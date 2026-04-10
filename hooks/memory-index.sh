@@ -24,7 +24,7 @@ TOTAL_DOCS=${#ALL_FILES[@]}
 # Load stopwords
 STOPWORDS=""
 if [ -f "$STOPWORDS_FILE" ]; then
-  STOPWORDS=$(tr '\n' '|' < "$STOPWORDS_FILE" | sed 's/|$//')
+  STOPWORDS=$(grep -v '^$' "$STOPWORDS_FILE" | tr '\n' '|' | sed 's/|$//')
 fi
 
 # NOTE: BSD awk — no multidimensional arrays. Use SUBSEP + term_files tracking.

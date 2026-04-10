@@ -74,6 +74,18 @@ if [ ! -f "$MEMORY_DIR/projects.json" ]; then
   echo '{}' > "$MEMORY_DIR/projects.json"
   echo "  Created empty projects.json"
 fi
+if [ ! -f "$MEMORY_DIR/projects-domains.json" ]; then
+  echo '{}' > "$MEMORY_DIR/projects-domains.json"
+  echo "  Created empty projects-domains.json"
+fi
+if [ ! -f "$MEMORY_DIR/.stopwords" ] && [ -f "$SCRIPT_DIR/hooks/.stopwords" ]; then
+  cp "$SCRIPT_DIR/hooks/.stopwords" "$MEMORY_DIR/.stopwords"
+  echo "  Copied default .stopwords"
+fi
+if [ ! -f "$MEMORY_DIR/.confidence-excludes" ] && [ -f "$SCRIPT_DIR/hooks/.confidence-excludes" ]; then
+  cp "$SCRIPT_DIR/hooks/.confidence-excludes" "$MEMORY_DIR/.confidence-excludes"
+  echo "  Copied default .confidence-excludes"
+fi
 
 echo ""
 echo "=== Done ==="
