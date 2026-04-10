@@ -687,7 +687,6 @@ if [ ${#INJECTED_FILES[@]} -gt 0 ]; then
     $in_fm = 1 if /^---$/ && !$seen_fm++;
     $in_fm = 0 if /^---$/ && $seen_fm > 1;
     if ($in_fm) {
-      s/^injected: .*/injected: '"$TODAY"'/;
       s/^referenced: .*/referenced: '"$TODAY"'/;
     }
     if (eof) { $seen_fm = 0; $in_fm = 0; }

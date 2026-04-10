@@ -433,6 +433,33 @@ assert "WAL — pipe in session_id sanitized" 'echo "$WAL_LAST" | grep -q "sess_
 assert "WAL — exactly 4 fields" '[ "$(echo "$WAL_LAST" | awk -F"|" "{print NF}")" -eq 4 ]'
 rm -rf "$WAL_PIPE_DIR"
 
+# Test: injected date preserved (not overwritten)
+INJECT_DIR=$(mktemp -d)
+INJECT_MEM="$INJECT_DIR/memory"
+mkdir -p "$INJECT_MEM"/{feedback,projects}
+cat > "$INJECT_MEM/projects.json" << 'EOF'
+{}
+EOF
+cat > "$INJECT_MEM/projects-domains.json" << 'EOF'
+{}
+EOF
+cat > "$INJECT_MEM/feedback/preserve-test.md" << 'EOF'
+---
+type: feedback
+project: global
+status: active
+injected: 2026-01-15
+referenced: 2026-03-01
+---
+Test body content here.
+EOF
+echo '{"session_id":"inject-test","cwd":"/tmp"}' | CLAUDE_MEMORY_DIR="$INJECT_MEM" bash "$HOOK" >/dev/null 2>&1
+INJECTED_DATE=$(awk '/^---$/{n++} n==1 && /^injected:/{sub(/^injected: */,""); print; exit}' "$INJECT_MEM/feedback/preserve-test.md")
+assert "Injected date preserved" '[ "$INJECTED_DATE" = "2026-01-15" ]'
+REFERENCED_DATE=$(awk '/^---$/{n++} n==1 && /^referenced:/{sub(/^referenced: */,""); print; exit}' "$INJECT_MEM/feedback/preserve-test.md")
+assert "Referenced date updated" '[ "$REFERENCED_DATE" = "'"$(date +%Y-%m-%d)"'" ]'
+rm -rf "$INJECT_DIR"
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="
