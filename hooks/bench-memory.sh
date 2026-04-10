@@ -15,7 +15,7 @@ CAT_PRECISION=0; CAT_DOMAIN=0; CAT_PRIORITY=0; CAT_EDGE=0
 RESULTS=""
 
 # ===== Create fixtures =====
-mkdir -p "$MEMDIR"/{mistakes,feedback,knowledge,strategies,projects}
+mkdir -p "$MEMDIR"/{mistakes,feedback,knowledge,strategies,notes,projects}
 
 # --- Mistakes ---
 cat > "$MEMDIR/mistakes/css-bug.md" << 'EOF'
