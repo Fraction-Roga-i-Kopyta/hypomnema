@@ -620,11 +620,13 @@ FEEDBACK_MD="$_COLLECT_RESULT"
 collect_scored "knowledge" "$CAP_KNOWLEDGE"
 KNOWLEDGE_MD="$_COLLECT_RESULT"
 
-collect_scored "strategies" "$CAP_STRATEGIES"
-STRATEGIES_MD="$_COLLECT_RESULT"
-
+# Notes before strategies — notes have most files and smallest cap,
+# placing them after everything else starves them when budget is tight
 collect_scored "notes" "$CAP_NOTES"
 NOTES_MD="$_COLLECT_RESULT"
+
+collect_scored "strategies" "$CAP_STRATEGIES"
+STRATEGIES_MD="$_COLLECT_RESULT"
 
 # --- Collect project overview ---
 

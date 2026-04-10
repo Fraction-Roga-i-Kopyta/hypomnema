@@ -624,6 +624,59 @@ assert "Session ID with slashes — marker created" '[ -f "$SLASH_MARKER" ]'
 rm -f "$SLASH_MARKER" 2>/dev/null
 rm -rf "$SLASH_DIR"
 
+# Test: notes not starved by other scored types
+STARVE_DIR=$(mktemp -d)
+STARVE_MEM="$STARVE_DIR/memory"
+mkdir -p "$STARVE_MEM"/{feedback,knowledge,strategies,notes,projects}
+cat > "$STARVE_MEM/projects.json" << 'EOF'
+{}
+EOF
+cat > "$STARVE_MEM/projects-domains.json" << 'EOF'
+{}
+EOF
+# Fill feedback to cap
+for i in 1 2 3 4 5 6; do
+cat > "$STARVE_MEM/feedback/fb-$i.md" << EOF
+---
+type: feedback
+project: global
+status: active
+referenced: 2026-04-01
+keywords: [docker]
+---
+Feedback item $i about docker.
+EOF
+done
+# Fill knowledge
+for i in 1 2 3 4; do
+cat > "$STARVE_MEM/knowledge/kn-$i.md" << EOF
+---
+type: knowledge
+project: global
+status: active
+referenced: 2026-04-01
+keywords: [docker]
+---
+Knowledge item $i about docker.
+EOF
+done
+# Add a note with matching keyword
+cat > "$STARVE_MEM/notes/docker-note.md" << 'EOF'
+---
+type: knowledge
+project: global
+status: active
+referenced: 2026-04-01
+keywords: [docker]
+---
+Important docker note that should appear.
+EOF
+mkdir -p /tmp/docker-starve
+STARVE_OUT=$(echo '{"session_id":"starve-test","cwd":"/tmp/docker-starve"}' | CLAUDE_MEMORY_DIR="$STARVE_MEM" bash "$HOOK" 2>/dev/null)
+STARVE_CTX=$(printf '%s' "$STARVE_OUT" | jq -r '.hookSpecificOutput.additionalContext // ""')
+assert "Notes not starved by budget" 'printf "%s" "$STARVE_CTX" | grep -q "docker-note"'
+rm -rf "$STARVE_DIR" /tmp/docker-starve
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="
