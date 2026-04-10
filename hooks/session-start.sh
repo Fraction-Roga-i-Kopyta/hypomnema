@@ -270,90 +270,99 @@ KEYWORD_COUNT=$(printf '%s' "$KEYWORDS" | wc -w | tr -d ' ')
 # --- Collect mistakes ---
 
 INJECTED_FILES=()
-MISTAKES_MD=""
-GLOBAL_COUNT=0
-PROJECT_COUNT=0
 
-if [ -d "$MEMORY_DIR/mistakes" ]; then
-  MISTAKE_FILES=()
-  while IFS= read -r f; do
-    MISTAKE_FILES+=("$f")
-  done < <(find "$MEMORY_DIR/mistakes" -name "*.md" -type f 2>/dev/null)
+collect_mistakes() {
+  local mistakes_md=""
+  local global_count=0
+  local project_count=0
 
-  if [ ${#MISTAKE_FILES[@]} -gt 0 ]; then
-    # Add keyword scoring to mistakes: keyword_hits*3 as primary sort, then recurrence desc
-    local mistakes_scored_out
-    mistakes_scored_out=$(awk "$AWK_MISTAKES" "${MISTAKE_FILES[@]}" 2>/dev/null | \
-      awk -F'\t' -v kw="$KEYWORDS" '
-      BEGIN { n=split(kw, kws, " ") }
-      {
-        score=0
-        fkw=$10
-        if (fkw != "_none_" && n > 0) {
-          split(fkw, fks, " ")
-          for (i in fks) for (j in kws) if (fks[i] == kws[j]) score += 3
-        }
-        printf "%d\t%s\n", score, $0
-      }' | sort -t$'\t' -k1,1rn -k5,5rn -k6,6r)
+  if [ -d "$MEMORY_DIR/mistakes" ]; then
+    local MISTAKE_FILES=()
+    while IFS= read -r f; do
+      MISTAKE_FILES+=("$f")
+    done < <(find "$MEMORY_DIR/mistakes" -name "*.md" -type f 2>/dev/null)
 
-    # Zero-score throttle for mistakes: if rich keywords AND scored mistakes exist,
-    # limit unscored mistakes to max 2 (keeps high-recurrence generals like wrong-root-cause)
-    local m_has_scored=0 m_zero_count=0 m_max_zero=99
-    if [ "${KEYWORD_COUNT:-0}" -ge 10 ] && [ -n "$mistakes_scored_out" ]; then
-      local m_top_score
-      m_top_score=$(echo "$mistakes_scored_out" | head -1 | cut -f1)
-      [ "${m_top_score:-0}" -gt 0 ] && m_has_scored=1 && m_max_zero=2
-    fi
+    if [ ${#MISTAKE_FILES[@]} -gt 0 ]; then
+      # Add keyword scoring to mistakes: keyword_hits*3 as primary sort, then recurrence desc
+      local mistakes_scored_out
+      mistakes_scored_out=$(awk "$AWK_MISTAKES" "${MISTAKE_FILES[@]}" 2>/dev/null | \
+        awk -F'\t' -v kw="$KEYWORDS" '
+        BEGIN { n=split(kw, kws, " ") }
+        {
+          score=0
+          fkw=$10
+          if (fkw != "_none_" && n > 0) {
+            split(fkw, fks, " ")
+            for (i in fks) for (j in kws) if (fks[i] == kws[j]) score += 3
+          }
+          printf "%d\t%s\n", score, $0
+        }' | sort -t$'\t' -k1,1rn -k5,5rn -k6,6r)
 
-    while IFS=$'\t' read -r kscore file status file_project recurrence injected severity root_cause prevention file_domains file_keywords body; do
-      [ -z "$file" ] && continue
-      body=$(printf '%s' "$body" | tr $'\x1e' '\n')
-      [ "$status" != "active" ] && [ "$status" != "pinned" ] && continue
+      # Zero-score throttle for mistakes: if rich keywords AND scored mistakes exist,
+      # limit unscored mistakes to max 2 (keeps high-recurrence generals like wrong-root-cause)
+      local m_has_scored=0 m_zero_count=0 m_max_zero=99
+      if [ "${KEYWORD_COUNT:-0}" -ge 10 ] && [ -n "$mistakes_scored_out" ]; then
+        local m_top_score
+        m_top_score=$(echo "$mistakes_scored_out" | head -1 | cut -f1)
+        [ "${m_top_score:-0}" -gt 0 ] && m_has_scored=1 && m_max_zero=2
+      fi
 
-      # Recurrence threshold: skip unconfirmed mistakes (rec=0) unless pinned
-      [ "$recurrence" = "0" ] && [ "$status" != "pinned" ] && continue
+      while IFS=$'\t' read -r kscore file status file_project recurrence injected severity root_cause prevention file_domains file_keywords body; do
+        [ -z "$file" ] && continue
+        body=$(printf '%s' "$body" | tr $'\x1e' '\n')
+        [ "$status" != "active" ] && [ "$status" != "pinned" ] && continue
 
-      # Domain filtering: skip if domains don't match active context
-      domain_matches "$file_domains" || continue
+        # Recurrence threshold: skip unconfirmed mistakes (rec=0) unless pinned
+        [ "$recurrence" = "0" ] && [ "$status" != "pinned" ] && continue
 
-      # Zero-score throttle: limit unscored mistakes when keyword signal is strong
-      if [ "$m_has_scored" -eq 1 ] && [ "${kscore:-0}" -eq 0 ]; then
-        # Always allow high-recurrence mistakes (>=3) regardless of score
-        if [ "${recurrence:-0}" -lt 3 ]; then
-          [ $m_zero_count -ge $m_max_zero ] && continue
-          m_zero_count=$((m_zero_count + 1))
+        # Domain filtering: skip if domains don't match active context
+        domain_matches "$file_domains" || continue
+
+        # Zero-score throttle: limit unscored mistakes when keyword signal is strong
+        if [ "$m_has_scored" -eq 1 ] && [ "${kscore:-0}" -eq 0 ]; then
+          # Always allow high-recurrence mistakes (>=3) regardless of score
+          if [ "${recurrence:-0}" -lt 3 ]; then
+            [ $m_zero_count -ge $m_max_zero ] && continue
+            m_zero_count=$((m_zero_count + 1))
+          fi
         fi
-      fi
 
-      if [ "$file_project" = "global" ]; then
-        [ $GLOBAL_COUNT -ge $MAX_GLOBAL_MISTAKES ] && continue
-        GLOBAL_COUNT=$((GLOBAL_COUNT + 1))
-      elif [ -n "$PROJECT" ] && [ "$file_project" = "$PROJECT" ]; then
-        [ $PROJECT_COUNT -ge $MAX_PROJECT_MISTAKES ] && continue
-        PROJECT_COUNT=$((PROJECT_COUNT + 1))
-      else
-        continue
-      fi
+        if [ "$file_project" = "global" ]; then
+          [ $global_count -ge $MAX_GLOBAL_MISTAKES ] && continue
+          global_count=$((global_count + 1))
+        elif [ -n "$PROJECT" ] && [ "$file_project" = "$PROJECT" ]; then
+          [ $project_count -ge $MAX_PROJECT_MISTAKES ] && continue
+          project_count=$((project_count + 1))
+        else
+          continue
+        fi
 
-      filename=$(basename "$file" .md)
+        local filename
+        filename=$(basename "$file" .md)
 
-      # If body is whitespace-only, use root-cause and prevention
-      clean_body=$(printf '%s' "$body" | tr -d '[:space:]')
-      if [ -z "$clean_body" ]; then
-        body=""
-        [ -n "$root_cause" ] && [ "$root_cause" != "_empty_" ] && body="Root cause: ${root_cause}"
-        [ -n "$prevention" ] && [ "$prevention" != "_empty_" ] && body="${body}
+        # If body is whitespace-only, use root-cause and prevention
+        local clean_body
+        clean_body=$(printf '%s' "$body" | tr -d '[:space:]')
+        if [ -z "$clean_body" ]; then
+          body=""
+          [ -n "$root_cause" ] && [ "$root_cause" != "_empty_" ] && body="Root cause: ${root_cause}"
+          [ -n "$prevention" ] && [ "$prevention" != "_empty_" ] && body="${body}
 Prevention: ${prevention}"
-      fi
+        fi
 
-      MISTAKES_MD="${MISTAKES_MD}
+        mistakes_md="${mistakes_md}
 ### ${filename} [${severity}, x${recurrence}]
 ${body}
 "
-      INJECTED_FILES+=("$file")
-    done <<< "$mistakes_scored_out"
+        INJECTED_FILES+=("$file")
+      done <<< "$mistakes_scored_out"
+    fi
   fi
-fi
+
+  printf '%s' "$mistakes_md"
+}
+
+MISTAKES_MD=$(collect_mistakes)
 
 # --- WAL-based spaced repetition scoring ---
 # Formula: spread × decay(recency) × (1 - negative_ratio)
