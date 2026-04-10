@@ -8,7 +8,7 @@ Persistent memory system for [Claude Code](https://docs.anthropic.com/en/docs/cl
 
 Claude Code starts every session from zero. Hypomnema fixes that.
 
-**v6 metrics:** Precision 44.2%, Recall 100%, ~8 files injected per session, hook time ~0.3 sec.
+58 smoke tests, 15 benchmarks, hook time ~0.7 sec.
 
 ## The problem
 
@@ -47,7 +47,7 @@ You ←→ Claude Code ←→ ~/.claude/memory/
 | **knowledge/** | Domain facts, API docs, infrastructure | Yes | cap 4 (adaptive) |
 | **projects/** | Project descriptions, stack, known issues | Yes | 1 (current) |
 | **continuity/** | "Where we left off" last session | Yes | 1 (current) |
-| **notes/** | User profile, references, URLs | No | — |
+| **notes/** | Long-form knowledge, references, URLs | Yes | Keywords + domains, cap 2 |
 | **journal/** | Session logs | No | — |
 
 Feedback, knowledge, and strategies share an adaptive budget of 12 slots total with per-type caps. If one type has fewer relevant files, the budget flows to others.
@@ -244,7 +244,7 @@ domains: [css, frontend]
 ├── knowledge/             # domain facts
 ├── projects/              # project overviews
 ├── continuity/            # where we left off (one per project)
-├── notes/                 # user profile, references
+├── notes/                 # long-form knowledge, references
 ├── journal/               # session logs
 ├── archive/               # rotated files (mirrors structure above)
 ├── projects.json          # cwd → project mapping
@@ -302,7 +302,7 @@ Negative outcomes reduce the record's WAL score over time. Records that repeated
 ## Testing
 
 ```bash
-# 33 smoke tests (injection, domain filtering, WAL, TF-IDF, outcome, spaced repetition)
+# 58 smoke tests (injection, domain filtering, WAL, TF-IDF, outcome, spaced repetition)
 bash ~/.claude/hooks/test-memory-hooks.sh
 
 # 15 benchmark scenarios (precision, domain, priority, edge cases)
@@ -340,7 +340,7 @@ The format (YAML frontmatter + markdown) is a stable contract. Any future engine
 
 **Why bash, not Python?** Zero cold start. Claude Code hooks have a 5-second timeout. Python adds ~300ms of startup. Bash + awk runs in ~300ms total on 40 files.
 
-**Why two date fields?** `injected` tracks when the hook last touched a file — useless for measuring actual relevance. `referenced` tracks when a human or agent actually used the information — this drives lifecycle decisions.
+**Why two date fields?** `injected` is set once on file creation (write-once) — tracks when the memory was first recorded. `referenced` tracks when a human or agent actually used the information — this drives lifecycle decisions.
 
 **Why split quotas for mistakes?** Without split quotas (3 global + 3 project), a frequently-recurring global mistake (like "jumps to first hypothesis") would push out all project-specific mistakes. Split quotas guarantee both types get representation.
 
