@@ -164,12 +164,12 @@ if [ -n "$PROJECT" ] && { [ -d "$CWD/.git" ] || git -C "$CWD" rev-parse --git-di
       if ! grep -q "^## Git State" "$CONT_FILE" 2>/dev/null; then
         printf '\n## Git State\n%s\n' "$GIT_STATE" >> "$CONT_FILE"
       else
-        # Update existing git state section
-        perl -pi -e "
-          if (/^## Git State/) { \$_ = \"## Git State\n${GIT_STATE}\n\"; \$skip=1; next }
-          if (\$skip && /^## /) { \$skip=0 }
-          \$_ = '' if \$skip;
-        " "$CONT_FILE" 2>/dev/null || true
+        # Update existing git state section — safe from special chars
+        awk -v state="$GIT_STATE" '
+          /^## Git State/ { print; print state; skip=1; next }
+          skip && /^## / { skip=0 }
+          !skip { print }
+        ' "$CONT_FILE" > "$CONT_FILE.tmp" && mv "$CONT_FILE.tmp" "$CONT_FILE"
       fi
     else
       cat > "$CONT_FILE" << CONTEOF

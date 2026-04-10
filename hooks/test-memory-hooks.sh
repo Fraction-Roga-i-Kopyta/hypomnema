@@ -485,6 +485,37 @@ sleep 1  # async build needs a moment
 assert "TF-IDF auto-rebuild on missing index" '[ -f "$TFIDF_AUTO_MEM/.tfidf-index" ]'
 rm -rf "$TFIDF_AUTO_DIR"
 
+# Test: git state with special chars doesn't break continuity
+PERL_DIR=$(mktemp -d)
+PERL_MEM="$PERL_DIR/memory"
+mkdir -p "$PERL_MEM"/{continuity,projects}
+cat > "$PERL_MEM/projects.json" << 'PEOF'
+{"/tmp/perl-test": "perl-proj"}
+PEOF
+# Init a git repo with special chars in commit message
+mkdir -p /tmp/perl-test
+git -C /tmp/perl-test init -q 2>/dev/null
+git -C /tmp/perl-test commit --allow-empty -m 'fix: handle $var @array (parens)' -q 2>/dev/null
+# Create existing continuity with Git State section
+cat > "$PERL_MEM/continuity/perl-proj.md" << 'CEOF'
+---
+type: continuity
+project: perl-proj
+created: 2026-04-01
+status: active
+---
+
+## Git State
+Old state here
+CEOF
+PERL_MARKER="/tmp/.claude-session-perl-test"
+touch -t 202601010000 "$PERL_MARKER"
+PERL_EXIT=0
+echo '{"session_id":"perl-test","cwd":"/tmp/perl-test"}' | CLAUDE_MEMORY_DIR="$PERL_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null || PERL_EXIT=$?
+assert "Special chars in git — no crash" '[ $PERL_EXIT -eq 0 ]'
+assert "Continuity file intact" '[ -f "$PERL_MEM/continuity/perl-proj.md" ]'
+rm -rf "$PERL_DIR" /tmp/perl-test "$PERL_MARKER"
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="
