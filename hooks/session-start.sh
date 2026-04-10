@@ -14,9 +14,6 @@ MAX_PROJECT_MISTAKES=3
 # Total budget for scored types (feedback+knowledge+strategies): 12 slots
 # Each type gets min slots guaranteed, rest compete in flex pool
 MAX_SCORED_TOTAL=12
-MIN_FEEDBACK=2
-MIN_KNOWLEDGE=1
-MIN_STRATEGIES=1
 # Per-type caps (prevent any single type from dominating)
 CAP_FEEDBACK=6
 CAP_KNOWLEDGE=4
@@ -491,22 +488,6 @@ if [ "$_tfidf_needs_rebuild" -eq 1 ]; then
   disown 2>/dev/null || true
 fi
 
-# --- Keyword matching helper ---
-# Returns 0 (true) if file keywords intersect with active KEYWORDS
-keyword_match_score() {
-  local file_keywords="$1"
-  local score=0
-  [ -z "$KEYWORDS" ] && echo 0 && return
-  [ "$file_keywords" = "_none_" ] && echo 0 && return
-  local fk ak
-  for fk in $file_keywords; do
-    for ak in $KEYWORDS; do
-      [ "$fk" = "$ak" ] && score=$((score + 1))
-    done
-  done
-  echo "$score"
-}
-
 # --- Generic scored collector (DRY: replaces 3 copy-paste blocks) ---
 # Usage: collect_scored <dir> <cap>
 # Sets _COLLECT_RESULT with markdown output, appends to INJECTED_FILES
@@ -622,7 +603,6 @@ ${body}
 
 # --- Collect feedback, knowledge, strategies (adaptive quotas) ---
 # Adaptive budget: rich keyword signal → tighter budget (less noise)
-KEYWORD_COUNT=$(printf '%s' "$KEYWORDS" | wc -w | tr -d ' ')
 if [ "${KEYWORD_COUNT:-0}" -ge 10 ]; then
   # Rich git context (commit messages extracted) — reduce noise
   MAX_SCORED_TOTAL=8
