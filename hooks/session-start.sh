@@ -397,9 +397,13 @@ if [ -f "$WAL_FILE" ]; then
     $1 >= cutoff && $2 == "outcome-negative" {
       neg_count[$3]++
     }
+    function jdn(y, m, d) {
+      if (m <= 2) { y--; m += 12 }
+      return int(365.25*(y+4716)) + int(30.6001*(m+1)) + d - 1524
+    }
     function days_between(d1, d2) {
       split(d1, a, "-"); split(d2, b, "-")
-      return (b[1]-a[1])*365 + (b[2]-a[2])*30 + (b[3]-a[3])
+      return jdn(b[1]+0, b[2]+0, b[3]+0) - jdn(a[1]+0, a[2]+0, a[3]+0)
     }
     END {
       first = 1
