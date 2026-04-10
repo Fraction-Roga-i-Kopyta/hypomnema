@@ -5,6 +5,8 @@ created: YYYY-MM-DD
 injected: YYYY-MM-DD
 referenced: YYYY-MM-DD
 status: active
+domains: [general]
+keywords: []
 ---
 
 Rule statement here.
