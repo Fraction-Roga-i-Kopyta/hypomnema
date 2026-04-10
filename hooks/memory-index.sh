@@ -11,7 +11,7 @@ STOPWORDS_FILE="$MEMORY_DIR/.stopwords"
 
 # Collect all candidate files
 ALL_FILES=()
-for subdir in mistakes feedback knowledge strategies; do
+for subdir in mistakes feedback knowledge strategies notes; do
   while IFS= read -r f; do
     ALL_FILES+=("$f")
   done < <(find "$MEMORY_DIR/$subdir" -name "*.md" -type f 2>/dev/null)
