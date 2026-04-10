@@ -466,6 +466,18 @@ if [ -f "$TFIDF_INDEX" ]; then
   fi
 fi
 
+# Auto-rebuild TF-IDF if missing or stale
+_tfidf_needs_rebuild=0
+if [ ! -f "$TFIDF_INDEX" ]; then
+  _tfidf_needs_rebuild=1
+elif [ "${idx_age:-999}" -gt 7 ]; then
+  _tfidf_needs_rebuild=1
+fi
+if [ "$_tfidf_needs_rebuild" -eq 1 ]; then
+  CLAUDE_MEMORY_DIR="$MEMORY_DIR" bash "$(dirname "$0")/memory-index.sh" 2>/dev/null &
+  disown 2>/dev/null || true
+fi
+
 # --- Keyword matching helper ---
 # Returns 0 (true) if file keywords intersect with active KEYWORDS
 keyword_match_score() {

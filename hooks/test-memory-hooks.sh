@@ -460,6 +460,31 @@ REFERENCED_DATE=$(awk '/^---$/{n++} n==1 && /^referenced:/{sub(/^referenced: */,
 assert "Referenced date updated" '[ "$REFERENCED_DATE" = "'"$(date +%Y-%m-%d)"'" ]'
 rm -rf "$INJECT_DIR"
 
+# Test: TF-IDF auto-rebuild when index missing
+TFIDF_AUTO_DIR=$(mktemp -d)
+TFIDF_AUTO_MEM="$TFIDF_AUTO_DIR/memory"
+mkdir -p "$TFIDF_AUTO_MEM"/{knowledge,feedback,projects}
+cat > "$TFIDF_AUTO_MEM/projects.json" << 'EOF'
+{}
+EOF
+cat > "$TFIDF_AUTO_MEM/projects-domains.json" << 'EOF'
+{}
+EOF
+cat > "$TFIDF_AUTO_MEM/knowledge/docker-guide.md" << 'EOF'
+---
+type: knowledge
+project: global
+status: active
+referenced: 2026-04-01
+---
+Docker container networking bridge mode explained in detail.
+EOF
+# No .tfidf-index exists — session-start should trigger build
+echo '{"session_id":"tfidf-auto","cwd":"/tmp"}' | CLAUDE_MEMORY_DIR="$TFIDF_AUTO_MEM" bash "$HOOK" >/dev/null 2>&1
+sleep 1  # async build needs a moment
+assert "TF-IDF auto-rebuild on missing index" '[ -f "$TFIDF_AUTO_MEM/.tfidf-index" ]'
+rm -rf "$TFIDF_AUTO_DIR"
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="
