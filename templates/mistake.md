@@ -9,6 +9,7 @@ severity: minor
 recurrence: 1
 root-cause: ""
 prevention: ""
-tags: []
+domains: [general]
+keywords: []
 ---
 

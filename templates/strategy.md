@@ -7,7 +7,8 @@ referenced: YYYY-MM-DD
 status: active
 trigger: "when to apply this"
 success_count: 1
-tags: []
+domains: [general]
+keywords: []
 ---
 
 1. Step one
