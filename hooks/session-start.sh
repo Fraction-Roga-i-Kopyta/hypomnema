@@ -135,17 +135,50 @@ detect_domains() {
 DOMAINS=$(detect_domains "$CWD" "$PROJECT")
 
 # --- Extract keywords for content-aware matching ---
-# Sources: git branch name, git diff filenames, CWD basename
+# Sources: git branch, diff filenames, commit messages (last 5), staged filenames, CWD basename
+# Stopwords filtered to avoid generic noise (feat, fix, update, etc.)
 KEYWORDS=""
+STOPWORDS="the and for with from this that into not but also been have has was were are will can may use used using add added update updated fix fixed feat merge merged commit ref docs test tests chore build main master head"
+
 if [ -d "$CWD/.git" ] || git -C "$CWD" rev-parse --git-dir >/dev/null 2>&1; then
+  # 1. Branch name tokens
   branch=$(git -C "$CWD" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
   [ -n "$branch" ] && KEYWORDS="$KEYWORDS $(printf '%s' "$branch" | tr '/_-' ' ')"
+
+  # 2. Uncommitted diff filenames (basenames without extension)
   diff_names=$(git -C "$CWD" diff --name-only HEAD 2>/dev/null | sed 's/.*\///; s/\..*//' | sort -u | head -10 | tr '\n' ' ')
   [ -n "$diff_names" ] && KEYWORDS="$KEYWORDS $diff_names"
+
+  # 3. Staged filenames
+  staged_names=$(git -C "$CWD" diff --cached --name-only 2>/dev/null | sed 's/.*\///; s/\..*//' | sort -u | head -10 | tr '\n' ' ')
+  [ -n "$staged_names" ] && KEYWORDS="$KEYWORDS $staged_names"
+
+  # 4. Recent commit messages — richest keyword source
+  # Tokenize subjects of last 5 commits, strip conventional commit prefixes
+  commit_words=$(git -C "$CWD" log --oneline -5 --format='%s' 2>/dev/null | \
+    sed 's/^[a-z]*[(:]//; s/[):]/ /g' | \
+    tr '[:upper:]' '[:lower:]' | tr -cs '[:alpha:]' ' ')
+  [ -n "$commit_words" ] && KEYWORDS="$KEYWORDS $commit_words"
+
+  # 5. File extensions in diff → domain keywords (css, sql, groovy, etc.)
+  ext_kw=$(git -C "$CWD" diff --name-only HEAD~3 HEAD 2>/dev/null | awk -F. '
+    NF>1 { ext=tolower($NF)
+      if (ext=="css"||ext=="scss"||ext=="sass") print "css"
+      else if (ext=="sql"||ext=="prisma") print "sql"
+      else if (ext=="groovy"||ext=="gvy") print "groovy"
+      else if (ext=="tsx"||ext=="jsx") print "react"
+      else if (ext=="dockerfile") print "docker"
+    }' | sort -u | tr '\n' ' ')
+  [ -n "$ext_kw" ] && KEYWORDS="$KEYWORDS $ext_kw"
 fi
 KEYWORDS="$KEYWORDS $(basename "$CWD")"
-# Normalize: lowercase, deduplicate, remove short tokens
-KEYWORDS=$(printf '%s' "$KEYWORDS" | tr '[:upper:]' '[:lower:]' | tr ' ' '\n' | awk 'length>=3 && !seen[$0]++' | tr '\n' ' ')
+
+# Normalize: lowercase, deduplicate, remove short tokens and stopwords
+KEYWORDS=$(printf '%s' "$KEYWORDS" | tr '[:upper:]' '[:lower:]' | tr ' ' '\n' | \
+  awk -v stops="$STOPWORDS" '
+    BEGIN { n=split(stops, s, " "); for(i=1;i<=n;i++) stop[s[i]]=1 }
+    length>=3 && !seen[$0]++ && !stop[$0]
+  ' | tr '\n' ' ')
 
 # --- Single-pass frontmatter parsers (BSD awk compatible) ---
 # Uses FNR==1 to detect file boundaries instead of BEGINFILE/ENDFILE
@@ -155,12 +188,12 @@ AWK_MISTAKES='
 { gsub(/\r/, "") }
 FNR == 1 {
   if (prev_file != "") {
-    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", \
-      prev_file, status, project, recurrence, injected, severity, root_cause, prevention, domains, body
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", \
+      prev_file, status, project, recurrence, injected, severity, root_cause, prevention, domains, keywords, body
   }
   in_fm = 0; fm_end_count = 0
   status = "_empty_"; project = "_empty_"; recurrence = "0"; injected = "0000-00-00"
-  severity = "_empty_"; root_cause = "_empty_"; prevention = "_empty_"; domains = "_none_"
+  severity = "_empty_"; root_cause = "_empty_"; prevention = "_empty_"; domains = "_none_"; keywords = "_none_"
   body = ""; past_fm = 0; prev_file = FILENAME
 }
 /^---$/ {
@@ -176,12 +209,13 @@ in_fm && /^severity:/ { sub(/^severity: */, ""); severity = $0; next }
 in_fm && /^root-cause:/ { sub(/^root-cause: */, ""); root_cause = $0; next }
 in_fm && /^prevention:/ { sub(/^prevention: */, ""); prevention = $0; next }
 in_fm && /^domains:/ { sub(/^domains: *\[?/, ""); sub(/\].*/, ""); gsub(/, */, " "); domains = $0; next }
+in_fm && /^keywords:/ { sub(/^keywords: *\[?/, ""); sub(/\].*/, ""); gsub(/, */, " "); keywords = $0; next }
 past_fm && !/^$/ { gsub(/\t/, " ", $0); body = body $0 "\x1e" }
 END {
   if (prev_file != "") {
     gsub(/\t/, " ", root_cause); gsub(/\t/, " ", prevention)
-    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", \
-      prev_file, status, project, recurrence, injected, severity, root_cause, prevention, domains, body
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", \
+      prev_file, status, project, recurrence, injected, severity, root_cause, prevention, domains, keywords, body
   }
 }'
 
@@ -230,6 +264,9 @@ domain_matches() {
   return 1  # no intersection
 }
 
+# --- Keyword signal strength (used by throttles below) ---
+KEYWORD_COUNT=$(printf '%s' "$KEYWORDS" | wc -w | tr -d ' ')
+
 # --- Collect mistakes ---
 
 INJECTED_FILES=()
@@ -244,7 +281,31 @@ if [ -d "$MEMORY_DIR/mistakes" ]; then
   done < <(find "$MEMORY_DIR/mistakes" -name "*.md" -type f 2>/dev/null)
 
   if [ ${#MISTAKE_FILES[@]} -gt 0 ]; then
-    while IFS=$'\t' read -r file status file_project recurrence injected severity root_cause prevention file_domains body; do
+    # Add keyword scoring to mistakes: keyword_hits*3 as primary sort, then recurrence desc
+    local mistakes_scored_out
+    mistakes_scored_out=$(awk "$AWK_MISTAKES" "${MISTAKE_FILES[@]}" 2>/dev/null | \
+      awk -F'\t' -v kw="$KEYWORDS" '
+      BEGIN { n=split(kw, kws, " ") }
+      {
+        score=0
+        fkw=$10
+        if (fkw != "_none_" && n > 0) {
+          split(fkw, fks, " ")
+          for (i in fks) for (j in kws) if (fks[i] == kws[j]) score += 3
+        }
+        printf "%d\t%s\n", score, $0
+      }' | sort -t$'\t' -k1,1rn -k5,5rn -k6,6r)
+
+    # Zero-score throttle for mistakes: if rich keywords AND scored mistakes exist,
+    # limit unscored mistakes to max 2 (keeps high-recurrence generals like wrong-root-cause)
+    local m_has_scored=0 m_zero_count=0 m_max_zero=99
+    if [ "${KEYWORD_COUNT:-0}" -ge 10 ] && [ -n "$mistakes_scored_out" ]; then
+      local m_top_score
+      m_top_score=$(echo "$mistakes_scored_out" | head -1 | cut -f1)
+      [ "${m_top_score:-0}" -gt 0 ] && m_has_scored=1 && m_max_zero=2
+    fi
+
+    while IFS=$'\t' read -r kscore file status file_project recurrence injected severity root_cause prevention file_domains file_keywords body; do
       [ -z "$file" ] && continue
       body=$(printf '%s' "$body" | tr $'\x1e' '\n')
       [ "$status" != "active" ] && [ "$status" != "pinned" ] && continue
@@ -254,6 +315,15 @@ if [ -d "$MEMORY_DIR/mistakes" ]; then
 
       # Domain filtering: skip if domains don't match active context
       domain_matches "$file_domains" || continue
+
+      # Zero-score throttle: limit unscored mistakes when keyword signal is strong
+      if [ "$m_has_scored" -eq 1 ] && [ "${kscore:-0}" -eq 0 ]; then
+        # Always allow high-recurrence mistakes (>=3) regardless of score
+        if [ "${recurrence:-0}" -lt 3 ]; then
+          [ $m_zero_count -ge $m_max_zero ] && continue
+          m_zero_count=$((m_zero_count + 1))
+        fi
+      fi
 
       if [ "$file_project" = "global" ]; then
         [ $GLOBAL_COUNT -ge $MAX_GLOBAL_MISTAKES ] && continue
@@ -281,7 +351,7 @@ Prevention: ${prevention}"
 ${body}
 "
       INJECTED_FILES+=("$file")
-    done < <(awk "$AWK_MISTAKES" "${MISTAKE_FILES[@]}" 2>/dev/null | sort -t$'\t' -k4,4rn -k5,5r)
+    done <<< "$mistakes_scored_out"
   fi
 fi
 
@@ -424,9 +494,9 @@ collect_scored() {
   # Parse files with keyword scoring via awk
   # Pass KEYWORDS to awk for inline scoring (avoids shell loop overhead)
   local awk_out
-  # Composite scoring: keyword_hits * 3 + wal_frequency (capped at 10)
+  # Composite scoring: keyword_hits * 3 + project_boost + wal + tfidf
   awk_out=$(awk "$AWK_SCORED" "${files[@]}" 2>/dev/null | \
-    awk -F'\t' -v kw="$KEYWORDS" -v wal="$WAL_SCORES" -v tfidf="$TFIDF_SCORES" '
+    awk -F'\t' -v kw="$KEYWORDS" -v wal="$WAL_SCORES" -v tfidf="$TFIDF_SCORES" -v proj="$PROJECT" '
     BEGIN {
       n=split(kw, kws, " ")
       # Parse WAL scores: "name:count;name:count;..."
@@ -450,6 +520,8 @@ collect_scored() {
         split(fkw, fks, " ")
         for (i in fks) for (j in kws) if (fks[i] == kws[j]) score += 3
       }
+      # Project boost: +1 tiebreaker for project-scoped records
+      if (proj != "" && $3 == proj) score += 1
       # WAL spaced repetition score (already normalized 0-10)
       fname=$1; sub(/.*\//, "", fname); sub(/\.md$/, "", fname)
       wc = wal_count[fname]+0
@@ -463,42 +535,40 @@ collect_scored() {
       printf "%d\t%s\n", score, $0
     }' | sort -t$'\t' -k1,1rn -k5,5r)
 
-  # Pass 1: project-specific
-  if [ -n "$PROJECT" ]; then
-    while IFS=$'\t' read -r kscore file status file_project referenced file_domains file_keywords body; do
-      [ -z "$file" ] && continue
-      body=$(printf '%s' "$body" | tr $'\x1e' '\n')
-      [ "$status" != "active" ] && [ "$status" != "pinned" ] && continue
-      domain_matches "$file_domains" || continue
-      [ "$file_project" != "$PROJECT" ] && continue
-      [ $type_count -ge $cap ] && continue
-      [ $_SCORED_USED -ge $MAX_SCORED_TOTAL ] && continue
-
-      local clean_body
-      clean_body=$(printf '%s' "$body" | tr -d '[:space:]')
-      [ -z "$clean_body" ] && continue
-
-      local filename
-      filename=$(basename "$file" .md)
-      _COLLECT_RESULT="${_COLLECT_RESULT}
-### ${filename}
-${body}
-"
-      INJECTED_FILES+=("$file")
-      type_count=$((type_count + 1))
-      _SCORED_USED=$((_SCORED_USED + 1))
-    done <<< "$awk_out"
+  # Unified pass: score-first, project as tiebreaker (+1 for project match)
+  # Records sorted by: keyword score desc, then project-match desc, then referenced desc
+  # Zero-score throttle: if ANY record has score > 0, limit score=0 records to 2 slots
+  # This prevents noise when keyword signal is available, but preserves fallback when it's not
+  local has_scored=0 zero_count=0 max_zero=$cap
+  if [ -n "$awk_out" ]; then
+    local top_score
+    top_score=$(echo "$awk_out" | head -1 | cut -f1)
+    [ "${top_score:-0}" -gt 0 ] && has_scored=1 && max_zero=2
   fi
 
-  # Pass 2: global
   while IFS=$'\t' read -r kscore file status file_project referenced file_domains file_keywords body; do
     [ -z "$file" ] && continue
     body=$(printf '%s' "$body" | tr $'\x1e' '\n')
     [ "$status" != "active" ] && [ "$status" != "pinned" ] && continue
     domain_matches "$file_domains" || continue
-    [ "$file_project" != "global" ] && continue
+
+    # Must be either project-scoped or global
+    if [ -n "$PROJECT" ] && [ "$file_project" = "$PROJECT" ]; then
+      : # project match — ok
+    elif [ "$file_project" = "global" ]; then
+      : # global — ok
+    else
+      continue # wrong project
+    fi
+
     [ $type_count -ge $cap ] && continue
     [ $_SCORED_USED -ge $MAX_SCORED_TOTAL ] && continue
+
+    # Zero-score throttle: limit unscored records when keyword signal exists
+    if [ "$has_scored" -eq 1 ] && [ "${kscore:-0}" -eq 0 ]; then
+      [ $zero_count -ge $max_zero ] && continue
+      zero_count=$((zero_count + 1))
+    fi
 
     local clean_body
     clean_body=$(printf '%s' "$body" | tr -d '[:space:]')
@@ -517,6 +587,16 @@ ${body}
 }
 
 # --- Collect feedback, knowledge, strategies (adaptive quotas) ---
+# Adaptive budget: rich keyword signal → tighter budget (less noise)
+KEYWORD_COUNT=$(printf '%s' "$KEYWORDS" | wc -w | tr -d ' ')
+if [ "${KEYWORD_COUNT:-0}" -ge 10 ]; then
+  # Rich git context (commit messages extracted) — reduce noise
+  MAX_SCORED_TOTAL=8
+elif [ "${KEYWORD_COUNT:-0}" -ge 5 ]; then
+  MAX_SCORED_TOTAL=10
+fi
+# else keep default 12
+
 _SCORED_USED=0
 
 collect_scored "feedback" "$CAP_FEEDBACK"
