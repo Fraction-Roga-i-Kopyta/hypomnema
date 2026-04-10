@@ -568,6 +568,27 @@ assert "WAL compaction — has aggregates" 'grep -q "inject-agg" "$WALC_MEM/.wal
 assert "WAL compaction — preserved recent raw" 'grep -q "|inject|" "$WALC_MEM/.wal"'
 rm -rf "$WALC_DIR"
 
+# Test: lifecycle rotation runs even without session marker
+LC_DIR=$(mktemp -d)
+LC_MEM="$LC_DIR/memory"
+mkdir -p "$LC_MEM/feedback"
+cat > "$LC_MEM/feedback/old-stale.md" << 'EOF'
+---
+type: feedback
+project: global
+status: active
+referenced: 2025-01-01
+created: 2025-01-01
+---
+Very old feedback.
+EOF
+# No session marker exists — stop hook should still do lifecycle rotation
+LC_EXIT=0
+echo '{"session_id":"no-marker-test"}' | CLAUDE_MEMORY_DIR="$LC_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null || LC_EXIT=$?
+LC_STATUS=$(awk '/^---$/{n++} n==1 && /^status:/{sub(/^status: */,""); print; exit}' "$LC_MEM/feedback/old-stale.md" 2>/dev/null)
+assert "Lifecycle rotation without marker — file marked stale" '[ "$LC_STATUS" = "stale" ]'
+rm -rf "$LC_DIR"
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="
