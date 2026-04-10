@@ -613,6 +613,17 @@ echo '{"session_id":"nofm-test"}' | CLAUDE_MEMORY_DIR="$NOFM_MEM" bash "$HOME/.c
 assert "Frontmatter-less file archived" '[ ! -f "$NOFM_MEM/notes/no-fm.md" ] && [ -f "$NOFM_MEM/archive/notes/no-fm.md" ]'
 rm -rf "$NOFM_DIR"
 
+# Test: session_id with slashes — marker created
+SLASH_MARKER="/tmp/.claude-session-v10-45569_10022"
+rm -f "$SLASH_MARKER" 2>/dev/null
+SLASH_DIR=$(mktemp -d)
+SLASH_MEM="$SLASH_DIR/memory"
+mkdir -p "$SLASH_MEM"
+echo '{"session_id":"v10-45569/10022","cwd":"/tmp"}' | CLAUDE_MEMORY_DIR="$SLASH_MEM" bash "$HOOK" >/dev/null 2>&1
+assert "Session ID with slashes — marker created" '[ -f "$SLASH_MARKER" ]'
+rm -f "$SLASH_MARKER" 2>/dev/null
+rm -rf "$SLASH_DIR"
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="
