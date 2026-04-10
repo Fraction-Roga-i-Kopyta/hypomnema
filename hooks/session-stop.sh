@@ -12,24 +12,8 @@ SESSION_ID=$(printf '%s\n' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
 [ -z "$SESSION_ID" ] && exit 0
 
 MARKER="/tmp/.claude-session-${SESSION_ID}"
-[ -f "$MARKER" ] || exit 0
 
-# Check session duration
-if [[ "$OSTYPE" == darwin* ]]; then
-  MARKER_TIME=$(stat -f %m "$MARKER" 2>/dev/null || echo 0)
-else
-  MARKER_TIME=$(stat -c %Y "$MARKER" 2>/dev/null || echo 0)
-fi
-NOW=$(date +%s)
-ELAPSED=$((NOW - MARKER_TIME))
-
-# Short session — skip
-if [ "$ELAPSED" -lt "$MIN_SESSION_SECONDS" ]; then
-  rm -f "$MARKER" 2>/dev/null
-  exit 0
-fi
-
-# --- Lifecycle rotation ---
+# --- Lifecycle rotation (always runs, even without session marker) ---
 lifecycle_rotate() {
   local ARCHIVE_DIR="$MEMORY_DIR/archive"
   local NOW_SEC=$(date +%s)
@@ -109,6 +93,24 @@ lifecycle_rotate() {
 }
 
 lifecycle_rotate 2>/dev/null || true
+
+# Session-specific processing requires marker
+[ -f "$MARKER" ] || exit 0
+
+# Check session duration
+if [[ "$OSTYPE" == darwin* ]]; then
+  MARKER_TIME=$(stat -f %m "$MARKER" 2>/dev/null || echo 0)
+else
+  MARKER_TIME=$(stat -c %Y "$MARKER" 2>/dev/null || echo 0)
+fi
+NOW=$(date +%s)
+ELAPSED=$((NOW - MARKER_TIME))
+
+# Short session — skip
+if [ "$ELAPSED" -lt "$MIN_SESSION_SECONDS" ]; then
+  rm -f "$MARKER" 2>/dev/null
+  exit 0
+fi
 
 # Rebuild TF-IDF index if memory files changed or index missing
 MODIFIED_FOR_INDEX=$(find "$MEMORY_DIR" -name "*.md" -newer "$MARKER" -not -name "MEMORY.md" -not -name "_agent_context.md" 2>/dev/null | head -1)

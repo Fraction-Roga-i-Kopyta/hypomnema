@@ -54,6 +54,9 @@ if [ -f "$PROJECTS_JSON" ] && jq empty "$PROJECTS_JSON" 2>/dev/null; then
   done < <(jq -r 'to_entries | sort_by(.key | length) | reverse | .[].key' "$PROJECTS_JSON" 2>/dev/null)
 fi
 
+# Create session marker early (ensures stop hook can run even if we crash later)
+touch "/tmp/.claude-session-${SESSION_ID}" 2>/dev/null || true
+
 # --- Detect domains ---
 
 detect_domains() {
@@ -743,8 +746,7 @@ if [ -f "$WAL_FILE" ] && [ "$(wc -l < "$WAL_FILE" 2>/dev/null)" -gt 1200 ]; then
     { tail -1000 "$WAL_FILE" > "$WAL_FILE.tmp" && mv "$WAL_FILE.tmp" "$WAL_FILE"; } 2>/dev/null || true
 fi
 
-# Create session marker AFTER all file modifications
-touch "/tmp/.claude-session-${SESSION_ID}" 2>/dev/null || true
+# Session marker already created early (after project detection)
 
 # Generate compact agent context file
 AGENT_CTX="$MEMORY_DIR/_agent_context.md"
