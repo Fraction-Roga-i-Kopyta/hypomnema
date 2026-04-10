@@ -12,6 +12,8 @@ SESSION_ID=$(printf '%s\n' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
 [ -z "$SESSION_ID" ] && exit 0
 
 SAFE_MARKER_ID="${SESSION_ID//\//_}"
+SAFE_SESSION_ID="${SESSION_ID//|/_}"
+SAFE_SESSION_ID="${SAFE_SESSION_ID//\//_}"
 MARKER="/tmp/.claude-session-${SAFE_MARKER_ID}"
 
 # --- Lifecycle rotation (always runs, even without session marker) ---
@@ -283,7 +285,7 @@ if [ -n "$ERROR_SUMMARY" ]; then
     ERROR_LINES="${ERROR_LINES}
 - \`${cmd}\` (${count}, confidence: ${level})"
     first_word=$(echo "$cmd" | awk '{print $1}' | sed 's/.*\///')
-    printf '%s|error-detected-%s|%s|%s\n' "$(date +%Y-%m-%d)" "$level" "$first_word" "$SESSION_ID" >> "$MEMORY_DIR/.wal" 2>/dev/null
+    printf '%s|error-detected-%s|%s|%s\n' "$(date +%Y-%m-%d)" "$level" "$first_word" "$SAFE_SESSION_ID" >> "$MEMORY_DIR/.wal" 2>/dev/null
   done <<< "$ERROR_SUMMARY"
   if [ -n "$ERROR_LINES" ]; then
     REMINDER="${REMINDER}${REMINDER:+
