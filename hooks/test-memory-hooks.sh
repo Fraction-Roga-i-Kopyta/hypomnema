@@ -543,6 +543,31 @@ NOTES_CTX=$(printf '%s' "$NOTES_OUT" | jq -r '.hookSpecificOutput.additionalCont
 assert "Notes injected by keyword" 'printf "%s" "$NOTES_CTX" | grep -q "docker-tips"'
 rm -rf "$NOTES_DIR" /tmp/docker-project
 
+# Test: WAL compaction preserves spread data
+WALC_DIR=$(mktemp -d)
+WALC_MEM="$WALC_DIR/memory"
+mkdir -p "$WALC_MEM"
+# Generate >1200 WAL entries with known spread pattern
+{
+  for day in $(seq 1 60); do
+    if [[ "$OSTYPE" == darwin* ]]; then
+      d=$(date -v-${day}d +%Y-%m-%d 2>/dev/null)
+    else
+      d=$(date -d "${day} days ago" +%Y-%m-%d)
+    fi
+    for i in $(seq 1 25); do
+      echo "${d}|inject|spread-victim|sess-${day}-${i}"
+    done
+  done
+} > "$WALC_MEM/.wal"
+WAL_BEFORE=$(wc -l < "$WALC_MEM/.wal")
+CLAUDE_MEMORY_DIR="$WALC_MEM" bash "$HOME/.claude/hooks/wal-compact.sh" 2>/dev/null
+WAL_AFTER=$(wc -l < "$WALC_MEM/.wal")
+assert "WAL compaction — reduced size" '[ "$WAL_AFTER" -lt "$WAL_BEFORE" ]'
+assert "WAL compaction — has aggregates" 'grep -q "inject-agg" "$WALC_MEM/.wal"'
+assert "WAL compaction — preserved recent raw" 'grep -q "|inject|" "$WALC_MEM/.wal"'
+rm -rf "$WALC_DIR"
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="
