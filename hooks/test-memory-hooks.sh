@@ -516,6 +516,33 @@ assert "Special chars in git — no crash" '[ $PERL_EXIT -eq 0 ]'
 assert "Continuity file intact" '[ -f "$PERL_MEM/continuity/perl-proj.md" ]'
 rm -rf "$PERL_DIR" /tmp/perl-test "$PERL_MARKER"
 
+# Test: notes injected by keyword match
+NOTES_DIR=$(mktemp -d)
+NOTES_MEM="$NOTES_DIR/memory"
+mkdir -p "$NOTES_MEM"/{notes,projects,feedback}
+cat > "$NOTES_MEM/projects.json" << 'EOF'
+{}
+EOF
+cat > "$NOTES_MEM/projects-domains.json" << 'EOF'
+{}
+EOF
+cat > "$NOTES_MEM/notes/docker-tips.md" << 'EOF'
+---
+type: knowledge
+project: global
+status: active
+referenced: 2026-04-01
+keywords: [docker, container, networking]
+---
+Docker networking tip: use bridge mode for isolation.
+EOF
+# Simulate session with keyword "docker" (via CWD basename)
+mkdir -p /tmp/docker-project
+NOTES_OUT=$(echo '{"session_id":"notes-test","cwd":"/tmp/docker-project"}' | CLAUDE_MEMORY_DIR="$NOTES_MEM" bash "$HOOK" 2>/dev/null)
+NOTES_CTX=$(printf '%s' "$NOTES_OUT" | jq -r '.hookSpecificOutput.additionalContext // ""')
+assert "Notes injected by keyword" 'printf "%s" "$NOTES_CTX" | grep -q "docker-tips"'
+rm -rf "$NOTES_DIR" /tmp/docker-project
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="
