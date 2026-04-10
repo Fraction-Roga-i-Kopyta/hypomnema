@@ -10,8 +10,18 @@ set -o pipefail
 MEMORY_DIR="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}"
 MAX_GLOBAL_MISTAKES=3
 MAX_PROJECT_MISTAKES=3
-MAX_FEEDBACK=5
-MAX_FILES=15
+# Adaptive quotas: min guaranteed per type, with shared flex pool
+# Total budget for scored types (feedback+knowledge+strategies): 12 slots
+# Each type gets min slots guaranteed, rest compete in flex pool
+MAX_SCORED_TOTAL=12
+MIN_FEEDBACK=2
+MIN_KNOWLEDGE=1
+MIN_STRATEGIES=1
+# Per-type caps (prevent any single type from dominating)
+CAP_FEEDBACK=6
+CAP_KNOWLEDGE=4
+CAP_STRATEGIES=4
+MAX_FILES=22
 TODAY=$(date +%Y-%m-%d)
 
 # --- Main ---
@@ -33,14 +43,109 @@ PROJECT=""
 PROJECTS_JSON="$MEMORY_DIR/projects.json"
 if [ -f "$PROJECTS_JSON" ] && jq empty "$PROJECTS_JSON" 2>/dev/null; then
   while read -r prefix; do
+    # Exact match or prefix with / boundary (prevents /fly matching /fly-other)
     case "$CWD" in
-      "${prefix}"*)
+      "${prefix}"|"${prefix}"/*)
         PROJECT=$(jq -r --arg k "$prefix" '.[$k]' "$PROJECTS_JSON" 2>/dev/null)
         break
         ;;
     esac
   done < <(jq -r 'to_entries | sort_by(.key | length) | reverse | .[].key' "$PROJECTS_JSON" 2>/dev/null)
 fi
+
+# --- Detect domains ---
+
+detect_domains() {
+  local cwd="$1" project="$2"
+  local _domains=""  # space-separated, deduped
+
+  _add() {
+    local d="$1"
+    [ -z "$d" ] && return
+    case " $_domains " in *" $d "*) return ;; esac
+    _domains="${_domains:+$_domains }$d"
+  }
+
+  # 1. Project → default domains mapping (from projects-domains.json)
+  local DOMAINS_JSON="$MEMORY_DIR/projects-domains.json"
+  if [ -n "$project" ] && [ -f "$DOMAINS_JSON" ]; then
+    local proj_domains
+    proj_domains=$(jq -r --arg p "$project" '.[$p] // [] | .[]' "$DOMAINS_JSON" 2>/dev/null)
+    while IFS= read -r d; do
+      [ -n "$d" ] && _add "$d"
+    done <<< "$proj_domains"
+  fi
+
+  # 2. CWD path heuristics
+  local cwd_lower
+  cwd_lower=$(printf '%s' "$cwd" | tr '[:upper:]' '[:lower:]')
+  case "$cwd_lower" in
+    *jira*|*scriptrunner*) _add "jira"; _add "groovy" ;;
+    *infra*|*terraform*|*ansible*) _add "infra"; _add "devops" ;;
+    *frontend*|*webapp*|*ui/*) _add "frontend" ;;
+    *backend*|*api/*|*server/*) _add "backend" ;;
+    *docs*|*documentation*) _add "docs" ;;
+  esac
+
+  # 3. Git diff — recent file extensions (last 3 commits)
+  if [ -d "$cwd/.git" ] || git -C "$cwd" rev-parse --git-dir >/dev/null 2>&1; then
+    local diff_files
+    diff_files=$(git -C "$cwd" diff --name-only HEAD~3 HEAD 2>/dev/null || \
+                 git -C "$cwd" diff --name-only HEAD 2>/dev/null || \
+                 git -C "$cwd" diff --cached --name-only 2>/dev/null || true)
+
+    if [ -n "$diff_files" ]; then
+      local ext_domains
+      ext_domains=$(printf '%s\n' "$diff_files" | awk -F. '
+        NF > 1 {
+          ext = tolower($NF)
+          if (ext == "css" || ext == "scss" || ext == "sass" || ext == "less") print "css"
+          else if (ext == "tsx" || ext == "jsx" || ext == "vue" || ext == "svelte") print "frontend"
+          else if (ext == "ts" || ext == "js") print "frontend"
+          else if (ext == "py" || ext == "rb" || ext == "go" || ext == "rs" || ext == "java" || ext == "kt") print "backend"
+          else if (ext == "groovy" || ext == "gvy") { print "groovy"; print "jira" }
+          else if (ext == "sql" || ext == "prisma") print "db"
+          else if (ext == "tf" || ext == "hcl" || ext == "yaml" || ext == "yml") print "infra"
+          else if (ext == "dockerfile") print "devops"
+          else if (ext == "md" || ext == "rst" || ext == "adoc") print "docs"
+        }
+        /^[Dd]ockerfile/ { print "devops" }
+      ' | sort -u)
+
+      while IFS= read -r d; do
+        [ -n "$d" ] && _add "$d"
+      done <<< "$ext_domains"
+    fi
+  fi
+
+  # 4. Fallback: ls CWD for signature files (no git needed)
+  if [ -z "$_domains" ]; then
+    { [ -f "$cwd/Dockerfile" ] || [ -f "$cwd/docker-compose.yml" ]; } && _add "devops"
+    [ -f "$cwd/package.json" ] && _add "frontend"
+    { [ -f "$cwd/requirements.txt" ] || [ -f "$cwd/pyproject.toml" ]; } && _add "backend"
+    { [ -f "$cwd/Makefile" ] || [ -f "$cwd/Taskfile.yml" ]; } && _add "infra"
+    { [ -d "$cwd/migrations" ] || [ -d "$cwd/alembic" ]; } && _add "db"
+    ls "$cwd"/*.groovy >/dev/null 2>&1 && _add "groovy"
+    find "$cwd/src" -maxdepth 3 \( -name "*.css" -o -name "*.scss" \) 2>/dev/null | head -1 | grep -q . && _add "css"
+  fi
+
+  printf '%s' "$_domains"
+}
+
+DOMAINS=$(detect_domains "$CWD" "$PROJECT")
+
+# --- Extract keywords for content-aware matching ---
+# Sources: git branch name, git diff filenames, CWD basename
+KEYWORDS=""
+if [ -d "$CWD/.git" ] || git -C "$CWD" rev-parse --git-dir >/dev/null 2>&1; then
+  branch=$(git -C "$CWD" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+  [ -n "$branch" ] && KEYWORDS="$KEYWORDS $(printf '%s' "$branch" | tr '/_-' ' ')"
+  diff_names=$(git -C "$CWD" diff --name-only HEAD 2>/dev/null | sed 's/.*\///; s/\..*//' | sort -u | head -10 | tr '\n' ' ')
+  [ -n "$diff_names" ] && KEYWORDS="$KEYWORDS $diff_names"
+fi
+KEYWORDS="$KEYWORDS $(basename "$CWD")"
+# Normalize: lowercase, deduplicate, remove short tokens
+KEYWORDS=$(printf '%s' "$KEYWORDS" | tr '[:upper:]' '[:lower:]' | tr ' ' '\n' | awk 'length>=3 && !seen[$0]++' | tr '\n' ' ')
 
 # --- Single-pass frontmatter parsers (BSD awk compatible) ---
 # Uses FNR==1 to detect file boundaries instead of BEGINFILE/ENDFILE
@@ -49,12 +154,12 @@ fi
 AWK_MISTAKES='
 FNR == 1 {
   if (prev_file != "") {
-    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", \
-      prev_file, status, project, recurrence, injected, severity, root_cause, prevention, body
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", \
+      prev_file, status, project, recurrence, injected, severity, root_cause, prevention, domains, body
   }
   in_fm = 0; fm_end_count = 0
-  status = ""; project = ""; recurrence = "0"; injected = "0000-00-00"
-  severity = ""; root_cause = ""; prevention = ""
+  status = "_empty_"; project = "_empty_"; recurrence = "0"; injected = "0000-00-00"
+  severity = "_empty_"; root_cause = "_empty_"; prevention = "_empty_"; domains = "_none_"
   body = ""; past_fm = 0; prev_file = FILENAME
 }
 /^---$/ {
@@ -69,21 +174,23 @@ in_fm && /^injected:/ { sub(/^injected: */, ""); injected = $0; next }
 in_fm && /^severity:/ { sub(/^severity: */, ""); severity = $0; next }
 in_fm && /^root-cause:/ { sub(/^root-cause: */, ""); root_cause = $0; next }
 in_fm && /^prevention:/ { sub(/^prevention: */, ""); prevention = $0; next }
-past_fm && !/^$/ { body = body $0 "\n" }
+in_fm && /^domains:/ { sub(/^domains: *\[?/, ""); sub(/\].*/, ""); gsub(/, */, " "); domains = $0; next }
+past_fm && !/^$/ { gsub(/\t/, " ", $0); body = body $0 "\x1e" }
 END {
   if (prev_file != "") {
-    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", \
-      prev_file, status, project, recurrence, injected, severity, root_cause, prevention, body
+    gsub(/\t/, " ", root_cause); gsub(/\t/, " ", prevention)
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", \
+      prev_file, status, project, recurrence, injected, severity, root_cause, prevention, domains, body
   }
 }'
 
-AWK_FEEDBACK='
+AWK_SCORED='
 FNR == 1 {
   if (prev_file != "") {
-    printf "%s\t%s\t%s\t%s\n", prev_file, status, project, body
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", prev_file, status, project, referenced, domains, keywords, body
   }
   in_fm = 0; fm_end_count = 0
-  status = ""; project = ""; body = ""; past_fm = 0; prev_file = FILENAME
+  status = "_empty_"; project = "_empty_"; referenced = "0000-00-00"; domains = "_none_"; keywords = "_none_"; body = ""; past_fm = 0; prev_file = FILENAME
 }
 /^---$/ {
   fm_end_count++
@@ -92,15 +199,34 @@ FNR == 1 {
 }
 in_fm && /^status:/ { sub(/^status: */, ""); status = $0; next }
 in_fm && /^project:/ { sub(/^project: */, ""); project = $0; next }
-past_fm && !/^$/ { body = body $0 "\n" }
+in_fm && /^referenced:/ { sub(/^referenced: */, ""); referenced = $0; next }
+in_fm && /^injected:/ { sub(/^injected: */, ""); if (referenced == "0000-00-00") referenced = $0; next }
+in_fm && /^domains:/ { sub(/^domains: *\[?/, ""); sub(/\].*/, ""); gsub(/, */, " "); domains = $0; next }
+in_fm && /^keywords:/ { sub(/^keywords: *\[?/, ""); sub(/\].*/, ""); gsub(/, */, " "); keywords = $0; next }
+past_fm && !/^$/ { gsub(/\t/, " ", $0); body = body $0 "\x1e" }
 END {
   if (prev_file != "") {
-    printf "%s\t%s\t%s\t%s\n", prev_file, status, project, body
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", prev_file, status, project, referenced, domains, keywords, body
   }
 }'
 
-# AWK_GENERIC reuses AWK_FEEDBACK format (same fields: file, status, project, body)
-AWK_GENERIC="$AWK_FEEDBACK"
+# --- Domain matching helper ---
+# Returns 0 (true) if file domains intersect with active DOMAINS, or if file has "general" domain
+domain_matches() {
+  local file_domains="$1"
+  [ -z "$DOMAINS" ] && return 0          # no active domains → match all
+  [ -z "$file_domains" ] && return 0     # no file domains → match (untagged)
+  [ "$file_domains" = "_none_" ] && return 0  # untagged marker from awk
+  local fd ad
+  local IFS=' '
+  for fd in $file_domains; do
+    [ "$fd" = "general" ] && return 0    # general always matches
+    for ad in $DOMAINS; do
+      [ "$fd" = "$ad" ] && return 0
+    done
+  done
+  return 1  # no intersection
+}
 
 # --- Collect mistakes ---
 
@@ -116,9 +242,16 @@ if [ -d "$MEMORY_DIR/mistakes" ]; then
   done < <(find "$MEMORY_DIR/mistakes" -name "*.md" -type f 2>/dev/null)
 
   if [ ${#MISTAKE_FILES[@]} -gt 0 ]; then
-    while IFS=$'\t' read -r file status file_project recurrence injected severity root_cause prevention body; do
+    while IFS=$'\t' read -r file status file_project recurrence injected severity root_cause prevention file_domains body; do
       [ -z "$file" ] && continue
+      body=$(printf '%s' "$body" | tr $'\x1e' '\n')
       [ "$status" != "active" ] && [ "$status" != "pinned" ] && continue
+
+      # Recurrence threshold: skip unconfirmed mistakes (rec=0) unless pinned
+      [ "$recurrence" = "0" ] && [ "$status" != "pinned" ] && continue
+
+      # Domain filtering: skip if domains don't match active context
+      domain_matches "$file_domains" || continue
 
       if [ "$file_project" = "global" ]; then
         [ $GLOBAL_COUNT -ge $MAX_GLOBAL_MISTAKES ] && continue
@@ -136,8 +269,8 @@ if [ -d "$MEMORY_DIR/mistakes" ]; then
       clean_body=$(printf '%s' "$body" | tr -d '[:space:]')
       if [ -z "$clean_body" ]; then
         body=""
-        [ -n "$root_cause" ] && body="Root cause: ${root_cause}"
-        [ -n "$prevention" ] && body="${body}
+        [ -n "$root_cause" ] && [ "$root_cause" != "_empty_" ] && body="Root cause: ${root_cause}"
+        [ -n "$prevention" ] && [ "$prevention" != "_empty_" ] && body="${body}
 Prevention: ${prevention}"
       fi
 
@@ -150,103 +283,248 @@ ${body}
   fi
 fi
 
-# --- Collect feedback ---
+# --- WAL-based spaced repetition scoring ---
+# Formula: spread × decay(recency) × (1 - negative_ratio)
+# spread = unique days with inject in 30 days (min 2 injects to count)
+# decay = 1 / (1 + days_since_last / 7)
+# negative_ratio = outcome-negative count / total injects
+WAL_FILE="$MEMORY_DIR/.wal"
+WAL_SCORES=""
+if [ -f "$WAL_FILE" ]; then
+  if [[ "$OSTYPE" == darwin* ]]; then
+    CUTOFF_30D=$(date -v-30d +%Y-%m-%d 2>/dev/null || echo "0000-00-00")
+  else
+    CUTOFF_30D=$(date -d "30 days ago" +%Y-%m-%d 2>/dev/null || echo "0000-00-00")
+  fi
+  # Output: "name:score;name:score;..." (semicolon-separated, no newlines)
+  # NOTE: BSD awk — no multidimensional arrays. Use SUBSEP for days tracking.
+  WAL_SCORES=$(awk -F'|' -v cutoff="$CUTOFF_30D" -v today="$TODAY" '
+    $1 >= cutoff && $2 == "inject" {
+      count[$3]++
+      days[$3, $1] = 1
+      if ($1 > last_day[$3] || last_day[$3] == "") last_day[$3] = $1
+    }
+    $1 >= cutoff && $2 == "outcome-negative" {
+      neg_count[$3]++
+    }
+    function days_between(d1, d2) {
+      split(d1, a, "-"); split(d2, b, "-")
+      return (b[1]-a[1])*365 + (b[2]-a[2])*30 + (b[3]-a[3])
+    }
+    END {
+      first = 1
+      for (name in count) {
+        if (count[name] < 2) continue
 
-FEEDBACK_MD=""
-FEEDBACK_COUNT=0
+        # spread = unique days (count SUBSEP keys for this name)
+        spread = 0
+        for (key in days) {
+          split(key, kp, SUBSEP)
+          if (kp[1] == name) spread++
+        }
 
-if [ -d "$MEMORY_DIR/feedback" ]; then
-  FEEDBACK_FILES=()
+        # decay
+        ds = days_between(last_day[name], today)
+        if (ds < 0) ds = 0
+        decay = 1.0 / (1.0 + ds / 7.0)
+
+        # negative ratio
+        nr = 0
+        if (name in neg_count) nr = neg_count[name] / count[name]
+        if (nr > 1) nr = 1
+
+        raw = spread * decay * (1.0 - nr)
+        if (raw > 10) raw = 10
+
+        if (!first) printf ";"
+        printf "%s:%.1f", name, raw
+        first = 0
+      }
+    }
+  ' "$WAL_FILE" 2>/dev/null || true)
+fi
+
+# --- TF-IDF index scoring ---
+TFIDF_INDEX="$MEMORY_DIR/.tfidf-index"
+TFIDF_SCORES=""
+if [ -f "$TFIDF_INDEX" ]; then
+  # Check freshness: skip if older than 7 days
+  if [[ "$OSTYPE" == darwin* ]]; then
+    idx_mtime=$(stat -f %m "$TFIDF_INDEX" 2>/dev/null || echo 0)
+  else
+    idx_mtime=$(stat -c %Y "$TFIDF_INDEX" 2>/dev/null || echo 0)
+  fi
+  idx_age=$(( ($(date +%s) - idx_mtime) / 86400 ))
+  if [ "$idx_age" -le 7 ]; then
+    if [ -n "$KEYWORDS" ]; then
+      TFIDF_SCORES=$(awk -F'\t' -v kw="$KEYWORDS" '
+        BEGIN { n=split(kw, kws, " ") }
+        {
+          term=$1
+          for (i=1; i<=n; i++) {
+            if (term == kws[i]) {
+              for (j=2; j<=NF; j++) {
+                split($j, fp, ":")
+                scores[fp[1]] += fp[2]+0
+              }
+            }
+          }
+        }
+        END {
+          first=1
+          for (f in scores) {
+            if (!first) printf ";"
+            printf "%s:%.2f", f, scores[f]
+            first=0
+          }
+        }
+      ' "$TFIDF_INDEX")
+    fi
+  else
+    printf '%s|index-stale|tfidf|%s\n' "$TODAY" "$SESSION_ID" >> "$MEMORY_DIR/.wal" 2>/dev/null || true
+  fi
+fi
+
+# --- Keyword matching helper ---
+# Returns 0 (true) if file keywords intersect with active KEYWORDS
+keyword_match_score() {
+  local file_keywords="$1"
+  local score=0
+  [ -z "$KEYWORDS" ] && echo 0 && return
+  [ "$file_keywords" = "_none_" ] && echo 0 && return
+  local fk ak
+  for fk in $file_keywords; do
+    for ak in $KEYWORDS; do
+      [ "$fk" = "$ak" ] && score=$((score + 1))
+    done
+  done
+  echo "$score"
+}
+
+# --- Generic scored collector (DRY: replaces 3 copy-paste blocks) ---
+# Usage: collect_scored <dir> <cap>
+# Sets _COLLECT_RESULT with markdown output, appends to INJECTED_FILES
+# Uses _SCORED_USED (shared counter across types) for adaptive budget
+collect_scored() {
+  local dir="$1" cap="$2"
+  _COLLECT_RESULT=""
+  local type_count=0
+
+  [ -d "$MEMORY_DIR/$dir" ] || return 0
+
+  local files=()
   while IFS= read -r f; do
-    FEEDBACK_FILES+=("$f")
-  done < <(find "$MEMORY_DIR/feedback" -name "*.md" -type f 2>/dev/null | sort)
+    files+=("$f")
+  done < <(find "$MEMORY_DIR/$dir" -name "*.md" -type f 2>/dev/null)
 
-  if [ ${#FEEDBACK_FILES[@]} -gt 0 ]; then
-    while IFS=$'\t' read -r file status file_project body; do
+  [ ${#files[@]} -gt 0 ] || return 0
+
+  # Parse files with keyword scoring via awk
+  # Pass KEYWORDS to awk for inline scoring (avoids shell loop overhead)
+  local awk_out
+  # Composite scoring: keyword_hits * 3 + wal_frequency (capped at 10)
+  awk_out=$(awk "$AWK_SCORED" "${files[@]}" 2>/dev/null | \
+    awk -F'\t' -v kw="$KEYWORDS" -v wal="$WAL_SCORES" -v tfidf="$TFIDF_SCORES" '
+    BEGIN {
+      n=split(kw, kws, " ")
+      # Parse WAL scores: "name:count;name:count;..."
+      m=split(wal, wentries, ";")
+      for (i=1; i<=m; i++) {
+        split(wentries[i], wp, ":")
+        if (wp[1] != "") wal_count[wp[1]] = wp[2]+0
+      }
+      # Parse TF-IDF scores: "name:score;name:score;..."
+      t=split(tfidf, tentries, ";")
+      for (i=1; i<=t; i++) {
+        split(tentries[i], tp, ":")
+        if (tp[1] != "") tfidf_score[tp[1]] = tp[2]+0
+      }
+    }
+    {
+      score=0
+      # Keyword matching: +3 per keyword hit
+      fkw=$6
+      if (fkw != "_none_" && n > 0) {
+        split(fkw, fks, " ")
+        for (i in fks) for (j in kws) if (fks[i] == kws[j]) score += 3
+      }
+      # WAL spaced repetition score (already normalized 0-10)
+      fname=$1; sub(/.*\//, "", fname); sub(/\.md$/, "", fname)
+      wc = wal_count[fname]+0
+      score += wc
+      # TF-IDF bonus: only for records WITHOUT keywords field (+2 per score unit, cap 6)
+      if (fkw == "_none_") {
+        ts = tfidf_score[fname]+0
+        if (ts > 3) ts = 3
+        score += ts * 2
+      }
+      printf "%d\t%s\n", score, $0
+    }' | sort -t$'\t' -k1,1rn -k5,5r)
+
+  # Pass 1: project-specific
+  if [ -n "$PROJECT" ]; then
+    while IFS=$'\t' read -r kscore file status file_project referenced file_domains file_keywords body; do
       [ -z "$file" ] && continue
-      [ $FEEDBACK_COUNT -ge $MAX_FEEDBACK ] && break
+      body=$(printf '%s' "$body" | tr $'\x1e' '\n')
       [ "$status" != "active" ] && [ "$status" != "pinned" ] && continue
-      [ "$file_project" != "global" ] && [ "$file_project" != "$PROJECT" ] && continue
+      domain_matches "$file_domains" || continue
+      [ "$file_project" != "$PROJECT" ] && continue
+      [ $type_count -ge $cap ] && continue
+      [ $_SCORED_USED -ge $MAX_SCORED_TOTAL ] && continue
 
+      local clean_body
       clean_body=$(printf '%s' "$body" | tr -d '[:space:]')
       [ -z "$clean_body" ] && continue
 
+      local filename
       filename=$(basename "$file" .md)
-      FEEDBACK_MD="${FEEDBACK_MD}
+      _COLLECT_RESULT="${_COLLECT_RESULT}
 ### ${filename}
 ${body}
 "
       INJECTED_FILES+=("$file")
-      FEEDBACK_COUNT=$((FEEDBACK_COUNT + 1))
-    done < <(awk "$AWK_FEEDBACK" "${FEEDBACK_FILES[@]}" 2>/dev/null)
+      type_count=$((type_count + 1))
+      _SCORED_USED=$((_SCORED_USED + 1))
+    done <<< "$awk_out"
   fi
-fi
 
-# --- Collect knowledge ---
+  # Pass 2: global
+  while IFS=$'\t' read -r kscore file status file_project referenced file_domains file_keywords body; do
+    [ -z "$file" ] && continue
+    body=$(printf '%s' "$body" | tr $'\x1e' '\n')
+    [ "$status" != "active" ] && [ "$status" != "pinned" ] && continue
+    domain_matches "$file_domains" || continue
+    [ "$file_project" != "global" ] && continue
+    [ $type_count -ge $cap ] && continue
+    [ $_SCORED_USED -ge $MAX_SCORED_TOTAL ] && continue
 
-KNOWLEDGE_MD=""
-MAX_KNOWLEDGE=3
+    local clean_body
+    clean_body=$(printf '%s' "$body" | tr -d '[:space:]')
+    [ -z "$clean_body" ] && continue
 
-if [ -d "$MEMORY_DIR/knowledge" ]; then
-  KNOWLEDGE_FILES=()
-  while IFS= read -r f; do
-    KNOWLEDGE_FILES+=("$f")
-  done < <(find "$MEMORY_DIR/knowledge" -name "*.md" -type f 2>/dev/null | sort)
-
-  if [ ${#KNOWLEDGE_FILES[@]} -gt 0 ]; then
-    KNOWLEDGE_COUNT=0
-    while IFS=$'\t' read -r file status file_project body; do
-      [ -z "$file" ] && continue
-      [ $KNOWLEDGE_COUNT -ge $MAX_KNOWLEDGE ] && break
-      [ "$status" != "active" ] && [ "$status" != "pinned" ] && continue
-      [ "$file_project" != "global" ] && [ "$file_project" != "$PROJECT" ] && continue
-
-      clean_body=$(printf '%s' "$body" | tr -d '[:space:]')
-      [ -z "$clean_body" ] && continue
-
-      filename=$(basename "$file" .md)
-      KNOWLEDGE_MD="${KNOWLEDGE_MD}
+    local filename
+    filename=$(basename "$file" .md)
+    _COLLECT_RESULT="${_COLLECT_RESULT}
 ### ${filename}
 ${body}
 "
-      INJECTED_FILES+=("$file")
-      KNOWLEDGE_COUNT=$((KNOWLEDGE_COUNT + 1))
-    done < <(awk "$AWK_GENERIC" "${KNOWLEDGE_FILES[@]}" 2>/dev/null)
-  fi
-fi
+    INJECTED_FILES+=("$file")
+    type_count=$((type_count + 1))
+    _SCORED_USED=$((_SCORED_USED + 1))
+  done <<< "$awk_out"
+}
 
-# --- Collect strategies ---
+# --- Collect feedback, knowledge, strategies (adaptive quotas) ---
+_SCORED_USED=0
 
-STRATEGIES_MD=""
-MAX_STRATEGIES=3
+collect_scored "feedback" "$CAP_FEEDBACK"
+FEEDBACK_MD="$_COLLECT_RESULT"
 
-if [ -d "$MEMORY_DIR/strategies" ]; then
-  STRATEGY_FILES=()
-  while IFS= read -r f; do
-    STRATEGY_FILES+=("$f")
-  done < <(find "$MEMORY_DIR/strategies" -name "*.md" -type f 2>/dev/null | sort)
+collect_scored "knowledge" "$CAP_KNOWLEDGE"
+KNOWLEDGE_MD="$_COLLECT_RESULT"
 
-  if [ ${#STRATEGY_FILES[@]} -gt 0 ]; then
-    STRATEGY_COUNT=0
-    while IFS=$'\t' read -r file status file_project body; do
-      [ -z "$file" ] && continue
-      [ $STRATEGY_COUNT -ge $MAX_STRATEGIES ] && break
-      [ "$status" != "active" ] && [ "$status" != "pinned" ] && continue
-      [ "$file_project" != "global" ] && [ "$file_project" != "$PROJECT" ] && continue
-
-      clean_body=$(printf '%s' "$body" | tr -d '[:space:]')
-      [ -z "$clean_body" ] && continue
-
-      filename=$(basename "$file" .md)
-      STRATEGIES_MD="${STRATEGIES_MD}
-### ${filename}
-${body}
-"
-      INJECTED_FILES+=("$file")
-      STRATEGY_COUNT=$((STRATEGY_COUNT + 1))
-    done < <(awk "$AWK_GENERIC" "${STRATEGY_FILES[@]}" 2>/dev/null)
-  fi
-fi
+collect_scored "strategies" "$CAP_STRATEGIES"
+STRATEGIES_MD="$_COLLECT_RESULT"
 
 # --- Collect project overview ---
 
@@ -286,6 +564,11 @@ CONTEXT=""
 # Continuity first — most relevant context
 [ -n "$CONTINUITY_MD" ] && CONTEXT="${CONTINUITY_MD}"
 [ -n "$PROJECT_MD" ] && CONTEXT="${CONTEXT}${PROJECT_MD}"
+if [ -n "$DOMAINS" ]; then
+  CONTEXT="${CONTEXT}
+**Active domains:** ${DOMAINS}
+"
+fi
 if [ -n "$MISTAKES_MD" ]; then
   CONTEXT="${CONTEXT}
 ## Active Mistakes
@@ -315,12 +598,31 @@ if [ ${#INJECTED_FILES[@]} -gt $MAX_FILES ]; then
   INJECTED_FILES=("${INJECTED_FILES[@]:0:$MAX_FILES}")
 fi
 
-# Update accessed dates — single sed per file (unavoidable writes)
-for f in "${INJECTED_FILES[@]}"; do
-  if grep -q "^injected:" "$f" 2>/dev/null; then
-    sed -i.bak "s/^injected: .*/injected: $TODAY/" "$f" 2>/dev/null && rm -f "$f.bak" 2>/dev/null || true
-  fi
-done
+# Update accessed dates — single perl call for all files (13x faster than grep+sed+rm loop)
+# Only modify within frontmatter block (between first and second ---)
+if [ ${#INJECTED_FILES[@]} -gt 0 ]; then
+  perl -pi -e '
+    $in_fm = 1 if /^---$/ && !$seen_fm++;
+    $in_fm = 0 if /^---$/ && $seen_fm > 1;
+    if ($in_fm) {
+      s/^injected: .*/injected: '"$TODAY"'/;
+      s/^referenced: .*/referenced: '"$TODAY"'/;
+    }
+    if (eof) { $seen_fm = 0; $in_fm = 0; }
+  ' "${INJECTED_FILES[@]}" 2>/dev/null || true
+fi
+
+# WAL: append injection log (Hebbian — tracks access frequency)
+WAL_FILE="$MEMORY_DIR/.wal"
+{
+  for f in "${INJECTED_FILES[@]}"; do
+    printf '%s|inject|%s|%s\n' "$TODAY" "$(basename "$f" .md)" "$SESSION_ID"
+  done
+} >> "$WAL_FILE" 2>/dev/null || true
+# Rotate WAL: keep last 1000 lines
+if [ -f "$WAL_FILE" ] && [ "$(wc -l < "$WAL_FILE" 2>/dev/null)" -gt 1200 ]; then
+  tail -1000 "$WAL_FILE" > "$WAL_FILE.tmp" && mv "$WAL_FILE.tmp" "$WAL_FILE" 2>/dev/null || true
+fi
 
 # Create session marker AFTER all file modifications
 touch "/tmp/.claude-session-${SESSION_ID}" 2>/dev/null || true
@@ -331,15 +633,21 @@ AGENT_CTX="$MEMORY_DIR/_agent_context.md"
   echo "# Memory Context (compact, for subagents)"
   echo ""
   [ -n "$PROJECT" ] && echo "**Project:** $PROJECT"
+  [ -n "$DOMAINS" ] && echo "**Domains:** $DOMAINS"
   echo ""
   if [ -n "$MISTAKES_MD" ]; then
     echo "## Key Mistakes"
-    printf '%s\n' "$MISTAKES_MD" | grep "^### " | head -5
+    printf '%s\n' "$MISTAKES_MD" | grep -E "^### |^Root cause:|^Prevention:" | head -15
+    echo ""
+  fi
+  if [ -n "$FEEDBACK_MD" ]; then
+    echo "## Feedback"
+    printf '%s\n' "$FEEDBACK_MD" | awk '/^### /{if(name)print name": "line; name=$0; line=""; next} line=="" && /^[^#]/ && !/^$/{line=$0} END{if(name)print name": "line}' | head -5
     echo ""
   fi
   if [ -n "$STRATEGIES_MD" ]; then
     echo "## Strategies"
-    printf '%s\n' "$STRATEGIES_MD" | grep "^### " | head -3
+    printf '%s\n' "$STRATEGIES_MD" | awk '/^### /{if(name)print name": "line; name=$0; line=""; next} line=="" && /^[^#]/ && !/^$/{line=$0} END{if(name)print name": "line}' | head -3
     echo ""
   fi
   echo "Full context: \`~/.claude/memory/\`"
