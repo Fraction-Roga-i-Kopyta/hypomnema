@@ -90,6 +90,23 @@ lifecycle_rotate() {
       ' "$f" 2>/dev/null || true
     fi
   done
+
+  # Archive files without valid frontmatter if older than 90 days by mtime
+  for f in "${all_files[@]}"; do
+    head_line=$(head -1 "$f" 2>/dev/null)
+    [ "$head_line" = "---" ] && continue
+    if [[ "$OSTYPE" == darwin* ]]; then
+      fmtime=$(stat -f %m "$f" 2>/dev/null || echo 0)
+    else
+      fmtime=$(stat -c %Y "$f" 2>/dev/null || echo 0)
+    fi
+    local fage=$(( (NOW_SEC - fmtime) / 86400 ))
+    if [ "$fage" -gt 90 ]; then
+      local rel="${f#$MEMORY_DIR/}"
+      mkdir -p "$ARCHIVE_DIR/$(dirname "$rel")"
+      mv "$f" "$ARCHIVE_DIR/$rel"
+    fi
+  done
 }
 
 lifecycle_rotate 2>/dev/null || true

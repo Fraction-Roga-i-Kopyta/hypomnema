@@ -602,6 +602,17 @@ function days_between(d1, d2) {
 END { printf "%d", days_between("2026-02-28", "2026-03-01") }')
 assert "days_between Feb28→Mar1 = 1" '[ "$DAYS_TEST" = "1" ]'
 
+# Test: frontmatter-less files archived after 90 days
+NOFM_DIR=$(mktemp -d)
+NOFM_MEM="$NOFM_DIR/memory"
+mkdir -p "$NOFM_MEM/notes"
+printf '# No frontmatter here\nJust a note.\n' > "$NOFM_MEM/notes/no-fm.md"
+# Set mtime to 100 days ago
+touch -t $(date -v-100d +%Y%m%d0000 2>/dev/null || date -d "100 days ago" +%Y%m%d0000) "$NOFM_MEM/notes/no-fm.md"
+echo '{"session_id":"nofm-test"}' | CLAUDE_MEMORY_DIR="$NOFM_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null
+assert "Frontmatter-less file archived" '[ ! -f "$NOFM_MEM/notes/no-fm.md" ] && [ -f "$NOFM_MEM/archive/notes/no-fm.md" ]'
+rm -rf "$NOFM_DIR"
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="
