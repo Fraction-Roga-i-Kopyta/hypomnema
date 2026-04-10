@@ -12,14 +12,14 @@ You have a persistent file-based memory system at `~/.claude/memory/`. SessionSt
 ### mistakes/ — What went wrong
 Record when a bug, wrong approach, or repeated error is found.
 
-Frontmatter: `type: mistake`, `severity: minor|major|critical`, `recurrence: N`, `root-cause: "..."`, `prevention: "..."`, `tags: [...]`
+Frontmatter: `type: mistake`, `severity: minor|major|critical`, `recurrence: N`, `root-cause: "..."`, `prevention: "..."`, `domains: [general]`, `keywords: [...]`
 
 Write immediately when a mistake is found. Increment `recurrence` if it happens again.
 
 ### strategies/ — What worked
 Record when a successful approach is found that's worth repeating.
 
-Frontmatter: `type: strategy`, `trigger: "when to use"`, `success_count: N`, `tags: [...]`
+Frontmatter: `type: strategy`, `trigger: "when to use"`, `success_count: N`, `domains: [general]`, `keywords: [...]`
 
 Body: numbered steps of the approach.
 
@@ -45,18 +45,18 @@ One file per project (`continuity/{project}.md`). Overwritten each session. Thre
 - Status: done / in-progress / blocked
 - Next: what to do next
 
-### notes/ — User profile and references
-User portrait, work style, external tools/URLs. Rarely changes.
+### notes/ — Long-form knowledge and references
+Notes are injected by keyword/domain matching (cap: 2).
 
 ## Lifecycle
 
 ### Frontmatter fields
-- `injected: YYYY-MM-DD` — updated automatically by hook when file is injected into context
-- `referenced: YYYY-MM-DD` — updated manually when file is actually read/edited by human or agent
+- `injected: YYYY-MM-DD` — set on file creation, never updated (write-once)
+- `referenced: YYYY-MM-DD` — updated automatically by hook when file is injected into context
 - `status: active | pinned | stale | archived`
 
 ### Automatic rotation (Stop hook)
-- `active` + no `referenced` update for 30 days → `stale`
+- `active` + no `referenced` update for N days → `stale` (N depends on type: mistakes=60, strategies=90, knowledge=90, feedback=45, notes/journal=30)
 - `stale` + no `referenced` update for 90 days → moved to `archive/`
 - `pinned` — never rotated, never archived
 
@@ -68,10 +68,11 @@ Critical mistakes with high recurrence, user profile, important references.
 SessionStart hook injects (in order):
 1. **Continuity** — last session context (if project detected)
 2. **Project overview** — current project description
-3. **Mistakes** — top 3 global + top 3 project-specific (sorted by recurrence)
-4. **Feedback** — up to 5 behavioral rules
-5. **Knowledge** — up to 3 domain facts (project-filtered)
-6. **Strategies** — up to 3 proven approaches
+3. **Mistakes** — top 3 global + top 3 project-specific (scored by keywords, recurrence)
+4. **Feedback** — up to 6 behavioral rules (keyword + WAL scored)
+5. **Knowledge** — up to 4 domain facts (keyword + domain filtered)
+6. **Notes** — up to 2 long-form notes (keyword + domain filtered)
+7. **Strategies** — up to 4 proven approaches (keyword + WAL scored)
 
 Also generates `_agent_context.md` — compact summary for subagents.
 
