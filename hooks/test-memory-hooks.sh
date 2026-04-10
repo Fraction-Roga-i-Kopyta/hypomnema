@@ -677,6 +677,16 @@ STARVE_CTX=$(printf '%s' "$STARVE_OUT" | jq -r '.hookSpecificOutput.additionalCo
 assert "Notes not starved by budget" 'printf "%s" "$STARVE_CTX" | grep -q "docker-note"'
 rm -rf "$STARVE_DIR" /tmp/docker-starve
 
+# Test: outcome hook — no false positive on substring match
+OUT_FP_DIR=$(mktemp -d)
+OUT_FP_MEM="$OUT_FP_DIR/memory"
+mkdir -p "$OUT_FP_MEM/mistakes"
+printf '2026-04-10|inject|test-other-bug|sess-100\n' > "$OUT_FP_MEM/.wal"
+echo '{"session_id":"sess-10","tool_name":"Write","tool_input":{"file_path":"'"$OUT_FP_MEM"'/mistakes/test.md","content":"x"}}' | CLAUDE_MEMORY_DIR="$OUT_FP_MEM" bash "$HOME/.claude/hooks/memory-outcome.sh" 2>/dev/null
+assert "Outcome — no false positive on substring" 'grep -q "outcome-new.*test" "$OUT_FP_MEM/.wal"'
+assert "Outcome — no false negative detection" '! grep -q "outcome-negative" "$OUT_FP_MEM/.wal"'
+rm -rf "$OUT_FP_DIR"
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="
