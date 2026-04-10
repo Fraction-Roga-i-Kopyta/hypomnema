@@ -4,9 +4,11 @@
 > Marcus Aurelius, Seneca, and Epictetus kept them.
 > Not memory itself, but the practice that sustains it.
 
-Persistent memory system for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Zero dependencies beyond bash and jq. No databases, no embeddings, no cloud — just markdown files, YAML frontmatter, and two shell hooks.
+Persistent memory system for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Zero dependencies beyond bash and jq. No databases, no embeddings, no cloud — just markdown files, YAML frontmatter, and shell hooks.
 
 Claude Code starts every session from zero. Hypomnema fixes that.
+
+**v6 metrics:** Precision 44.2%, Recall 100%, ~8 files injected per session, hook time ~0.3 sec.
 
 ## The problem
 
@@ -19,15 +21,20 @@ Hypomnema gives Claude Code a file-based long-term memory with automatic context
 ```
 You ←→ Claude Code ←→ ~/.claude/memory/
                             │
-         SessionStart hook ─┤── mistakes (sorted by recurrence)
+         SessionStart hook ─┤── mistakes (sorted by recurrence × severity)
          reads & injects    ├── strategies (proven approaches)
                             ├── feedback (behavioral rules)
                             ├── knowledge (domain facts)
-                            ├── project overview
-                            └── continuity (where we left off)
+                            ├── project overview + continuity
+                            └── scoring: keywords + TF-IDF + WAL spaced repetition
 
-         Stop hook ─────────┤── lifecycle rotation (stale/archive)
-         checks & reminds   └── "nothing recorded" reminder
+         Stop hook ─────────┤── lifecycle rotation (decay rates by type)
+         checks & reminds   ├── auto-generate continuity from git state
+                            ├── rebuild TF-IDF index
+                            └── structured continuity prompt
+
+         PostToolUse hook ──┤── outcome tracking (negative/new detection)
+                            └── feeds back into WAL scoring
 ```
 
 ## What gets remembered
@@ -35,13 +42,15 @@ You ←→ Claude Code ←→ ~/.claude/memory/
 | Type | What | Injected at start | Limit |
 |------|------|:-:|---|
 | **mistakes/** | Bugs, wrong approaches, repeated errors | Yes | 3 global + 3 per project |
-| **strategies/** | Proven approaches that worked | Yes | 3 |
-| **feedback/** | Behavioral rules (why + how to apply) | Yes | 5 |
-| **knowledge/** | Domain facts, API docs, infrastructure | Yes | 3 |
+| **strategies/** | Proven approaches that worked | Yes | cap 4 (adaptive) |
+| **feedback/** | Behavioral rules (why + how to apply) | Yes | cap 6 (adaptive) |
+| **knowledge/** | Domain facts, API docs, infrastructure | Yes | cap 4 (adaptive) |
 | **projects/** | Project descriptions, stack, known issues | Yes | 1 (current) |
 | **continuity/** | "Where we left off" last session | Yes | 1 (current) |
 | **notes/** | User profile, references, URLs | No | — |
 | **journal/** | Session logs | No | — |
+
+Feedback, knowledge, and strategies share an adaptive budget of 12 slots total with per-type caps. If one type has fewer relevant files, the budget flows to others.
 
 ### Example: a mistake
 
@@ -57,7 +66,8 @@ severity: major
 recurrence: 5
 root-cause: "Jumps to first hypothesis without listing alternatives"
 prevention: "List 2-3 possible root causes before attempting the first fix"
-tags: [debugging, methodology]
+keywords: [debugging, hypothesis, root, cause, diagnosis, fix, cascade]
+domains: [general]
 ---
 ```
 
@@ -75,7 +85,8 @@ referenced: 2025-06-30
 status: active
 trigger: "CSS layout bug"
 success_count: 3
-tags: [css, layout, frontend]
+keywords: [css, layout, viewport, cascade, parent, container, debugging]
+domains: [css, frontend]
 ---
 
 1. Trace constraint chain from viewport down to target element
@@ -142,37 +153,58 @@ The hooks activate on next session start.
 
 ### SessionStart hook (~0.3 sec)
 
-1. Reads `projects.json`, matches `cwd` to a project via longest-prefix match
-2. Parses all memory files using single-pass BSD-compatible awk (no subprocess spawning per file)
-3. Filters by `project` (global + current) and `status` (active or pinned)
-4. Applies quotas: 3 global + 3 project mistakes, 5 feedback, 3 knowledge, 3 strategies
-5. Sorts mistakes by `recurrence` descending — most frequent errors surface first
-6. Injects everything as markdown into Claude's system context
-7. Updates `injected:` dates in frontmatter
-8. Generates `_agent_context.md` — compact summary for subagents
-9. Creates a session marker in `/tmp` for the Stop hook
+1. Reads `projects.json`, matches `cwd` to a project via longest-prefix match (with boundary check — `/fly` won't match `/fly-other`)
+2. Detects active domains via 4-level cascade: `projects-domains.json` → CWD path heuristics → git diff extensions → signature files
+3. Extracts keywords from git context: branch name, diff filenames, CWD basename
+4. Parses all memory files using single-pass BSD-compatible awk (no subprocess spawning per file)
+5. Filters by `project` (global + current), `status` (active/pinned), `domains` (intersection with active), and `recurrence` threshold
+6. Scores records: `keyword_hits × 3 + tfidf_bonus × 2 + wal_spaced_score (0-10)`
+7. Applies adaptive quotas: 3+3 mistakes, shared budget of 12 for feedback/knowledge/strategies
+8. Injects everything as markdown into Claude's system context
+9. Updates `injected:` and `referenced:` dates in frontmatter (scoped to frontmatter block only)
+10. Logs injections to WAL (Write-Ahead Log) for spaced repetition scoring
+11. Generates `_agent_context.md` — compact summary with body excerpts for subagents
 
 ### Stop hook
 
-1. Runs lifecycle rotation (stale after 30 days, archive after 90)
-2. Checks if any memory files were modified during the session
-3. If not — reminds Claude to record findings before the session ends
+1. Runs lifecycle rotation with type-specific decay rates (mistakes 60/180d, feedback 45/120d, knowledge 90/365d)
+2. Auto-generates continuity from git state (branch, uncommitted, last commit)
+3. Rebuilds TF-IDF index if memory files changed (background, non-blocking)
+4. Shows structured continuity prompt with git context if continuity is stale
+5. Reminds Claude to record findings if nothing was saved
+
+### PostToolUse hook
+
+1. Triggers on Write/Edit to `mistakes/*.md`
+2. Checks WAL: was this mistake injected in current session?
+3. If yes → logs `outcome-negative` (warning didn't help)
+4. If no → logs `outcome-new` (fresh mistake)
+5. Feeds back into spaced repetition scoring — repeatedly-failed warnings get deprioritized
 
 ## Lifecycle
 
 Every memory file has two date fields:
 
 - **`injected`** — updated automatically by the hook whenever the file is injected into context
-- **`referenced`** — updated manually when someone actually reads or edits the file
+- **`referenced`** — updated automatically on injection AND manually when someone reads or edits
 
-Lifecycle decisions use `referenced`, not `injected`. A file that's been injected 100 times but never actually referenced is a candidate for archival.
+Lifecycle decisions use `referenced`. Both fields are updated within the frontmatter block only — body content is never modified by hooks.
+
+| Type | Stale after | Archive after |
+|------|-------------|---------------|
+| mistakes | 60 days | 180 days |
+| strategies | 90 days | 180 days |
+| knowledge | 90 days | 365 days |
+| feedback | 45 days | 120 days |
+| notes/journal | 30 days | 90 days |
+| projects | never | never |
 
 ```
-active ──30 days without referenced──→ stale ──90 days──→ archive/
-  ↑                                                         │
-  └──────────── manually restore ───────────────────────────┘
+active ──stale_days without referenced──→ stale ──archive_days──→ archive/
+  ↑                                                                  │
+  └──────────── manually restore ────────────────────────────────────┘
 
-pinned ──────────────────────────────→ (never rotated)
+pinned ──────────────────────────────────→ (never rotated)
 ```
 
 ## Frontmatter schema
@@ -191,12 +223,14 @@ severity: major       # minor | major | critical
 recurrence: 3         # how many times this happened
 root-cause: "..."
 prevention: "..."
-tags: [css, layout]
+keywords: [css, layout]  # for content-aware matching
+domains: [css, frontend] # for domain filtering
 
 # Strategies only
 trigger: "when to apply this"
 success_count: 3
-tags: [css, debugging]
+keywords: [css, debugging]
+domains: [css, frontend]
 ---
 ```
 
@@ -204,17 +238,21 @@ tags: [css, debugging]
 
 ```
 ~/.claude/memory/
-├── mistakes/           # what went wrong
-├── strategies/         # what worked
-├── feedback/           # behavioral rules
-├── knowledge/          # domain facts
-├── projects/           # project overviews
-├── continuity/         # where we left off (one per project)
-├── notes/              # user profile, references
-├── journal/            # session logs
-├── archive/            # rotated files (mirrors structure above)
-├── projects.json       # cwd → project mapping
-└── _agent_context.md   # auto-generated compact context for subagents
+├── mistakes/              # what went wrong
+├── strategies/            # what worked
+├── feedback/              # behavioral rules
+├── knowledge/             # domain facts
+├── projects/              # project overviews
+├── continuity/            # where we left off (one per project)
+├── notes/                 # user profile, references
+├── journal/               # session logs
+├── archive/               # rotated files (mirrors structure above)
+├── projects.json          # cwd → project mapping
+├── projects-domains.json  # project → default domains mapping
+├── .stopwords             # TF-IDF tokenization stop words
+├── .tfidf-index           # auto-generated TF-IDF index
+├── .wal                   # Write-Ahead Log (injection + outcome tracking)
+└── _agent_context.md      # auto-generated compact context for subagents
 ```
 
 ## Subagents
@@ -223,6 +261,52 @@ Claude Code subagents (via the Agent tool) don't receive SessionStart injection.
 
 ```
 Read ~/.claude/memory/_agent_context.md before starting.
+```
+
+## Domain filtering
+
+Each project can have default domains in `projects-domains.json`:
+
+```json
+{
+  "webapp": ["frontend", "css", "backend"],
+  "scripts": ["jira", "groovy"]
+}
+```
+
+Domains are also auto-detected from git diff (`.css` → css, `.sql` → db, `.groovy` → groovy) and CWD path heuristics. Records tagged with non-matching domains are filtered out — jira mistakes won't appear in CSS sessions.
+
+Memory files use `domains: [css, frontend]` in frontmatter. Records with `domains: [general]` or no domains always match.
+
+## Scoring
+
+Records are ranked by a composite score:
+
+```
+score = keyword_hits × 3 + tfidf_bonus × 2 + wal_spaced_score (0-10)
+```
+
+- **Keywords** — `keywords:` in frontmatter matched against git context (branch name, diff filenames, CWD basename). Primary mechanism.
+- **TF-IDF** — Offline index of body text for records without keywords. Weak signal (~3 IDF units at 30-50 docs), but catches unlabeled records.
+- **WAL spaced repetition** — `spread × decay × (1 - negative_ratio)`. Rewards records used consistently across days, penalizes burst usage (benchmarks) and records with negative outcomes.
+
+## Outcome tracking
+
+A PostToolUse hook monitors writes to `mistakes/*.md`:
+
+- If Claude writes/updates a mistake that was **already injected** this session → `outcome-negative` (the warning didn't prevent the repeat)
+- If it's a new mistake → `outcome-new`
+
+Negative outcomes reduce the record's WAL score over time. Records that repeatedly fail to prevent mistakes get deprioritized.
+
+## Testing
+
+```bash
+# 33 smoke tests (injection, domain filtering, WAL, TF-IDF, outcome, spaced repetition)
+bash ~/.claude/hooks/test-memory-hooks.sh
+
+# 15 benchmark scenarios (precision, domain, priority, edge cases)
+bash ~/.claude/hooks/bench-memory.sh
 ```
 
 ## Consolidation
@@ -260,7 +344,11 @@ The format (YAML frontmatter + markdown) is a stable contract. Any future engine
 
 **Why split quotas for mistakes?** Without split quotas (3 global + 3 project), a frequently-recurring global mistake (like "jumps to first hypothesis") would push out all project-specific mistakes. Split quotas guarantee both types get representation.
 
-**Why not embeddings?** At 40 files and ~30KB total, keyword matching by project and tags covers 100% of use cases. Embeddings add ML dependencies, network calls, and latency for zero gain at this scale.
+**Why not embeddings?** At 40 files and ~30KB total, keyword matching + TF-IDF covers the use cases. Embeddings add ML dependencies, network calls, and latency for marginal gain at this scale.
+
+**Why spaced repetition, not raw frequency?** A record injected 50 times in one benchmarking session is not 50× more important. Spread (unique days) rewards consistent real usage. Decay prevents stale records from hogging slots. Negative ratio deprioritizes warnings that don't actually help.
+
+**Why three hooks?** SessionStart handles injection (the read path). Stop handles lifecycle and continuity (the maintenance path). PostToolUse handles outcome tracking (the feedback path). Each has a clear single responsibility and different timing constraints.
 
 ## License
 

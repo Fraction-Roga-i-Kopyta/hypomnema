@@ -1,0 +1,6 @@
+{
+  "fly-next": ["backend", "frontend", "db"],
+  "jira-scriptrunner": ["jira", "groovy"],
+  "akasha": ["frontend", "backend", "css", "devops"],
+  "tl24": ["frontend", "backend", "db"]
+}
