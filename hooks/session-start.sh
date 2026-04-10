@@ -386,6 +386,11 @@ if [ -f "$WAL_FILE" ]; then
       days[$3, $1] = 1
       if ($1 > last_day[$3] || last_day[$3] == "") last_day[$3] = $1
     }
+    $1 >= cutoff && $2 == "inject-agg" {
+      count[$3] += $4
+      days[$3, $1] = 1
+      if ($1 > last_day[$3] || last_day[$3] == "") last_day[$3] = $1
+    }
     $1 >= cutoff && $2 == "outcome-negative" {
       neg_count[$3]++
     }
@@ -732,9 +737,10 @@ WAL_FILE="$MEMORY_DIR/.wal"
     printf '%s|inject|%s|%s\n' "$TODAY" "$(basename "$f" .md)" "$SAFE_SESSION_ID"
   done
 } >> "$WAL_FILE" 2>/dev/null || true
-# Rotate WAL: keep last 1000 lines
+# Rotate WAL: smart compaction (aggregate old entries, preserve spread data)
 if [ -f "$WAL_FILE" ] && [ "$(wc -l < "$WAL_FILE" 2>/dev/null)" -gt 1200 ]; then
-  tail -1000 "$WAL_FILE" > "$WAL_FILE.tmp" && mv "$WAL_FILE.tmp" "$WAL_FILE" 2>/dev/null || true
+  CLAUDE_MEMORY_DIR="$MEMORY_DIR" bash "$(dirname "$0")/wal-compact.sh" 2>/dev/null || \
+    { tail -1000 "$WAL_FILE" > "$WAL_FILE.tmp" && mv "$WAL_FILE.tmp" "$WAL_FILE"; } 2>/dev/null || true
 fi
 
 # Create session marker AFTER all file modifications
