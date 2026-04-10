@@ -189,6 +189,52 @@ fi
 # Check if any memory files were modified during this session
 MODIFIED=$(find "$MEMORY_DIR" -name "*.md" -newer "$MARKER" -not -name "MEMORY.md" -not -name "_agent_context.md" 2>/dev/null | head -1)
 
+# --- Transcript error detection ---
+TRANSCRIPT_PATH=$(printf '%s\n' "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)
+ERROR_SUMMARY=""
+if [ -n "$TRANSCRIPT_PATH" ] && [ -f "$TRANSCRIPT_PATH" ]; then
+  EXCLUDES_FILE="$MEMORY_DIR/.confidence-excludes"
+  EXCLUDES_PATTERN=""
+  if [ -f "$EXCLUDES_FILE" ]; then
+    EXCLUDES_PATTERN=$(tr '\n' '|' < "$EXCLUDES_FILE" | sed 's/|$//' | sed 's/\[/\\[/g')
+  fi
+  ERROR_SUMMARY=$(awk -v excludes="$EXCLUDES_PATTERN" '
+  /"is_error":true/ {
+    content = $0; sub(/.*"content":"/, "", content); sub(/"[,}].*/, "", content)
+    gsub(/\\n/, " ", content)
+    tid = $0; sub(/.*"tool_use_id":"/, "", tid); sub(/".*/, "", tid)
+    if (tid != "") error_tids[tid] = content
+  }
+  /"name":"Bash"/ && /"tool_use"/ {
+    tid = $0
+    if (match(tid, /"id":"[^"]+"/)) tid = substr(tid, RSTART+6, RLENGTH-7)
+    cmd = $0; sub(/.*"command":"/, "", cmd); sub(/"[,}].*/, "", cmd)
+    gsub(/\\n/, " ", cmd); gsub(/\\"/, "\"", cmd)
+    if (tid != "") commands[tid] = cmd
+  }
+  END {
+    for (tid in error_tids) {
+      cmd = commands[tid]; if (cmd == "") continue
+      split(cmd, words, " "); fw = words[1]; sub(/.*\//, "", fw)
+      if (excludes != "" && fw ~ "^(" excludes ")$") continue
+      err = error_tids[tid]
+      if (err ~ /PASSED|FAILED|pytest|jest|vitest|rspec/) continue
+      score = 0.5
+      if (err ~ /[Ee]rror|[Ff]atal|[Pp]anic|[Tt]raceback/) score += 0.3
+      if (err ~ /[Ww]arning|[Dd]eprecated/) score += 0.1
+      cmd_counts[fw]++; if (cmd_counts[fw] > 1) score += 0.2
+      if (score >= 0.7) level = "HIGH"
+      else if (score >= 0.4) level = "MEDIUM"
+      else continue
+      if (!(fw in best_level) || level == "HIGH") {
+        best_level[fw] = level; best_cmd[fw] = substr(cmd, 1, 60); error_count[fw] = cmd_counts[fw]
+      }
+    }
+    for (fw in best_level) printf "%s|%s|x%d\n", best_cmd[fw], best_level[fw], error_count[fw]
+  }
+  ' "$TRANSCRIPT_PATH" 2>/dev/null)
+fi
+
 REMINDER=""
 if [ -z "$MODIFIED" ]; then
   REMINDER="[MEMORY CHECKPOINT] Session lasted >2 min but nothing was recorded.
@@ -207,6 +253,22 @@ if [ "${CONT_STALE:-0}" = "1" ] && [ -n "$PROJECT" ]; then
 Следующий шаг: ___
 
 Контекст: ветка \`${cont_branch}\`, последний коммит: \"${cont_commit}\""
+fi
+
+if [ -n "$ERROR_SUMMARY" ]; then
+  ERROR_LINES=""
+  while IFS='|' read -r cmd level count; do
+    [ -z "$cmd" ] && continue
+    ERROR_LINES="${ERROR_LINES}
+- \`${cmd}\` (${count}, confidence: ${level})"
+    first_word=$(echo "$cmd" | awk '{print $1}' | sed 's/.*\///')
+    printf '%s|error-detected-%s|%s|%s\n' "$(date +%Y-%m-%d)" "$level" "$first_word" "$SESSION_ID" >> "$MEMORY_DIR/.wal" 2>/dev/null
+  done <<< "$ERROR_SUMMARY"
+  if [ -n "$ERROR_LINES" ]; then
+    REMINDER="${REMINDER}${REMINDER:+
+}[ERRORS] Обнаружены ошибки в этой сессии:${ERROR_LINES}
+Запиши в mistakes/ если это повторяющийся паттерн."
+  fi
 fi
 
 if [ -n "$REMINDER" ]; then
