@@ -400,6 +400,39 @@ if python3 -c "import rapidfuzz" 2>/dev/null; then
 fi
 rm -rf "$DEDUP_DIR"
 
+# --- CRLF handling ---
+CRLF_DIR=$(mktemp -d)
+CRLF_MEM="$CRLF_DIR/memory"
+mkdir -p "$CRLF_MEM/mistakes"
+cat > "$CRLF_MEM/projects.json" <<'CREOF'
+{"/test/crlf": "crlf-proj"}
+CREOF
+# Create CRLF file (Windows-style line endings)
+printf -- "---\r\ntype: mistake\r\nstatus: active\r\nproject: global\r\nrecurrence: 3\r\nseverity: major\r\ndomains: [general]\r\n---\r\nCRLF body line\r\n" > "$CRLF_MEM/mistakes/crlf-test.md"
+CRLF_OUT=$(echo '{"session_id":"crlf-test","cwd":"/test/crlf"}' | CLAUDE_MEMORY_DIR="$CRLF_MEM" bash "$HOME/.claude/hooks/memory-session-start.sh" 2>/dev/null)
+assert "CRLF — file injected" 'echo "$CRLF_OUT" | grep -q "crlf-test"'
+assert "CRLF — body preserved" 'echo "$CRLF_OUT" | grep -q "CRLF body line"'
+rm -rf "$CRLF_DIR"
+
+# --- WAL pipe in session_id ---
+WAL_PIPE_DIR=$(mktemp -d)
+WAL_PIPE_MEM="$WAL_PIPE_DIR/memory"
+mkdir -p "$WAL_PIPE_MEM/feedback"
+cat > "$WAL_PIPE_MEM/feedback/test-fb.md" <<'WPEOF'
+---
+status: active
+project: global
+referenced: 2026-04-10
+domains: [general]
+---
+Test feedback body
+WPEOF
+echo '{"session_id":"sess|with|pipes","cwd":"/tmp"}' | CLAUDE_MEMORY_DIR="$WAL_PIPE_MEM" bash "$HOME/.claude/hooks/memory-session-start.sh" >/dev/null 2>&1
+WAL_LAST=$(tail -1 "$WAL_PIPE_MEM/.wal" 2>/dev/null)
+assert "WAL — pipe in session_id sanitized" 'echo "$WAL_LAST" | grep -q "sess_with_pipes"'
+assert "WAL — exactly 4 fields" '[ "$(echo "$WAL_LAST" | awk -F"|" "{print NF}")" -eq 4 ]'
+rm -rf "$WAL_PIPE_DIR"
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="

@@ -152,6 +152,7 @@ KEYWORDS=$(printf '%s' "$KEYWORDS" | tr '[:upper:]' '[:lower:]' | tr ' ' '\n' | 
 # Output: TSV lines per file, one awk process per directory
 
 AWK_MISTAKES='
+{ gsub(/\r/, "") }
 FNR == 1 {
   if (prev_file != "") {
     printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", \
@@ -185,6 +186,7 @@ END {
 }'
 
 AWK_SCORED='
+{ gsub(/\r/, "") }
 FNR == 1 {
   if (prev_file != "") {
     printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", prev_file, status, project, referenced, domains, keywords, body
@@ -613,10 +615,12 @@ if [ ${#INJECTED_FILES[@]} -gt 0 ]; then
 fi
 
 # WAL: append injection log (Hebbian — tracks access frequency)
+# Sanitize session_id: replace | with _ to prevent WAL field corruption
+SAFE_SESSION_ID="${SESSION_ID//|/_}"
 WAL_FILE="$MEMORY_DIR/.wal"
 {
   for f in "${INJECTED_FILES[@]}"; do
-    printf '%s|inject|%s|%s\n' "$TODAY" "$(basename "$f" .md)" "$SESSION_ID"
+    printf '%s|inject|%s|%s\n' "$TODAY" "$(basename "$f" .md)" "$SAFE_SESSION_ID"
   done
 } >> "$WAL_FILE" 2>/dev/null || true
 # Rotate WAL: keep last 1000 lines

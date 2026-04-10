@@ -55,6 +55,7 @@ lifecycle_rotate() {
 
   # Single-pass awk: extract status, referenced, created for all files
   awk '
+  { gsub(/\r/, "") }
   FNR == 1 {
     if (prev_file != "") printf "%s\t%s\t%s\t%s\n", prev_file, status, ref, created
     in_fm = 0; n = 0; status = "_empty_"; ref = ""; created = ""; prev_file = FILENAME
