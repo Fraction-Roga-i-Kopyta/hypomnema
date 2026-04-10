@@ -10,9 +10,8 @@ set -o pipefail
 MEMORY_DIR="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}"
 MAX_GLOBAL_MISTAKES=3
 MAX_PROJECT_MISTAKES=3
-# Adaptive quotas: min guaranteed per type, with shared flex pool
-# Total budget for scored types (feedback+knowledge+strategies): 12 slots
-# Each type gets min slots guaranteed, rest compete in flex pool
+# Adaptive quotas: shared flex pool across scored types
+# Total budget for scored types (feedback+knowledge+strategies+notes): 12 slots
 MAX_SCORED_TOTAL=12
 # Per-type caps (prevent any single type from dominating)
 CAP_FEEDBACK=6
@@ -52,7 +51,9 @@ if [ -f "$PROJECTS_JSON" ] && jq empty "$PROJECTS_JSON" 2>/dev/null; then
 fi
 
 # Create session marker early (ensures stop hook can run even if we crash later)
-touch "/tmp/.claude-session-${SESSION_ID}" 2>/dev/null || true
+# Sanitize session_id for marker filename (slashes create subdirs)
+SAFE_MARKER_ID="${SESSION_ID//\//_}"
+touch "/tmp/.claude-session-${SAFE_MARKER_ID}" 2>/dev/null || true
 
 # --- Detect domains ---
 

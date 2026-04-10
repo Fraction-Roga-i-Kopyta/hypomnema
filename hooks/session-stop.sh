@@ -11,7 +11,8 @@ SESSION_ID=$(printf '%s\n' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
 
 [ -z "$SESSION_ID" ] && exit 0
 
-MARKER="/tmp/.claude-session-${SESSION_ID}"
+SAFE_MARKER_ID="${SESSION_ID//\//_}"
+MARKER="/tmp/.claude-session-${SAFE_MARKER_ID}"
 
 # --- Lifecycle rotation (always runs, even without session marker) ---
 lifecycle_rotate() {
@@ -132,7 +133,7 @@ fi
 # Rebuild TF-IDF index if memory files changed or index missing
 MODIFIED_FOR_INDEX=$(find "$MEMORY_DIR" -name "*.md" -newer "$MARKER" -not -name "MEMORY.md" -not -name "_agent_context.md" 2>/dev/null | head -1)
 if [ -n "$MODIFIED_FOR_INDEX" ] || [ ! -f "$MEMORY_DIR/.tfidf-index" ]; then
-  bash "$HOME/.claude/hooks/memory-index.sh" 2>/dev/null &
+  bash "$(dirname "$0")/memory-index.sh" 2>/dev/null &
   disown 2>/dev/null || true
 fi
 
