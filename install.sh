@@ -21,20 +21,26 @@ for dir in mistakes feedback knowledge strategies projects notes journal continu
 done
 echo "  Created: mistakes/ feedback/ knowledge/ strategies/ projects/ notes/ journal/ continuity/"
 
-# --- Copy hooks ---
-echo "[2/4] Installing hooks..."
+# --- Symlink hooks ---
+echo "[2/4] Installing hooks (symlinks)..."
 mkdir -p "$HOOKS_DIR"
-cp "$SCRIPT_DIR/hooks/session-start.sh" "$HOOKS_DIR/memory-session-start.sh"
-cp "$SCRIPT_DIR/hooks/session-stop.sh" "$HOOKS_DIR/memory-stop.sh"
-chmod +x "$HOOKS_DIR/memory-session-start.sh" "$HOOKS_DIR/memory-stop.sh"
-echo "  Installed: memory-session-start.sh, memory-stop.sh"
+ln -sf "$SCRIPT_DIR/hooks/session-start.sh" "$HOOKS_DIR/memory-session-start.sh"
+ln -sf "$SCRIPT_DIR/hooks/session-stop.sh" "$HOOKS_DIR/memory-stop.sh"
+ln -sf "$SCRIPT_DIR/hooks/memory-index.sh" "$HOOKS_DIR/memory-index.sh"
+ln -sf "$SCRIPT_DIR/hooks/memory-outcome.sh" "$HOOKS_DIR/memory-outcome.sh"
+ln -sf "$SCRIPT_DIR/hooks/memory-dedup.sh" "$HOOKS_DIR/memory-dedup.sh"
+ln -sf "$SCRIPT_DIR/hooks/wal-compact.sh" "$HOOKS_DIR/wal-compact.sh"
+ln -sf "$SCRIPT_DIR/hooks/bench-memory.sh" "$HOOKS_DIR/bench-memory.sh"
+ln -sf "$SCRIPT_DIR/hooks/test-memory-hooks.sh" "$HOOKS_DIR/test-memory-hooks.sh"
+echo "  Symlinked: memory-session-start.sh, memory-stop.sh, memory-index.sh,"
+echo "             memory-outcome.sh, memory-dedup.sh, wal-compact.sh,"
+echo "             bench-memory.sh, test-memory-hooks.sh"
 
-# --- Copy consolidation script ---
-echo "[3/4] Installing utilities..."
+# --- Symlink utilities ---
+echo "[3/4] Installing utilities (symlinks)..."
 mkdir -p "$CLAUDE_DIR/bin"
-cp "$SCRIPT_DIR/bin/consolidate.sh" "$CLAUDE_DIR/bin/memory-consolidate.sh"
-chmod +x "$CLAUDE_DIR/bin/memory-consolidate.sh"
-echo "  Installed: memory-consolidate.sh"
+ln -sf "$SCRIPT_DIR/bin/consolidate.sh" "$CLAUDE_DIR/bin/memory-consolidate.sh"
+echo "  Symlinked: memory-consolidate.sh"
 
 # --- Patch settings.json ---
 echo "[4/4] Patching settings.json..."
