@@ -342,6 +342,64 @@ SR_POS_BURST=$(printf '%s\n' "$SR_CTX" | grep -n "burst-file" | head -1 | cut -d
 assert "Spaced repetition — spread before burst" '[ -n "$SR_POS_SPREAD" ] && [ -n "$SR_POS_BURST" ] && [ "$SR_POS_SPREAD" -lt "$SR_POS_BURST" ]'
 rm -rf "$SR_DIR"
 
+# Test: transcript error detection
+ERR_DIR=$(mktemp -d)
+ERR_MEM="$ERR_DIR/memory"
+mkdir -p "$ERR_MEM"
+cat > "$ERR_MEM/.confidence-excludes" << 'EEOF'
+grep
+test
+EEOF
+cat > "$ERR_DIR/transcript.jsonl" << 'EEOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"npm run build"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"Exit code 1\nError: Module not found","is_error":true}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"grep foo bar"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t2","content":"Exit code 1","is_error":true}]}}
+EEOF
+MARKER_ERR="/tmp/.claude-session-err-test"
+touch -t 202601010000 "$MARKER_ERR"
+STOP_OUT=$(printf '{"session_id":"err-test","transcript_path":"%s/transcript.jsonl"}' "$ERR_DIR" | CLAUDE_MEMORY_DIR="$ERR_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null)
+STOP_CTX=$(printf '%s' "$STOP_OUT" | jq -r '.hookSpecificOutput.additionalContext // ""' 2>/dev/null)
+assert "Error detection — npm error found" 'printf "%s" "$STOP_CTX" | grep -q "npm"'
+assert "Error detection — grep excluded" '! printf "%s" "$STOP_CTX" | grep -q "grep foo"'
+assert "Error detection — WAL entry" 'grep -q "error-detected" "$ERR_MEM/.wal" 2>/dev/null'
+rm -rf "$ERR_DIR" "$MARKER_ERR"
+
+# Test: dedup wrapper — syntax and graceful fallback
+assert "Dedup wrapper syntax valid" 'bash -n "$HOME/.claude/hooks/memory-dedup.sh" 2>/dev/null'
+DEDUP_DIR=$(mktemp -d)
+DEDUP_MEM="$DEDUP_DIR/memory"
+mkdir -p "$DEDUP_MEM/mistakes"
+cat > "$DEDUP_MEM/mistakes/existing.md" << 'DEOF'
+---
+type: mistake
+project: global
+status: active
+recurrence: 1
+root-cause: "CSS variable not applied in shadow DOM"
+prevention: "Check computed styles"
+---
+DEOF
+cat > "$DEDUP_MEM/mistakes/new-similar.md" << 'DEOF'
+---
+type: mistake
+project: global
+status: active
+recurrence: 1
+root-cause: "CSS variable not inherited in shadow DOM components"
+prevention: "Verify CSS custom properties"
+---
+DEOF
+DEDUP_EXIT=0
+echo '{"session_id":"dedup-test","tool_name":"Write","tool_input":{"file_path":"'"$DEDUP_MEM"'/mistakes/new-similar.md"}}' | CLAUDE_MEMORY_DIR="$DEDUP_MEM" bash "$HOME/.claude/hooks/memory-dedup.sh" 2>/dev/null || DEDUP_EXIT=$?
+assert "Dedup wrapper — no crash" '[ $DEDUP_EXIT -eq 0 ]'
+if python3 -c "import rapidfuzz" 2>/dev/null; then
+  assert "Dedup — merged duplicate" '[ ! -f "$DEDUP_MEM/mistakes/new-similar.md" ]'
+  assert "Dedup — WAL entry" 'grep -q "dedup-merged" "$DEDUP_MEM/.wal" 2>/dev/null'
+  assert "Dedup — recurrence incremented" 'grep -q "recurrence: 2" "$DEDUP_MEM/mistakes/existing.md"'
+fi
+rm -rf "$DEDUP_DIR"
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="
