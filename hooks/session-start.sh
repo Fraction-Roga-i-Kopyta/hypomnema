@@ -21,6 +21,7 @@ MIN_STRATEGIES=1
 CAP_FEEDBACK=6
 CAP_KNOWLEDGE=4
 CAP_STRATEGIES=4
+CAP_NOTES=2
 MAX_FILES=22
 TODAY=$(date +%Y-%m-%d)
 
@@ -629,6 +630,9 @@ KNOWLEDGE_MD="$_COLLECT_RESULT"
 collect_scored "strategies" "$CAP_STRATEGIES"
 STRATEGIES_MD="$_COLLECT_RESULT"
 
+collect_scored "notes" "$CAP_NOTES"
+NOTES_MD="$_COLLECT_RESULT"
+
 # --- Collect project overview ---
 
 PROJECT_MD=""
@@ -691,6 +695,11 @@ if [ -n "$STRATEGIES_MD" ]; then
   CONTEXT="${CONTEXT}
 ## Strategies
 ${STRATEGIES_MD}"
+fi
+if [ -n "$NOTES_MD" ]; then
+  CONTEXT="${CONTEXT}
+## Notes
+${NOTES_MD}"
 fi
 
 # Nothing to inject
