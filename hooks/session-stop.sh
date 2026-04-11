@@ -358,6 +358,31 @@ if [ -f "$WAL_FILE" ] && [ -n "$SAFE_SESSION_ID" ]; then
   fi
 fi
 
+# --- Session metrics ---
+if [ -n "$TRANSCRIPT_PATH" ] && [ -f "$TRANSCRIPT_PATH" ]; then
+  TOOL_CALLS=$(grep -c '"tool_use"' "$TRANSCRIPT_PATH" 2>/dev/null || echo 0)
+  if [ -n "$ERROR_SUMMARY" ]; then
+    METRIC_ERROR_COUNT=$(printf '%s\n' "$ERROR_SUMMARY" | grep -c '.' 2>/dev/null)
+  else
+    METRIC_ERROR_COUNT=0
+  fi
+  METRIC_DURATION=$ELAPSED
+
+  METRIC_DOMAINS="${SESSION_DOMAINS:-unknown}"
+  [ -z "$METRIC_DOMAINS" ] && METRIC_DOMAINS="unknown"
+  METRIC_DOMAINS=$(printf '%s' "$METRIC_DOMAINS" | tr ' ' ',')
+  [ -z "$METRIC_DOMAINS" ] && METRIC_DOMAINS="unknown"
+
+  printf '%s|session-metrics|%s|error_count:%s,tool_calls:%s,duration:%ss\n' \
+    "$TODAY" "$METRIC_DOMAINS" "$METRIC_ERROR_COUNT" "$TOOL_CALLS" "$METRIC_DURATION" \
+    >> "$WAL_FILE" 2>/dev/null
+
+  if [ "${METRIC_ERROR_COUNT:-0}" -eq 0 ]; then
+    printf '%s|clean-session|%s|%s\n' "$TODAY" "$METRIC_DOMAINS" "$SAFE_SESSION_ID" \
+      >> "$WAL_FILE" 2>/dev/null
+  fi
+fi
+
 if [ -n "$REMINDER" ]; then
   cat <<EOF
 {"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":$(printf '%s\n' "$REMINDER" | jq -Rs .)}}
