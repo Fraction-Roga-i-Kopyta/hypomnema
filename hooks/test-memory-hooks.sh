@@ -1024,6 +1024,37 @@ echo '{"session_id":"cs-test-session","cwd":"/tmp","transcript_path":"'"$CS_DIR"
 assert "Clean session — written to WAL" 'grep -q "clean-session" "$CS_MEM/.wal"'
 rm -rf "$CS_DIR" "$CS_MARKER"
 
+# Test: WAL compaction preserves outcome and metrics events
+WALC2_DIR=$(mktemp -d)
+WALC2_MEM="$WALC2_DIR/memory"
+mkdir -p "$WALC2_MEM"
+{
+  for day in $(seq 15 50); do
+    if [[ "$OSTYPE" == darwin* ]]; then
+      d=$(date -v-${day}d +%Y-%m-%d 2>/dev/null)
+    else
+      d=$(date -d "${day} days ago" +%Y-%m-%d)
+    fi
+    for i in $(seq 1 30); do
+      echo "${d}|inject|test-file|sess-${day}-${i}"
+    done
+    echo "${d}|outcome-positive|test-file|sess-${day}-1"
+    echo "${d}|outcome-negative|other-file|sess-${day}-2"
+    echo "${d}|session-metrics|css,frontend|error_count:1,tool_calls:5,duration:300s"
+    echo "${d}|clean-session|backend|sess-${day}-3"
+    echo "${d}|strategy-used|my-strat|sess-${day}-4"
+    echo "${d}|strategy-gap|frontend|sess-${day}-5"
+  done
+} > "$WALC2_MEM/.wal"
+CLAUDE_MEMORY_DIR="$WALC2_MEM" bash "$HOME/.claude/hooks/wal-compact.sh" 2>/dev/null
+assert "Compact v2 — outcome-positive preserved" 'grep -q "outcome-positive" "$WALC2_MEM/.wal"'
+assert "Compact v2 — outcome-negative preserved" 'grep -q "outcome-negative" "$WALC2_MEM/.wal"'
+assert "Compact v2 — clean-session preserved" 'grep -q "clean-session" "$WALC2_MEM/.wal"'
+assert "Compact v2 — strategy-used preserved" 'grep -q "strategy-used" "$WALC2_MEM/.wal"'
+assert "Compact v2 — inject aggregated" 'grep -q "inject-agg" "$WALC2_MEM/.wal"'
+assert "Compact v2 — session-metrics aggregated" 'grep -q "metrics-agg" "$WALC2_MEM/.wal"'
+rm -rf "$WALC2_DIR"
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="
