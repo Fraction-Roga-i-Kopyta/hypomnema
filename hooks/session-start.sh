@@ -284,7 +284,7 @@ KEYWORD_COUNT=$(printf '%s' "$KEYWORDS" | wc -w | tr -d ' ')
 INJECTED_FILES=()
 
 collect_mistakes() {
-  local mistakes_md=""
+  _MISTAKES_RESULT=""
   local global_count=0
   local project_count=0
 
@@ -362,7 +362,7 @@ collect_mistakes() {
 Prevention: ${prevention}"
         fi
 
-        mistakes_md="${mistakes_md}
+        _MISTAKES_RESULT="${_MISTAKES_RESULT}
 ### ${filename} [${severity}, x${recurrence}]
 ${body}
 "
@@ -370,11 +370,10 @@ ${body}
       done <<< "$mistakes_scored_out"
     fi
   fi
-
-  printf '%s' "$mistakes_md"
 }
 
-MISTAKES_MD=$(collect_mistakes)
+collect_mistakes
+MISTAKES_MD="$_MISTAKES_RESULT"
 
 # --- WAL-based spaced repetition scoring ---
 # Formula: spread × decay(recency) × effectiveness

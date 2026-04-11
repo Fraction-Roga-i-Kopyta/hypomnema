@@ -1350,6 +1350,56 @@ ar_age=$(( now_at - ar_mtime ))
 assert "Analytics trigger — report is fresh" '[ "$ar_age" -lt 5 ]'
 rm -rf "$AT_DIR" "$AT_MARKER"
 
+# --- Full pipeline integration test ---
+# Test: full pipeline — session-start injects, session-stop writes outcomes
+FULL_DIR=$(mktemp -d)
+FULL_MEM="$FULL_DIR/memory"
+mkdir -p "$FULL_MEM"/{mistakes,feedback,strategies,projects}
+cat > "$FULL_MEM/projects.json" << 'EOF'
+{"/tmp/full-test": "full-proj"}
+EOF
+cat > "$FULL_MEM/projects-domains.json" << 'EOF'
+{"full-proj": ["backend"]}
+EOF
+cat > "$FULL_MEM/mistakes/test-mistake.md" << 'EOF'
+---
+type: mistake
+project: global
+status: active
+severity: major
+recurrence: 3
+domains: [backend]
+root-cause: "Test root cause"
+prevention: "Test prevention"
+---
+EOF
+cat > "$FULL_MEM/strategies/test-strat.md" << 'EOF'
+---
+type: strategy
+project: global
+status: active
+domains: [backend]
+---
+Test strategy steps.
+EOF
+# Step 1: session-start injects records
+echo '{"session_id":"full-test","cwd":"/tmp/full-test"}' | CLAUDE_MEMORY_DIR="$FULL_MEM" bash "$HOOK" 2>/dev/null
+assert "Full pipeline — WAL has inject entries" 'grep -q "inject|test-mistake" "$FULL_MEM/.wal"'
+assert "Full pipeline — WAL has strategy inject" 'grep -q "inject|test-strat" "$FULL_MEM/.wal"'
+# Step 2: session-stop with clean session
+FULL_MARKER="/tmp/.claude-session-full-test"
+touch -t 202601010000 "$FULL_MARKER"
+cat > "$FULL_DIR/transcript.jsonl" << 'FULLEOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Edit","input":{"file_path":"x.py"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"OK"}]}}
+FULLEOF
+echo '{"session_id":"full-test","cwd":"/tmp/full-test","transcript_path":"'"$FULL_DIR"'/transcript.jsonl"}' | CLAUDE_MEMORY_DIR="$FULL_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null
+assert "Full pipeline — outcome-positive written" 'grep -q "outcome-positive|test-mistake" "$FULL_MEM/.wal"'
+assert "Full pipeline — strategy-used written" 'grep -q "strategy-used|test-strat" "$FULL_MEM/.wal"'
+assert "Full pipeline — clean-session written" 'grep -q "clean-session" "$FULL_MEM/.wal"'
+assert "Full pipeline — session-metrics written" 'grep -q "session-metrics" "$FULL_MEM/.wal"'
+rm -rf "$FULL_DIR" "$FULL_MARKER"
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="
