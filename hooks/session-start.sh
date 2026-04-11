@@ -761,6 +761,14 @@ AGENT_CTX="$MEMORY_DIR/_agent_context.md"
   [ -n "$PROJECT" ] && echo "**Project:** $PROJECT"
   [ -n "$DOMAINS" ] && echo "**Domains:** $DOMAINS"
   echo ""
+  # User profile (stable, from user-profile.md)
+  USER_PROFILE="$MEMORY_DIR/user-profile.md"
+  if [ -f "$USER_PROFILE" ]; then
+    echo "## User"
+    sed -n '/^---$/,/^---$/d; /^#/d; /^$/d; p' "$USER_PROFILE" | \
+      grep -E "^- .*(специалист|стек|stack|русский|лаконич|конкретн)" | head -3
+    echo ""
+  fi
   if [ -n "$MISTAKES_MD" ]; then
     echo "## Key Mistakes"
     printf '%s\n' "$MISTAKES_MD" | grep -E "^### |^Root cause:|^Prevention:" | head -15
@@ -768,7 +776,7 @@ AGENT_CTX="$MEMORY_DIR/_agent_context.md"
   fi
   if [ -n "$FEEDBACK_MD" ]; then
     echo "## Feedback"
-    printf '%s\n' "$FEEDBACK_MD" | awk '/^### /{if(name)print name": "line; name=$0; line=""; next} line=="" && /^[^#]/ && !/^$/{line=$0} END{if(name)print name": "line}' | head -5
+    printf '%s\n' "$FEEDBACK_MD" | awk '/^### /{if(name){print name; if(body)print body; if(why)print why}; name=$0; body=""; why=""; next} body=="" && /^[^#*]/ && !/^$/{body=$0; next} /^\*\*Why:\*\*/{why=$0} END{if(name){print name; if(body)print body; if(why)print why}}' | head -20
     echo ""
   fi
   if [ -n "$STRATEGIES_MD" ]; then

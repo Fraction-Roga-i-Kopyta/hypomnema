@@ -12,7 +12,7 @@ Claude Code starts every session from zero. Hypomnema fixes that.
 
 ## The problem
 
-Every Claude Code session is stateless. Your AI assistant doesn't remember that it made the same CSS debugging mistake five times, doesn't know the Groovy ternary it broke last week, doesn't recall the strategy that worked for NestJS routing. You repeat yourself. It repeats its mistakes.
+Every Claude Code session is stateless. Your AI assistant doesn't remember that it made the same debugging mistake five times, doesn't know the database migration it broke last week, doesn't recall the strategy that worked for async race conditions. You repeat yourself. It repeats its mistakes.
 
 ## The solution
 
@@ -305,11 +305,11 @@ Each project can have default domains in `projects-domains.json`:
 ```json
 {
   "webapp": ["frontend", "css", "backend"],
-  "scripts": ["jira", "groovy"]
+  "api": ["python", "sql", "backend"]
 }
 ```
 
-Domains are also auto-detected from git diff (`.css` → css, `.sql` → db, `.groovy` → groovy) and CWD path heuristics. Records tagged with non-matching domains are filtered out — jira mistakes won't appear in CSS sessions.
+Domains are also auto-detected from git diff (`.css` → css, `.sql` → db, `.py` → python) and CWD path heuristics. Records tagged with non-matching domains are filtered out — database mistakes won't appear in frontend sessions.
 
 Memory files use `domains: [css, frontend]` in frontmatter. Records with `domains: [general]` or no domains always match.
 
