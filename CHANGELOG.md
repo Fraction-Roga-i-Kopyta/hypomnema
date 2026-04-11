@@ -1,5 +1,79 @@
 # Changelog
 
+## [0.4.0] - 2026-04-12
+
+Related links and graph. Memory files now connect to each other through typed relationships, forming clusters that activate together.
+
+### Related links
+
+- **`related:` field in frontmatter** — typed connections between memory files: `reinforces`, `contradicts`, `instance_of`, `supersedes`
+- **Unidirectional links** — the more specific record declares the link; reverse references built on-the-fly during injection
+- **Flat YAML map format** — `- target-slug: link_type`, compact and shell-parseable
+
+### Cluster activation
+
+- **Forward scan** — when a file is injected, its `related:` targets are loaded as a cluster
+- **Reverse scan** — files that reference an injected file are also pulled in
+- **Cross-relationship scan** — detects `contradicts` links between already-injected files
+- **Score filter** — cluster candidates must have composite score > 0 (keyword OR WAL OR TF-IDF signal)
+- **Budget cap** — max +4 cluster files above MAX_FILES (total up to 26), prioritized: contradicts > reinforces > instance_of > supersedes
+- **Provenance markers** — cluster-loaded records show `(via source → type)` in output
+- **`## Related` output section** — cluster-loaded records appear in a dedicated section
+
+### Contradicts handling
+
+- **`[ПРИОРИТЕТ]` marker** — the newer record (by `referenced` date) gets priority annotation on its header
+- **`⚠ Конфликт` warning** — explicit warning when contradicting records are both injected
+- **`superseded` status** — records with `status: superseded` are excluded from injection entirely
+
+### Cascade signals
+
+- **Cascade detection** — when a memory file is updated, `memory-outcome.sh` scans for `instance_of` children and logs `cascade-review` events to WAL
+- **`[REVIEW]` display markers** — injected files with pending cascade-review (< 14 days) show `[REVIEW: parent updated YYYY-MM-DD]` on their header
+- **Non-destructive** — cascade is a signal for Claude to check actuality, not automatic content modification
+
+### WAL events
+
+- `cluster-load|<slug>|<session_id>` — file loaded by cluster activation
+- `cascade-review|<child-slug>|parent:<parent-slug>` — child needs review after parent update
+
+### Testing
+
+- 132 smoke tests (+24 new: cluster forward/reverse scan, provenance, WAL events, superseded exclusion, contradicts warning/priority, cluster cap, cascade detection cross-dir, cascade display)
+- 18 benchmark scenarios — all passing, zero regressions
+
+---
+
+## [0.3.0] - 2026-04-11
+
+Memory lifecycle. The system now tracks access frequency and ages records for archival.
+
+### Lifecycle fields
+
+- **`ref_count`** — auto-incremented on each injection; high ref_count = core memory
+- **`decay_rate`** — `slow` (fundamentals, 180d stale), `normal` (project notes, 60d), `fast` (situational, 14d)
+- **Auto-assignment** — decay_rate inferred from file type/location: projects and user-profile → slow, continuity and journal → fast, pinned → always slow
+
+### ref_count tracking
+
+- **Per-injection increment** — single perl call updates `referenced` date and `ref_count` atomically across all injected files
+- **Backfill script** (`memory-backfill-refcount.sh`) — populates ref_count from WAL history for existing files
+- **Enrichment script** (`memory-enrich-frontmatter.sh`) — adds missing `decay_rate` and `ref_count` fields to legacy files
+
+### Archival (Stop hook)
+
+- **Stale detection** — files not referenced within type-specific thresholds get `status: stale`
+- **Auto-archival** — stale files exceeding archive threshold move to `archive/` subdirectory
+- **Type-specific thresholds** — mistakes 60→180d, strategies 90→180d, knowledge 90→365d, feedback 45→120d, notes 30→90d
+- **decay_rate override** — fast records stale at 14d/archive at 45d; slow records stale at 180d/archive at 365d
+- **Projects exempt** — project files never archived
+
+### Testing
+
+- 3 new benchmark scenarios (ref_count auto-increment, ref_count feedback increment, decay_rate preserved after injection)
+
+---
+
 ## [0.2.0] - 2026-04-11
 
 Meta-analytics and positive patterns. The system now tracks what works, not just what breaks.
