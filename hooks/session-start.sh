@@ -1053,6 +1053,44 @@ if [ -n "$CONTRADICTS_WARNINGS" ]; then
 ${CONTRADICTS_WARNINGS}"
 fi
 
+# --- Cascade-review display (v0.4) ---
+# Scan WAL for cascade-review events < 14 days old, inject [REVIEW] markers into section headers
+if [ -f "$WAL_FILE" ]; then
+  if [[ "$OSTYPE" == darwin* ]]; then
+    _CASCADE_CUTOFF=$(date -v-14d +%Y-%m-%d 2>/dev/null || echo "0000-00-00")
+  else
+    _CASCADE_CUTOFF=$(date -d "14 days ago" +%Y-%m-%d 2>/dev/null || echo "0000-00-00")
+  fi
+  # Build review map: "slug|parent|date" lines (most recent per slug)
+  _CASCADE_MAP=$(awk -F'|' -v cutoff="$_CASCADE_CUTOFF" '
+    $1 >= cutoff && $2 == "cascade-review" {
+      slug = $3
+      # $4 format: "parent:parent-slug"
+      parent = $4
+      sub(/^parent:/, "", parent)
+      date = $1
+      if (!(slug in best) || date > best_date[slug]) {
+        best[slug] = parent
+        best_date[slug] = date
+      }
+    }
+    END {
+      for (s in best) {
+        printf "%s|%s|%s\n", s, best[s], best_date[s]
+      }
+    }
+  ' "$WAL_FILE" 2>/dev/null)
+
+  if [ -n "$_CASCADE_MAP" ]; then
+    while IFS='|' read -r _cr_slug _cr_parent _cr_date; do
+      [ -z "$_cr_slug" ] && continue
+      # Replace "### slug" with "### slug [REVIEW: parent updated YYYY-MM-DD]" in CONTEXT
+      _cr_marker="[REVIEW: ${_cr_parent} updated ${_cr_date}]"
+      CONTEXT=$(printf '%s' "$CONTEXT" | perl -pe "s/^(### ${_cr_slug})( |$)/\$1 ${_cr_marker}\$2/")
+    done <<< "$_CASCADE_MAP"
+  fi
+fi
+
 # Nothing to inject
 [ -z "$CONTEXT" ] && exit 0
 

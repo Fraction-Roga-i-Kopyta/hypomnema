@@ -289,11 +289,91 @@ assert "Outcome hook — negative detected" 'grep -q "outcome-negative.*wrong-ro
 echo '{"session_id":"outcome-test-session","tool_name":"Write","tool_input":{"file_path":"'"$OUTCOME_MEM"'/mistakes/brand-new-bug.md","content":"test"}}' | CLAUDE_MEMORY_DIR="$OUTCOME_MEM" bash "$HOME/.claude/hooks/memory-outcome.sh" 2>/dev/null
 assert "Outcome hook — new mistake detected" 'grep -q "outcome-new.*brand-new-bug" "$OUTCOME_MEM/.wal"'
 
-# Test: outcome hook — non-mistake file ignored
+# Test: outcome hook — non-mistake file: no outcome entry, but cascade scan runs
 echo '{"session_id":"outcome-test-session","tool_name":"Write","tool_input":{"file_path":"'"$OUTCOME_MEM"'/feedback/test.md","content":"test"}}' | CLAUDE_MEMORY_DIR="$OUTCOME_MEM" bash "$HOME/.claude/hooks/memory-outcome.sh" 2>/dev/null
 OUTCOME_LINES=$(wc -l < "$OUTCOME_MEM/.wal")
-assert "Outcome hook — non-mistake ignored" '[ "$OUTCOME_LINES" -eq 3 ]'
+assert "Outcome hook — non-mistake no outcome entry" '[ "$OUTCOME_LINES" -eq 3 ]'
 rm -rf "$OUTCOME_DIR"
+
+# Test: cascade detection — instance_of child detected when parent updated
+CASC_DIR=$(mktemp -d)
+CASC_MEM="$CASC_DIR/memory"
+mkdir -p "$CASC_MEM"/{mistakes,feedback,knowledge}
+
+cat > "$CASC_MEM/mistakes/parent-bug.md" << 'EOF'
+---
+type: mistake
+project: global
+status: active
+severity: major
+recurrence: 3
+root-cause: "Parent root cause"
+prevention: "Parent prevention"
+---
+Parent bug body.
+EOF
+
+cat > "$CASC_MEM/mistakes/child-bug.md" << 'EOF'
+---
+type: mistake
+project: global
+status: active
+severity: minor
+recurrence: 1
+root-cause: "Child root cause"
+prevention: "Child prevention"
+related:
+  - parent-bug: instance_of
+---
+Child bug body.
+EOF
+
+# Write to parent — should cascade to child
+echo '{"session_id":"casc-session","tool_name":"Write","tool_input":{"file_path":"'"$CASC_MEM"'/mistakes/parent-bug.md","content":"updated"}}' | CLAUDE_MEMORY_DIR="$CASC_MEM" bash "$HOME/.claude/hooks/memory-outcome.sh" 2>/dev/null
+assert "Cascade — child detected on parent update" 'grep -q "cascade-review|child-bug|parent:parent-bug" "$CASC_MEM/.wal"'
+assert "Cascade — outcome-new also written for mistake" 'grep -q "outcome-new|parent-bug" "$CASC_MEM/.wal"'
+
+# Write to a feedback file with a child in knowledge
+cat > "$CASC_MEM/feedback/parent-fb.md" << 'EOF'
+---
+type: feedback
+project: global
+status: active
+---
+Parent feedback.
+EOF
+
+cat > "$CASC_MEM/knowledge/child-kb.md" << 'EOF'
+---
+type: knowledge
+project: global
+status: active
+related:
+  - parent-fb: instance_of
+---
+Child knowledge.
+EOF
+
+echo '{"session_id":"casc-session","tool_name":"Write","tool_input":{"file_path":"'"$CASC_MEM"'/feedback/parent-fb.md","content":"updated"}}' | CLAUDE_MEMORY_DIR="$CASC_MEM" bash "$HOME/.claude/hooks/memory-outcome.sh" 2>/dev/null
+assert "Cascade — cross-dir instance_of detected" 'grep -q "cascade-review|child-kb|parent:parent-fb" "$CASC_MEM/.wal"'
+assert "Cascade — no outcome entry for non-mistake" '! grep -q "outcome-.*parent-fb" "$CASC_MEM/.wal"'
+
+# File without instance_of children — no cascade
+cat > "$CASC_MEM/feedback/lonely.md" << 'EOF'
+---
+type: feedback
+project: global
+status: active
+---
+No children here.
+EOF
+
+CASC_LINES_BEFORE=$(wc -l < "$CASC_MEM/.wal")
+echo '{"session_id":"casc-session","tool_name":"Write","tool_input":{"file_path":"'"$CASC_MEM"'/feedback/lonely.md","content":"updated"}}' | CLAUDE_MEMORY_DIR="$CASC_MEM" bash "$HOME/.claude/hooks/memory-outcome.sh" 2>/dev/null
+CASC_LINES_AFTER=$(wc -l < "$CASC_MEM/.wal")
+assert "Cascade — no cascade for file without children" '[ "$CASC_LINES_BEFORE" -eq "$CASC_LINES_AFTER" ]'
+
+rm -rf "$CASC_DIR"
 
 # Test: spaced repetition — spread across days scores higher than burst
 SR_DIR=$(mktemp -d)
@@ -1670,13 +1750,13 @@ ref_count: 5
 Cascade review test mistake.
 EOF
 
-# Pre-populate WAL with a cascade-review event for this mistake
-printf '2026-04-11|cascade-review|cascade-mistake|cascade-test-session\n' > "$CASCADE_MEM/.wal"
+# Pre-populate WAL with a cascade-review event for this mistake (format: date|cascade-review|child|parent:parent-slug)
+printf '2026-04-11|cascade-review|cascade-mistake|parent:some-parent\n' > "$CASCADE_MEM/.wal"
 
 mkdir -p /tmp/cascade-test
 CASCADE_OUT=$(echo '{"session_id":"cascade-test","cwd":"/tmp/cascade-test"}' | CLAUDE_MEMORY_DIR="$CASCADE_MEM" bash "$HOOK" 2>/dev/null)
 CASCADE_CTX=$(printf '%s' "$CASCADE_OUT" | jq -r '.hookSpecificOutput.additionalContext // ""')
-assert "Cascade display — REVIEW marker appears" 'printf "%s" "$CASCADE_CTX" | grep -iq "REVIEW\|cascade-review"'
+assert "Cascade display — REVIEW marker appears" 'printf "%s" "$CASCADE_CTX" | grep -q "REVIEW.*some-parent.*updated"'
 
 rm -rf "$CASCADE_DIR" /tmp/cascade-test
 
