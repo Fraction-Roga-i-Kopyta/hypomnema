@@ -923,6 +923,66 @@ fi
 fi
 # --- End dedup tests ---
 
+# Test: outcome-positive — injected mistake not repeated → positive
+OP_DIR=$(mktemp -d)
+OP_MEM="$OP_DIR/memory"
+mkdir -p "$OP_MEM"/{mistakes,projects}
+cat > "$OP_MEM/projects.json" << 'EOF'
+{}
+EOF
+cat > "$OP_MEM/mistakes/css-var-bug.md" << 'EOF'
+---
+type: mistake
+project: global
+status: active
+severity: major
+recurrence: 3
+domains: [css, frontend]
+root-cause: "CSS var not applied"
+prevention: "Check computed styles"
+---
+EOF
+printf '2026-04-11|inject|css-var-bug|op-test-session\n' > "$OP_MEM/.wal"
+OP_MARKER="/tmp/.claude-session-op-test-session"
+touch -t 202601010000 "$OP_MARKER"
+cat > "$OP_DIR/transcript.jsonl" << 'OPEOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Edit","input":{"file_path":"test.css"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"OK"}]}}
+OPEOF
+echo '{"session_id":"op-test-session","cwd":"/tmp","transcript_path":"'"$OP_DIR"'/transcript.jsonl"}' | CLAUDE_MEMORY_DIR="$OP_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null
+assert "Outcome-positive — written to WAL" 'grep -q "outcome-positive|css-var-bug" "$OP_MEM/.wal"'
+rm -rf "$OP_DIR" "$OP_MARKER"
+
+# Test: outcome-positive — skipped when outcome-negative exists
+ON_DIR=$(mktemp -d)
+ON_MEM="$ON_DIR/memory"
+mkdir -p "$ON_MEM"/{mistakes,projects}
+cat > "$ON_MEM/projects.json" << 'EOF'
+{}
+EOF
+cat > "$ON_MEM/mistakes/repeated-bug.md" << 'EOF'
+---
+type: mistake
+project: global
+status: active
+severity: major
+recurrence: 3
+domains: [general]
+root-cause: "Repeated bug"
+prevention: "Stop repeating"
+---
+EOF
+printf '2026-04-11|inject|repeated-bug|on-test-session\n2026-04-11|outcome-negative|repeated-bug|on-test-session\n' > "$ON_MEM/.wal"
+ON_MARKER="/tmp/.claude-session-on-test-session"
+touch -t 202601010000 "$ON_MARKER"
+cat > "$ON_DIR/transcript.jsonl" << 'ONEOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"echo test"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"test"}]}}
+ONEOF
+echo '{"session_id":"on-test-session","cwd":"/tmp","transcript_path":"'"$ON_DIR"'/transcript.jsonl"}' | CLAUDE_MEMORY_DIR="$ON_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null
+assert "Outcome-positive — not written when negative exists" '! grep -q "outcome-positive|repeated-bug" "$ON_MEM/.wal"'
+rm -rf "$ON_DIR" "$ON_MARKER"
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="
