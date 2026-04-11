@@ -1219,6 +1219,51 @@ SR2_CTX=$(printf '%s' "$SR2_OUT" | jq -r '.hookSpecificOutput.additionalContext 
 assert "Strategies reminder — shown on long clean session" 'printf "%s" "$SR2_CTX" | grep -qi "strateg"'
 rm -rf "$SR2_DIR" "$SR2_MARKER"
 
+# Test: memory-analytics.sh generates report
+AN_DIR=$(mktemp -d)
+AN_MEM="$AN_DIR/memory"
+mkdir -p "$AN_MEM"/{strategies,mistakes}
+cat > "$AN_MEM/strategies/css-debug.md" << 'EOF'
+---
+type: strategy
+project: global
+status: active
+domains: [css]
+---
+CSS debug strategy.
+EOF
+{
+  for day in 1 3 5 7 9 11 13 15 17 19 21; do
+    if [[ "$OSTYPE" == darwin* ]]; then
+      d=$(date -v-${day}d +%Y-%m-%d)
+    else
+      d=$(date -d "${day} days ago" +%Y-%m-%d)
+    fi
+    echo "${d}|inject|winner-file|s${day}"
+    echo "${d}|outcome-positive|winner-file|s${day}"
+    echo "${d}|inject|noise-file|s${day}"
+    echo "${d}|session-metrics|backend|error_count:0,tool_calls:5,duration:300s"
+    echo "${d}|clean-session|backend|s${day}"
+  done
+  for day in 2 4 6 8 10 12; do
+    if [[ "$OSTYPE" == darwin* ]]; then
+      d=$(date -v-${day}d +%Y-%m-%d)
+    else
+      d=$(date -d "${day} days ago" +%Y-%m-%d)
+    fi
+    echo "${d}|inject|noise-file|sn${day}"
+    echo "${d}|outcome-negative|noise-file|sn${day}"
+    echo "${d}|session-metrics|frontend|error_count:2,tool_calls:8,duration:600s"
+  done
+} > "$AN_MEM/.wal"
+CLAUDE_MEMORY_DIR="$AN_MEM" bash "$HOME/.claude/hooks/memory-analytics.sh" 2>/dev/null
+assert "Analytics — report created" '[ -f "$AN_MEM/.analytics-report" ]'
+assert "Analytics — has winners" 'grep -q "winner-file" "$AN_MEM/.analytics-report"'
+assert "Analytics — has noise" 'grep -q "noise-file" "$AN_MEM/.analytics-report"'
+assert "Analytics — has clean_ratio" 'grep -q "clean_ratio" "$AN_MEM/.analytics-report"'
+assert "Analytics — has strategy gaps" 'grep -qi "backend" "$AN_MEM/.analytics-report"'
+rm -rf "$AN_DIR"
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="
