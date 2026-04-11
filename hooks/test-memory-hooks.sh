@@ -1400,6 +1400,291 @@ assert "Full pipeline — clean-session written" 'grep -q "clean-session" "$FULL
 assert "Full pipeline — session-metrics written" 'grep -q "session-metrics" "$FULL_MEM/.wal"'
 rm -rf "$FULL_DIR" "$FULL_MARKER"
 
+# --- Cluster activation tests (v0.4 "Wiki") ---
+
+# Cluster fixtures: temp dir with related files
+CL_DIR=$(mktemp -d)
+CL_MEM="$CL_DIR/memory"
+mkdir -p "$CL_MEM"/{mistakes,feedback,strategies,knowledge,projects,decisions,continuity,notes}
+
+cat > "$CL_MEM/projects.json" << 'PJSON'
+{"/tmp/cluster-test": "cluster-proj"}
+PJSON
+cat > "$CL_MEM/projects-domains.json" << 'DJSON'
+{"cluster-proj": ["debugging"]}
+DJSON
+
+# 1. Mistake with forward links to two related files
+cat > "$CL_MEM/mistakes/root-cause-bug.md" << 'EOF'
+---
+type: mistake
+project: global
+status: active
+severity: major
+recurrence: 5
+injected: 2026-04-01
+referenced: 2026-04-11
+root-cause: "Jumps to first hypothesis without alternatives"
+prevention: "List 2-3 possible root causes before fixing"
+domains: [debugging]
+keywords: [debugging, root-cause]
+decay_rate: 0.03
+ref_count: 12
+related:
+  - debug-feedback: reinforces
+  - debug-strategy: reinforces
+---
+Root cause diagnosis mistake — always list alternatives first.
+EOF
+
+# 2. Feedback file — should be pulled by cluster (forward link target)
+cat > "$CL_MEM/feedback/debug-feedback.md" << 'EOF'
+---
+type: feedback
+project: global
+status: active
+referenced: 2026-04-08
+domains: [debugging]
+keywords: [debugging]
+decay_rate: 0.05
+ref_count: 4
+---
+When debugging, generate 2-3 root cause hypotheses before committing to a fix.
+EOF
+
+# 3. Strategy file — should be pulled by cluster (forward link target)
+cat > "$CL_MEM/strategies/debug-strategy.md" << 'EOF'
+---
+type: strategy
+project: global
+status: active
+referenced: 2026-04-07
+domains: [debugging, strategy]
+keywords: [debugging, strategy]
+decay_rate: 0.04
+ref_count: 6
+---
+1. Read the error message carefully
+2. List 2-3 hypotheses
+3. Test cheapest hypothesis first
+EOF
+
+# 4. Feedback with reverse link — tests reverse scan (points TO root-cause-bug)
+cat > "$CL_MEM/feedback/reverse-linked.md" << 'EOF'
+---
+type: feedback
+project: global
+status: active
+referenced: 2026-04-06
+domains: [debugging]
+keywords: [debugging, instance]
+decay_rate: 0.05
+ref_count: 2
+related:
+  - root-cause-bug: instance_of
+---
+This is a specific instance of the root cause diagnosis problem.
+EOF
+
+# 5. Contradicts pair — old-rule links to new-rule as contradicts
+cat > "$CL_MEM/feedback/old-rule.md" << 'EOF'
+---
+type: feedback
+project: global
+status: active
+referenced: 2026-04-05
+domains: [debugging]
+keywords: [debugging, old-rule]
+decay_rate: 0.05
+ref_count: 3
+related:
+  - new-rule: contradicts
+---
+Old debugging rule: always add console.log first.
+EOF
+
+cat > "$CL_MEM/feedback/new-rule.md" << 'EOF'
+---
+type: feedback
+project: global
+status: active
+referenced: 2026-04-11
+domains: [debugging]
+keywords: [debugging, new-rule]
+decay_rate: 0.05
+ref_count: 7
+---
+New rule: use debugger breakpoints, not console.log spam.
+EOF
+
+# 6. Cascade test — instance_of pointing to root-cause-bug
+cat > "$CL_MEM/mistakes/specific-css-bug.md" << 'EOF'
+---
+type: mistake
+project: global
+status: active
+severity: minor
+recurrence: 1
+injected: 2026-04-05
+referenced: 2026-04-09
+root-cause: "Applied first CSS fix without checking cascade"
+prevention: "Trace CSS from viewport down"
+domains: [css, debugging]
+keywords: [css, debugging]
+decay_rate: 0.05
+ref_count: 2
+related:
+  - root-cause-bug: instance_of
+---
+Specific CSS instance of root cause diagnosis problem.
+EOF
+
+# 7. Superseded file — should NOT be loaded by cluster
+cat > "$CL_MEM/feedback/deprecated-rule.md" << 'EOF'
+---
+type: feedback
+project: global
+status: superseded
+referenced: 2026-03-01
+domains: [debugging]
+keywords: [debugging, deprecated]
+decay_rate: 0.05
+ref_count: 1
+---
+This rule is superseded and should not appear.
+EOF
+
+# Run hook with cluster fixtures
+mkdir -p /tmp/cluster-test
+CL_OUT=$(echo '{"session_id":"cluster-test","cwd":"/tmp/cluster-test"}' | CLAUDE_MEMORY_DIR="$CL_MEM" bash "$HOOK" 2>/dev/null)
+CL_CTX=$(printf '%s' "$CL_OUT" | jq -r '.hookSpecificOutput.additionalContext // ""')
+
+# Cluster loading assertions
+assert "Cluster — root-cause-bug injected by main pass" 'printf "%s" "$CL_CTX" | grep -q "root-cause-bug"'
+assert "Cluster — debug-feedback loaded (forward link)" 'printf "%s" "$CL_CTX" | grep -q "debug-feedback"'
+assert "Cluster — debug-strategy loaded (forward link)" 'printf "%s" "$CL_CTX" | grep -q "debug-strategy"'
+assert "Cluster — reverse-linked loaded (reverse scan)" 'printf "%s" "$CL_CTX" | grep -q "reverse-linked"'
+assert "Cluster — provenance shown (via reinforces)" 'printf "%s" "$CL_CTX" | grep -iq "via.*reinforces\|via.*instance_of"'
+assert "Cluster — WAL has cluster-load events" 'grep -q "cluster-load" "$CL_MEM/.wal"'
+assert "Cluster — superseded file NOT loaded" '! printf "%s" "$CL_CTX" | grep -q "deprecated-rule"'
+
+# Contradicts assertions
+assert "Cluster contradicts — warning appears" 'printf "%s" "$CL_CTX" | grep -iq "конфликт\|contradicts"'
+assert "Cluster contradicts — priority marker" 'printf "%s" "$CL_CTX" | grep -q "\[ПРИОРИТЕТ\]"'
+
+rm -rf /tmp/cluster-test
+
+# --- Cluster cap test (max +4 files) ---
+CAP_DIR=$(mktemp -d)
+CAP_MEM="$CAP_DIR/memory"
+mkdir -p "$CAP_MEM"/{mistakes,feedback,projects}
+
+cat > "$CAP_MEM/projects.json" << 'PJSON'
+{"/tmp/cap-test": "cap-proj"}
+PJSON
+cat > "$CAP_MEM/projects-domains.json" << 'DJSON'
+{"cap-proj": ["testing"]}
+DJSON
+
+# Hub mistake with 8 related feedback files
+cat > "$CAP_MEM/mistakes/hub-mistake.md" << 'EOF'
+---
+type: mistake
+project: global
+status: active
+severity: major
+recurrence: 5
+injected: 2026-04-01
+referenced: 2026-04-11
+root-cause: "Hub mistake linking many files"
+prevention: "Cap test prevention"
+domains: [testing]
+keywords: [testing]
+decay_rate: 0.03
+ref_count: 10
+related:
+  - cap-fb-1: reinforces
+  - cap-fb-2: reinforces
+  - cap-fb-3: reinforces
+  - cap-fb-4: reinforces
+  - cap-fb-5: reinforces
+  - cap-fb-6: reinforces
+  - cap-fb-7: reinforces
+  - cap-fb-8: reinforces
+---
+Hub mistake with many related files to test cap.
+EOF
+
+# Create 8 feedback files as targets
+for i in $(seq 1 8); do
+cat > "$CAP_MEM/feedback/cap-fb-$i.md" << CAPEOF
+---
+type: feedback
+project: global
+status: active
+referenced: 2026-04-0$((i % 9 + 1))
+domains: [testing]
+keywords: [testing, cap]
+decay_rate: 0.05
+ref_count: $i
+---
+Cap test feedback file number $i.
+CAPEOF
+done
+
+mkdir -p /tmp/cap-test
+echo '{"session_id":"cap-test","cwd":"/tmp/cap-test"}' | CLAUDE_MEMORY_DIR="$CAP_MEM" bash "$HOOK" >/dev/null 2>&1
+CAP_CLUSTER_COUNT=$(grep -c "cluster-load" "$CAP_MEM/.wal" 2>/dev/null || echo 0)
+assert "Cluster cap — max 4 files loaded by cluster" '[ "$CAP_CLUSTER_COUNT" -le 4 ]'
+
+rm -rf "$CAP_DIR" /tmp/cap-test
+
+# --- Cascade review display test ---
+CASCADE_DIR=$(mktemp -d)
+CASCADE_MEM="$CASCADE_DIR/memory"
+mkdir -p "$CASCADE_MEM"/{mistakes,feedback,projects}
+
+cat > "$CASCADE_MEM/projects.json" << 'PJSON'
+{"/tmp/cascade-test": "cascade-proj"}
+PJSON
+cat > "$CASCADE_MEM/projects-domains.json" << 'DJSON'
+{"cascade-proj": ["css"]}
+DJSON
+
+cat > "$CASCADE_MEM/mistakes/cascade-mistake.md" << 'EOF'
+---
+type: mistake
+project: global
+status: active
+severity: major
+recurrence: 3
+injected: 2026-04-01
+referenced: 2026-04-11
+root-cause: "CSS cascade test mistake"
+prevention: "Trace from viewport"
+domains: [css]
+keywords: [css, cascade]
+decay_rate: 0.03
+ref_count: 5
+---
+Cascade review test mistake.
+EOF
+
+# Pre-populate WAL with a cascade-review event for this mistake
+printf '2026-04-11|cascade-review|cascade-mistake|cascade-test-session\n' > "$CASCADE_MEM/.wal"
+
+mkdir -p /tmp/cascade-test
+CASCADE_OUT=$(echo '{"session_id":"cascade-test","cwd":"/tmp/cascade-test"}' | CLAUDE_MEMORY_DIR="$CASCADE_MEM" bash "$HOOK" 2>/dev/null)
+CASCADE_CTX=$(printf '%s' "$CASCADE_OUT" | jq -r '.hookSpecificOutput.additionalContext // ""')
+assert "Cascade display — REVIEW marker appears" 'printf "%s" "$CASCADE_CTX" | grep -iq "REVIEW\|cascade-review"'
+
+rm -rf "$CASCADE_DIR" /tmp/cascade-test
+
+# Cleanup cluster test dirs
+rm -rf "$CL_DIR"
+
+# --- End cluster activation tests ---
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="
