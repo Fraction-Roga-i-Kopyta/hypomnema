@@ -1105,6 +1105,53 @@ assert "Bayesian — proven-good appears" '[ -n "$BAYES_POS_GOOD" ]'
 assert "Bayesian — proven-good before proven-bad" '[ -n "$BAYES_POS_GOOD" ] && [ -n "$BAYES_POS_BAD" ] && [ "$BAYES_POS_GOOD" -lt "$BAYES_POS_BAD" ]'
 rm -rf "$BAYES_DIR"
 
+# Test: strategy-used bonus — used strategy ranks higher
+SBONUS_DIR=$(mktemp -d)
+SBONUS_MEM="$SBONUS_DIR/memory"
+mkdir -p "$SBONUS_MEM"/{strategies,feedback,projects}
+cat > "$SBONUS_MEM/projects.json" << 'EOF'
+{}
+EOF
+cat > "$SBONUS_MEM/projects-domains.json" << 'EOF'
+{}
+EOF
+cat > "$SBONUS_MEM/strategies/used-strat.md" << 'EOF'
+---
+type: strategy
+project: global
+status: active
+referenced: 2026-04-01
+---
+Strategy with confirmed usage.
+EOF
+cat > "$SBONUS_MEM/strategies/unused-strat.md" << 'EOF'
+---
+type: strategy
+project: global
+status: active
+referenced: 2026-04-01
+---
+Strategy never confirmed.
+EOF
+{
+  echo "2026-04-05|inject|used-strat|s1"
+  echo "2026-04-06|inject|used-strat|s2"
+  echo "2026-04-07|inject|used-strat|s3"
+  echo "2026-04-05|strategy-used|used-strat|s1"
+  echo "2026-04-06|strategy-used|used-strat|s2"
+  echo "2026-04-07|strategy-used|used-strat|s3"
+  echo "2026-04-05|inject|unused-strat|s1"
+  echo "2026-04-06|inject|unused-strat|s2"
+  echo "2026-04-07|inject|unused-strat|s3"
+} > "$SBONUS_MEM/.wal"
+SBONUS_OUT=$(printf '{"session_id":"sbonus-test","cwd":"/tmp"}' | CLAUDE_MEMORY_DIR="$SBONUS_MEM" bash "$HOOK" 2>/dev/null)
+SBONUS_CTX=$(printf '%s' "$SBONUS_OUT" | jq -r '.hookSpecificOutput.additionalContext')
+SBONUS_POS_USED=$(printf '%s\n' "$SBONUS_CTX" | grep -n "used-strat" | head -1 | cut -d: -f1)
+SBONUS_POS_UNUSED=$(printf '%s\n' "$SBONUS_CTX" | grep -n "unused-strat" | head -1 | cut -d: -f1)
+assert "Strategy bonus — used-strat appears" '[ -n "$SBONUS_POS_USED" ]'
+assert "Strategy bonus — used before unused" '[ -n "$SBONUS_POS_USED" ] && [ -n "$SBONUS_POS_UNUSED" ] && [ "$SBONUS_POS_USED" -lt "$SBONUS_POS_UNUSED" ]'
+rm -rf "$SBONUS_DIR"
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="
