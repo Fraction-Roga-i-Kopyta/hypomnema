@@ -408,6 +408,9 @@ if [ -f "$WAL_FILE" ]; then
     $1 >= cutoff && $2 == "outcome-negative" {
       neg_count[$3]++
     }
+    $1 >= cutoff && $2 == "strategy-used" {
+      strat_used[$3]++
+    }
     function jdn(y, m, d) {
       if (m <= 2) { y--; m += 12 }
       return int(365.25*(y+4716)) + int(30.6001*(m+1)) + d - 1524
@@ -442,8 +445,10 @@ if [ -f "$WAL_FILE" ]; then
         raw = spread * decay * effectiveness
         if (raw > 10) raw = 10
 
+        su = 0
+        if (name in strat_used) su = strat_used[name]
         if (!first) printf ";"
-        printf "%s:%.1f", name, raw
+        printf "%s:%.1f:%d", name, raw, su
         first = 0
       }
     }
@@ -533,7 +538,10 @@ collect_scored() {
       m=split(wal, wentries, ";")
       for (i=1; i<=m; i++) {
         split(wentries[i], wp, ":")
-        if (wp[1] != "") wal_count[wp[1]] = wp[2]+0
+        if (wp[1] != "") {
+          wal_count[wp[1]] = wp[2]+0
+          strat_used_count[wp[1]] = wp[3]+0
+        }
       }
       # Parse TF-IDF scores: "name:score;name:score;..."
       t=split(tfidf, tentries, ";")
@@ -556,6 +564,10 @@ collect_scored() {
       fname=$1; sub(/.*\//, "", fname); sub(/\.md$/, "", fname)
       wc = wal_count[fname]+0
       score += wc
+      # Strategy bonus: min(strategy_used_count * 2, 6)
+      su = strat_used_count[fname]+0
+      if (su > 3) su = 3
+      score += su * 2
       # TF-IDF bonus: only for records WITHOUT keywords field (+2 per score unit, cap 6)
       if (fkw == "_none_") {
         ts = tfidf_score[fname]+0
