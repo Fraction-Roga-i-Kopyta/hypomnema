@@ -377,10 +377,10 @@ ${body}
 MISTAKES_MD=$(collect_mistakes)
 
 # --- WAL-based spaced repetition scoring ---
-# Formula: spread × decay(recency) × (1 - negative_ratio)
+# Formula: spread × decay(recency) × effectiveness
 # spread = unique days with inject in 30 days (min 2 injects to count)
 # decay = 1 / (1 + days_since_last / 7)
-# negative_ratio = outcome-negative count / total injects
+# effectiveness = Bayesian (positive + 1) / (positive + negative + 2)
 WAL_FILE="$MEMORY_DIR/.wal"
 WAL_SCORES=""
 if [ -f "$WAL_FILE" ]; then
@@ -401,6 +401,9 @@ if [ -f "$WAL_FILE" ]; then
       count[$3] += $4
       days[$3, $1] = 1
       if ($1 > last_day[$3] || last_day[$3] == "") last_day[$3] = $1
+    }
+    $1 >= cutoff && $2 == "outcome-positive" {
+      pos_count[$3]++
     }
     $1 >= cutoff && $2 == "outcome-negative" {
       neg_count[$3]++
@@ -430,12 +433,13 @@ if [ -f "$WAL_FILE" ]; then
         if (ds < 0) ds = 0
         decay = 1.0 / (1.0 + ds / 7.0)
 
-        # negative ratio
-        nr = 0
-        if (name in neg_count) nr = neg_count[name] / count[name]
-        if (nr > 1) nr = 1
+        # Bayesian effectiveness
+        pc = 0; nc = 0
+        if (name in pos_count) pc = pos_count[name]
+        if (name in neg_count) nc = neg_count[name]
+        effectiveness = (pc + 1) / (pc + nc + 2)
 
-        raw = spread * decay * (1.0 - nr)
+        raw = spread * decay * effectiveness
         if (raw > 10) raw = 10
 
         if (!first) printf ";"

@@ -1055,6 +1055,56 @@ assert "Compact v2 — inject aggregated" 'grep -q "inject-agg" "$WALC2_MEM/.wal
 assert "Compact v2 — session-metrics aggregated" 'grep -q "metrics-agg" "$WALC2_MEM/.wal"'
 rm -rf "$WALC2_DIR"
 
+# Test: Bayesian effectiveness — positive outcomes boost score
+BAYES_DIR=$(mktemp -d)
+BAYES_MEM="$BAYES_DIR/memory"
+mkdir -p "$BAYES_MEM"/{feedback,projects}
+cat > "$BAYES_MEM/projects.json" << 'EOF'
+{}
+EOF
+cat > "$BAYES_MEM/projects-domains.json" << 'EOF'
+{}
+EOF
+cat > "$BAYES_MEM/feedback/proven-good.md" << 'EOF'
+---
+type: feedback
+project: global
+status: active
+referenced: 2026-04-01
+---
+Proven effective feedback.
+EOF
+cat > "$BAYES_MEM/feedback/proven-bad.md" << 'EOF'
+---
+type: feedback
+project: global
+status: active
+referenced: 2026-04-01
+---
+Proven ineffective feedback.
+EOF
+{
+  echo "2026-04-05|inject|proven-good|s1"
+  echo "2026-04-06|inject|proven-good|s2"
+  echo "2026-04-07|inject|proven-good|s3"
+  echo "2026-04-05|outcome-positive|proven-good|s1"
+  echo "2026-04-06|outcome-positive|proven-good|s2"
+  echo "2026-04-07|outcome-positive|proven-good|s3"
+  echo "2026-04-05|inject|proven-bad|s1"
+  echo "2026-04-06|inject|proven-bad|s2"
+  echo "2026-04-07|inject|proven-bad|s3"
+  echo "2026-04-05|outcome-negative|proven-bad|s1"
+  echo "2026-04-06|outcome-negative|proven-bad|s2"
+  echo "2026-04-07|outcome-negative|proven-bad|s3"
+} > "$BAYES_MEM/.wal"
+BAYES_OUT=$(printf '{"session_id":"bayes-test","cwd":"/tmp"}' | CLAUDE_MEMORY_DIR="$BAYES_MEM" bash "$HOOK" 2>/dev/null)
+BAYES_CTX=$(printf '%s' "$BAYES_OUT" | jq -r '.hookSpecificOutput.additionalContext')
+BAYES_POS_GOOD=$(printf '%s\n' "$BAYES_CTX" | grep -n "proven-good" | head -1 | cut -d: -f1)
+BAYES_POS_BAD=$(printf '%s\n' "$BAYES_CTX" | grep -n "proven-bad" | head -1 | cut -d: -f1)
+assert "Bayesian — proven-good appears" '[ -n "$BAYES_POS_GOOD" ]'
+assert "Bayesian — proven-good before proven-bad" '[ -n "$BAYES_POS_GOOD" ] && [ -n "$BAYES_POS_BAD" ] && [ "$BAYES_POS_GOOD" -lt "$BAYES_POS_BAD" ]'
+rm -rf "$BAYES_DIR"
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="
