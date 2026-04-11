@@ -1264,6 +1264,58 @@ assert "Analytics — has clean_ratio" 'grep -q "clean_ratio" "$AN_MEM/.analytic
 assert "Analytics — has strategy gaps" 'grep -qi "backend" "$AN_MEM/.analytics-report"'
 rm -rf "$AN_DIR"
 
+# Test: noise penalty — records in .analytics-report noise list get demoted
+NP_DIR=$(mktemp -d)
+NP_MEM="$NP_DIR/memory"
+mkdir -p "$NP_MEM"/{feedback,projects}
+cat > "$NP_MEM/projects.json" << 'EOF'
+{}
+EOF
+cat > "$NP_MEM/projects-domains.json" << 'EOF'
+{}
+EOF
+cat > "$NP_MEM/feedback/noisy-fb.md" << 'EOF'
+---
+type: feedback
+project: global
+status: active
+referenced: 2026-04-01
+---
+Noisy feedback that never helps.
+EOF
+cat > "$NP_MEM/feedback/good-fb.md" << 'EOF'
+---
+type: feedback
+project: global
+status: active
+referenced: 2026-04-01
+---
+Good feedback that always helps.
+EOF
+{
+  echo "2026-04-05|inject|noisy-fb|s1"
+  echo "2026-04-06|inject|noisy-fb|s2"
+  echo "2026-04-07|inject|noisy-fb|s3"
+  echo "2026-04-05|inject|good-fb|s1"
+  echo "2026-04-06|inject|good-fb|s2"
+  echo "2026-04-07|inject|good-fb|s3"
+} > "$NP_MEM/.wal"
+cat > "$NP_MEM/.analytics-report" << 'EOF'
+date: 2026-04-10
+sessions: 20
+clean_ratio: 0.70
+
+## Noise candidates
+- noisy-fb (eff: 0.20, injects: 8, +0/-3)
+EOF
+NP_OUT=$(printf '{"session_id":"np-test","cwd":"/tmp"}' | CLAUDE_MEMORY_DIR="$NP_MEM" bash "$HOOK" 2>/dev/null)
+NP_CTX=$(printf '%s' "$NP_OUT" | jq -r '.hookSpecificOutput.additionalContext')
+NP_POS_GOOD=$(printf '%s\n' "$NP_CTX" | grep -n "good-fb" | head -1 | cut -d: -f1)
+NP_POS_NOISY=$(printf '%s\n' "$NP_CTX" | grep -n "noisy-fb" | head -1 | cut -d: -f1)
+assert "Noise penalty — good-fb appears" '[ -n "$NP_POS_GOOD" ]'
+assert "Noise penalty — good before noisy" '[ -n "$NP_POS_GOOD" ] && [ -n "$NP_POS_NOISY" ] && [ "$NP_POS_GOOD" -lt "$NP_POS_NOISY" ]'
+rm -rf "$NP_DIR"
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="

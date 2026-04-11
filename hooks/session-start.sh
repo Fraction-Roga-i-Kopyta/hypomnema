@@ -508,6 +508,25 @@ if [ "$_tfidf_needs_rebuild" -eq 1 ]; then
   disown 2>/dev/null || true
 fi
 
+# --- Load noise candidates from analytics report ---
+NOISE_CANDIDATES=""
+ANALYTICS_REPORT="$MEMORY_DIR/.analytics-report"
+if [ -f "$ANALYTICS_REPORT" ]; then
+  if [[ "$OSTYPE" == darwin* ]]; then
+    ar_mtime=$(stat -f %m "$ANALYTICS_REPORT" 2>/dev/null || echo 0)
+  else
+    ar_mtime=$(stat -c %Y "$ANALYTICS_REPORT" 2>/dev/null || echo 0)
+  fi
+  ar_age=$(( ($(date +%s) - ar_mtime) / 86400 ))
+  if [ "$ar_age" -le 7 ]; then
+    NOISE_CANDIDATES=$(awk '
+      /^## Noise candidates/ { in_noise=1; next }
+      in_noise && /^## / { exit }
+      in_noise && /^- / { sub(/^- /, ""); sub(/ .*/, ""); print }
+    ' "$ANALYTICS_REPORT" 2>/dev/null | tr '\n' ' ')
+  fi
+fi
+
 # --- Generic scored collector (DRY: replaces 3 copy-paste blocks) ---
 # Usage: collect_scored <dir> <cap>
 # Sets _COLLECT_RESULT with markdown output, appends to INJECTED_FILES
@@ -531,7 +550,7 @@ collect_scored() {
   local awk_out
   # Composite scoring: keyword_hits * 3 + project_boost + wal + tfidf
   awk_out=$(awk "$AWK_SCORED" "${files[@]}" 2>/dev/null | \
-    awk -F'\t' -v kw="$KEYWORDS" -v wal="$WAL_SCORES" -v tfidf="$TFIDF_SCORES" -v proj="$PROJECT" '
+    awk -F'\t' -v kw="$KEYWORDS" -v wal="$WAL_SCORES" -v tfidf="$TFIDF_SCORES" -v proj="$PROJECT" -v noise="$NOISE_CANDIDATES" '
     BEGIN {
       n=split(kw, kws, " ")
       # Parse WAL scores: "name:count;name:count;..."
@@ -549,6 +568,9 @@ collect_scored() {
         split(tentries[i], tp, ":")
         if (tp[1] != "") tfidf_score[tp[1]] = tp[2]+0
       }
+      # Parse noise candidates
+      nn=split(noise, ncands, " ")
+      for (i=1; i<=nn; i++) if (ncands[i] != "") is_noise[ncands[i]]=1
     }
     {
       score=0
@@ -568,6 +590,8 @@ collect_scored() {
       su = strat_used_count[fname]+0
       if (su > 3) su = 3
       score += su * 2
+      # Noise penalty from analytics report
+      if (fname in is_noise) score -= 3
       # TF-IDF bonus: only for records WITHOUT keywords field (+2 per score unit, cap 6)
       if (fkw == "_none_") {
         ts = tfidf_score[fname]+0
