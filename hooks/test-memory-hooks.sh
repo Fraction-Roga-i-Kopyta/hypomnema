@@ -983,6 +983,47 @@ echo '{"session_id":"on-test-session","cwd":"/tmp","transcript_path":"'"$ON_DIR"
 assert "Outcome-positive — not written when negative exists" '! grep -q "outcome-positive|repeated-bug" "$ON_MEM/.wal"'
 rm -rf "$ON_DIR" "$ON_MARKER"
 
+# Test: session-metrics written to WAL
+SM_DIR=$(mktemp -d)
+SM_MEM="$SM_DIR/memory"
+mkdir -p "$SM_MEM/projects"
+cat > "$SM_MEM/projects.json" << 'EOF'
+{}
+EOF
+SM_MARKER="/tmp/.claude-session-sm-test-session"
+touch -t 202601010000 "$SM_MARKER"
+cat > "$SM_DIR/transcript.jsonl" << 'SMEOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"npm run build"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"Error: fail","is_error":true}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t2","name":"Edit","input":{"file_path":"x.ts"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t2","content":"OK"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t3","name":"Bash","input":{"command":"npm run build"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t3","content":"OK"}]}}
+SMEOF
+echo '{"session_id":"sm-test-session","cwd":"/tmp","transcript_path":"'"$SM_DIR"'/transcript.jsonl"}' | CLAUDE_MEMORY_DIR="$SM_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null
+assert "Session metrics — written to WAL" 'grep -q "session-metrics" "$SM_MEM/.wal" 2>/dev/null'
+assert "Session metrics — has error_count" 'grep "session-metrics" "$SM_MEM/.wal" | grep -q "error_count:1"'
+assert "Session metrics — has tool_calls" 'grep "session-metrics" "$SM_MEM/.wal" | grep -q "tool_calls:3"'
+assert "Session metrics — not clean (has errors)" '! grep -q "clean-session" "$SM_MEM/.wal"'
+rm -rf "$SM_DIR" "$SM_MARKER"
+
+# Test: clean-session when 0 errors
+CS_DIR=$(mktemp -d)
+CS_MEM="$CS_DIR/memory"
+mkdir -p "$CS_MEM/projects"
+cat > "$CS_MEM/projects.json" << 'EOF'
+{}
+EOF
+CS_MARKER="/tmp/.claude-session-cs-test-session"
+touch -t 202601010000 "$CS_MARKER"
+cat > "$CS_DIR/transcript.jsonl" << 'CSEOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Edit","input":{"file_path":"x.ts"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"OK"}]}}
+CSEOF
+echo '{"session_id":"cs-test-session","cwd":"/tmp","transcript_path":"'"$CS_DIR"'/transcript.jsonl"}' | CLAUDE_MEMORY_DIR="$CS_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null
+assert "Clean session — written to WAL" 'grep -q "clean-session" "$CS_MEM/.wal"'
+rm -rf "$CS_DIR" "$CS_MARKER"
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="
