@@ -296,6 +296,68 @@ if [ -n "$ERROR_SUMMARY" ]; then
   fi
 fi
 
+# --- Outcome-positive detection ---
+# Injected mistakes that were NOT repeated → positive signal
+TODAY=$(date +%Y-%m-%d)
+WAL_FILE="$MEMORY_DIR/.wal"
+if [ -f "$WAL_FILE" ] && [ -n "$SAFE_SESSION_ID" ]; then
+  INJECTED_MISTAKES=$(awk -F'|' -v sid="$SAFE_SESSION_ID" '
+    $4 == sid && $2 == "inject" { print $3 }
+  ' "$WAL_FILE" 2>/dev/null)
+
+  NEGATIVE_MISTAKES=$(awk -F'|' -v sid="$SAFE_SESSION_ID" '
+    $4 == sid && $2 == "outcome-negative" { print $3 }
+  ' "$WAL_FILE" 2>/dev/null)
+
+  if [ -n "$INJECTED_MISTAKES" ]; then
+    # Detect session domains for domain filtering
+    SESSION_DOMAINS=""
+    if [ -n "$CWD" ]; then
+      if [ -d "$CWD/.git" ] || git -C "$CWD" rev-parse --git-dir >/dev/null 2>&1; then
+        SESSION_DOMAINS=$(git -C "$CWD" diff --name-only HEAD 2>/dev/null | awk -F. '
+          NF > 1 {
+            ext = tolower($NF)
+            if (ext == "css" || ext == "scss") print "css"
+            else if (ext == "tsx" || ext == "jsx" || ext == "ts" || ext == "js") print "frontend"
+            else if (ext == "py" || ext == "go" || ext == "java") print "backend"
+            else if (ext == "sql") print "db"
+            else if (ext == "groovy") print "groovy"
+          }' | sort -u | tr '\n' ' ')
+      fi
+    fi
+
+    while IFS= read -r mistake_name; do
+      [ -z "$mistake_name" ] && continue
+      if printf '%s\n' "$NEGATIVE_MISTAKES" | grep -qx "$mistake_name" 2>/dev/null; then
+        continue
+      fi
+      MISTAKE_FILE="$MEMORY_DIR/mistakes/${mistake_name}.md"
+      [ -f "$MISTAKE_FILE" ] || continue
+
+      # Domain filter: skip if mistake domains don't intersect with session domains
+      if [ -n "$SESSION_DOMAINS" ]; then
+        MISTAKE_DOMAINS=$(awk '
+          /^---$/ { n++ }
+          n==1 && /^domains:/ { sub(/^domains: *\[?/, ""); sub(/\].*/, ""); gsub(/, */, " "); print; exit }
+        ' "$MISTAKE_FILE" 2>/dev/null)
+
+        if [ -n "$MISTAKE_DOMAINS" ] && [ "$MISTAKE_DOMAINS" != "general" ]; then
+          DOMAIN_MATCH=0
+          for md in $MISTAKE_DOMAINS; do
+            [ "$md" = "general" ] && { DOMAIN_MATCH=1; break; }
+            for sd in $SESSION_DOMAINS; do
+              [ "$md" = "$sd" ] && { DOMAIN_MATCH=1; break 2; }
+            done
+          done
+          [ "$DOMAIN_MATCH" -eq 0 ] && continue
+        fi
+      fi
+
+      printf '%s|outcome-positive|%s|%s\n' "$TODAY" "$mistake_name" "$SAFE_SESSION_ID" >> "$WAL_FILE" 2>/dev/null
+    done <<< "$INJECTED_MISTAKES"
+  fi
+fi
+
 if [ -n "$REMINDER" ]; then
   cat <<EOF
 {"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":$(printf '%s\n' "$REMINDER" | jq -Rs .)}}
