@@ -141,6 +141,29 @@ if [ -n "$MODIFIED_FOR_INDEX" ] || [ ! -f "$MEMORY_DIR/.tfidf-index" ]; then
   disown 2>/dev/null || true
 fi
 
+# Rebuild analytics report if missing or stale (>7 days)
+WAL_FILE="$MEMORY_DIR/.wal"
+ANALYTICS_REPORT="$MEMORY_DIR/.analytics-report"
+ANALYTICS_STALE=0
+if [ ! -f "$ANALYTICS_REPORT" ]; then
+  ANALYTICS_STALE=1
+elif [ -f "$WAL_FILE" ]; then
+  if [[ "$OSTYPE" == darwin* ]]; then
+    ar_mtime=$(stat -f %m "$ANALYTICS_REPORT" 2>/dev/null || echo 0)
+  else
+    ar_mtime=$(stat -c %Y "$ANALYTICS_REPORT" 2>/dev/null || echo 0)
+  fi
+  ar_age=$(( (NOW - ar_mtime) / 86400 ))
+  [ "$ar_age" -gt 7 ] && ANALYTICS_STALE=1
+fi
+if [ "$ANALYTICS_STALE" -eq 1 ] && [ -f "$WAL_FILE" ]; then
+  ANALYTICS_SCRIPT="$(dirname "$0")/memory-analytics.sh"
+  if [ -f "$ANALYTICS_SCRIPT" ]; then
+    CLAUDE_MEMORY_DIR="$MEMORY_DIR" bash "$ANALYTICS_SCRIPT" 2>/dev/null &
+    disown 2>/dev/null || true
+  fi
+fi
+
 # --- Auto-generate continuity from git state ---
 CWD=$(printf '%s\n' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)
 [ -z "$CWD" ] && CWD="$PWD"

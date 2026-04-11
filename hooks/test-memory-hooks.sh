@@ -1316,6 +1316,40 @@ assert "Noise penalty — good-fb appears" '[ -n "$NP_POS_GOOD" ]'
 assert "Noise penalty — good before noisy" '[ -n "$NP_POS_GOOD" ] && [ -n "$NP_POS_NOISY" ] && [ "$NP_POS_GOOD" -lt "$NP_POS_NOISY" ]'
 rm -rf "$NP_DIR"
 
+# Test: analytics trigger — stale report triggers rebuild
+AT_DIR=$(mktemp -d)
+AT_MEM="$AT_DIR/memory"
+mkdir -p "$AT_MEM"
+echo "date: 2026-03-01" > "$AT_MEM/.analytics-report"
+if [[ "$OSTYPE" == darwin* ]]; then
+  touch -t $(date -v-10d +%Y%m%d0000) "$AT_MEM/.analytics-report"
+else
+  touch -d "10 days ago" "$AT_MEM/.analytics-report"
+fi
+{
+  echo "2026-04-10|inject|test-file|at-session"
+  echo "2026-04-10|session-metrics|backend|error_count:0,tool_calls:3,duration:300s"
+  echo "2026-04-10|clean-session|backend|at-session"
+} > "$AT_MEM/.wal"
+AT_MARKER="/tmp/.claude-session-at-test-session"
+touch -t 202601010000 "$AT_MARKER"
+cat > "$AT_DIR/transcript.jsonl" << 'ATEOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"echo ok"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}
+ATEOF
+echo '{"session_id":"at-test-session","cwd":"/tmp","transcript_path":"'"$AT_DIR"'/transcript.jsonl"}' | CLAUDE_MEMORY_DIR="$AT_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null
+sleep 1
+assert "Analytics trigger — report refreshed" '[ -f "$AT_MEM/.analytics-report" ]'
+if [[ "$OSTYPE" == darwin* ]]; then
+  ar_mtime=$(stat -f %m "$AT_MEM/.analytics-report" 2>/dev/null || echo 0)
+else
+  ar_mtime=$(stat -c %Y "$AT_MEM/.analytics-report" 2>/dev/null || echo 0)
+fi
+now_at=$(date +%s)
+ar_age=$(( now_at - ar_mtime ))
+assert "Analytics trigger — report is fresh" '[ "$ar_age" -lt 5 ]'
+rm -rf "$AT_DIR" "$AT_MARKER"
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="
