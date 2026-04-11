@@ -28,7 +28,7 @@ WAL остаётся append-only TSV с `|` разделителем. wal-compac
 1. Из WAL взять все `inject` события текущей сессии
 2. Отфильтровать те, что соответствуют файлам из `mistakes/`
 3. Исключить те, для которых есть `outcome-negative` в этой сессии
-4. **Domain filter:** outcome-positive только если domains сессии пересекаются с domains mistake (предотвращает false positive когда mistake инжектирован но задача была в другом домене)
+4. **Domain filter:** outcome-positive только если domains сессии пересекаются с domains mistake (предотвращает false positive когда mistake инжектирован но задача была в другом домене). Domains mistake берутся из frontmatter файла (awk-парсинг, аналогичный session-start.sh). Domains сессии — из detect_domains (вычисляются заново в Stop hook, т.к. git diff мог измениться за сессию).
 5. Оставшиеся → записать `outcome-positive` в WAL
 
 Условия: сессия длиннее MIN_SESSION_SECONDS (120с), транскрипт существует и не пуст.
