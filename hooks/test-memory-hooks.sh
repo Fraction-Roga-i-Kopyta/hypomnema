@@ -21,7 +21,7 @@ assert() {
 # --- Setup test fixtures ---
 TEST_DIR=$(mktemp -d)
 FIXTURE="$TEST_DIR/memory"
-mkdir -p "$FIXTURE"/{mistakes,feedback,knowledge,strategies,projects,continuity}
+mkdir -p "$FIXTURE"/{mistakes,feedback,knowledge,strategies,decisions,projects,continuity}
 
 # Create projects.json
 cat > "$FIXTURE/projects.json" << 'PJSON'
@@ -686,6 +686,242 @@ echo '{"session_id":"sess-10","tool_name":"Write","tool_input":{"file_path":"'"$
 assert "Outcome — no false positive on substring" 'grep -q "outcome-new.*test" "$OUT_FP_MEM/.wal"'
 assert "Outcome — no false negative detection" '! grep -q "outcome-negative" "$OUT_FP_MEM/.wal"'
 rm -rf "$OUT_FP_DIR"
+
+# --- Error detection hook tests ---
+DETECT_HOOK="$HOME/.claude/hooks/memory-error-detect.sh"
+if [ -x "$DETECT_HOOK" ] || [ -L "$DETECT_HOOK" ]; then
+
+# Test: pattern matched in stdout
+ED_DIR=$(mktemp -d)
+ED_MEM="$ED_DIR/memory"
+mkdir -p "$ED_MEM/mistakes"
+cat > "$ED_MEM/.error-patterns" << 'EPAT'
+DeprecationWarning|deprecation|Deprecated API
+Permission denied|permissions|Check permissions
+EPAT
+ED_OUT=$(echo '{"session_id":"ed-sess-1","tool_name":"Bash","tool_input":{"command":"npm install"},"tool_response":{"stdout":"npm WARN DeprecationWarning: punycode module","stderr":"","interrupted":false}}' | CLAUDE_MEMORY_DIR="$ED_MEM" bash "$DETECT_HOOK" 2>/dev/null)
+assert "Error detect — pattern matched" 'echo "$ED_OUT" | grep -q "Deprecated API"'
+assert "Error detect — WAL logged" 'grep -q "error-detect|deprecation|ed-sess-1" "$ED_MEM/.wal"'
+
+# Test: no match on clean output
+ED_OUT2=$(echo '{"session_id":"ed-sess-2","tool_name":"Bash","tool_input":{"command":"echo ok"},"tool_response":{"stdout":"ok","stderr":"","interrupted":false}}' | CLAUDE_MEMORY_DIR="$ED_MEM" bash "$DETECT_HOOK" 2>/dev/null)
+assert "Error detect — no match on clean output" '[ -z "$ED_OUT2" ]'
+
+# Test: session dedup — same category twice in same session
+ED_OUT3=$(echo '{"session_id":"ed-sess-1","tool_name":"Bash","tool_input":{"command":"npm update"},"tool_response":{"stdout":"DeprecationWarning again","stderr":"","interrupted":false}}' | CLAUDE_MEMORY_DIR="$ED_MEM" bash "$DETECT_HOOK" 2>/dev/null)
+assert "Error detect — session dedup works" '[ -z "$ED_OUT3" ]'
+
+# Test: different category in same session — not deduped
+ED_OUT4=$(echo '{"session_id":"ed-sess-1","tool_name":"Bash","tool_input":{"command":"ls /root"},"tool_response":{"stdout":"","stderr":"Permission denied","interrupted":false}}' | CLAUDE_MEMORY_DIR="$ED_MEM" bash "$DETECT_HOOK" 2>/dev/null)
+assert "Error detect — different category not deduped" 'echo "$ED_OUT4" | grep -q "Check permissions"'
+
+# Test: stderr detection
+ED_OUT5=$(echo '{"session_id":"ed-sess-5","tool_name":"Bash","tool_input":{"command":"some cmd"},"tool_response":{"stdout":"","stderr":"DeprecationWarning: old API","interrupted":false}}' | CLAUDE_MEMORY_DIR="$ED_MEM" bash "$DETECT_HOOK" 2>/dev/null)
+assert "Error detect — stderr matched" 'echo "$ED_OUT5" | grep -q "Deprecated API"'
+
+# Test: cross-reference with existing mistake
+cat > "$ED_MEM/mistakes/file-permissions.md" << 'MEOF'
+---
+type: mistake
+project: global
+status: active
+keywords: [permissions]
+---
+Always check file permissions.
+MEOF
+ED_OUT6=$(echo '{"session_id":"ed-sess-6","tool_name":"Bash","tool_input":{"command":"chmod"},"tool_response":{"stdout":"Permission denied","stderr":"","interrupted":false}}' | CLAUDE_MEMORY_DIR="$ED_MEM" bash "$DETECT_HOOK" 2>/dev/null)
+assert "Error detect — cross-ref existing mistake" 'echo "$ED_OUT6" | grep -q "file-permissions"'
+
+# Test: non-Bash tool ignored
+ED_OUT7=$(echo '{"session_id":"ed-sess-7","tool_name":"Write","tool_input":{"file_path":"/tmp/x"},"tool_response":{"stdout":"DeprecationWarning","stderr":""}}' | CLAUDE_MEMORY_DIR="$ED_MEM" bash "$DETECT_HOOK" 2>/dev/null)
+assert "Error detect — non-Bash tool ignored" '[ -z "$ED_OUT7" ]'
+
+rm -rf "$ED_DIR"
+
+fi
+# --- End error detection tests ---
+
+# --- Decision type tests ---
+DEC_DIR=$(mktemp -d)
+DEC_MEM="$DEC_DIR/memory"
+mkdir -p "$DEC_MEM"/{mistakes,feedback,knowledge,strategies,decisions,projects,continuity,notes}
+cat > "$DEC_MEM/projects.json" << 'PJSON'
+{"/tmp/dec-proj": "dec-proj"}
+PJSON
+cat > "$DEC_MEM/decisions/fastapi-over-django.md" << 'DEOF'
+---
+type: decision
+project: dec-proj
+status: active
+referenced: 2026-04-10
+domains: [backend]
+keywords: [api, framework, fastapi, django]
+---
+**Decision:** FastAPI вместо Django для API-сервиса.
+**Alternatives:** Django REST, Flask, Starlette
+**Reasoning:** async-first, Pydantic из коробки, легче для microservices.
+DEOF
+cat > "$DEC_MEM/decisions/postgres-over-mysql.md" << 'DEOF'
+---
+type: decision
+project: global
+status: active
+referenced: 2026-04-09
+keywords: [database, postgres, mysql]
+---
+**Decision:** PostgreSQL как основная СУБД.
+**Reasoning:** JSONB, массивы, CTE, лучше для сложных запросов.
+DEOF
+
+mkdir -p /tmp/dec-proj
+DEC_OUT=$(echo '{"session_id":"dec-test","cwd":"/tmp/dec-proj"}' | CLAUDE_MEMORY_DIR="$DEC_MEM" bash "$HOOK" 2>/dev/null)
+DEC_CTX=$(printf '%s' "$DEC_OUT" | jq -r '.hookSpecificOutput.additionalContext // ""')
+assert "Decision — section present" 'printf "%s" "$DEC_CTX" | grep -q "## Decisions"'
+assert "Decision — project-scoped injected" 'printf "%s" "$DEC_CTX" | grep -q "fastapi-over-django"'
+assert "Decision — global injected" 'printf "%s" "$DEC_CTX" | grep -q "postgres-over-mysql"'
+rm -rf "$DEC_DIR" /tmp/dec-proj
+
+# --- End decision tests ---
+
+# --- PreCompact hook tests ---
+PC_HOOK="$HOME/.claude/hooks/memory-precompact.sh"
+if [ -x "$PC_HOOK" ] || [ -L "$PC_HOOK" ]; then
+
+# Test: outputs valid JSON with reminder
+PC_DIR=$(mktemp -d)
+PC_MEM="$PC_DIR/memory"
+mkdir -p "$PC_MEM"
+PC_SID="pc-test-$$"
+PC_MARKER="/tmp/.claude-session-${PC_SID}"
+touch "$PC_MARKER"
+PC_OUT=$(echo '{"session_id":"'"$PC_SID"'","cwd":"/tmp"}' | CLAUDE_MEMORY_DIR="$PC_MEM" bash "$PC_HOOK" 2>/dev/null)
+assert "PreCompact — valid JSON" 'printf "%s" "$PC_OUT" | jq -e ".hookSpecificOutput" >/dev/null 2>&1'
+PC_CTX=$(printf '%s' "$PC_OUT" | jq -r '.hookSpecificOutput.additionalContext // ""')
+assert "PreCompact — contains reminder" 'printf "%s" "$PC_CTX" | grep -q "Context compression"'
+
+# Test: stronger message when nothing saved
+assert "PreCompact — nothing-saved warning" 'printf "%s" "$PC_CTX" | grep -q "ничего не записано"'
+
+# Test: no nothing-saved warning when files were created after marker
+sleep 1
+touch "$PC_MEM/test-insight.md"
+PC_OUT2=$(echo '{"session_id":"'"$PC_SID"'","cwd":"/tmp"}' | CLAUDE_MEMORY_DIR="$PC_MEM" bash "$PC_HOOK" 2>/dev/null)
+PC_CTX2=$(printf '%s' "$PC_OUT2" | jq -r '.hookSpecificOutput.additionalContext // ""')
+assert "PreCompact — no nothing-saved when files exist" '! printf "%s" "$PC_CTX2" | grep -q "ничего не записано"'
+
+rm -f "$PC_MARKER" "$PC_MEM/test-insight.md"
+rm -rf "$PC_DIR"
+
+fi
+# --- End PreCompact tests ---
+
+# --- Cold start / domain fallback tests ---
+CS_DIR=$(mktemp -d)
+CS_MEM="$CS_DIR/memory"
+mkdir -p "$CS_MEM"/{mistakes,feedback,knowledge,strategies,decisions,projects,continuity,notes}
+
+# Project with domains but we'll test from a non-git directory
+cat > "$CS_MEM/projects.json" << 'PJSON'
+{"/tmp/cold-start-proj": "cold-proj"}
+PJSON
+cat > "$CS_MEM/projects-domains.json" << 'DJSON'
+{"cold-proj": ["backend", "api"]}
+DJSON
+
+# Knowledge tagged with domain keyword
+cat > "$CS_MEM/knowledge/api-patterns.md" << 'EOF'
+---
+type: knowledge
+project: global
+status: active
+referenced: 2026-04-10
+keywords: [api, rest, pagination]
+---
+Always use cursor-based pagination for large datasets.
+EOF
+
+# Knowledge without matching domain keyword (should score lower)
+cat > "$CS_MEM/knowledge/css-tricks.md" << 'EOF'
+---
+type: knowledge
+project: global
+status: active
+referenced: 2026-04-10
+keywords: [css, flexbox, grid]
+---
+Use CSS grid for 2D layouts, flexbox for 1D.
+EOF
+
+# Test from non-git dir (cold start — no git keywords)
+mkdir -p /tmp/cold-start-proj
+CS_OUT=$(echo '{"session_id":"cold-test","cwd":"/tmp/cold-start-proj"}' | CLAUDE_MEMORY_DIR="$CS_MEM" bash "$HOOK" 2>/dev/null)
+CS_CTX=$(printf '%s' "$CS_OUT" | jq -r '.hookSpecificOutput.additionalContext // ""')
+
+assert "Cold start — domain keyword matches api-patterns" 'printf "%s" "$CS_CTX" | grep -q "api-patterns"'
+# css-tricks might still appear (global, no domain filter blocks it) but api-patterns should be first/present
+assert "Cold start — context not empty" '[ -n "$CS_CTX" ]'
+
+rm -rf "$CS_DIR" /tmp/cold-start-proj
+
+# --- End cold start tests ---
+
+# --- Fuzzy dedup (PreToolUse) tests ---
+DEDUP_HOOK="$HOME/.claude/hooks/memory-dedup.sh"
+if [ -x "$DEDUP_HOOK" ] || [ -L "$DEDUP_HOOK" ]; then
+if command -v uv >/dev/null 2>&1; then
+
+DD_DIR=$(mktemp -d)
+DD_MEM="$DD_DIR/memory"
+mkdir -p "$DD_MEM/mistakes"
+
+cat > "$DD_MEM/mistakes/existing-mistake.md" << 'DEOF'
+---
+type: mistake
+project: global
+status: active
+recurrence: 2
+root-cause: "Claude jumps to first hypothesis without listing alternatives"
+prevention: "List 2-3 possible causes"
+---
+DEOF
+
+# Test: block high-similarity duplicate (exit 2)
+DD_JSON1=$(jq -n --arg sid "dd-1" --arg fp "$DD_MEM/mistakes/dupe.md" \
+  --arg content "$(printf '%s\n' '---' 'type: mistake' 'root-cause: "Claude jumps to first hypothesis without listing alternative causes"' '---')" \
+  '{session_id:$sid,tool_name:"Write",tool_input:{file_path:$fp,content:$content}}')
+DD_EXIT1=0
+DD_OUT1=$(printf '%s\n' "$DD_JSON1" | CLAUDE_MEMORY_DIR="$DD_MEM" bash "$DEDUP_HOOK" 2>&1) || DD_EXIT1=$?
+assert "Dedup — blocks high-similarity duplicate" '[ "$DD_EXIT1" -eq 2 ]'
+assert "Dedup — block message mentions existing file" 'echo "$DD_OUT1" | grep -q "existing-mistake"'
+
+# Test: allow unique mistake (exit 0)
+DD_JSON2=$(jq -n --arg sid "dd-2" --arg fp "$DD_MEM/mistakes/css-safari.md" \
+  --arg content "$(printf '%s\n' '---' 'type: mistake' 'root-cause: "CSS grid layout breaks on Safari due to gap property"' '---')" \
+  '{session_id:$sid,tool_name:"Write",tool_input:{file_path:$fp,content:$content}}')
+DD_OUT2=$(printf '%s\n' "$DD_JSON2" | CLAUDE_MEMORY_DIR="$DD_MEM" bash "$DEDUP_HOOK" 2>&1)
+DD_EXIT2=$?
+assert "Dedup — allows unique mistake" '[ "$DD_EXIT2" -eq 0 ]'
+
+# Test: skip non-mistakes paths (exit 0)
+DD_JSON3=$(jq -n --arg sid "dd-3" --arg fp "$DD_MEM/feedback/test.md" --arg content "anything" \
+  '{session_id:$sid,tool_name:"Write",tool_input:{file_path:$fp,content:$content}}')
+DD_OUT3=$(printf '%s\n' "$DD_JSON3" | CLAUDE_MEMORY_DIR="$DD_MEM" bash "$DEDUP_HOOK" 2>&1)
+assert "Dedup — skips non-mistakes path" '[ $? -eq 0 ] && [ -z "$DD_OUT3" ]'
+
+# Test: skip existing file overwrite (exit 0)
+DD_JSON4=$(jq -n --arg sid "dd-4" --arg fp "$DD_MEM/mistakes/existing-mistake.md" --arg content "update" \
+  '{session_id:$sid,tool_name:"Write",tool_input:{file_path:$fp,content:$content}}')
+DD_OUT4=$(printf '%s\n' "$DD_JSON4" | CLAUDE_MEMORY_DIR="$DD_MEM" bash "$DEDUP_HOOK" 2>&1)
+assert "Dedup — skips overwrite of existing file" '[ $? -eq 0 ]'
+
+# Test: WAL logged on block
+assert "Dedup — WAL has dedup-blocked entry" 'grep -q "dedup-blocked" "$DD_MEM/.wal" 2>/dev/null'
+
+rm -rf "$DD_DIR"
+
+fi
+fi
+# --- End dedup tests ---
 
 # --- Results ---
 echo ""

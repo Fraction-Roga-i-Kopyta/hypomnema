@@ -18,6 +18,7 @@ CAP_FEEDBACK=6
 CAP_KNOWLEDGE=4
 CAP_STRATEGIES=4
 CAP_NOTES=2
+CAP_DECISIONS=3
 MAX_FILES=22
 TODAY=$(date +%Y-%m-%d)
 
@@ -181,6 +182,15 @@ KEYWORDS=$(printf '%s' "$KEYWORDS" | tr '[:upper:]' '[:lower:]' | tr ' ' '\n' | 
     BEGIN { n=split(stops, s, " "); for(i=1;i<=n;i++) stop[s[i]]=1 }
     length>=3 && !seen[$0]++ && !stop[$0]
   ' | tr '\n' ' ')
+
+# Domain fallback: when git keyword signal is weak, use project domains as pseudo-keywords
+# Domains like "backend", "frontend", "db", "jira" provide baseline matching signal
+# Only activates when git context yields < 3 keywords (cold start / empty repo)
+_KW_COUNT=$(printf '%s' "$KEYWORDS" | wc -w | tr -d ' ')
+if [ "${_KW_COUNT:-0}" -lt 3 ] && [ -n "$DOMAINS" ]; then
+  KEYWORDS="$KEYWORDS $DOMAINS"
+  KEYWORDS=$(printf '%s' "$KEYWORDS" | tr ' ' '\n' | awk '!seen[$0]++' | tr '\n' ' ')
+fi
 
 # --- Single-pass frontmatter parsers (BSD awk compatible) ---
 # Uses FNR==1 to detect file boundaries instead of BEGINFILE/ENDFILE
@@ -628,6 +638,9 @@ NOTES_MD="$_COLLECT_RESULT"
 collect_scored "strategies" "$CAP_STRATEGIES"
 STRATEGIES_MD="$_COLLECT_RESULT"
 
+collect_scored "decisions" "$CAP_DECISIONS"
+DECISIONS_MD="$_COLLECT_RESULT"
+
 # --- Collect project overview ---
 
 PROJECT_MD=""
@@ -690,6 +703,11 @@ if [ -n "$STRATEGIES_MD" ]; then
   CONTEXT="${CONTEXT}
 ## Strategies
 ${STRATEGIES_MD}"
+fi
+if [ -n "$DECISIONS_MD" ]; then
+  CONTEXT="${CONTEXT}
+## Decisions
+${DECISIONS_MD}"
 fi
 if [ -n "$NOTES_MD" ]; then
   CONTEXT="${CONTEXT}
@@ -756,6 +774,11 @@ AGENT_CTX="$MEMORY_DIR/_agent_context.md"
   if [ -n "$STRATEGIES_MD" ]; then
     echo "## Strategies"
     printf '%s\n' "$STRATEGIES_MD" | awk '/^### /{if(name)print name": "line; name=$0; line=""; next} line=="" && /^[^#]/ && !/^$/{line=$0} END{if(name)print name": "line}' | head -3
+    echo ""
+  fi
+  if [ -n "$DECISIONS_MD" ]; then
+    echo "## Decisions"
+    printf '%s\n' "$DECISIONS_MD" | awk '/^### /{if(name)print name": "line; name=$0; line=""; next} line=="" && /^[^#]/ && !/^$/{line=$0} END{if(name)print name": "line}' | head -3
     echo ""
   fi
   echo "Full context: \`~/.claude/memory/\`"

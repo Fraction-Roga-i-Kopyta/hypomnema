@@ -8,7 +8,7 @@ Persistent memory system for [Claude Code](https://docs.anthropic.com/en/docs/cl
 
 Claude Code starts every session from zero. Hypomnema fixes that.
 
-58 smoke tests, 15 benchmarks, hook time ~0.7 sec.
+81 smoke tests, 15 benchmarks, hook time ~0.3 sec.
 
 ## The problem
 
@@ -22,19 +22,25 @@ Hypomnema gives Claude Code a file-based long-term memory with automatic context
 You ←→ Claude Code ←→ ~/.claude/memory/
                             │
          SessionStart hook ─┤── mistakes (sorted by recurrence × severity)
-         reads & injects    ├── strategies (proven approaches)
-                            ├── feedback (behavioral rules)
-                            ├── knowledge (domain facts)
+         reads & injects    ├── strategies, feedback, knowledge, decisions, notes
                             ├── project overview + continuity
-                            └── scoring: keywords + TF-IDF + WAL spaced repetition
+                            ├── scoring: keywords + TF-IDF + WAL spaced repetition
+                            └── domain fallback for cold start (weak git signal)
 
          Stop hook ─────────┤── lifecycle rotation (decay rates by type)
          checks & reminds   ├── auto-generate continuity from git state
                             ├── rebuild TF-IDF index
                             └── structured continuity prompt
 
+         PreToolUse hook ───┤── fuzzy dedup: blocks duplicate mistakes (rapidfuzz)
+                            └── exit 2 = write blocked, hint to update existing
+
          PostToolUse hook ──┤── outcome tracking (negative/new detection)
+                            ├── error pattern detection in Bash output
                             └── feeds back into WAL scoring
+
+         PreCompact hook ───┤── checkpoint reminder before context compression
+                            └── stronger warning if nothing saved in session
 ```
 
 ## What gets remembered
@@ -47,10 +53,11 @@ You ←→ Claude Code ←→ ~/.claude/memory/
 | **knowledge/** | Domain facts, API docs, infrastructure | Yes | cap 4 (adaptive) |
 | **projects/** | Project descriptions, stack, known issues | Yes | 1 (current) |
 | **continuity/** | "Where we left off" last session | Yes | 1 (current) |
-| **notes/** | Long-form knowledge, references, URLs | Yes | Keywords + domains, cap 2 |
+| **decisions/** | Architecture & technology choices | Yes | cap 3 (adaptive) |
+| **notes/** | Long-form knowledge, references, URLs | Yes | cap 2 (adaptive) |
 | **journal/** | Session logs | No | — |
 
-Feedback, knowledge, and strategies share an adaptive budget of 12 slots total with per-type caps. If one type has fewer relevant files, the budget flows to others.
+Feedback, knowledge, strategies, decisions, and notes share an adaptive budget of 12 slots total with per-type caps. If one type has fewer relevant files, the budget flows to others.
 
 ### Example: a mistake
 
@@ -116,6 +123,7 @@ The installer:
 - bash 3.2+ (macOS default works)
 - jq
 - awk (BSD or GNU)
+- uv (optional — enables fuzzy dedup via rapidfuzz)
 
 ## Setup
 
@@ -155,11 +163,11 @@ The hooks activate on next session start.
 
 1. Reads `projects.json`, matches `cwd` to a project via longest-prefix match (with boundary check — `/fly` won't match `/fly-other`)
 2. Detects active domains via 4-level cascade: `projects-domains.json` → CWD path heuristics → git diff extensions → signature files
-3. Extracts keywords from git context: branch name, diff filenames, CWD basename
+3. Extracts keywords from git context: branch name, diff filenames, commit messages, CWD basename. Falls back to project domains as pseudo-keywords when git signal is weak (< 3 keywords)
 4. Parses all memory files using single-pass BSD-compatible awk (no subprocess spawning per file)
 5. Filters by `project` (global + current), `status` (active/pinned), `domains` (intersection with active), and `recurrence` threshold
 6. Scores records: `keyword_hits × 3 + tfidf_bonus × 2 + wal_spaced_score (0-10)`
-7. Applies adaptive quotas: 3+3 mistakes, shared budget of 12 for feedback/knowledge/strategies
+7. Applies adaptive quotas: 3+3 mistakes, shared budget of 12 for feedback/knowledge/strategies/decisions/notes
 8. Injects everything as markdown into Claude's system context
 9. Updates `injected:` and `referenced:` dates in frontmatter (scoped to frontmatter block only)
 10. Logs injections to WAL (Write-Ahead Log) for spaced repetition scoring
@@ -173,13 +181,37 @@ The hooks activate on next session start.
 4. Shows structured continuity prompt with git context if continuity is stale
 5. Reminds Claude to record findings if nothing was saved
 
-### PostToolUse hook
+### PreToolUse hook (fuzzy dedup)
 
-1. Triggers on Write/Edit to `mistakes/*.md`
-2. Checks WAL: was this mistake injected in current session?
-3. If yes → logs `outcome-negative` (warning didn't help)
-4. If no → logs `outcome-new` (fresh mistake)
-5. Feeds back into spaced repetition scoring — repeatedly-failed warnings get deprioritized
+1. Triggers on Write to `mistakes/*.md` (new files only, skips overwrites)
+2. Extracts `root-cause` from content before file is created
+3. Compares against existing mistakes using rapidfuzz trigram similarity (via `uv run`)
+4. Similarity ≥ 80% → **blocks write** (exit 2) with hint: "update existing file instead"
+5. Similarity ≥ 50% → warns: "possible duplicate"
+6. Logs dedup events to WAL
+
+### PostToolUse hooks
+
+**Outcome tracking** (Write/Edit → `mistakes/*.md`):
+1. Checks WAL: was this mistake injected in current session?
+2. If yes → logs `outcome-negative` (warning didn't help)
+3. If no → logs `outcome-new` (fresh mistake)
+4. Feeds back into spaced repetition scoring — repeatedly-failed warnings get deprioritized
+
+**Error pattern detection** (Bash, exit 0 only):
+1. Extracts `stdout` + `stderr` from tool response
+2. Matches against patterns in `.error-patterns` config (pipe-delimited: `pattern|category|hint`)
+3. Session dedup via WAL — one hint per category per session
+4. Cross-references with existing mistakes
+5. Outputs hint to Claude's context: "Pattern detected: {hint}"
+6. Only fires on successful commands (exit 0) — failed commands are already visible in context
+
+### PreCompact hook
+
+1. Fires before context window compression
+2. Checks if any memory files were created/modified during this session (uses session marker as timestamp reference)
+3. Outputs reminder: "Save unsaved insights now"
+4. Stronger warning if nothing was saved this session
 
 ## Lifecycle
 
@@ -195,6 +227,7 @@ Lifecycle decisions use `referenced`. Both fields are updated within the frontma
 | mistakes | 60 days | 180 days |
 | strategies | 90 days | 180 days |
 | knowledge | 90 days | 365 days |
+| decisions | 90 days | 365 days |
 | feedback | 45 days | 120 days |
 | notes/journal | 30 days | 90 days |
 | projects | never | never |
@@ -211,7 +244,7 @@ pinned ────────────────────────�
 
 ```yaml
 ---
-type: mistake         # mistake | strategy | feedback | knowledge | project | continuity
+type: mistake         # mistake | strategy | feedback | knowledge | decision | project | continuity
 project: global       # global | your-project-id
 created: 2025-01-15
 injected: 2025-01-15  # auto-updated by hook
@@ -242,6 +275,7 @@ domains: [css, frontend]
 ├── strategies/            # what worked
 ├── feedback/              # behavioral rules
 ├── knowledge/             # domain facts
+├── decisions/             # architecture & technology choices
 ├── projects/              # project overviews
 ├── continuity/            # where we left off (one per project)
 ├── notes/                 # long-form knowledge, references
@@ -249,9 +283,10 @@ domains: [css, frontend]
 ├── archive/               # rotated files (mirrors structure above)
 ├── projects.json          # cwd → project mapping
 ├── projects-domains.json  # project → default domains mapping
+├── .error-patterns        # error detection patterns (pattern|category|hint)
 ├── .stopwords             # TF-IDF tokenization stop words
 ├── .tfidf-index           # auto-generated TF-IDF index
-├── .wal                   # Write-Ahead Log (injection + outcome tracking)
+├── .wal                   # Write-Ahead Log (injection + outcome + error-detect)
 └── _agent_context.md      # auto-generated compact context for subagents
 ```
 
@@ -286,7 +321,7 @@ Records are ranked by a composite score:
 score = keyword_hits × 3 + tfidf_bonus × 2 + wal_spaced_score (0-10)
 ```
 
-- **Keywords** — `keywords:` in frontmatter matched against git context (branch name, diff filenames, CWD basename). Primary mechanism.
+- **Keywords** — `keywords:` in frontmatter matched against git context (branch name, diff filenames, commit messages, CWD basename). Primary mechanism. When git signal is weak (< 3 keywords), project domains are used as fallback pseudo-keywords.
 - **TF-IDF** — Offline index of body text for records without keywords. Weak signal (~3 IDF units at 30-50 docs), but catches unlabeled records.
 - **WAL spaced repetition** — `spread × decay × (1 - negative_ratio)`. Rewards records used consistently across days, penalizes burst usage (benchmarks) and records with negative outcomes.
 
@@ -302,11 +337,11 @@ Negative outcomes reduce the record's WAL score over time. Records that repeated
 ## Testing
 
 ```bash
-# 58 smoke tests (injection, domain filtering, WAL, TF-IDF, outcome, spaced repetition)
-bash ~/.claude/hooks/test-memory-hooks.sh
+# 81 smoke tests (injection, domain filtering, WAL, TF-IDF, outcome, error detection, dedup, decisions, precompact, cold start)
+bash hooks/test-memory-hooks.sh
 
 # 15 benchmark scenarios (precision, domain, priority, edge cases)
-bash ~/.claude/hooks/bench-memory.sh
+bash hooks/bench-memory.sh
 ```
 
 ## Consolidation
