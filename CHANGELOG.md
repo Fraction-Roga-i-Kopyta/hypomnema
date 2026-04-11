@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.2.0] - 2026-04-11
+
+Meta-analytics and positive patterns. The system now tracks what works, not just what breaks.
+
+### Meta-analytics
+
+- **Outcome-positive detection** — Stop hook detects when injected mistake warnings successfully prevented repeats (domain-filtered to avoid false positives)
+- **Session metrics** — WAL events for error_count, tool_calls, duration per session
+- **Clean session tracking** — sessions with zero errors logged with domain context
+- **Bayesian effectiveness scoring** — replaces binary negative_ratio with `(positive+1)/(positive+negative+2)` Laplace smoothing; records with no outcome data score 0.5 (neutral) instead of 1.0 (optimistic)
+- **Batch analytics** (`memory-analytics.sh`) — weekly WAL analysis generating `.analytics-report` with winners, noise candidates, strategy gaps, and unproven records
+- **Noise penalty** — records flagged as noise in analytics report get -3 score penalty in session-start injection
+- **Auto-trigger** — Stop hook launches analytics rebuild in background when report is stale (>7 days)
+
+### Positive patterns
+
+- **Strategy-used tracking** — clean session + injected strategy = confirmed usage event in WAL
+- **Strategy-gap detection** — clean session without strategies = signal for analytics (domain-level gap tracking)
+- **Strategy bonus** — strategies with confirmed usage get up to +6 score bonus (`min(used_count*2, 6)`)
+- **Strategies reminders** — PreCompact and Stop hooks prompt to record successful approaches on long clean sessions (>10 min)
+- **Structured strategy template** — trigger, steps, outcome format
+
+### Improvements
+
+- **WAL compaction v2** — preserves outcome/strategy events during compaction; aggregates old session-metrics to monthly summaries (`metrics-agg`)
+- **collect_mistakes subshell fix** — INJECTED_FILES array was lost in subshell; refactored to use result variable pattern (bug found by integration test)
+
+### Testing
+
+- 116 smoke tests (+35 new: outcome-positive, session-metrics, clean-session, Bayesian scoring, strategy bonus, strategy-used/gap, analytics, noise penalty, full pipeline integration)
+- 15 benchmark scenarios — all passing, zero regressions
+
 ## [0.1.0] - 2026-04-11
 
 First release. Persistent file-based memory system for Claude Code with composite scoring, lifecycle management, and feedback loops.
