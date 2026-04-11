@@ -28,12 +28,13 @@ lifecycle_rotate() {
   # knowledge | 90         | 365
   # feedback  | 45         | 120
   # notes     | 30         | 90
+  # decisions | 90         | 365
   # journal   | 30         | 90
   # projects  | never      | never (excluded)
 
   # Collect all candidate files
   local all_files=()
-  for subdir in mistakes feedback knowledge notes strategies journal; do
+  for subdir in mistakes feedback knowledge notes strategies decisions journal; do
     while IFS= read -r f; do
       all_files+=("$f")
     done < <(find "$MEMORY_DIR/$subdir" -name "*.md" -type f 2>/dev/null)
@@ -74,6 +75,7 @@ lifecycle_rotate() {
       */knowledge/*)  stale_days=90;  archive_days=365 ;;
       */feedback/*)   stale_days=45;  archive_days=120 ;;
       */notes/*)      stale_days=30;  archive_days=90  ;;
+      */decisions/*)  stale_days=90;  archive_days=365 ;;
       */journal/*)    stale_days=30;  archive_days=90  ;;
     esac
 
