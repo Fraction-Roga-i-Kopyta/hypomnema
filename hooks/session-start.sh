@@ -20,6 +20,7 @@ CAP_STRATEGIES=4
 CAP_NOTES=2
 CAP_DECISIONS=3
 MAX_FILES=22
+MAX_CLUSTER=4
 TODAY=$(date +%Y-%m-%d)
 
 # --- Main ---
@@ -257,6 +258,38 @@ END {
     printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", prev_file, status, project, referenced, domains, keywords, body
   }
 }'
+
+# --- Parse related links from a memory file ---
+# Input: file path
+# Output: space-separated "target:type" pairs (stdout)
+parse_related() {
+  local file="$1"
+  [ -f "$file" ] || return 0
+  awk '
+    /^---$/ { fm_count++; if (fm_count >= 2) exit; next }
+    fm_count == 1 && /^related:/ { in_rel = 1; next }
+    fm_count == 1 && in_rel && /^  - / {
+      line = $0
+      sub(/^  - /, "", line)
+      gsub(/: /, ":", line)
+      gsub(/ /, "", line)
+      printf "%s ", line
+      next
+    }
+    fm_count == 1 && in_rel && !/^  - / { in_rel = 0 }
+  ' "$file"
+}
+
+# --- Find memory file by slug (basename without .md) ---
+find_memory_file() {
+  local slug="$1"
+  local f
+  for dir in mistakes feedback strategies knowledge notes decisions; do
+    f="$MEMORY_DIR/$dir/${slug}.md"
+    [ -f "$f" ] && printf '%s' "$f" && return 0
+  done
+  return 1
+}
 
 # --- Domain matching helper ---
 # Returns 0 (true) if file domains intersect with active DOMAINS, or if file has "general" domain
@@ -680,6 +713,248 @@ STRATEGIES_MD="$_COLLECT_RESULT"
 collect_scored "decisions" "$CAP_DECISIONS"
 DECISIONS_MD="$_COLLECT_RESULT"
 
+# --- Cluster activation pass (v0.4) ---
+# Load related files that weren't picked up by the main pass
+CLUSTER_MD=""
+CONTRADICTS_WARNINGS=""
+_PRIORITY_SLUGS=" "
+
+if [ ${#INJECTED_FILES[@]} -gt 0 ]; then
+  # Build space-separated list of injected slugs
+  INJECTED_SLUGS=" "
+  for _cf in "${INJECTED_FILES[@]}"; do
+    _cs=$(basename "$_cf" .md)
+    INJECTED_SLUGS="${INJECTED_SLUGS}${_cs} "
+  done
+
+  # Candidate list: "slug|source_slug|rel_type|priority" lines (new files only)
+  # Priority: contradicts=0 reinforces=1 instance_of=2 supersedes=3
+  CLUSTER_CANDIDATES=""
+  # Provenance links: "target|source|type" for all related (including already-injected)
+  CLUSTER_PROVENANCE=""
+
+  # --- Forward scan: for each injected file, parse related targets ---
+  for _cf in "${INJECTED_FILES[@]}"; do
+    _source_slug=$(basename "$_cf" .md)
+    _rels=$(parse_related "$_cf")
+    [ -z "$_rels" ] && continue
+    for _rel in $_rels; do
+      _target=$(printf '%s' "$_rel" | cut -d: -f1)
+      _rtype=$(printf '%s' "$_rel" | cut -d: -f2)
+      [ -z "$_target" ] && continue
+      # Record provenance for all valid links (including already-injected)
+      CLUSTER_PROVENANCE="${CLUSTER_PROVENANCE}
+${_target}|${_source_slug}|${_rtype}"
+      # Skip if already injected (provenance recorded above)
+      case "$INJECTED_SLUGS" in
+        *" ${_target} "*) continue ;;
+      esac
+      # Skip if already a candidate
+      case "$CLUSTER_CANDIDATES" in
+        *"|${_target}|"*) continue ;;
+      esac
+      # Find the file
+      _tpath=$(find_memory_file "$_target") || continue
+      # Check status: active or pinned only
+      _tstatus=$(awk '/^---$/{n++} n==1 && /^status:/{sub(/^status: */,""); print; exit}' "$_tpath" 2>/dev/null)
+      case "$_tstatus" in active|pinned) ;; *) continue ;; esac
+      # Score check: keyword OR WAL OR TF-IDF > 0
+      _qualifies=0
+      # Check keywords
+      _fkw=$(awk '/^---$/{n++} n==1 && /^keywords:/{sub(/^keywords: *\[?/,""); sub(/\].*/,""); gsub(/, */," "); print; exit}' "$_tpath" 2>/dev/null)
+      if [ -n "$_fkw" ] && [ -n "$KEYWORDS" ]; then
+        for _k in $_fkw; do
+          for _sk in $KEYWORDS; do
+            [ "$_k" = "$_sk" ] && _qualifies=1 && break 2
+          done
+        done
+      fi
+      # Check WAL
+      if [ "$_qualifies" -eq 0 ] && [ -n "$WAL_SCORES" ]; then
+        case ";${WAL_SCORES};" in *";${_target}:"*) _qualifies=1 ;; esac
+      fi
+      # Check TF-IDF
+      if [ "$_qualifies" -eq 0 ] && [ -n "$TFIDF_SCORES" ]; then
+        case ";${TFIDF_SCORES};" in *";${_target}:"*) _qualifies=1 ;; esac
+      fi
+      [ "$_qualifies" -eq 0 ] && continue
+      # Assign priority by relationship type
+      case "$_rtype" in
+        contradicts) _prio=0 ;;
+        reinforces)  _prio=1 ;;
+        instance_of) _prio=2 ;;
+        supersedes)  _prio=3 ;;
+        *)           _prio=2 ;;
+      esac
+      CLUSTER_CANDIDATES="${CLUSTER_CANDIDATES}
+${_prio}|${_target}|${_source_slug}|${_rtype}"
+    done
+  done
+
+  # --- Reverse scan: for each non-injected file, check if it links to an injected slug ---
+  for _rdir in mistakes feedback strategies knowledge notes decisions; do
+    [ -d "$MEMORY_DIR/$_rdir" ] || continue
+    for _rf in "$MEMORY_DIR/$_rdir"/*.md; do
+      [ -f "$_rf" ] || continue
+      _rslug=$(basename "$_rf" .md)
+      # Skip if already injected
+      case "$INJECTED_SLUGS" in *" ${_rslug} "*) continue ;; esac
+      # Skip if already a candidate
+      case "$CLUSTER_CANDIDATES" in *"|${_rslug}|"*) continue ;; esac
+      _rrels=$(parse_related "$_rf")
+      [ -z "$_rrels" ] && continue
+      for _rrel in $_rrels; do
+        _rtarget=$(printf '%s' "$_rrel" | cut -d: -f1)
+        _rrtype=$(printf '%s' "$_rrel" | cut -d: -f2)
+        # Check if target is in injected set
+        case "$INJECTED_SLUGS" in
+          *" ${_rtarget} "*)
+            # Check status
+            _rstatus=$(awk '/^---$/{n++} n==1 && /^status:/{sub(/^status: */,""); print; exit}' "$_rf" 2>/dev/null)
+            case "$_rstatus" in active|pinned) ;; *) continue ;; esac
+            # Score check
+            _rqualifies=0
+            _rfkw=$(awk '/^---$/{n++} n==1 && /^keywords:/{sub(/^keywords: *\[?/,""); sub(/\].*/,""); gsub(/, */," "); print; exit}' "$_rf" 2>/dev/null)
+            if [ -n "$_rfkw" ] && [ -n "$KEYWORDS" ]; then
+              for _k in $_rfkw; do
+                for _sk in $KEYWORDS; do
+                  [ "$_k" = "$_sk" ] && _rqualifies=1 && break 2
+                done
+              done
+            fi
+            if [ "$_rqualifies" -eq 0 ] && [ -n "$WAL_SCORES" ]; then
+              case ";${WAL_SCORES};" in *";${_rslug}:"*) _rqualifies=1 ;; esac
+            fi
+            if [ "$_rqualifies" -eq 0 ] && [ -n "$TFIDF_SCORES" ]; then
+              case ";${TFIDF_SCORES};" in *";${_rslug}:"*) _rqualifies=1 ;; esac
+            fi
+            [ "$_rqualifies" -eq 0 ] && continue
+            case "$_rrtype" in
+              contradicts) _rprio=0 ;;
+              reinforces)  _rprio=1 ;;
+              instance_of) _rprio=2 ;;
+              supersedes)  _rprio=3 ;;
+              *)           _rprio=2 ;;
+            esac
+            CLUSTER_CANDIDATES="${CLUSTER_CANDIDATES}
+${_rprio}|${_rslug}|${_rtarget}|${_rrtype}"
+            break  # one match is enough for reverse scan
+            ;;
+        esac
+      done
+    done
+  done
+
+  # --- Also scan injected files for cross-relationships (contradicts between injected files) ---
+  for _cf in "${INJECTED_FILES[@]}"; do
+    _source_slug=$(basename "$_cf" .md)
+    _rels=$(parse_related "$_cf")
+    [ -z "$_rels" ] && continue
+    for _rel in $_rels; do
+      _target=$(printf '%s' "$_rel" | cut -d: -f1)
+      _rtype=$(printf '%s' "$_rel" | cut -d: -f2)
+      [ "$_rtype" = "contradicts" ] || continue
+      # Check if target is also injected
+      case "$INJECTED_SLUGS" in
+        *" ${_target} "*)
+          # Both are injected — handle contradicts
+          # Determine which is newer by referenced date
+          _src_ref=$(awk '/^---$/{n++} n==1 && /^referenced:/{sub(/^referenced: */,""); print; exit}' "$_cf" 2>/dev/null)
+          _tgt_path=$(find_memory_file "$_target") || continue
+          _tgt_ref=$(awk '/^---$/{n++} n==1 && /^referenced:/{sub(/^referenced: */,""); print; exit}' "$_tgt_path" 2>/dev/null)
+          [ -z "$_src_ref" ] && _src_ref="0000-00-00"
+          [ -z "$_tgt_ref" ] && _tgt_ref="0000-00-00"
+          if [ "$_tgt_ref" ">" "$_src_ref" ] || [ "$_tgt_ref" = "$_src_ref" ]; then
+            _newer="$_target"
+            _older="$_source_slug"
+          else
+            _newer="$_source_slug"
+            _older="$_target"
+          fi
+          CONTRADICTS_WARNINGS="${CONTRADICTS_WARNINGS}
+> ⚠ Конфликт: \`${_older}\` contradicts \`${_newer}\` — проверь актуальность"
+          _PRIORITY_SLUGS="${_PRIORITY_SLUGS}${_newer} "
+          ;;
+      esac
+    done
+  done
+
+  # --- Sort candidates by priority, take up to MAX_CLUSTER ---
+  if [ -n "$CLUSTER_CANDIDATES" ]; then
+    _cluster_count=0
+    _cluster_loaded_slugs=" "
+    while IFS='|' read -r _prio _slug _source _rtype; do
+      [ -z "$_slug" ] && continue
+      [ "$_cluster_count" -ge "$MAX_CLUSTER" ] && break
+      # Dedup
+      case "$_cluster_loaded_slugs" in *" ${_slug} "*) continue ;; esac
+      # Find and load the file
+      _cpath=$(find_memory_file "$_slug") || continue
+      _cbody=$(sed '1,/^---$/d; 1,/^---$/d' "$_cpath" 2>/dev/null | sed '/^$/d')
+      [ -z "$(printf '%s' "$_cbody" | tr -d '[:space:]')" ] && continue
+
+      # For contradicts: determine newer before writing header so we can tag it
+      _slug_label="${_slug}"
+      if [ "$_rtype" = "contradicts" ]; then
+        _src_path=$(find_memory_file "$_source") || true
+        if [ -n "$_src_path" ] && [ -f "$_src_path" ]; then
+          _src_ref=$(awk '/^---$/{n++} n==1 && /^referenced:/{sub(/^referenced: */,""); print; exit}' "$_src_path" 2>/dev/null)
+          _tgt_ref=$(awk '/^---$/{n++} n==1 && /^referenced:/{sub(/^referenced: */,""); print; exit}' "$_cpath" 2>/dev/null)
+          [ -z "$_src_ref" ] && _src_ref="0000-00-00"
+          [ -z "$_tgt_ref" ] && _tgt_ref="0000-00-00"
+          if [ "$_tgt_ref" ">" "$_src_ref" ] || [ "$_tgt_ref" = "$_src_ref" ]; then
+            _newer="$_slug"
+          else
+            _newer="$_source"
+          fi
+          # Tag the header if this loaded slug is the newer record
+          if [ "$_newer" = "$_slug" ]; then
+            _slug_label="${_slug} [ПРИОРИТЕТ]"
+          else
+            # Source is newer — mark it for post-processing of already-injected sections
+            _PRIORITY_SLUGS="${_PRIORITY_SLUGS}${_newer} "
+          fi
+          CONTRADICTS_WARNINGS="${CONTRADICTS_WARNINGS}
+> ⚠ Конфликт: \`${_source}\` contradicts \`${_slug}\` — проверь актуальность"
+        fi
+      fi
+
+      CLUSTER_MD="${CLUSTER_MD}
+### ${_slug_label} (via ${_source} → ${_rtype})
+${_cbody}
+"
+      INJECTED_FILES+=("$_cpath")
+      _cluster_loaded_slugs="${_cluster_loaded_slugs}${_slug} "
+      _cluster_count=$((_cluster_count + 1))
+
+      # WAL: log cluster-load event
+      printf '%s|cluster-load|%s|%s\n' "$TODAY" "$_slug" "${SESSION_ID//|/_}" >> "$MEMORY_DIR/.wal" 2>/dev/null || true
+    done < <(printf '%s\n' "$CLUSTER_CANDIDATES" | sort -t'|' -k1,1n | grep -v '^$')
+  fi
+
+  # --- Provenance annotations for already-injected related files ---
+  # Share cluster budget: cluster-loaded + provenance together capped at MAX_CLUSTER
+  _prov_count=${_cluster_count:-0}
+  if [ -n "$CLUSTER_PROVENANCE" ]; then
+    _prov_shown=""
+    while IFS='|' read -r _ptarget _psource _ptype; do
+      [ -z "$_ptarget" ] && continue
+      [ "$_prov_count" -ge "$MAX_CLUSTER" ] && break
+      # Only show provenance for already-injected targets (not cluster-loaded, those have inline provenance)
+      case "$INJECTED_SLUGS" in *" ${_ptarget} "*) ;; *) continue ;; esac
+      # Dedup provenance display
+      case "$_prov_shown" in *"|${_ptarget}:${_ptype}|"*) continue ;; esac
+      _prov_shown="${_prov_shown}|${_ptarget}:${_ptype}|"
+      CLUSTER_MD="${CLUSTER_MD}
+- **${_ptarget}** (via ${_psource} → ${_ptype})
+"
+      # WAL: log cluster-load for provenance-linked files
+      printf '%s|cluster-load|%s|%s\n' "$TODAY" "$_ptarget" "${SESSION_ID//|/_}" >> "$MEMORY_DIR/.wal" 2>/dev/null || true
+      _prov_count=$((_prov_count + 1))
+    done <<< "$CLUSTER_PROVENANCE"
+  fi
+fi
+
 # --- Collect project overview ---
 
 PROJECT_MD=""
@@ -710,6 +985,21 @@ ${cont_body}
       INJECTED_FILES+=("$cont")
     fi
   fi
+fi
+
+# --- Post-process: inject [ПРИОРИТЕТ] into headers of newer contradicts records ---
+# These are already-injected files (cross-injected contradicts) whose headers are in section vars
+if [ "$_PRIORITY_SLUGS" != " " ]; then
+  for _ps in $_PRIORITY_SLUGS; do
+    [ -z "$_ps" ] && continue
+    # Replace "### slug\n" with "### slug [ПРИОРИТЕТ]\n" in section variables (exact match, not already tagged)
+    MISTAKES_MD=$(printf '%s' "$MISTAKES_MD" | perl -pe "s/^(### ${_ps})(\\s|$)/\$1 [ПРИОРИТЕТ]\$2/")
+    FEEDBACK_MD=$(printf '%s' "$FEEDBACK_MD" | perl -pe "s/^(### ${_ps})(\\s|$)/\$1 [ПРИОРИТЕТ]\$2/")
+    KNOWLEDGE_MD=$(printf '%s' "$KNOWLEDGE_MD" | perl -pe "s/^(### ${_ps})(\\s|$)/\$1 [ПРИОРИТЕТ]\$2/")
+    STRATEGIES_MD=$(printf '%s' "$STRATEGIES_MD" | perl -pe "s/^(### ${_ps})(\\s|$)/\$1 [ПРИОРИТЕТ]\$2/")
+    DECISIONS_MD=$(printf '%s' "$DECISIONS_MD" | perl -pe "s/^(### ${_ps})(\\s|$)/\$1 [ПРИОРИТЕТ]\$2/")
+    NOTES_MD=$(printf '%s' "$NOTES_MD" | perl -pe "s/^(### ${_ps})(\\s|$)/\$1 [ПРИОРИТЕТ]\$2/")
+  done
 fi
 
 # --- Build output ---
@@ -753,13 +1043,23 @@ if [ -n "$NOTES_MD" ]; then
 ## Notes
 ${NOTES_MD}"
 fi
+if [ -n "$CLUSTER_MD" ]; then
+  CONTEXT="${CONTEXT}
+## Related
+${CLUSTER_MD}"
+fi
+if [ -n "$CONTRADICTS_WARNINGS" ]; then
+  CONTEXT="${CONTEXT}
+${CONTRADICTS_WARNINGS}"
+fi
 
 # Nothing to inject
 [ -z "$CONTEXT" ] && exit 0
 
-# Cap total injected files
-if [ ${#INJECTED_FILES[@]} -gt $MAX_FILES ]; then
-  INJECTED_FILES=("${INJECTED_FILES[@]:0:$MAX_FILES}")
+# Cap total injected files (cluster files are ABOVE MAX_FILES, up to MAX_FILES + MAX_CLUSTER)
+_TOTAL_CAP=$((MAX_FILES + MAX_CLUSTER))
+if [ ${#INJECTED_FILES[@]} -gt $_TOTAL_CAP ]; then
+  INJECTED_FILES=("${INJECTED_FILES[@]:0:$_TOTAL_CAP}")
 fi
 
 # Update accessed dates — single perl call for all files (13x faster than grep+sed+rm loop)
@@ -770,6 +1070,7 @@ if [ ${#INJECTED_FILES[@]} -gt 0 ]; then
     $in_fm = 0 if /^---$/ && $seen_fm > 1;
     if ($in_fm) {
       s/^referenced: .*/referenced: '"$TODAY"'/;
+      s/^ref_count: (\d+)/"ref_count: " . ($1 + 1)/e;
     }
     if (eof) { $seen_fm = 0; $in_fm = 0; }
   ' "${INJECTED_FILES[@]}" 2>/dev/null || true
