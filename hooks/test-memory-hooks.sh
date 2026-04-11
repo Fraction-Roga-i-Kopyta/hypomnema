@@ -1152,6 +1152,73 @@ assert "Strategy bonus — used-strat appears" '[ -n "$SBONUS_POS_USED" ]'
 assert "Strategy bonus — used before unused" '[ -n "$SBONUS_POS_USED" ] && [ -n "$SBONUS_POS_UNUSED" ] && [ "$SBONUS_POS_USED" -lt "$SBONUS_POS_UNUSED" ]'
 rm -rf "$SBONUS_DIR"
 
+# Test: strategy-used — clean session + injected strategy
+SU_DIR=$(mktemp -d)
+SU_MEM="$SU_DIR/memory"
+mkdir -p "$SU_MEM"/{strategies,projects}
+cat > "$SU_MEM/projects.json" << 'EOF'
+{}
+EOF
+cat > "$SU_MEM/strategies/debug-strat.md" << 'EOF'
+---
+type: strategy
+project: global
+status: active
+domains: [general]
+---
+Debug strategy steps.
+EOF
+printf '2026-04-11|inject|debug-strat|su-test-session\n' > "$SU_MEM/.wal"
+SU_MARKER="/tmp/.claude-session-su-test-session"
+touch -t 202601010000 "$SU_MARKER"
+cat > "$SU_DIR/transcript.jsonl" << 'SUEOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Edit","input":{"file_path":"x.py"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"OK"}]}}
+SUEOF
+echo '{"session_id":"su-test-session","cwd":"/tmp","transcript_path":"'"$SU_DIR"'/transcript.jsonl"}' | CLAUDE_MEMORY_DIR="$SU_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null
+assert "Strategy-used — written to WAL" 'grep -q "strategy-used|debug-strat" "$SU_MEM/.wal"'
+rm -rf "$SU_DIR" "$SU_MARKER"
+
+# Test: strategy-gap — clean session, no strategies injected
+SG_DIR=$(mktemp -d)
+SG_MEM="$SG_DIR/memory"
+mkdir -p "$SG_MEM/projects"
+cat > "$SG_MEM/projects.json" << 'EOF'
+{}
+EOF
+printf '2026-04-11|inject|code-approach|sg-test-session\n' > "$SG_MEM/.wal"
+SG_MARKER="/tmp/.claude-session-sg-test-session"
+touch -t 202601010000 "$SG_MARKER"
+cat > "$SG_DIR/transcript.jsonl" << 'SGEOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Edit","input":{"file_path":"x.py"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"OK"}]}}
+SGEOF
+echo '{"session_id":"sg-test-session","cwd":"/tmp","transcript_path":"'"$SG_DIR"'/transcript.jsonl"}' | CLAUDE_MEMORY_DIR="$SG_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null
+assert "Strategy-gap — written to WAL" 'grep -q "strategy-gap" "$SG_MEM/.wal"'
+rm -rf "$SG_DIR" "$SG_MARKER"
+
+# Test: strategies reminder on long clean session
+SR2_DIR=$(mktemp -d)
+SR2_MEM="$SR2_DIR/memory"
+mkdir -p "$SR2_MEM/projects"
+cat > "$SR2_MEM/projects.json" << 'EOF'
+{}
+EOF
+SR2_MARKER="/tmp/.claude-session-sr2-test-session"
+if [[ "$OSTYPE" == darwin* ]]; then
+  touch -t $(date -v-15M +%Y%m%d%H%M) "$SR2_MARKER"
+else
+  touch -d "15 minutes ago" "$SR2_MARKER"
+fi
+cat > "$SR2_DIR/transcript.jsonl" << 'SR2EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Edit","input":{"file_path":"x.py"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"OK"}]}}
+SR2EOF
+SR2_OUT=$(echo '{"session_id":"sr2-test-session","cwd":"/tmp","transcript_path":"'"$SR2_DIR"'/transcript.jsonl"}' | CLAUDE_MEMORY_DIR="$SR2_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null)
+SR2_CTX=$(printf '%s' "$SR2_OUT" | jq -r '.hookSpecificOutput.additionalContext // ""' 2>/dev/null)
+assert "Strategies reminder — shown on long clean session" 'printf "%s" "$SR2_CTX" | grep -qi "strateg"'
+rm -rf "$SR2_DIR" "$SR2_MARKER"
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="

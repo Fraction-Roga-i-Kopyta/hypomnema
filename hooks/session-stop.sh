@@ -383,6 +383,43 @@ if [ -n "$TRANSCRIPT_PATH" ] && [ -f "$TRANSCRIPT_PATH" ]; then
   fi
 fi
 
+# --- Strategy tracking ---
+if [ -f "$WAL_FILE" ] && [ -n "$SAFE_SESSION_ID" ]; then
+  INJECTED_STRATEGIES=$(awk -F'|' -v sid="$SAFE_SESSION_ID" '
+    $4 == sid && $2 == "inject" { print $3 }
+  ' "$WAL_FILE" 2>/dev/null)
+
+  HAS_STRATEGIES=0
+  if [ -n "$INJECTED_STRATEGIES" ]; then
+    while IFS= read -r strat_name; do
+      [ -z "$strat_name" ] && continue
+      [ -f "$MEMORY_DIR/strategies/${strat_name}.md" ] || continue
+      HAS_STRATEGIES=1
+
+      if [ "${METRIC_ERROR_COUNT:-0}" -eq 0 ]; then
+        printf '%s|strategy-used|%s|%s\n' "$TODAY" "$strat_name" "$SAFE_SESSION_ID" \
+          >> "$WAL_FILE" 2>/dev/null
+      fi
+    done <<< "$INJECTED_STRATEGIES"
+  fi
+
+  if [ "${METRIC_ERROR_COUNT:-0}" -eq 0 ] && [ "$HAS_STRATEGIES" -eq 0 ]; then
+    METRIC_DOMAINS_GAP="${SESSION_DOMAINS:-unknown}"
+    [ -z "$METRIC_DOMAINS_GAP" ] && METRIC_DOMAINS_GAP="unknown"
+    METRIC_DOMAINS_GAP=$(printf '%s' "$METRIC_DOMAINS_GAP" | tr ' ' ',')
+    [ -z "$METRIC_DOMAINS_GAP" ] && METRIC_DOMAINS_GAP="unknown"
+    printf '%s|strategy-gap|%s|%s\n' "$TODAY" "$METRIC_DOMAINS_GAP" "$SAFE_SESSION_ID" \
+      >> "$WAL_FILE" 2>/dev/null
+  fi
+fi
+
+# Strategies reminder: long clean session → suggest recording approach
+if [ "${METRIC_ERROR_COUNT:-0}" -eq 0 ] && [ "${ELAPSED:-0}" -gt 600 ]; then
+  REMINDER="${REMINDER}${REMINDER:+
+}[STRATEGIES] Сессия чистая (0 ошибок, ${ELAPSED}с). Если задача решена с первого подхода — запиши в strategies/:
+trigger, steps (3-5), outcome."
+fi
+
 if [ -n "$REMINDER" ]; then
   cat <<EOF
 {"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":$(printf '%s\n' "$REMINDER" | jq -Rs .)}}
