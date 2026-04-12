@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.5.0] - 2026-04-12
+
+Context triggers. Memory files with declared trigger phrases activate on matching user prompts, complementing CWD/git-based scoring with direct task context reaction.
+
+### Triggers in frontmatter
+
+- **`triggers:` field** — array of case-insensitive phrases, e.g. `- "tailwind hsl"`
+- **`trigger:` field** — single-phrase form (legacy, supported alongside `triggers:`)
+- **Plain substring match** — no regex; phrases matched as case-insensitive substring against prompt text (works for Latin + Cyrillic)
+- **Recommended usage** — mistakes with characteristic symptom phrases, strategies with explicit task triggers, knowledge with domain terminology
+
+### UserPromptSubmit hook
+
+- **New `hooks/user-prompt-submit.sh`** — activates on every user prompt
+- **Dedup with SessionStart** — skips files already injected at session start (tracked via `/tmp/.claude-injected-${SESSION_ID}.list`)
+- **Sorted candidates** — `status: pinned` > `active`; tiebreak by severity, recurrence, ref_count
+- **Cap `MAX_TRIGGERED=4`** — prevents noisy injections on broad prompts
+- **`## Triggered (from prompt)` section** — matched records appear under dedicated heading with `(matched: "phrase")` annotation
+
+### WAL integration
+
+- `trigger-match|<slug>|<session_id>` event logged per match
+- `trigger-match` contributes to `pos_count` in WAL spaced-repetition scoring (weighted same as `outcome-positive`) — triggered files surface more readily in future sessions
+
+### SessionStart changes
+
+- **Dedup list write** — always writes `/tmp/.claude-injected-${SESSION_ID}.list` (even when no injections), enabling user-prompt-submit to detect a started session
+- Writes happen before the `CONTEXT` early-exit to ensure the list exists for empty sessions
+
+### Testing
+
+- 144 smoke tests (+12 new: single trigger match, case-insensitive, array triggers (2 phrases), no-match silence, dedup, pinned priority, WAL logging, cap enforcement, superseded ignored, session-start dedup list)
+- 18 benchmark scenarios — all passing, zero regressions
+
+---
+
 ## [0.4.0] - 2026-04-12
 
 Related links and graph. Memory files now connect to each other through typed relationships, forming clusters that activate together.

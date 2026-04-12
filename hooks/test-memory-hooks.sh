@@ -1765,6 +1765,186 @@ rm -rf "$CL_DIR"
 
 # --- End cluster activation tests ---
 
+# --- Prompt triggers tests (v0.5) ---
+
+TR_HOOK="$(dirname "$0")/user-prompt-submit.sh"
+TR_DIR=$(mktemp -d)
+TR_MEM="$TR_DIR/memory"
+mkdir -p "$TR_MEM"/{mistakes,feedback,strategies,knowledge,notes}
+
+# Mistake with `trigger:` single (backcompat)
+cat > "$TR_MEM/mistakes/trigger-single.md" << 'EOF'
+---
+type: mistake
+status: active
+severity: major
+recurrence: 3
+ref_count: 10
+trigger: "tailwind hsl"
+---
+
+Body of single-trigger mistake.
+EOF
+
+# Strategy with `triggers:` array (new syntax)
+cat > "$TR_MEM/strategies/trigger-array.md" << 'EOF'
+---
+type: strategy
+status: active
+ref_count: 5
+triggers:
+  - "css layout"
+  - "flex gap"
+---
+
+Body of array-trigger strategy.
+EOF
+
+# Pinned mistake (higher priority)
+cat > "$TR_MEM/mistakes/trigger-pinned.md" << 'EOF'
+---
+type: mistake
+status: pinned
+severity: minor
+recurrence: 1
+ref_count: 1
+trigger: "docker stale"
+---
+
+Body of pinned mistake.
+EOF
+
+# Active mistake same trigger word (lower priority than pinned)
+cat > "$TR_MEM/mistakes/trigger-active-dup.md" << 'EOF'
+---
+type: mistake
+status: active
+severity: minor
+recurrence: 10
+ref_count: 100
+trigger: "docker stale"
+---
+
+Body of active-dup mistake.
+EOF
+
+# File with no triggers (should never match)
+cat > "$TR_MEM/feedback/no-triggers.md" << 'EOF'
+---
+type: feedback
+status: active
+---
+
+This file has no triggers.
+EOF
+
+# Inactive file with triggers (should NOT match)
+cat > "$TR_MEM/mistakes/inactive-trigger.md" << 'EOF'
+---
+type: mistake
+status: superseded
+severity: major
+trigger: "inactive phrase"
+---
+
+Inactive body.
+EOF
+
+# --- Test 1: single trigger match ---
+TR_OUT=$(echo '{"session_id":"trtest-1","prompt":"помоги с tailwind hsl"}' | \
+  CLAUDE_MEMORY_DIR="$TR_MEM" bash "$TR_HOOK" 2>/dev/null)
+TR_CTX=$(printf '%s' "$TR_OUT" | jq -r '.hookSpecificOutput.additionalContext // ""')
+assert "Trigger — single trigger: match" 'printf "%s" "$TR_CTX" | grep -q "### trigger-single"'
+assert "Trigger — single trigger: matched phrase quoted" 'printf "%s" "$TR_CTX" | grep -q "matched: \"tailwind hsl\""'
+
+# --- Test 2: case-insensitive ---
+TR_OUT=$(echo '{"session_id":"trtest-2","prompt":"Помогите с TAILWIND HSL"}' | \
+  CLAUDE_MEMORY_DIR="$TR_MEM" bash "$TR_HOOK" 2>/dev/null)
+TR_CTX=$(printf '%s' "$TR_OUT" | jq -r '.hookSpecificOutput.additionalContext // ""')
+assert "Trigger — case-insensitive match" 'printf "%s" "$TR_CTX" | grep -q "### trigger-single"'
+
+# --- Test 3: triggers: array match ---
+TR_OUT=$(echo '{"session_id":"trtest-3","prompt":"есть проблема с css layout"}' | \
+  CLAUDE_MEMORY_DIR="$TR_MEM" bash "$TR_HOOK" 2>/dev/null)
+TR_CTX=$(printf '%s' "$TR_OUT" | jq -r '.hookSpecificOutput.additionalContext // ""')
+assert "Trigger — array trigger match (phrase 1)" 'printf "%s" "$TR_CTX" | grep -q "### trigger-array"'
+
+TR_OUT=$(echo '{"session_id":"trtest-3b","prompt":"плохой flex gap"}' | \
+  CLAUDE_MEMORY_DIR="$TR_MEM" bash "$TR_HOOK" 2>/dev/null)
+TR_CTX=$(printf '%s' "$TR_OUT" | jq -r '.hookSpecificOutput.additionalContext // ""')
+assert "Trigger — array trigger match (phrase 2)" 'printf "%s" "$TR_CTX" | grep -q "### trigger-array"'
+
+# --- Test 4: no match → empty output ---
+TR_OUT=$(echo '{"session_id":"trtest-4","prompt":"совершенно нерелевантный текст"}' | \
+  CLAUDE_MEMORY_DIR="$TR_MEM" bash "$TR_HOOK" 2>/dev/null)
+assert "Trigger — no match: empty output" '[ -z "$TR_OUT" ]'
+
+# --- Test 5: dedup via /tmp list ---
+echo "trigger-single" > "/tmp/.claude-injected-trtest-dedup.list"
+TR_OUT=$(echo '{"session_id":"trtest-dedup","prompt":"tailwind hsl"}' | \
+  CLAUDE_MEMORY_DIR="$TR_MEM" bash "$TR_HOOK" 2>/dev/null)
+assert "Trigger — dedup: excludes already-injected slug" '[ -z "$TR_OUT" ]'
+rm -f "/tmp/.claude-injected-trtest-dedup.list"
+
+# --- Test 6: pinned priority over active ---
+# Both trigger-pinned and trigger-active-dup match "docker stale"
+TR_OUT=$(echo '{"session_id":"trtest-6","prompt":"docker stale"}' | \
+  CLAUDE_MEMORY_DIR="$TR_MEM" bash "$TR_HOOK" 2>/dev/null)
+TR_CTX=$(printf '%s' "$TR_OUT" | jq -r '.hookSpecificOutput.additionalContext // ""')
+# Pinned should come first (sort descending)
+assert "Trigger — pinned before active in output" 'printf "%s" "$TR_CTX" | awk "/### trigger-pinned/{p=NR} /### trigger-active-dup/{a=NR} END{exit !(p && a && p < a)}"'
+
+# --- Test 7: WAL trigger-match logged ---
+# Clear WAL
+: > "$TR_MEM/.wal"
+TR_OUT=$(echo '{"session_id":"trtest-wal","prompt":"tailwind hsl test"}' | \
+  CLAUDE_MEMORY_DIR="$TR_MEM" bash "$TR_HOOK" 2>/dev/null)
+assert "Trigger — WAL event trigger-match written" 'grep -q "trigger-match|trigger-single|trtest-wal" "$TR_MEM/.wal"'
+
+# --- Test 8: cap MAX_TRIGGERED=4 ---
+# Create 5 active files with same trigger word
+for i in 1 2 3 4 5; do
+  cat > "$TR_MEM/mistakes/bulk-${i}.md" << EOF
+---
+type: mistake
+status: active
+severity: minor
+recurrence: ${i}
+trigger: "bulk match"
+---
+
+Bulk $i body.
+EOF
+done
+TR_OUT=$(echo '{"session_id":"trtest-cap","prompt":"bulk match test"}' | \
+  CLAUDE_MEMORY_DIR="$TR_MEM" bash "$TR_HOOK" 2>/dev/null)
+TR_CTX=$(printf '%s' "$TR_OUT" | jq -r '.hookSpecificOutput.additionalContext // ""')
+TR_COUNT=$(printf '%s' "$TR_CTX" | grep -c "^### bulk-" || true)
+assert "Trigger — cap MAX_TRIGGERED=4 enforced" '[ "$TR_COUNT" -eq 4 ]'
+
+# --- Test 9: inactive status ignored ---
+TR_OUT=$(echo '{"session_id":"trtest-inactive","prompt":"inactive phrase"}' | \
+  CLAUDE_MEMORY_DIR="$TR_MEM" bash "$TR_HOOK" 2>/dev/null)
+assert "Trigger — superseded file ignored" '[ -z "$TR_OUT" ]'
+
+# --- Test 10: session-start writes dedup list ---
+SS_HOOK="$(dirname "$0")/session-start.sh"
+mkdir -p /tmp/trtest-ss-proj
+cat > "$TR_MEM/projects.json" << 'PJSON'
+{"/tmp/trtest-ss-proj": "ss-proj"}
+PJSON
+# Sanity: ensure file is created
+SS_OUT=$(echo '{"session_id":"ss-dedup-test","cwd":"/tmp/trtest-ss-proj"}' | \
+  CLAUDE_MEMORY_DIR="$TR_MEM" bash "$SS_HOOK" 2>/dev/null)
+assert "Trigger — session-start writes dedup list" '[ -f "/tmp/.claude-injected-ss-dedup-test.list" ]'
+rm -f "/tmp/.claude-injected-ss-dedup-test.list"
+rm -rf /tmp/trtest-ss-proj
+
+# Cleanup trigger test dir
+rm -rf "$TR_DIR"
+
+# --- End prompt triggers tests ---
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="
