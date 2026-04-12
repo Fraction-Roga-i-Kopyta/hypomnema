@@ -1,8 +1,8 @@
 #!/bin/bash
 # Regenerate MEMORY.md index from memory/ filesystem.
 # Writes to $MEMORY_INDEX_PATH (default: ~/.claude/projects/-Users-akamash/memory/MEMORY.md).
-# Descriptions extracted from first body line after frontmatter.
-# Pure rebuild — existing human-written hooks are lost.
+# Descriptions pulled from frontmatter (description → root-cause → trigger), fallback to first body line.
+# Pure rebuild — any hand-curated descriptions in the existing index are lost on each run.
 
 set -o pipefail
 

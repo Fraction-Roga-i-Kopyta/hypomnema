@@ -69,7 +69,6 @@ extract_meta() {
   awk '
     BEGIN { fm_count = 0; printed = 0; status = ""; severity = ""; recurrence = 0; ref_count = 0; project = ""; created = ""; trig_single = ""; in_trigs = 0 }
     /^---$/ { fm_count++; if (fm_count >= 2) { print_out(); printed = 1; exit } next }
-    fm_count == 0 && !/^---$/ && !/^$/ { has_nonfm = 1 }
     fm_count != 1 { next }
     /^status:/        { val = $0; sub(/^status: */, "", val); gsub(/["'"'"']/, "", val); status = val; next }
     /^severity:/      { val = $0; sub(/^severity: */, "", val); gsub(/["'"'"']/, "", val); severity = val; next }

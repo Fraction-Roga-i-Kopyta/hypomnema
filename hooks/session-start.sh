@@ -1239,10 +1239,12 @@ if [ -n "$_broken" ]; then
 fi
 
 # 2. UserPromptSubmit hook silent-fail signal: 50+ injects but 0 trigger-match.
+# NOTE: grep -c outputs "0" with exit 1 when no matches, so || fallback would duplicate the count.
+# $(...) strips trailing newline; numeric comparison works directly.
 if [ -z "$HEALTH_WARNING" ] && [ -f "$WAL_FILE" ]; then
   _wal_tail=$(tail -200 "$WAL_FILE" 2>/dev/null)
-  _inj=$(printf '%s\n' "$_wal_tail" | grep -c '|inject|' 2>/dev/null || echo 0)
-  _trig=$(printf '%s\n' "$_wal_tail" | grep -c '|trigger-match|' 2>/dev/null || echo 0)
+  _inj=$(printf '%s\n' "$_wal_tail" | grep -c '|inject|')
+  _trig=$(printf '%s\n' "$_wal_tail" | grep -c '|trigger-match|')
   if [ "${_inj:-0}" -gt 50 ] && [ "${_trig:-0}" -eq 0 ]; then
     HEALTH_WARNING="⚠ Memory health: 0 trigger-match events in last 200 WAL entries (${_inj} injects). UserPromptSubmit hook may be silently failing — check settings.json timeout and ~/.claude/hooks/lib/wal-lock.sh presence."
   fi
@@ -1250,7 +1252,7 @@ fi
 
 # 3. Schema errors accumulated — surface to user.
 if [ -z "$HEALTH_WARNING" ] && [ -f "$WAL_FILE" ]; then
-  _schema_errs=$(tail -200 "$WAL_FILE" 2>/dev/null | grep -c '|schema-error|' 2>/dev/null || echo 0)
+  _schema_errs=$(tail -200 "$WAL_FILE" 2>/dev/null | grep -c '|schema-error|')
   if [ "${_schema_errs:-0}" -gt 0 ]; then
     _err_slugs=$(tail -200 "$WAL_FILE" 2>/dev/null | awk -F'|' '$2=="schema-error"{print $3}' | sort -u | head -5 | tr '\n' ' ')
     HEALTH_WARNING="⚠ Memory schema: ${_schema_errs} malformed frontmatter entries recently (${_err_slugs}). Fix closing --- in these files."
