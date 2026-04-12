@@ -289,6 +289,11 @@ assert "Outcome hook — negative detected" 'grep -q "outcome-negative.*wrong-ro
 echo '{"session_id":"outcome-test-session","tool_name":"Write","tool_input":{"file_path":"'"$OUTCOME_MEM"'/mistakes/brand-new-bug.md","content":"test"}}' | CLAUDE_MEMORY_DIR="$OUTCOME_MEM" bash "$HOME/.claude/hooks/memory-outcome.sh" 2>/dev/null
 assert "Outcome hook — new mistake detected" 'grep -q "outcome-new.*brand-new-bug" "$OUTCOME_MEM/.wal"'
 
+# Test: outcome hook — dedup same session write (regression for double outcome-new)
+echo '{"session_id":"outcome-test-session","tool_name":"Write","tool_input":{"file_path":"'"$OUTCOME_MEM"'/mistakes/brand-new-bug.md","content":"test"}}' | CLAUDE_MEMORY_DIR="$OUTCOME_MEM" bash "$HOME/.claude/hooks/memory-outcome.sh" 2>/dev/null
+OUTCOME_NEW_COUNT=$(grep -c "outcome-new|brand-new-bug|outcome-test-session" "$OUTCOME_MEM/.wal")
+assert "Outcome hook — outcome-new deduped within session" '[ "$OUTCOME_NEW_COUNT" -eq 1 ]'
+
 # Test: outcome hook — non-mistake file: no outcome entry, but cascade scan runs
 echo '{"session_id":"outcome-test-session","tool_name":"Write","tool_input":{"file_path":"'"$OUTCOME_MEM"'/feedback/test.md","content":"test"}}' | CLAUDE_MEMORY_DIR="$OUTCOME_MEM" bash "$HOME/.claude/hooks/memory-outcome.sh" 2>/dev/null
 OUTCOME_LINES=$(wc -l < "$OUTCOME_MEM/.wal")
@@ -1966,6 +1971,21 @@ assert "Trigger — «уже» skips match" '[ -z "$TR_OUT" ]'
 TR_OUT=$(echo '{"session_id":"trtest-neg3","prompt":"already fixed the tailwind hsl issue"}' | \
   CLAUDE_MEMORY_DIR="$TR_MEM" bash "$TR_HOOK" 2>/dev/null)
 assert "Trigger — «already» skips match" '[ -z "$TR_OUT" ]'
+
+# --- Test 16b: «ignore» negation → no match ---
+TR_OUT=$(echo '{"session_id":"trtest-neg4","prompt":"ignore tailwind hsl for now"}' | \
+  CLAUDE_MEMORY_DIR="$TR_MEM" bash "$TR_HOOK" 2>/dev/null)
+assert "Trigger — «ignore» skips match" '[ -z "$TR_OUT" ]'
+
+# --- Test 16c: «without» negation → no match ---
+TR_OUT=$(echo '{"session_id":"trtest-neg5","prompt":"do it without tailwind hsl"}' | \
+  CLAUDE_MEMORY_DIR="$TR_MEM" bash "$TR_HOOK" 2>/dev/null)
+assert "Trigger — «without» skips match" '[ -z "$TR_OUT" ]'
+
+# --- Test 16d: Russian «игнор» negation → no match ---
+TR_OUT=$(echo '{"session_id":"trtest-neg6","prompt":"игнорируй tailwind hsl правило"}' | \
+  CLAUDE_MEMORY_DIR="$TR_MEM" bash "$TR_HOOK" 2>/dev/null)
+assert "Trigger — «игнор» skips match" '[ -z "$TR_OUT" ]'
 
 # --- Test 17: project filter — mismatched project demoted vs global ---
 mkdir -p "$TR_MEM/projects"

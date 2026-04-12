@@ -131,10 +131,11 @@ match_prompt() {
     _boff=$(( ${#before} - 40 ))
     [ "$_boff" -lt 0 ] && _boff=0
     context=" ${before:$_boff}${lower_phrase}${after:0:40} "
-    # Skip if negated nearby — ru: не/без/уже/нет, en: already/fixed/skip/no/don't
+    # Skip if negated nearby — ru: не/без/уже/нет/игнор, en: already/fixed/skip/no/don't/ignore/without
     case "$context" in
-      *" не "*|*" без "*|*" уже "*|*" нет "*|*" нету "*|\
-      *" already "*|*" fixed "*|*" skip "*|*" no "*|*"don't"*|*"dont "*)
+      *" не "*|*" без "*|*" уже "*|*" нет "*|*" нету "*|*" игнор"*|\
+      *" already "*|*" fixed "*|*" skip "*|*" no "*|*"don't"*|*"dont "*|*"dont"|\
+      *" ignore "*|*" ignore"|*" without "*)
         continue ;;
     esac
     printf '%s' "$phrase"
@@ -286,7 +287,7 @@ if [ -n "$NEW_INJECTED" ]; then
   ' "$TODAY" "$SAFE_SESSION_ID" "$WAL_FILE" "$NEW_INJECTED" 2>/dev/null || true
 
   # Append to dedup list so repeated prompts don't re-inject
-  printf '%s' "$NEW_INJECTED" >> "$DEDUP_FILE" 2>/dev/null || true
+  wal_run_locked bash -c 'printf "%s" "$1" >> "$2"' _ "$NEW_INJECTED" "$DEDUP_FILE" 2>/dev/null || true
 fi
 
 # --- Emit hookSpecificOutput JSON ---

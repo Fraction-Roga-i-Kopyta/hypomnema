@@ -9,6 +9,9 @@ MEMORY_DIR="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}"
 PATTERNS_FILE="$MEMORY_DIR/.error-patterns"
 WAL_FILE="$MEMORY_DIR/.wal"
 
+# shellcheck source=lib/wal-lock.sh
+. "$(dirname "$0")/lib/wal-lock.sh" 2>/dev/null || true
+
 INPUT=$(cat)
 
 # Only process Bash tool calls
@@ -73,7 +76,7 @@ if [ -f "$WAL_FILE" ] && [ -n "$SAFE_SESSION_ID" ]; then
 fi
 
 # Log detection to WAL
-printf '%s|error-detect|%s|%s\n' "$TODAY" "$CAT" "$SAFE_SESSION_ID" >> "$WAL_FILE" 2>/dev/null
+wal_append "$TODAY|error-detect|$CAT|$SAFE_SESSION_ID" "error-detect|$CAT|$SAFE_SESSION_ID"
 
 # Cross-reference: check if similar mistake already exists
 SIMILAR=""

@@ -23,6 +23,9 @@ MAX_FILES=22
 MAX_CLUSTER=4
 TODAY=$(date +%Y-%m-%d)
 
+# shellcheck source=lib/wal-lock.sh
+. "$(dirname "$0")/lib/wal-lock.sh" 2>/dev/null || true
+
 # --- Main ---
 
 INPUT=$(cat)
@@ -534,7 +537,7 @@ if [ -f "$TFIDF_INDEX" ]; then
       ' "$TFIDF_INDEX")
     fi
   else
-    printf '%s|index-stale|tfidf|%s\n' "$TODAY" "$SESSION_ID" >> "$MEMORY_DIR/.wal" 2>/dev/null || true
+    wal_append "$TODAY|index-stale|tfidf|$SESSION_ID" "index-stale|tfidf|$SESSION_ID"
   fi
 fi
 
@@ -938,7 +941,7 @@ ${_cbody}
       _cluster_count=$((_cluster_count + 1))
 
       # WAL: log cluster-load event
-      printf '%s|cluster-load|%s|%s\n' "$TODAY" "$_slug" "${SESSION_ID//|/_}" >> "$MEMORY_DIR/.wal" 2>/dev/null || true
+      wal_append "$TODAY|cluster-load|$_slug|${SESSION_ID//|/_}" "cluster-load|$_slug|${SESSION_ID//|/_}"
     done < <(printf '%s\n' "$CLUSTER_CANDIDATES" | sort -t'|' -k1,1n | grep -v '^$')
   fi
 
@@ -959,7 +962,7 @@ ${_cbody}
 - **${_ptarget}** (via ${_psource} → ${_ptype})
 "
       # WAL: log cluster-load for provenance-linked files
-      printf '%s|cluster-load|%s|%s\n' "$TODAY" "$_ptarget" "${SESSION_ID//|/_}" >> "$MEMORY_DIR/.wal" 2>/dev/null || true
+      wal_append "$TODAY|cluster-load|$_ptarget|${SESSION_ID//|/_}" "cluster-load|$_ptarget|${SESSION_ID//|/_}"
       _prov_count=$((_prov_count + 1))
     done <<< "$CLUSTER_PROVENANCE"
   fi
