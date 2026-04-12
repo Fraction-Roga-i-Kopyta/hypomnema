@@ -1,6 +1,6 @@
 #!/bin/bash
 # Benchmark for memory-session-start.sh hook
-# Self-contained: creates fixtures in tmpdir, runs 15 scenarios, reports results
+# Self-contained: creates fixtures in tmpdir, runs 18 scenarios, reports results
 set -euo pipefail
 
 HOOK="$HOME/.claude/hooks/memory-session-start.sh"
@@ -11,7 +11,7 @@ MEMDIR="$TMPDIR/memory"
 trap 'rm -rf "$TMPDIR"' EXIT
 
 PASS=0; FAIL=0; TOTAL=0
-CAT_PRECISION=0; CAT_DOMAIN=0; CAT_PRIORITY=0; CAT_EDGE=0
+CAT_PRECISION=0; CAT_DOMAIN=0; CAT_PRIORITY=0; CAT_EDGE=0; CAT_V03=0
 RESULTS=""
 
 # ===== Create fixtures =====
@@ -28,6 +28,8 @@ status: active
 domains: [css, frontend]
 severity: major
 recurrence: 3
+decay_rate: normal
+ref_count: 5
 root-cause: "CSS variable not applied"
 prevention: "Check computed styles"
 ---
@@ -44,6 +46,8 @@ status: pinned
 domains: [db, backend]
 severity: critical
 recurrence: 5
+decay_rate: slow
+ref_count: 20
 root-cause: "String interpolation in SQL"
 prevention: "Use parameterized queries"
 ---
@@ -124,6 +128,8 @@ injected: 2026-01-01
 referenced: 2026-01-01
 status: active
 domains: [general]
+decay_rate: slow
+ref_count: 10
 ---
 Use consistent naming. Prefer const over let.
 EOF
@@ -448,6 +454,66 @@ else
   RESULTS="${RESULTS}$(printf '  %2d. %-40s %s\n' 15 'Prefix boundary' 'PASS')\n"
 fi
 
+# ===== v0.3 scenarios: ref_count auto-increment =====
+
+# 16. ref_count is incremented after injection
+# Run hook for backend context (sql-injection should be injected)
+OUTPUT_16=$(run_hook "bench-16" "/tmp/bench-backend")
+CTX_16=$(extract_context "$OUTPUT_16")
+TOTAL=$((TOTAL + 1))
+# Check sql-injection was injected
+if check_present "$CTX_16" "sql-injection"; then
+  # Now check if ref_count was incremented (was 20, should be 21)
+  NEW_RC=$(awk '/^---$/{n++; if(n>1)exit} n==1 && /^ref_count:/{sub(/^ref_count: */, ""); print}' "$MEMDIR/mistakes/sql-injection.md")
+  if [ "${NEW_RC:-0}" -gt 20 ]; then
+    PASS=$((PASS + 1)); CAT_V03=$((CAT_V03 + 1))
+    RESULTS="${RESULTS}$(printf '  %2d. %-40s %s\n' 16 'ref_count auto-increment' 'PASS')\n"
+  else
+    FAIL=$((FAIL + 1))
+    RESULTS="${RESULTS}$(printf '  %2d. %-40s %s\n' 16 'ref_count auto-increment' 'FAIL')\n"
+    RESULTS="${RESULTS}  ref_count=${NEW_RC:-missing}, expected >20\n"
+  fi
+else
+  FAIL=$((FAIL + 1))
+  RESULTS="${RESULTS}$(printf '  %2d. %-40s %s\n' 16 'ref_count auto-increment' 'FAIL')\n"
+  RESULTS="${RESULTS}  sql-injection not injected (precondition)\n"
+fi
+
+# 17. ref_count incremented for feedback too
+# code-style (general domain) should be injected in any context
+RC_BEFORE_17=$(awk '/^---$/{n++; if(n>1)exit} n==1 && /^ref_count:/{sub(/^ref_count: */, ""); print}' "$MEMDIR/feedback/code-style.md")
+OUTPUT_17=$(run_hook "bench-17" "/tmp/bench-backend")
+CTX_17=$(extract_context "$OUTPUT_17")
+TOTAL=$((TOTAL + 1))
+if check_present "$CTX_17" "code-style"; then
+  RC_AFTER_17=$(awk '/^---$/{n++; if(n>1)exit} n==1 && /^ref_count:/{sub(/^ref_count: */, ""); print}' "$MEMDIR/feedback/code-style.md")
+  if [ "${RC_AFTER_17:-0}" -gt "${RC_BEFORE_17:-0}" ]; then
+    PASS=$((PASS + 1)); CAT_V03=$((CAT_V03 + 1))
+    RESULTS="${RESULTS}$(printf '  %2d. %-40s %s\n' 17 'ref_count feedback increment' 'PASS')\n"
+  else
+    FAIL=$((FAIL + 1))
+    RESULTS="${RESULTS}$(printf '  %2d. %-40s %s\n' 17 'ref_count feedback increment' 'FAIL')\n"
+    RESULTS="${RESULTS}  ref_count: ${RC_BEFORE_17} -> ${RC_AFTER_17}, expected increment\n"
+  fi
+else
+  FAIL=$((FAIL + 1))
+  RESULTS="${RESULTS}$(printf '  %2d. %-40s %s\n' 17 'ref_count feedback increment' 'FAIL')\n"
+  RESULTS="${RESULTS}  code-style not injected (precondition)\n"
+fi
+
+# 18. decay_rate field preserved (not corrupted by hook)
+OUTPUT_18=$(run_hook "bench-18" "/tmp/bench-proj")
+TOTAL=$((TOTAL + 1))
+DECAY_18=$(awk '/^---$/{n++; if(n>1)exit} n==1 && /^decay_rate:/{sub(/^decay_rate: */, ""); print}' "$MEMDIR/mistakes/css-bug.md")
+if [ "$DECAY_18" = "normal" ]; then
+  PASS=$((PASS + 1)); CAT_V03=$((CAT_V03 + 1))
+  RESULTS="${RESULTS}$(printf '  %2d. %-40s %s\n' 18 'decay_rate preserved after injection' 'PASS')\n"
+else
+  FAIL=$((FAIL + 1))
+  RESULTS="${RESULTS}$(printf '  %2d. %-40s %s\n' 18 'decay_rate preserved after injection' 'FAIL')\n"
+  RESULTS="${RESULTS}  decay_rate=${DECAY_18:-missing}, expected 'normal'\n"
+fi
+
 # ===== Report =====
 echo "============================================"
 echo "  Memory Hook Benchmark Results"
@@ -462,6 +528,7 @@ printf "  Precision:  %d / 4\n" "$CAT_PRECISION"
 printf "  Domain:     %d / 4\n" "$CAT_DOMAIN"
 printf "  Priority:   %d / 3\n" "$CAT_PRIORITY"
 printf "  Edge:       %d / 4\n" "$CAT_EDGE"
+printf "  v0.3:       %d / 3\n" "$CAT_V03"
 echo "--------------------------------------------"
 
 [ "$PASS" -eq "$TOTAL" ] && echo "  ALL PASSED" || echo "  FAILURES: $FAIL"
