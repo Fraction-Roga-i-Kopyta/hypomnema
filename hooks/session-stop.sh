@@ -45,15 +45,16 @@ lifecycle_rotate() {
   awk '
   { gsub(/\r/, "") }
   FNR == 1 {
-    if (prev_file != "") printf "%s\t%s\t%s\t%s\n", prev_file, status, ref, created
-    in_fm = 0; n = 0; status = "_empty_"; ref = ""; created = ""; prev_file = FILENAME
+    if (prev_file != "") printf "%s\t%s\t%s\t%s\t%s\n", prev_file, status, ref, created, decay
+    in_fm = 0; n = 0; status = "_empty_"; ref = ""; created = ""; decay = ""; prev_file = FILENAME
   }
   /^---$/ { n++; if (n==1) in_fm=1; if (n==2) in_fm=0 }
   in_fm && /^status:/ { sub(/^status: */, ""); status = $0 }
   in_fm && /^referenced:/ { sub(/^referenced: */, ""); ref = $0 }
   in_fm && /^created:/ { sub(/^created: */, ""); created = $0 }
-  END { if (prev_file != "") printf "%s\t%s\t%s\t%s\n", prev_file, status, ref, created }
-  ' "${all_files[@]}" 2>/dev/null | while IFS=$'\t' read -r f file_status ref_date created_date; do
+  in_fm && /^decay_rate:/ { sub(/^decay_rate: */, ""); decay = $0 }
+  END { if (prev_file != "") printf "%s\t%s\t%s\t%s\t%s\n", prev_file, status, ref, created, decay }
+  ' "${all_files[@]}" 2>/dev/null | while IFS=$'\t' read -r f file_status ref_date created_date file_decay; do
     [ "$file_status" = "pinned" ] && continue
     [ "$file_status" = "archived" ] && continue
 
@@ -68,15 +69,22 @@ lifecycle_rotate() {
     fi
     local age=$(( (NOW_SEC - ref_sec) / 86400 ))
 
+    # decay_rate from frontmatter overrides type-based defaults
     local stale_days=30 archive_days=90
-    case "$f" in
-      */mistakes/*)   stale_days=60;  archive_days=180 ;;
-      */strategies/*) stale_days=90;  archive_days=180 ;;
-      */knowledge/*)  stale_days=90;  archive_days=365 ;;
-      */feedback/*)   stale_days=45;  archive_days=120 ;;
-      */notes/*)      stale_days=30;  archive_days=90  ;;
-      */decisions/*)  stale_days=90;  archive_days=365 ;;
-      */journal/*)    stale_days=30;  archive_days=90  ;;
+    case "$file_decay" in
+      slow)   stale_days=180; archive_days=365 ;;
+      fast)   stale_days=14;  archive_days=45  ;;
+      normal|"")
+        case "$f" in
+          */mistakes/*)   stale_days=60;  archive_days=180 ;;
+          */strategies/*) stale_days=90;  archive_days=180 ;;
+          */knowledge/*)  stale_days=90;  archive_days=365 ;;
+          */feedback/*)   stale_days=45;  archive_days=120 ;;
+          */notes/*)      stale_days=30;  archive_days=90  ;;
+          */decisions/*)  stale_days=90;  archive_days=365 ;;
+          */journal/*)    stale_days=30;  archive_days=90  ;;
+        esac
+        ;;
     esac
 
     if [ "$file_status" = "stale" ] && [ "$age" -gt "$archive_days" ]; then
