@@ -440,6 +440,9 @@ if [ -f "$WAL_FILE" ]; then
     $1 >= cutoff && $2 == "outcome-negative" {
       neg_count[$3]++
     }
+    $1 >= cutoff && $2 == "trigger-match" {
+      pos_count[$3]++
+    }
     $1 >= cutoff && $2 == "strategy-used" {
       strat_used[$3]++
     }
@@ -1091,6 +1094,15 @@ if [ -f "$WAL_FILE" ]; then
   fi
 fi
 
+# v0.5: always write dedup list (even if empty) so user-prompt-submit knows session started
+SAFE_MARKER_ID_V05="${SESSION_ID//\//_}"
+DEDUP_FILE_V05="/tmp/.claude-injected-${SAFE_MARKER_ID_V05}.list"
+{
+  for f in "${INJECTED_FILES[@]}"; do
+    basename "$f" .md
+  done
+} > "$DEDUP_FILE_V05" 2>/dev/null || true
+
 # Nothing to inject
 [ -z "$CONTEXT" ] && exit 0
 
@@ -1123,6 +1135,7 @@ WAL_FILE="$MEMORY_DIR/.wal"
     printf '%s|inject|%s|%s\n' "$TODAY" "$(basename "$f" .md)" "$SAFE_SESSION_ID"
   done
 } >> "$WAL_FILE" 2>/dev/null || true
+
 # Rotate WAL: smart compaction (aggregate old entries, preserve spread data)
 if [ -f "$WAL_FILE" ] && [ "$(wc -l < "$WAL_FILE" 2>/dev/null)" -gt 1200 ]; then
   CLAUDE_MEMORY_DIR="$MEMORY_DIR" bash "$(dirname "$0")/wal-compact.sh" 2>/dev/null || \

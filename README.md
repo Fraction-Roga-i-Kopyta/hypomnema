@@ -8,7 +8,7 @@ Persistent memory system for [Claude Code](https://docs.anthropic.com/en/docs/cl
 
 Claude Code starts every session from zero. Hypomnema fixes that.
 
-81 smoke tests, 15 benchmarks, hook time ~0.3 sec.
+144 smoke tests, 25 benchmarks, hook time ~0.3 sec.
 
 ## The problem
 
@@ -41,6 +41,9 @@ You ←→ Claude Code ←→ ~/.claude/memory/
 
          PreCompact hook ───┤── checkpoint reminder before context compression
                             └── stronger warning if nothing saved in session
+
+         UserPromptSubmit ──┤── v0.5 context triggers: match `triggers:` frontmatter
+                            └── against prompt text, inject matched records (cap 4)
 ```
 
 ## What gets remembered
@@ -213,6 +216,39 @@ The hooks activate on next session start.
 3. Outputs reminder: "Save unsaved insights now"
 4. Stronger warning if nothing was saved this session
 
+### UserPromptSubmit hook (v0.5)
+
+1. Fires on every user prompt
+2. Scans memory files for `triggers:` (array) / `trigger:` (single) frontmatter fields
+3. Matches phrases against prompt text as case-insensitive substring (Latin + Cyrillic)
+4. Sorts candidates: `pinned` > `active`; tiebreak by severity, recurrence, ref_count
+5. Dedups against SessionStart-injected slugs via `/tmp/.claude-injected-${SESSION_ID}.list`
+6. Caps at `MAX_TRIGGERED=4` to prevent noisy injections on broad prompts
+7. Emits matched records under `## Triggered (from prompt)` section
+8. For mistakes with empty body — synthesizes from `root-cause` + `prevention` frontmatter
+9. Logs `trigger-match|<slug>|<session_id>` to WAL; counts as positive signal in future scoring
+
+## Cluster activation (v0.4)
+
+Memory files declare typed relationships in `related:` frontmatter:
+
+```yaml
+related:
+  - debugging-approach: reinforces       # two rules point at the same thing
+  - css-layout-debugging: instance_of    # concrete mistake → general strategy
+  - old-api-rule: supersedes             # new rule replaces old
+  - legacy-approach: contradicts         # explicit conflict (priority goes to newer)
+```
+
+During SessionStart, after the main scoring pass:
+
+1. **Forward scan** — each injected file's `related:` targets are pulled in if they score above zero
+2. **Reverse scan** — non-injected files that reference an injected slug are also candidates
+3. **Cluster cap +4** — up to four additional files above `MAX_FILES`
+4. **Provenance markers** — cluster-loaded records show `(via source → type)` in output
+5. **Contradicts** — the newer record (by `referenced` date) gets `[ПРИОРИТЕТ]` header annotation; a `⚠ Конфликт` warning explains which is outdated
+6. **Cascade signals** — when a file with `instance_of` children is updated, the children get `[REVIEW: parent updated YYYY-MM-DD]` markers for 14 days via the outcome hook writing `cascade-review` WAL events
+
 ## Lifecycle
 
 Every memory file has two date fields:
@@ -260,10 +296,19 @@ keywords: [css, layout]  # for content-aware matching
 domains: [css, frontend] # for domain filtering
 
 # Strategies only
-trigger: "when to apply this"
+trigger: "when to apply this"   # legacy single phrase
 success_count: 3
 keywords: [css, debugging]
 domains: [css, frontend]
+
+# v0.4 — typed links between memory files
+related:
+  - wrong-root-cause-diagnosis: instance_of   # reinforces | contradicts | instance_of | supersedes
+
+# v0.5 — prompt triggers (case-insensitive substring match)
+triggers:
+  - "css layout"
+  - "flex gap"
 ---
 ```
 
@@ -337,10 +382,11 @@ Negative outcomes reduce the record's WAL score over time. Records that repeated
 ## Testing
 
 ```bash
-# 81 smoke tests (injection, domain filtering, WAL, TF-IDF, outcome, error detection, dedup, decisions, precompact, cold start)
+# 144 smoke tests (injection, domain filtering, WAL, TF-IDF, outcome, error detection, dedup,
+#                 decisions, precompact, cold start, cluster activation, cascade signals, prompt triggers)
 bash hooks/test-memory-hooks.sh
 
-# 15 benchmark scenarios (precision, domain, priority, edge cases)
+# 25 benchmark scenarios (precision, domain, priority, edge cases, v0.3 ref_count)
 bash hooks/bench-memory.sh
 ```
 
@@ -383,7 +429,11 @@ The format (YAML frontmatter + markdown) is a stable contract. Any future engine
 
 **Why spaced repetition, not raw frequency?** A record injected 50 times in one benchmarking session is not 50× more important. Spread (unique days) rewards consistent real usage. Decay prevents stale records from hogging slots. Negative ratio deprioritizes warnings that don't actually help.
 
-**Why three hooks?** SessionStart handles injection (the read path). Stop handles lifecycle and continuity (the maintenance path). PostToolUse handles outcome tracking (the feedback path). Each has a clear single responsibility and different timing constraints.
+**Why separate hooks?** SessionStart handles baseline injection (the cold read path). UserPromptSubmit handles prompt-reactive injection (v0.5 — explicit task context triggers). Stop handles lifecycle and continuity (maintenance). PostToolUse handles outcome tracking and cascade detection (feedback). Each has a clear single responsibility and different timing constraints.
+
+**Why cluster activation?** Related memories don't just sit in separate files — a mistake is often an instance of a general rule, a strategy reinforces a feedback note. At injection time, the cluster pass pulls in the graph neighborhood of each primary record, up to +4 files, with provenance markers showing *why* each was included. This surfaces context that keyword-only scoring would miss.
+
+**Why prompt triggers?** CWD/git scoring catches the general shape of a task (*"frontend files changed, css domain"*). But the user's first sentence often names the exact symptom (*"tailwind hsl"*, *"410 gone"*). Triggers close that gap — a file declares its own activation phrase, and the UserPromptSubmit hook matches it directly against what the user just typed.
 
 ## License
 
