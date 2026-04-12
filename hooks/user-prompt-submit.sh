@@ -19,10 +19,24 @@ TODAY=$(date +%Y-%m-%d)
 INPUT=$(cat)
 SESSION_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
 PROMPT=$(printf '%s' "$INPUT" | jq -r '.prompt // empty' 2>/dev/null)
+CWD=$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)
 
 [ -z "$SESSION_ID" ] && exit 0
 [ -z "$PROMPT" ] && exit 0
 [ -d "$MEMORY_DIR" ] || exit 0
+
+# Detect current project from cwd via projects.json (matches session-start logic).
+CURRENT_PROJECT=""
+PROJECTS_JSON="$MEMORY_DIR/projects.json"
+if [ -n "$CWD" ] && [ -f "$PROJECTS_JSON" ] && jq empty "$PROJECTS_JSON" 2>/dev/null; then
+  while IFS= read -r prefix; do
+    case "$CWD" in
+      "$prefix"|"$prefix"/*)
+        CURRENT_PROJECT=$(jq -r --arg k "$prefix" '.[$k] // empty' "$PROJECTS_JSON" 2>/dev/null)
+        break ;;
+    esac
+  done < <(jq -r 'to_entries | sort_by(.key | length) | reverse | .[].key' "$PROJECTS_JSON" 2>/dev/null)
+fi
 
 # Strip fenced code blocks, inline backtick code, and blockquote lines before matching.
 # This prevents triggers from matching quoted examples like `"tailwind hsl"` or meta-text
@@ -46,18 +60,19 @@ mkdir -p "$RUNTIME_DIR" 2>/dev/null || true
 
 # --- Extract frontmatter fields from a memory file ---
 # Output (tab-separated, single line):
-#   status<TAB>severity<TAB>recurrence<TAB>ref_count<TAB>trigger_joined
-# where trigger_joined is newline-separated phrases (trigger + triggers[]).
+#   status<TAB>severity<TAB>recurrence<TAB>ref_count<TAB>project<TAB>trigger_joined
+# where trigger_joined is \x1f-separated phrases (trigger + triggers[]).
 extract_meta() {
   local file="$1"
   awk '
-    BEGIN { fm_count = 0; printed = 0; status = ""; severity = ""; recurrence = 0; ref_count = 0; trig_single = ""; in_trigs = 0 }
+    BEGIN { fm_count = 0; printed = 0; status = ""; severity = ""; recurrence = 0; ref_count = 0; project = ""; trig_single = ""; in_trigs = 0 }
     /^---$/ { fm_count++; if (fm_count >= 2) { print_out(); printed = 1; exit } next }
     fm_count != 1 { next }
     /^status:/        { val = $0; sub(/^status: */, "", val); gsub(/["'"'"']/, "", val); status = val; next }
     /^severity:/      { val = $0; sub(/^severity: */, "", val); gsub(/["'"'"']/, "", val); severity = val; next }
     /^recurrence:/    { val = $0; sub(/^recurrence: */, "", val); recurrence = val + 0; next }
     /^ref_count:/     { val = $0; sub(/^ref_count: */, "", val); ref_count = val + 0; next }
+    /^project:/       { val = $0; sub(/^project: */, "", val); gsub(/["'"'"']/, "", val); project = val; next }
     /^trigger:/       {
       val = $0
       sub(/^trigger: */, "", val)
@@ -83,28 +98,41 @@ extract_meta() {
         if (joined != "") joined = joined SEP trig_arr[i]
         else joined = trig_arr[i]
       }
-      printf "%s\t%s\t%d\t%d\t%s", status, severity, recurrence, ref_count, joined
+      printf "%s\t%s\t%d\t%d\t%s\t%s", status, severity, recurrence, ref_count, project, joined
     }
   ' "$file"
 }
 
-# --- Case-insensitive substring match ---
-# Returns 0 if any phrase in stdin matches $LOWER_PROMPT.
+# --- Case-insensitive substring match with negation context check ---
+# Returns 0 if any phrase matches $LOWER_PROMPT without negation in ±40 char window.
 # Echoes the matched phrase on stdout.
 match_prompt() {
   local phrases="$1"
-  local phrase lower_phrase
+  local phrase lower_phrase before after context
   # Phrases separated by \x1f (Unit Separator) to avoid collision with newlines in values
   local IFS=$'\x1f'
   for phrase in $phrases; do
     [ -z "$phrase" ] && continue
     lower_phrase=$(printf '%s' "$phrase" | tr '[:upper:]' '[:lower:]')
     case "$LOWER_PROMPT" in
-      *"$lower_phrase"*)
-        printf '%s' "$phrase"
-        return 0
-        ;;
+      *"$lower_phrase"*) ;;
+      *) continue ;;
     esac
+    # Extract ±40 chars around match for negation sniffing.
+    # Bash 3.2 (macOS default) returns "" for `${var: -N}` when N > len; compute offset explicitly.
+    before="${LOWER_PROMPT%%${lower_phrase}*}"
+    after="${LOWER_PROMPT#*${lower_phrase}}"
+    _boff=$(( ${#before} - 40 ))
+    [ "$_boff" -lt 0 ] && _boff=0
+    context=" ${before:$_boff}${lower_phrase}${after:0:40} "
+    # Skip if negated nearby — ru: не/без/уже/нет, en: already/fixed/skip/no/don't
+    case "$context" in
+      *" не "*|*" без "*|*" уже "*|*" нет "*|*" нету "*|\
+      *" already "*|*" fixed "*|*" skip "*|*" no "*|*"don't"*|*"dont "*)
+        continue ;;
+    esac
+    printf '%s' "$phrase"
+    return 0
   done
   return 1
 }
@@ -140,7 +168,8 @@ for _dir in mistakes feedback strategies knowledge notes; do
     _severity=$(printf '%s' "$_meta" | cut -f2)
     _recurrence=$(printf '%s' "$_meta" | cut -f3)
     _ref_count=$(printf '%s' "$_meta" | cut -f4)
-    _phrases=$(printf '%s' "$_meta" | cut -f5-)
+    _project=$(printf '%s' "$_meta" | cut -f5)
+    _phrases=$(printf '%s' "$_meta" | cut -f6-)
 
     # Status filter
     case "$_status" in active|pinned) ;; *) continue ;; esac
@@ -151,14 +180,21 @@ for _dir in mistakes feedback strategies knowledge notes; do
     _matched=$(match_prompt "$_phrases") || continue
 
     # Build priority key (higher = better, sort -r)
-    # Fields: pinned=1 active=0; severity major=2 minor=1 none=0; recurrence; ref_count
+    # Fields: project_rank (match=2, global=1, mismatch=0); status (pinned=1, active=0);
+    # severity (major=2, minor=1, none=0); recurrence; ref_count
+    _project_rank=0
+    if [ -z "$_project" ] || [ "$_project" = "global" ]; then
+      _project_rank=1
+    elif [ -n "$CURRENT_PROJECT" ] && [ "$_project" = "$CURRENT_PROJECT" ]; then
+      _project_rank=2
+    fi
     _status_rank=0
     [ "$_status" = "pinned" ] && _status_rank=1
     _sev_rank=0
     case "$_severity" in major) _sev_rank=2 ;; minor) _sev_rank=1 ;; esac
 
     # Zero-pad for lex sort
-    _key=$(printf '%d.%d.%06d.%06d' "$_status_rank" "$_sev_rank" "$_recurrence" "$_ref_count")
+    _key=$(printf '%d.%d.%d.%06d.%06d' "$_project_rank" "$_status_rank" "$_sev_rank" "$_recurrence" "$_ref_count")
 
     CANDIDATES="${CANDIDATES}
 ${_key}	${_slug}	${_f}	${_matched}"
