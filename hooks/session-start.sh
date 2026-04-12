@@ -1112,8 +1112,10 @@ mkdir -p "$RUNTIME_DIR_V05" 2>/dev/null || true
   done
 } > "$DEDUP_FILE_V05" 2>/dev/null || true
 
-# Nothing to inject
-[ -z "$CONTEXT" ] && exit 0
+# Nothing to inject — but don't exit yet; health warnings (broken hooks,
+# schema errors) must surface even when no memories match the session.
+_EARLY_EMPTY_CONTEXT=0
+[ -z "$CONTEXT" ] && _EARLY_EMPTY_CONTEXT=1
 
 # Cap total injected files (cluster files are ABOVE MAX_FILES, up to MAX_FILES + MAX_CLUSTER)
 _TOTAL_CAP=$((MAX_FILES + MAX_CLUSTER))
@@ -1183,7 +1185,30 @@ AGENT_CTX="$MEMORY_DIR/_agent_context.md"
   fi
   if [ -n "$FEEDBACK_MD" ]; then
     echo "## Feedback"
-    printf '%s\n' "$FEEDBACK_MD" | awk '/^### /{if(name){print name; if(body)print body; if(why)print why}; name=$0; body=""; why=""; next} body=="" && /^[^#*]/ && !/^$/{body=$0; next} /^\*\*Why:\*\*/{why=$0} END{if(name){print name; if(body)print body; if(why)print why}}' | head -20
+    # Capture ALL body lines until **Why:** (previous impl kept only first, losing multi-rule feedback like code-approach).
+    printf '%s\n' "$FEEDBACK_MD" | awk '
+      /^### / {
+        if (name) {
+          print name
+          if (body) print body
+          if (why)  print why
+        }
+        name = $0; body = ""; why = ""; next
+      }
+      /^\*\*Why:\*\*/ { why = $0; next }
+      /^[^#*]/ && !/^$/ {
+        if (body == "") body = $0
+        else            body = body "\n" $0
+        next
+      }
+      END {
+        if (name) {
+          print name
+          if (body) print body
+          if (why)  print why
+        }
+      }
+    ' | head -40
     echo ""
   fi
   if [ -n "$STRATEGIES_MD" ]; then
@@ -1199,16 +1224,42 @@ AGENT_CTX="$MEMORY_DIR/_agent_context.md"
   echo "Full context: \`~/.claude/memory/\`"
 } > "$AGENT_CTX" 2>/dev/null || true
 
-# Health check: warn if UserPromptSubmit trigger-matching appears broken.
-# Trigger: 50+ inject events (hook has been running) but 0 trigger-match.
+# Health check: detect silent failures.
 HEALTH_WARNING=""
-if [ -f "$WAL_FILE" ]; then
+
+# 1. Broken symlinks / missing companion scripts (C3 risk: hooks are symlinks
+#    to dev folder; a rename would make hooks fail silently).
+_hook_dir="$(dirname "$0")"
+_broken=""
+for _req in "$_hook_dir/lib/wal-lock.sh" "$_hook_dir/wal-compact.sh" "$_hook_dir/regen-memory-index.sh"; do
+  [ -f "$_req" ] || _broken="${_broken}${_broken:+, }$(basename "$_req")"
+done
+if [ -n "$_broken" ]; then
+  HEALTH_WARNING="⚠ Memory hooks broken — missing: $_broken. Likely cause: symlink target moved. Re-run hypomnema/install.sh."
+fi
+
+# 2. UserPromptSubmit hook silent-fail signal: 50+ injects but 0 trigger-match.
+if [ -z "$HEALTH_WARNING" ] && [ -f "$WAL_FILE" ]; then
   _wal_tail=$(tail -200 "$WAL_FILE" 2>/dev/null)
   _inj=$(printf '%s\n' "$_wal_tail" | grep -c '|inject|' 2>/dev/null || echo 0)
   _trig=$(printf '%s\n' "$_wal_tail" | grep -c '|trigger-match|' 2>/dev/null || echo 0)
   if [ "${_inj:-0}" -gt 50 ] && [ "${_trig:-0}" -eq 0 ]; then
     HEALTH_WARNING="⚠ Memory health: 0 trigger-match events in last 200 WAL entries (${_inj} injects). UserPromptSubmit hook may be silently failing — check settings.json timeout and ~/.claude/hooks/lib/wal-lock.sh presence."
   fi
+fi
+
+# 3. Schema errors accumulated — surface to user.
+if [ -z "$HEALTH_WARNING" ] && [ -f "$WAL_FILE" ]; then
+  _schema_errs=$(tail -200 "$WAL_FILE" 2>/dev/null | grep -c '|schema-error|' 2>/dev/null || echo 0)
+  if [ "${_schema_errs:-0}" -gt 0 ]; then
+    _err_slugs=$(tail -200 "$WAL_FILE" 2>/dev/null | awk -F'|' '$2=="schema-error"{print $3}' | sort -u | head -5 | tr '\n' ' ')
+    HEALTH_WARNING="⚠ Memory schema: ${_schema_errs} malformed frontmatter entries recently (${_err_slugs}). Fix closing --- in these files."
+  fi
+fi
+
+# Nothing to inject AND no health warnings → silent exit.
+if [ "$_EARLY_EMPTY_CONTEXT" = "1" ] && [ -z "$HEALTH_WARNING" ]; then
+  exit 0
 fi
 
 # Output for Claude Code

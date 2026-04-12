@@ -22,6 +22,11 @@ RESPONSE="${STDOUT}
 ${STDERR}"
 [ -z "$STDOUT" ] && [ -z "$STDERR" ] && exit 0
 
+# Truncate large outputs to 50 KB — protects awk heredoc from megabyte blasts.
+if [ "${#RESPONSE}" -gt 50000 ]; then
+  RESPONSE="${RESPONSE:0:50000}"
+fi
+
 # Need patterns file
 [ -f "$PATTERNS_FILE" ] || exit 0
 

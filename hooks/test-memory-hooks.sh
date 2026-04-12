@@ -2140,6 +2140,59 @@ assert "Feedback — trigger-silent written when slug not referenced" \
 
 rm -rf "$FB_DIR" "$FB_MARKER"
 
+# --- Test 21: schema-error logged for broken frontmatter ---
+SCH_DIR=$(mktemp -d); SCH_MEM="$SCH_DIR/memory"
+mkdir -p "$SCH_MEM/mistakes"
+cat > "$SCH_MEM/mistakes/missing-close.md" << 'EOF'
+---
+type: mistake
+status: active
+trigger: "sch phrase"
+EOF
+# Deliberately missing closing ---
+
+echo '{"session_id":"sch-test","prompt":"unrelated text"}' | \
+  CLAUDE_MEMORY_DIR="$SCH_MEM" bash "$TR_HOOK" 2>/dev/null >/dev/null
+assert "Schema — missing closing --- logged as schema-error" \
+  'grep -q "schema-error|missing-close|sch-test" "$SCH_MEM/.wal"'
+
+# De-dup: calling again in same day should NOT append another entry
+echo '{"session_id":"sch-test2","prompt":"another"}' | \
+  CLAUDE_MEMORY_DIR="$SCH_MEM" bash "$TR_HOOK" 2>/dev/null >/dev/null
+assert "Schema — de-duplicated within same day" \
+  '[ "$(grep -c "schema-error|missing-close" "$SCH_MEM/.wal")" -eq 1 ]'
+
+rm -rf "$SCH_DIR"
+
+# --- Test 22: health-check — schema-error surfaces in SessionStart output ---
+HC_DIR=$(mktemp -d); HC_MEM="$HC_DIR/memory"
+mkdir -p "$HC_MEM/mistakes" "$HC_MEM/projects"
+# Create one valid mistake so session-start has something to inject (otherwise early-exits)
+cat > "$HC_MEM/mistakes/valid.md" << 'EOF'
+---
+type: mistake
+status: active
+severity: major
+recurrence: 1
+root-cause: "something"
+prevention: "fix it"
+---
+EOF
+echo "{}" > "$HC_MEM/projects.json"
+# Pre-populate WAL with schema-error events
+printf '%s|schema-error|broken-one|prev-session\n' "$(date +%Y-%m-%d)" > "$HC_MEM/.wal"
+printf '%s|schema-error|broken-two|prev-session\n' "$(date +%Y-%m-%d)" >> "$HC_MEM/.wal"
+
+HC_OUT=$(echo '{"session_id":"hc-test","cwd":"/tmp"}' | \
+  CLAUDE_MEMORY_DIR="$HC_MEM" bash "$HOME/.claude/hooks/memory-session-start.sh" 2>/dev/null)
+HC_CTX=$(printf '%s' "$HC_OUT" | jq -r '.hookSpecificOutput.additionalContext // ""')
+assert "Health — schema-error count surfaced in SessionStart" \
+  'printf "%s" "$HC_CTX" | grep -q "schema.*2"'
+assert "Health — names of broken files surfaced" \
+  'printf "%s" "$HC_CTX" | grep -q "broken-one\|broken-two"'
+
+rm -rf "$HC_DIR"
+
 # --- Test 10: session-start writes dedup list ---
 SS_HOOK="$(dirname "$0")/session-start.sh"
 mkdir -p /tmp/trtest-ss-proj

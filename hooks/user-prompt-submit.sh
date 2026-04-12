@@ -50,7 +50,8 @@ CLEAN_PROMPT=$(printf '%s' "$PROMPT" | awk '
 ' | sed 's/`[^`]*`//g')
 LOWER_PROMPT=$(printf '%s' "$CLEAN_PROMPT" | tr '[:upper:]' '[:lower:]')
 
-SAFE_SESSION_ID="${SESSION_ID//\//_}"
+SAFE_SESSION_ID="${SESSION_ID//|/_}"
+SAFE_SESSION_ID="${SAFE_SESSION_ID//\//_}"
 RUNTIME_DIR="$MEMORY_DIR/.runtime"
 DEDUP_FILE="$RUNTIME_DIR/injected-${SAFE_SESSION_ID}.list"
 WAL_FILE="$MEMORY_DIR/.wal"
@@ -68,6 +69,7 @@ extract_meta() {
   awk '
     BEGIN { fm_count = 0; printed = 0; status = ""; severity = ""; recurrence = 0; ref_count = 0; project = ""; created = ""; trig_single = ""; in_trigs = 0 }
     /^---$/ { fm_count++; if (fm_count >= 2) { print_out(); printed = 1; exit } next }
+    fm_count == 0 && !/^---$/ && !/^$/ { has_nonfm = 1 }
     fm_count != 1 { next }
     /^status:/        { val = $0; sub(/^status: */, "", val); gsub(/["'"'"']/, "", val); status = val; next }
     /^severity:/      { val = $0; sub(/^severity: */, "", val); gsub(/["'"'"']/, "", val); severity = val; next }
@@ -91,7 +93,10 @@ extract_meta() {
       next
     }
     in_trigs && !/^  / && !/^$/ { in_trigs = 0 }
-    END { if (!printed) print_out() }
+    END {
+      if (fm_count < 2) { printf "SCHEMA_ERROR"; exit }
+      if (!printed) print_out()
+    }
     function print_out(   i, joined, SEP) {
       SEP = "\x1f"
       joined = ""
@@ -165,6 +170,15 @@ for _dir in mistakes feedback strategies knowledge notes; do
     # Extract metadata + triggers
     _meta=$(extract_meta "$_f" 2>/dev/null)
     [ -z "$_meta" ] && continue
+
+    # Schema validation: malformed frontmatter → log once per day, skip
+    if [ "$_meta" = "SCHEMA_ERROR" ]; then
+      if ! grep -q "^${TODAY}|schema-error|${_slug}|" "$WAL_FILE" 2>/dev/null; then
+        printf '%s|schema-error|%s|%s\n' "$TODAY" "$_slug" "$SAFE_SESSION_ID" |
+          wal_run_locked bash -c 'cat >> "$1"' _ "$WAL_FILE" 2>/dev/null || true
+      fi
+      continue
+    fi
 
     _status=$(printf '%s' "$_meta" | cut -f1)
     _severity=$(printf '%s' "$_meta" | cut -f2)
