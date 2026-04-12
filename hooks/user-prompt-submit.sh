@@ -24,11 +24,25 @@ PROMPT=$(printf '%s' "$INPUT" | jq -r '.prompt // empty' 2>/dev/null)
 [ -z "$PROMPT" ] && exit 0
 [ -d "$MEMORY_DIR" ] || exit 0
 
-LOWER_PROMPT=$(printf '%s' "$PROMPT" | tr '[:upper:]' '[:lower:]')
+# Strip fenced code blocks, inline backtick code, and blockquote lines before matching.
+# This prevents triggers from matching quoted examples like `"tailwind hsl"` or meta-text
+# inside ``` fences (the 2026-04-12 false-positive that motivated this fix).
+CLEAN_PROMPT=$(printf '%s' "$PROMPT" | awk '
+  /^[[:space:]]*```/ { in_fence = !in_fence; next }
+  in_fence { next }
+  /^[[:space:]]*>/ { next }
+  { print }
+' | sed 's/`[^`]*`//g')
+LOWER_PROMPT=$(printf '%s' "$CLEAN_PROMPT" | tr '[:upper:]' '[:lower:]')
 
 SAFE_SESSION_ID="${SESSION_ID//\//_}"
-DEDUP_FILE="/tmp/.claude-injected-${SAFE_SESSION_ID}.list"
+RUNTIME_DIR="$MEMORY_DIR/.runtime"
+DEDUP_FILE="$RUNTIME_DIR/injected-${SAFE_SESSION_ID}.list"
 WAL_FILE="$MEMORY_DIR/.wal"
+mkdir -p "$RUNTIME_DIR" 2>/dev/null || true
+
+# shellcheck source=lib/wal-lock.sh
+. "$(dirname "$0")/lib/wal-lock.sh" 2>/dev/null || true
 
 # --- Extract frontmatter fields from a memory file ---
 # Output (tab-separated, single line):
@@ -187,17 +201,16 @@ done <<< "$SORTED"
 # --- WAL: log trigger-match events ---
 
 if [ -n "$NEW_INJECTED" ]; then
-  {
+  # Batch all WAL appends under single lock to avoid interleaving with other sessions.
+  wal_run_locked bash -c '
     while IFS= read -r _slug; do
       [ -z "$_slug" ] && continue
-      printf '%s|trigger-match|%s|%s\n' "$TODAY" "$_slug" "$SAFE_SESSION_ID"
-    done <<< "$NEW_INJECTED"
-  } >> "$WAL_FILE" 2>/dev/null || true
+      printf "%s|trigger-match|%s|%s\n" "$0" "$_slug" "$1" >> "$2"
+    done <<< "$3"
+  ' "$TODAY" "$SAFE_SESSION_ID" "$WAL_FILE" "$NEW_INJECTED" 2>/dev/null || true
 
   # Append to dedup list so repeated prompts don't re-inject
-  {
-    printf '%s' "$NEW_INJECTED"
-  } >> "$DEDUP_FILE" 2>/dev/null || true
+  printf '%s' "$NEW_INJECTED" >> "$DEDUP_FILE" 2>/dev/null || true
 fi
 
 # --- Emit hookSpecificOutput JSON ---

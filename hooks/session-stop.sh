@@ -457,6 +457,16 @@ if [ -n "$REMINDER" ]; then
 EOF
 fi
 
+# WAL compaction — ensure WAL doesn't grow unbounded between sessions.
+# wal-compact.sh self-checks threshold (>1200 lines) and acquires lock.
+if [ -f "$WAL_FILE" ]; then
+  COMPACT_SCRIPT="$(dirname "$0")/wal-compact.sh"
+  if [ -x "$COMPACT_SCRIPT" ]; then
+    CLAUDE_MEMORY_DIR="$MEMORY_DIR" bash "$COMPACT_SCRIPT" 2>/dev/null &
+    disown 2>/dev/null || true
+  fi
+fi
+
 # Clean up marker
 rm -f "$MARKER" 2>/dev/null
 

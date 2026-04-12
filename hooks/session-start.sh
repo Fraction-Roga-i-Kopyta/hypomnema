@@ -36,6 +36,13 @@ CWD=$(printf '%s\n' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)
 # Clean up stale session markers (older than 1 day)
 find /tmp -maxdepth 1 -name ".claude-session-*" -mtime +1 -delete 2>/dev/null || true
 
+# Regenerate MEMORY.md index in background (drift fix — fresh for next session)
+REGEN_SCRIPT="$(dirname "$0")/regen-memory-index.sh"
+if [ -x "$REGEN_SCRIPT" ]; then
+  CLAUDE_MEMORY_DIR="$MEMORY_DIR" bash "$REGEN_SCRIPT" 2>/dev/null &
+  disown 2>/dev/null || true
+fi
+
 # --- Detect project ---
 
 PROJECT=""
@@ -1096,7 +1103,9 @@ fi
 
 # v0.5: always write dedup list (even if empty) so user-prompt-submit knows session started
 SAFE_MARKER_ID_V05="${SESSION_ID//\//_}"
-DEDUP_FILE_V05="/tmp/.claude-injected-${SAFE_MARKER_ID_V05}.list"
+RUNTIME_DIR_V05="$MEMORY_DIR/.runtime"
+DEDUP_FILE_V05="$RUNTIME_DIR_V05/injected-${SAFE_MARKER_ID_V05}.list"
+mkdir -p "$RUNTIME_DIR_V05" 2>/dev/null || true
 {
   for f in "${INJECTED_FILES[@]}"; do
     basename "$f" .md
@@ -1130,11 +1139,18 @@ fi
 # Sanitize session_id: replace | with _ to prevent WAL field corruption
 SAFE_SESSION_ID="${SESSION_ID//|/_}"
 WAL_FILE="$MEMORY_DIR/.wal"
-{
-  for f in "${INJECTED_FILES[@]}"; do
-    printf '%s|inject|%s|%s\n' "$TODAY" "$(basename "$f" .md)" "$SAFE_SESSION_ID"
-  done
-} >> "$WAL_FILE" 2>/dev/null || true
+
+# shellcheck source=lib/wal-lock.sh
+. "$(dirname "$0")/lib/wal-lock.sh" 2>/dev/null || true
+
+_INJECT_LINES=""
+for f in "${INJECTED_FILES[@]}"; do
+  _INJECT_LINES="${_INJECT_LINES}${TODAY}|inject|$(basename "$f" .md)|${SAFE_SESSION_ID}
+"
+done
+if [ -n "$_INJECT_LINES" ]; then
+  wal_run_locked bash -c 'printf "%s" "$1" >> "$2"' _ "$_INJECT_LINES" "$WAL_FILE" 2>/dev/null || true
+fi
 
 # Rotate WAL: smart compaction (aggregate old entries, preserve spread data)
 if [ -f "$WAL_FILE" ] && [ "$(wc -l < "$WAL_FILE" 2>/dev/null)" -gt 1200 ]; then
@@ -1183,9 +1199,24 @@ AGENT_CTX="$MEMORY_DIR/_agent_context.md"
   echo "Full context: \`~/.claude/memory/\`"
 } > "$AGENT_CTX" 2>/dev/null || true
 
+# Health check: warn if UserPromptSubmit trigger-matching appears broken.
+# Trigger: 50+ inject events (hook has been running) but 0 trigger-match.
+HEALTH_WARNING=""
+if [ -f "$WAL_FILE" ]; then
+  _wal_tail=$(tail -200 "$WAL_FILE" 2>/dev/null)
+  _inj=$(printf '%s\n' "$_wal_tail" | grep -c '|inject|' 2>/dev/null || echo 0)
+  _trig=$(printf '%s\n' "$_wal_tail" | grep -c '|trigger-match|' 2>/dev/null || echo 0)
+  if [ "${_inj:-0}" -gt 50 ] && [ "${_trig:-0}" -eq 0 ]; then
+    HEALTH_WARNING="⚠ Memory health: 0 trigger-match events in last 200 WAL entries (${_inj} injects). UserPromptSubmit hook may be silently failing — check settings.json timeout and ~/.claude/hooks/lib/wal-lock.sh presence."
+  fi
+fi
+
 # Output for Claude Code
 MARKDOWN="# Memory Context
-${CONTEXT}"
+${CONTEXT}${HEALTH_WARNING:+
+
+## System Health
+${HEALTH_WARNING}}"
 
 cat <<EOF
 {"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":$(printf '%s\n' "$MARKDOWN" | jq -Rs .)}}
