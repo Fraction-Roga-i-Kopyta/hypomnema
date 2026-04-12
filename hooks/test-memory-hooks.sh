@@ -1952,6 +1952,79 @@ TR_OUT=$(printf '{"session_id":"trtest-mixed","prompt":%s}' "$(printf '%s' "$TR_
 TR_CTX=$(printf '%s' "$TR_OUT" | jq -r '.hookSpecificOutput.additionalContext // ""')
 assert "Trigger — match outside fence still works" 'printf "%s" "$TR_CTX" | grep -q "### trigger-single"'
 
+# --- Test 14: negation «не» before trigger → no match ---
+TR_OUT=$(echo '{"session_id":"trtest-neg1","prompt":"не используй tailwind hsl в этом проекте"}' | \
+  CLAUDE_MEMORY_DIR="$TR_MEM" bash "$TR_HOOK" 2>/dev/null)
+assert "Trigger — negation «не» skips match" '[ -z "$TR_OUT" ]'
+
+# --- Test 15: negation «уже пофиксил» before trigger → no match ---
+TR_OUT=$(echo '{"session_id":"trtest-neg2","prompt":"уже пофиксил tailwind hsl вчера"}' | \
+  CLAUDE_MEMORY_DIR="$TR_MEM" bash "$TR_HOOK" 2>/dev/null)
+assert "Trigger — «уже» skips match" '[ -z "$TR_OUT" ]'
+
+# --- Test 16: English «already» negation → no match ---
+TR_OUT=$(echo '{"session_id":"trtest-neg3","prompt":"already fixed the tailwind hsl issue"}' | \
+  CLAUDE_MEMORY_DIR="$TR_MEM" bash "$TR_HOOK" 2>/dev/null)
+assert "Trigger — «already» skips match" '[ -z "$TR_OUT" ]'
+
+# --- Test 17: project filter — mismatched project demoted vs global ---
+mkdir -p "$TR_MEM/projects"
+cat > "$TR_MEM/projects.json" << 'PJSON'
+{"/tmp/project-a": "project-a"}
+PJSON
+
+cat > "$TR_MEM/mistakes/trigger-other-proj.md" << 'EOF'
+---
+type: mistake
+project: project-b
+status: active
+severity: major
+recurrence: 10
+ref_count: 100
+trigger: "shared phrase"
+---
+Body of other-proj mistake.
+EOF
+
+cat > "$TR_MEM/mistakes/trigger-global-match.md" << 'EOF'
+---
+type: mistake
+project: global
+status: active
+severity: minor
+recurrence: 1
+ref_count: 1
+trigger: "shared phrase"
+---
+Body of global mistake.
+EOF
+
+cat > "$TR_MEM/mistakes/trigger-current-proj.md" << 'EOF'
+---
+type: mistake
+project: project-a
+status: active
+severity: minor
+recurrence: 1
+ref_count: 1
+trigger: "shared phrase"
+---
+Body of current-proj mistake.
+EOF
+
+TR_OUT=$(echo '{"session_id":"trtest-proj","cwd":"/tmp/project-a","prompt":"shared phrase test"}' | \
+  CLAUDE_MEMORY_DIR="$TR_MEM" bash "$TR_HOOK" 2>/dev/null)
+TR_CTX=$(printf '%s' "$TR_OUT" | jq -r '.hookSpecificOutput.additionalContext // ""')
+assert "Project filter — current-proj ranked before global and mismatch" '
+  printf "%s" "$TR_CTX" | awk "
+    /### trigger-current-proj/{c=NR}
+    /### trigger-global-match/{g=NR}
+    /### trigger-other-proj/{o=NR}
+    END{exit !(c && g && o && c<g && g<o)}
+  "
+'
+rm -f "$TR_MEM/mistakes/trigger-other-proj.md" "$TR_MEM/mistakes/trigger-global-match.md" "$TR_MEM/mistakes/trigger-current-proj.md"
+
 # --- Test 10: session-start writes dedup list ---
 SS_HOOK="$(dirname "$0")/session-start.sh"
 mkdir -p /tmp/trtest-ss-proj
