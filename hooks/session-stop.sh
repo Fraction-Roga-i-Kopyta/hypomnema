@@ -444,6 +444,47 @@ if [ -f "$WAL_FILE" ] && [ -n "$SAFE_SESSION_ID" ]; then
   fi
 fi
 
+# --- Feedback loop: useful/silent signal for injected memories ---
+# Check if assistant ever referenced the slug of an injected memory.
+# Useful = explicit reference; Silent = injected but never named (either
+# applied silently or was noise — future per-trigger precision will tell).
+if [ -f "$WAL_FILE" ] && [ -n "$SAFE_SESSION_ID" ] && [ -n "$TRANSCRIPT_PATH" ] && [ -f "$TRANSCRIPT_PATH" ]; then
+  _INJECTED_ALL=$(awk -F'|' -v sid="$SAFE_SESSION_ID" '
+    $4 == sid && ($2 == "inject" || $2 == "trigger-match") { print $3 }
+  ' "$WAL_FILE" 2>/dev/null | sort -u)
+
+  if [ -n "$_INJECTED_ALL" ]; then
+    # Extract assistant text only — skip tool calls and user messages.
+    _ASSIST_TEXT=$(awk '
+      /"type":"assistant"/ && /"text":/ {
+        t = $0
+        while (match(t, /"text":"[^"]*"/)) {
+          print substr(t, RSTART+8, RLENGTH-9)
+          t = substr(t, RSTART+RLENGTH)
+        }
+      }
+    ' "$TRANSCRIPT_PATH" 2>/dev/null)
+
+    _FEEDBACK_LINES=""
+    while IFS= read -r _inj_slug; do
+      [ -z "$_inj_slug" ] && continue
+      if printf '%s' "$_ASSIST_TEXT" | grep -qF "$_inj_slug" 2>/dev/null; then
+        _FEEDBACK_LINES="${_FEEDBACK_LINES}${TODAY}|trigger-useful|${_inj_slug}|${SAFE_SESSION_ID}
+"
+      else
+        _FEEDBACK_LINES="${_FEEDBACK_LINES}${TODAY}|trigger-silent|${_inj_slug}|${SAFE_SESSION_ID}
+"
+      fi
+    done <<< "$_INJECTED_ALL"
+
+    if [ -n "$_FEEDBACK_LINES" ]; then
+      # shellcheck source=lib/wal-lock.sh
+      . "$(dirname "$0")/lib/wal-lock.sh" 2>/dev/null || true
+      wal_run_locked bash -c 'printf "%s" "$1" >> "$2"' _ "$_FEEDBACK_LINES" "$WAL_FILE" 2>/dev/null || true
+    fi
+  fi
+fi
+
 # Strategies reminder: long clean session → suggest recording approach
 if [ "${METRIC_ERROR_COUNT:-0}" -eq 0 ] && [ "${ELAPSED:-0}" -gt 600 ]; then
   REMINDER="${REMINDER}${REMINDER:+

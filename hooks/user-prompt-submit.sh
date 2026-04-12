@@ -13,6 +13,7 @@ set -o pipefail
 MEMORY_DIR="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}"
 MAX_TRIGGERED=4
 TODAY=$(date +%Y-%m-%d)
+NOW_EPOCH=$(date +%s)
 
 # --- Parse hook input ---
 
@@ -65,7 +66,7 @@ mkdir -p "$RUNTIME_DIR" 2>/dev/null || true
 extract_meta() {
   local file="$1"
   awk '
-    BEGIN { fm_count = 0; printed = 0; status = ""; severity = ""; recurrence = 0; ref_count = 0; project = ""; trig_single = ""; in_trigs = 0 }
+    BEGIN { fm_count = 0; printed = 0; status = ""; severity = ""; recurrence = 0; ref_count = 0; project = ""; created = ""; trig_single = ""; in_trigs = 0 }
     /^---$/ { fm_count++; if (fm_count >= 2) { print_out(); printed = 1; exit } next }
     fm_count != 1 { next }
     /^status:/        { val = $0; sub(/^status: */, "", val); gsub(/["'"'"']/, "", val); status = val; next }
@@ -73,6 +74,7 @@ extract_meta() {
     /^recurrence:/    { val = $0; sub(/^recurrence: */, "", val); recurrence = val + 0; next }
     /^ref_count:/     { val = $0; sub(/^ref_count: */, "", val); ref_count = val + 0; next }
     /^project:/       { val = $0; sub(/^project: */, "", val); gsub(/["'"'"']/, "", val); project = val; next }
+    /^created:/       { val = $0; sub(/^created: */, "", val); gsub(/["'"'"']/, "", val); created = val; next }
     /^trigger:/       {
       val = $0
       sub(/^trigger: */, "", val)
@@ -98,7 +100,7 @@ extract_meta() {
         if (joined != "") joined = joined SEP trig_arr[i]
         else joined = trig_arr[i]
       }
-      printf "%s\t%s\t%d\t%d\t%s\t%s", status, severity, recurrence, ref_count, project, joined
+      printf "%s\t%s\t%d\t%d\t%s\t%s\t%s", status, severity, recurrence, ref_count, project, created, joined
     }
   ' "$file"
 }
@@ -169,7 +171,8 @@ for _dir in mistakes feedback strategies knowledge notes; do
     _recurrence=$(printf '%s' "$_meta" | cut -f3)
     _ref_count=$(printf '%s' "$_meta" | cut -f4)
     _project=$(printf '%s' "$_meta" | cut -f5)
-    _phrases=$(printf '%s' "$_meta" | cut -f6-)
+    _created=$(printf '%s' "$_meta" | cut -f6)
+    _phrases=$(printf '%s' "$_meta" | cut -f7-)
 
     # Status filter
     case "$_status" in active|pinned) ;; *) continue ;; esac
@@ -180,8 +183,9 @@ for _dir in mistakes feedback strategies knowledge notes; do
     _matched=$(match_prompt "$_phrases") || continue
 
     # Build priority key (higher = better, sort -r)
-    # Fields: project_rank (match=2, global=1, mismatch=0); status (pinned=1, active=0);
-    # severity (major=2, minor=1, none=0); recurrence; ref_count
+    # Priority order: project → status → severity → recency → log_ref_count → recurrence → ref_count
+    # Recency boost lets fresh records surface above old popular ones within same severity.
+    # ref_count is log10-bucketed so 100 isn't 100x better than 1 — diminishing returns.
     _project_rank=0
     if [ -z "$_project" ] || [ "$_project" = "global" ]; then
       _project_rank=1
@@ -193,8 +197,31 @@ for _dir in mistakes feedback strategies knowledge notes; do
     _sev_rank=0
     case "$_severity" in major) _sev_rank=2 ;; minor) _sev_rank=1 ;; esac
 
-    # Zero-pad for lex sort
-    _key=$(printf '%d.%d.%d.%06d.%06d' "$_project_rank" "$_status_rank" "$_sev_rank" "$_recurrence" "$_ref_count")
+    # Recency rank from `created` — newer wins within same severity
+    _recency_rank=0
+    if [ -n "$_created" ]; then
+      if [[ "$OSTYPE" == darwin* ]]; then
+        _created_sec=$(date -j -f "%Y-%m-%d" "$_created" +%s 2>/dev/null)
+      else
+        _created_sec=$(date -d "$_created" +%s 2>/dev/null)
+      fi
+      if [ -n "$_created_sec" ]; then
+        _age_days=$(( (NOW_EPOCH - _created_sec) / 86400 ))
+        if [ "$_age_days" -le 7 ]; then
+          _recency_rank=3
+        elif [ "$_age_days" -le 30 ]; then
+          _recency_rank=2
+        elif [ "$_age_days" -le 90 ]; then
+          _recency_rank=1
+        fi
+      fi
+    fi
+
+    # log10-bucket of ref_count (0=1-9, 1=10-99, 2=100-999, 3=1000+)
+    _log_ref=$(awk -v r="$_ref_count" 'BEGIN{v=log(r+1)/log(10); print int(v)}')
+
+    # Zero-pad for lex sort (descending)
+    _key=$(printf '%d.%d.%d.%d.%d.%06d.%06d' "$_project_rank" "$_status_rank" "$_sev_rank" "$_recency_rank" "$_log_ref" "$_recurrence" "$_ref_count")
 
     CANDIDATES="${CANDIDATES}
 ${_key}	${_slug}	${_f}	${_matched}"

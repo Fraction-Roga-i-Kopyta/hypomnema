@@ -2025,6 +2025,121 @@ assert "Project filter — current-proj ranked before global and mismatch" '
 '
 rm -f "$TR_MEM/mistakes/trigger-other-proj.md" "$TR_MEM/mistakes/trigger-global-match.md" "$TR_MEM/mistakes/trigger-current-proj.md"
 
+# --- Test 18: ranking — fresh with low ref_count beats old with high ref_count ---
+TODAY_Y=$(date +%Y-%m-%d)
+if [[ "$OSTYPE" == darwin* ]]; then
+  OLD_DATE=$(date -v-200d +%Y-%m-%d)
+else
+  OLD_DATE=$(date -d "200 days ago" +%Y-%m-%d)
+fi
+
+cat > "$TR_MEM/mistakes/trigger-fresh.md" << EOF
+---
+type: mistake
+status: active
+severity: minor
+recurrence: 1
+ref_count: 1
+created: $TODAY_Y
+trigger: "rank phrase"
+---
+Fresh body.
+EOF
+
+cat > "$TR_MEM/mistakes/trigger-old-popular.md" << EOF
+---
+type: mistake
+status: active
+severity: minor
+recurrence: 1
+ref_count: 108
+created: $OLD_DATE
+trigger: "rank phrase"
+---
+Old popular body.
+EOF
+
+TR_OUT=$(echo '{"session_id":"trtest-rank","prompt":"rank phrase check"}' | \
+  CLAUDE_MEMORY_DIR="$TR_MEM" bash "$TR_HOOK" 2>/dev/null)
+TR_CTX=$(printf '%s' "$TR_OUT" | jq -r '.hookSpecificOutput.additionalContext // ""')
+assert "Ranking — fresh record wins over old high ref_count" '
+  printf "%s" "$TR_CTX" | awk "
+    /### trigger-fresh/{f=NR}
+    /### trigger-old-popular/{o=NR}
+    END{exit !(f && o && f<o)}
+  "
+'
+rm -f "$TR_MEM/mistakes/trigger-fresh.md" "$TR_MEM/mistakes/trigger-old-popular.md"
+
+# --- Test 19: ranking — severity beats recency ---
+cat > "$TR_MEM/mistakes/trigger-fresh-minor.md" << EOF
+---
+type: mistake
+status: active
+severity: minor
+recurrence: 1
+ref_count: 1
+created: $TODAY_Y
+trigger: "sev phrase"
+---
+Fresh minor.
+EOF
+
+cat > "$TR_MEM/mistakes/trigger-old-major.md" << EOF
+---
+type: mistake
+status: active
+severity: major
+recurrence: 1
+ref_count: 1
+created: $OLD_DATE
+trigger: "sev phrase"
+---
+Old major.
+EOF
+
+TR_OUT=$(echo '{"session_id":"trtest-sev","prompt":"sev phrase"}' | \
+  CLAUDE_MEMORY_DIR="$TR_MEM" bash "$TR_HOOK" 2>/dev/null)
+TR_CTX=$(printf '%s' "$TR_OUT" | jq -r '.hookSpecificOutput.additionalContext // ""')
+assert "Ranking — major severity beats fresh minor" '
+  printf "%s" "$TR_CTX" | awk "
+    /### trigger-old-major/{m=NR}
+    /### trigger-fresh-minor/{f=NR}
+    END{exit !(m && f && m<f)}
+  "
+'
+rm -f "$TR_MEM/mistakes/trigger-fresh-minor.md" "$TR_MEM/mistakes/trigger-old-major.md"
+
+# --- Test 20: feedback loop — trigger-useful when assistant references slug ---
+FB_DIR=$(mktemp -d); FB_MEM="$FB_DIR/memory"
+mkdir -p "$FB_MEM/mistakes"
+cat > "$FB_MEM/mistakes/referenced-mistake.md" << 'EOF'
+---
+type: mistake
+status: active
+---
+Body.
+EOF
+printf '%s|inject|referenced-mistake|fb-useful\n' "$(date +%Y-%m-%d)" > "$FB_MEM/.wal"
+printf '%s|inject|ghost-mistake|fb-useful\n' "$(date +%Y-%m-%d)" >> "$FB_MEM/.wal"
+
+cat > "$FB_DIR/transcript.jsonl" << 'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"help me"}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Based on referenced-mistake, we need to handle this carefully."}]}}
+EOF
+FB_MARKER="/tmp/.claude-session-fb-useful"
+touch -t 202601010000 "$FB_MARKER"
+
+printf '{"session_id":"fb-useful","transcript_path":"%s/transcript.jsonl"}' "$FB_DIR" | \
+  CLAUDE_MEMORY_DIR="$FB_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null >/dev/null
+
+assert "Feedback — trigger-useful written when slug referenced" \
+  'grep -q "trigger-useful|referenced-mistake|fb-useful" "$FB_MEM/.wal"'
+assert "Feedback — trigger-silent written when slug not referenced" \
+  'grep -q "trigger-silent|ghost-mistake|fb-useful" "$FB_MEM/.wal"'
+
+rm -rf "$FB_DIR" "$FB_MARKER"
+
 # --- Test 10: session-start writes dedup list ---
 SS_HOOK="$(dirname "$0")/session-start.sh"
 mkdir -p /tmp/trtest-ss-proj
