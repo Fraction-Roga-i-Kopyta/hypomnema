@@ -6,6 +6,9 @@
 MEMORY_DIR="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}"
 WAL_FILE="$MEMORY_DIR/.wal"
 
+# shellcheck source=lib/wal-lock.sh
+. "$(dirname "$0")/lib/wal-lock.sh" 2>/dev/null || true
+
 INPUT=$(cat)
 FILE_PATH=$(printf '%s\n' "$INPUT" | jq -r '.tool_input.file_path // empty' 2>/dev/null)
 [ -z "$FILE_PATH" ] && exit 0
@@ -36,9 +39,9 @@ case "$FILE_PATH" in
     fi
 
     if [ "$INJECTED_IN_SESSION" = "1" ]; then
-      printf '%s|outcome-negative|%s|%s\n' "$TODAY" "$FILENAME" "$SAFE_SESSION_ID" >> "$WAL_FILE" 2>/dev/null
+      wal_append "$TODAY|outcome-negative|$FILENAME|$SAFE_SESSION_ID" "outcome-negative|$FILENAME|$SAFE_SESSION_ID"
     else
-      printf '%s|outcome-new|%s|%s\n' "$TODAY" "$FILENAME" "$SAFE_SESSION_ID" >> "$WAL_FILE" 2>/dev/null
+      wal_append "$TODAY|outcome-new|$FILENAME|$SAFE_SESSION_ID" "outcome-new|$FILENAME|$SAFE_SESSION_ID"
     fi
     ;;
 esac
@@ -66,7 +69,7 @@ for dir in mistakes feedback strategies knowledge notes decisions; do
       END { exit !found }
     ' "$candidate" 2>/dev/null && {
       child_slug=$(basename "$candidate" .md)
-      printf '%s|cascade-review|%s|parent:%s\n' "$TODAY" "$child_slug" "$FILENAME" >> "$WAL_FILE" 2>/dev/null
+      wal_append "$TODAY|cascade-review|$child_slug|parent:$FILENAME" "cascade-review|$child_slug|parent:$FILENAME"
     }
   done
 done

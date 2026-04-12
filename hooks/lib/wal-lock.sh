@@ -52,3 +52,21 @@ wal_run_locked() {
   fi
   "$@"
 }
+
+# wal_append <line> [dedup_key]
+# Append a pre-formatted line to $WAL_FILE (or $MEMORY_DIR/.wal) under the WAL lock.
+# If dedup_key is non-empty and a line containing that exact key already exists
+# in the WAL for today, the write is skipped. dedup_key should be a unique
+# substring of the line (typically "event|slug|session").
+wal_append() {
+  local line="$1" dedup_key="${2:-}"
+  local wal="${WAL_FILE:-${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}/.wal}"
+  [ -z "$line" ] && return 0
+  wal_run_locked bash -c '
+    line=$1; key=$2; wal=$3
+    if [ -n "$key" ] && [ -f "$wal" ] && grep -qF "$key" "$wal" 2>/dev/null; then
+      exit 0
+    fi
+    printf "%s\n" "$line" >> "$wal"
+  ' _ "$line" "$dedup_key" "$wal" 2>/dev/null || true
+}

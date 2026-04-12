@@ -5,6 +5,10 @@
 
 MEMORY_DIR="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}"
 MIN_SESSION_SECONDS=120  # 2 minutes
+WAL_FILE="$MEMORY_DIR/.wal"
+
+# shellcheck source=lib/wal-lock.sh
+. "$(dirname "$0")/lib/wal-lock.sh" 2>/dev/null || true
 
 INPUT=$(cat)
 SESSION_ID=$(printf '%s\n' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
@@ -318,7 +322,7 @@ if [ -n "$ERROR_SUMMARY" ]; then
     ERROR_LINES="${ERROR_LINES}
 - \`${cmd}\` (${count}, confidence: ${level})"
     first_word=$(echo "$cmd" | awk '{print $1}' | sed 's/.*\///')
-    printf '%s|error-detected-%s|%s|%s\n' "$(date +%Y-%m-%d)" "$level" "$first_word" "$SAFE_SESSION_ID" >> "$MEMORY_DIR/.wal" 2>/dev/null
+    wal_append "$(date +%Y-%m-%d)|error-detected-$level|$first_word|$SAFE_SESSION_ID" "error-detected-$level|$first_word|$SAFE_SESSION_ID"
   done <<< "$ERROR_SUMMARY"
   if [ -n "$ERROR_LINES" ]; then
     REMINDER="${REMINDER}${REMINDER:+
@@ -384,7 +388,7 @@ if [ -f "$WAL_FILE" ] && [ -n "$SAFE_SESSION_ID" ]; then
         fi
       fi
 
-      printf '%s|outcome-positive|%s|%s\n' "$TODAY" "$mistake_name" "$SAFE_SESSION_ID" >> "$WAL_FILE" 2>/dev/null
+      wal_append "$TODAY|outcome-positive|$mistake_name|$SAFE_SESSION_ID" "outcome-positive|$mistake_name|$SAFE_SESSION_ID"
     done <<< "$INJECTED_MISTAKES"
   fi
 fi
@@ -404,13 +408,10 @@ if [ -n "$TRANSCRIPT_PATH" ] && [ -f "$TRANSCRIPT_PATH" ]; then
   METRIC_DOMAINS=$(printf '%s' "$METRIC_DOMAINS" | tr ' ' ',')
   [ -z "$METRIC_DOMAINS" ] && METRIC_DOMAINS="unknown"
 
-  printf '%s|session-metrics|%s|error_count:%s,tool_calls:%s,duration:%ss\n' \
-    "$TODAY" "$METRIC_DOMAINS" "$METRIC_ERROR_COUNT" "$TOOL_CALLS" "$METRIC_DURATION" \
-    >> "$WAL_FILE" 2>/dev/null
+  wal_append "$TODAY|session-metrics|$METRIC_DOMAINS|error_count:$METRIC_ERROR_COUNT,tool_calls:$TOOL_CALLS,duration:${METRIC_DURATION}s"
 
   if [ "${METRIC_ERROR_COUNT:-0}" -eq 0 ]; then
-    printf '%s|clean-session|%s|%s\n' "$TODAY" "$METRIC_DOMAINS" "$SAFE_SESSION_ID" \
-      >> "$WAL_FILE" 2>/dev/null
+    wal_append "$TODAY|clean-session|$METRIC_DOMAINS|$SAFE_SESSION_ID" "clean-session|$METRIC_DOMAINS|$SAFE_SESSION_ID"
   fi
 fi
 
@@ -428,8 +429,7 @@ if [ -f "$WAL_FILE" ] && [ -n "$SAFE_SESSION_ID" ]; then
       HAS_STRATEGIES=1
 
       if [ "${METRIC_ERROR_COUNT:-0}" -eq 0 ]; then
-        printf '%s|strategy-used|%s|%s\n' "$TODAY" "$strat_name" "$SAFE_SESSION_ID" \
-          >> "$WAL_FILE" 2>/dev/null
+        wal_append "$TODAY|strategy-used|$strat_name|$SAFE_SESSION_ID" "strategy-used|$strat_name|$SAFE_SESSION_ID"
       fi
     done <<< "$INJECTED_STRATEGIES"
   fi
@@ -439,8 +439,7 @@ if [ -f "$WAL_FILE" ] && [ -n "$SAFE_SESSION_ID" ]; then
     [ -z "$METRIC_DOMAINS_GAP" ] && METRIC_DOMAINS_GAP="unknown"
     METRIC_DOMAINS_GAP=$(printf '%s' "$METRIC_DOMAINS_GAP" | tr ' ' ',')
     [ -z "$METRIC_DOMAINS_GAP" ] && METRIC_DOMAINS_GAP="unknown"
-    printf '%s|strategy-gap|%s|%s\n' "$TODAY" "$METRIC_DOMAINS_GAP" "$SAFE_SESSION_ID" \
-      >> "$WAL_FILE" 2>/dev/null
+    wal_append "$TODAY|strategy-gap|$METRIC_DOMAINS_GAP|$SAFE_SESSION_ID" "strategy-gap|$METRIC_DOMAINS_GAP|$SAFE_SESSION_ID"
   fi
 fi
 
