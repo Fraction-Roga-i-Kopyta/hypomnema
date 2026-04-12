@@ -280,23 +280,29 @@ pinned ────────────────────────�
 
 ```yaml
 ---
-type: mistake         # mistake | strategy | feedback | knowledge | decision | project | continuity
-project: global       # global | your-project-id
-created: 2025-01-15
-injected: 2025-01-15  # auto-updated by hook
-referenced: 2025-01-15 # manually updated
-status: active        # active | pinned | stale | archived
+# Core (all types)
+type: mistake          # mistake | strategy | feedback | knowledge | decision | project | continuity
+project: global        # global | your-project-id
+created: 2025-01-15    # used by recency-boost ranking (≤7/30/90 days → rank 3/2/1)
+injected: 2025-01-15   # auto-updated by SessionStart on each injection
+referenced: 2025-01-15 # auto-updated when file is accessed
+status: active         # active | pinned | stale | archived | superseded
+
+# Ranking signals (optional, used by UserPromptSubmit trigger-match priority key)
+ref_count: 108         # auto-incremented per injection (log10-bucketed in priority key)
+decay_rate: slow       # slow | normal | fast — overrides type-default stale/archive thresholds
+description: "..."     # optional one-liner; auto-picked by regen-memory-index.sh for MEMORY.md
 
 # Mistakes only
-severity: major       # minor | major | critical
-recurrence: 3         # how many times this happened
-root-cause: "..."
+severity: major        # minor | major | critical (critical=pinned priority)
+recurrence: 3          # how many times this happened
+root-cause: "..."      # also used as fallback description in MEMORY.md index
 prevention: "..."
-keywords: [css, layout]  # for content-aware matching
-domains: [css, frontend] # for domain filtering
+keywords: [css, layout]  # for TF-IDF content matching
+domains: [css, frontend] # for domain-gated injection
 
 # Strategies only
-trigger: "when to apply this"   # legacy single phrase
+trigger: "when to apply this"   # legacy single-phrase trigger (substring match)
 success_count: 3
 keywords: [css, debugging]
 domains: [css, frontend]
@@ -305,12 +311,18 @@ domains: [css, frontend]
 related:
   - wrong-root-cause-diagnosis: instance_of   # reinforces | contradicts | instance_of | supersedes
 
-# v0.5 — prompt triggers (case-insensitive substring match)
+# v0.5 — prompt triggers (case-insensitive substring match; quoted/code-block/blockquote stripped)
 triggers:
   - "css layout"
   - "flex gap"
 ---
 ```
+
+**Trigger matching rules (v0.6):**
+- fenced ` ``` ` blocks, inline backticks, and `> blockquote` lines are stripped before matching
+- negation window: match skipped if ±40 chars around it contain не/без/уже/нет/already/fixed/skip/no/don't
+- priority key: `project_rank → status → severity → recency → log₁₀(ref_count) → recurrence → ref_count`
+- malformed frontmatter (no closing `---`) produces `schema-error` WAL event, file skipped
 
 ## Project structure
 
@@ -332,6 +344,8 @@ triggers:
 ├── .stopwords             # TF-IDF tokenization stop words
 ├── .tfidf-index           # auto-generated TF-IDF index
 ├── .wal                   # Write-Ahead Log (injection + outcome + error-detect)
+├── .wal.lockd/            # mkdir-based lock for WAL compaction (v0.6+)
+├── .runtime/              # per-session dedup lists (v0.6+, replaces /tmp)
 └── _agent_context.md      # auto-generated compact context for subagents
 ```
 
