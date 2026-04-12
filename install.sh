@@ -31,11 +31,14 @@ ln -sf "$SCRIPT_DIR/hooks/memory-index.sh" "$HOOKS_DIR/memory-index.sh"
 ln -sf "$SCRIPT_DIR/hooks/memory-outcome.sh" "$HOOKS_DIR/memory-outcome.sh"
 ln -sf "$SCRIPT_DIR/hooks/memory-dedup.sh" "$HOOKS_DIR/memory-dedup.sh"
 ln -sf "$SCRIPT_DIR/hooks/wal-compact.sh" "$HOOKS_DIR/wal-compact.sh"
+ln -sf "$SCRIPT_DIR/hooks/regen-memory-index.sh" "$HOOKS_DIR/regen-memory-index.sh"
 ln -sf "$SCRIPT_DIR/hooks/bench-memory.sh" "$HOOKS_DIR/bench-memory.sh"
 ln -sf "$SCRIPT_DIR/hooks/test-memory-hooks.sh" "$HOOKS_DIR/test-memory-hooks.sh"
+# Shared library (wal-lock.sh, sourced by hooks at runtime)
+ln -sfn "$SCRIPT_DIR/hooks/lib" "$HOOKS_DIR/lib"
 echo "  Symlinked: memory-session-start.sh, memory-stop.sh, memory-user-prompt-submit.sh,"
 echo "             memory-index.sh, memory-outcome.sh, memory-dedup.sh, wal-compact.sh,"
-echo "             bench-memory.sh, test-memory-hooks.sh"
+echo "             bench-memory.sh, test-memory-hooks.sh, lib/"
 
 # --- Symlink utilities ---
 echo "[3/4] Installing utilities (symlinks)..."
@@ -58,7 +61,7 @@ HAS_STOP=$(jq '.hooks.Stop // empty' "$SETTINGS" 2>/dev/null)
 HAS_USER_PROMPT_SUBMIT=$(jq '.hooks.UserPromptSubmit // empty' "$SETTINGS" 2>/dev/null)
 
 if [ -z "$HAS_SESSION_START" ]; then
-  jq '.hooks.SessionStart = [{"hooks": [{"type": "command", "command": "~/.claude/hooks/memory-session-start.sh", "timeout": 5}]}]' "$SETTINGS" > "${SETTINGS}.tmp" && mv "${SETTINGS}.tmp" "$SETTINGS"
+  jq '.hooks.SessionStart = [{"hooks": [{"type": "command", "command": "~/.claude/hooks/memory-session-start.sh", "timeout": 15}]}]' "$SETTINGS" > "${SETTINGS}.tmp" && mv "${SETTINGS}.tmp" "$SETTINGS"
   echo "  Added SessionStart hook"
 else
   echo "  SessionStart hook already exists — skipping (add manually if needed)"
@@ -72,7 +75,7 @@ else
 fi
 
 if [ -z "$HAS_USER_PROMPT_SUBMIT" ]; then
-  jq '.hooks.UserPromptSubmit = [{"hooks": [{"type": "command", "command": "~/.claude/hooks/memory-user-prompt-submit.sh", "timeout": 3}]}]' "$SETTINGS" > "${SETTINGS}.tmp" && mv "${SETTINGS}.tmp" "$SETTINGS"
+  jq '.hooks.UserPromptSubmit = [{"hooks": [{"type": "command", "command": "~/.claude/hooks/memory-user-prompt-submit.sh", "timeout": 10}]}]' "$SETTINGS" > "${SETTINGS}.tmp" && mv "${SETTINGS}.tmp" "$SETTINGS"
   echo "  Added UserPromptSubmit hook (v0.5 context triggers)"
 else
   echo "  UserPromptSubmit hook already exists — skipping (add manually if needed)"

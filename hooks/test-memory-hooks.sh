@@ -1880,11 +1880,12 @@ TR_OUT=$(echo '{"session_id":"trtest-4","prompt":"совершенно нере�
 assert "Trigger — no match: empty output" '[ -z "$TR_OUT" ]'
 
 # --- Test 5: dedup via /tmp list ---
-echo "trigger-single" > "/tmp/.claude-injected-trtest-dedup.list"
+mkdir -p "$TR_MEM/.runtime"
+echo "trigger-single" > "$TR_MEM/.runtime/injected-trtest-dedup.list"
 TR_OUT=$(echo '{"session_id":"trtest-dedup","prompt":"tailwind hsl"}' | \
   CLAUDE_MEMORY_DIR="$TR_MEM" bash "$TR_HOOK" 2>/dev/null)
 assert "Trigger — dedup: excludes already-injected slug" '[ -z "$TR_OUT" ]'
-rm -f "/tmp/.claude-injected-trtest-dedup.list"
+rm -f "$TR_MEM/.runtime/injected-trtest-dedup.list"
 
 # --- Test 6: pinned priority over active ---
 # Both trigger-pinned and trigger-active-dup match "docker stale"
@@ -1927,6 +1928,30 @@ TR_OUT=$(echo '{"session_id":"trtest-inactive","prompt":"inactive phrase"}' | \
   CLAUDE_MEMORY_DIR="$TR_MEM" bash "$TR_HOOK" 2>/dev/null)
 assert "Trigger — superseded file ignored" '[ -z "$TR_OUT" ]'
 
+# --- Test 10: trigger inside fenced code block → no match ---
+TR_P10=$'text before\n```\nпример tailwind hsl внутри кода\n```\nи после'
+TR_OUT=$(printf '{"session_id":"trtest-fence","prompt":%s}' "$(printf '%s' "$TR_P10" | jq -Rs .)" | \
+  CLAUDE_MEMORY_DIR="$TR_MEM" bash "$TR_HOOK" 2>/dev/null)
+assert "Trigger — fenced code block ignored" '[ -z "$TR_OUT" ]'
+
+# --- Test 11: trigger inside inline backticks → no match ---
+TR_OUT=$(echo '{"session_id":"trtest-inline","prompt":"ссылка `tailwind hsl` как пример"}' | \
+  CLAUDE_MEMORY_DIR="$TR_MEM" bash "$TR_HOOK" 2>/dev/null)
+assert "Trigger — inline backtick ignored" '[ -z "$TR_OUT" ]'
+
+# --- Test 12: trigger inside blockquote → no match ---
+TR_P12=$'обычный текст\n> пример tailwind hsl внутри цитаты'
+TR_OUT=$(printf '{"session_id":"trtest-quote","prompt":%s}' "$(printf '%s' "$TR_P12" | jq -Rs .)" | \
+  CLAUDE_MEMORY_DIR="$TR_MEM" bash "$TR_HOOK" 2>/dev/null)
+assert "Trigger — blockquote line ignored" '[ -z "$TR_OUT" ]'
+
+# --- Test 13: trigger outside code fence still matches (regression) ---
+TR_P13=$'описание\n```\nsome other code\n```\nнужен фикс tailwind hsl срочно'
+TR_OUT=$(printf '{"session_id":"trtest-mixed","prompt":%s}' "$(printf '%s' "$TR_P13" | jq -Rs .)" | \
+  CLAUDE_MEMORY_DIR="$TR_MEM" bash "$TR_HOOK" 2>/dev/null)
+TR_CTX=$(printf '%s' "$TR_OUT" | jq -r '.hookSpecificOutput.additionalContext // ""')
+assert "Trigger — match outside fence still works" 'printf "%s" "$TR_CTX" | grep -q "### trigger-single"'
+
 # --- Test 10: session-start writes dedup list ---
 SS_HOOK="$(dirname "$0")/session-start.sh"
 mkdir -p /tmp/trtest-ss-proj
@@ -1936,8 +1961,8 @@ PJSON
 # Sanity: ensure file is created
 SS_OUT=$(echo '{"session_id":"ss-dedup-test","cwd":"/tmp/trtest-ss-proj"}' | \
   CLAUDE_MEMORY_DIR="$TR_MEM" bash "$SS_HOOK" 2>/dev/null)
-assert "Trigger — session-start writes dedup list" '[ -f "/tmp/.claude-injected-ss-dedup-test.list" ]'
-rm -f "/tmp/.claude-injected-ss-dedup-test.list"
+assert "Trigger — session-start writes dedup list" '[ -f "$TR_MEM/.runtime/injected-ss-dedup-test.list" ]'
+rm -f "$TR_MEM/.runtime/injected-ss-dedup-test.list"
 rm -rf /tmp/trtest-ss-proj
 
 # Cleanup trigger test dir

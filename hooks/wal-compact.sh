@@ -4,8 +4,16 @@ MEMORY_DIR="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}"
 WAL_FILE="$MEMORY_DIR/.wal"
 [ -f "$WAL_FILE" ] || exit 0
 
+# shellcheck source=lib/wal-lock.sh
+. "$(dirname "$0")/lib/wal-lock.sh" 2>/dev/null || true
+
 LINE_COUNT=$(wc -l < "$WAL_FILE" 2>/dev/null)
 [ "${LINE_COUNT:-0}" -le 1200 ] && exit 0
+
+# Acquire exclusive lock — compaction is read-modify-write, cannot race with writers.
+# If lock unavailable within timeout, bail out (next SessionStart will retry).
+wal_lock_acquire 2>/dev/null || exit 0
+trap 'wal_lock_release 2>/dev/null' EXIT INT TERM
 
 if [[ "$OSTYPE" == darwin* ]]; then
   CUTOFF=$(date -v-14d +%Y-%m-%d)
