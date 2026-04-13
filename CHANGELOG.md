@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.7.0] - 2026-04-13
+
+"Самопознание" — система теперь видит себя через WAL-метрики. Плюс гигиена v0.6 (H1-H4).
+
+### Self-awareness (v0.7 MVP)
+
+- **`bin/memory-strategy-score.sh`** — success_count в strategies/*.md синхронизируется из WAL `strategy-used` events. Идемпотентно: пересчёт с нуля на каждый вызов, запись только при изменении. Пишет `strategy-rescored` WAL-event при обновлении.
+- **`bin/memory-self-profile.sh`** → `memory/self-profile.md` — агрегированный профиль: meta-signals (sessions, clean, outcome pos/neg, trigger useful/silent), strengths (top стратегии), weaknesses (top mistakes с маркером 🔴 для scope:universal), calibration (error-prone domains). Генерируется в фоне из session-stop.sh.
+- **C (meta-pattern detector)** отложен до ≥25 mistakes в корпусе — на 14 записях кластеры слишком шумные.
+
+### Hygiene (v0.6 backlog, closed)
+
+- **H1. Avatar-notes cluster consolidated** — 8 файлов `notes/avatar-*` → 1 мастер (`avatar-unified-analysis.md`) + 7 источников в `notes/avatar-sources/` (не попадают в MEMORY.md благодаря `-maxdepth 1`).
+- **H2. decay_rotation observability** — lifecycle_rotate в `session-stop.sh` теперь пишет в WAL: `rotation-stale`, `rotation-archive`, `rotation-summary|checked_N|stale_M,archived_K`. Раньше всё подавлялось `2>/dev/null || true` — нельзя было проверить, работает ли вообще.
+- **H3. Scope field для mistakes** — новое поле `scope: universal | domain | narrow` в frontmatter. Логика в `session-start.sh`: `narrow` инжектится ТОЛЬКО при явном keyword-match, не по domain-фильтру. 14 mistakes мигрированы (1 universal, 5 domain, 8 narrow). Pinned bypass сохранён. Защищает SessionStart от шума узкоспецифичных ошибок (bcrypt/shell-escape, html2canvas-oklch и т.п.) в backend/frontend-сессиях.
+- **H4. MEMORY.md regeneration timestamp** — `<!-- regenerated: YYYY-MM-DD HH:MM:SS -->` в шапке. Помогает заметить, если автогенерация сломалась.
+
+### Infrastructure
+
+- `install.sh` добавил симлинки для `memory-strategy-score.sh` и `memory-self-profile.sh` в `~/.claude/bin/`.
+
+---
+
 ## [0.6.0] - 2026-04-12
 
 Post-v0.5 audit revealed silent failures, data corruption risks, and ranking issues. This release ships all findings from a multi-agent review (reliability / matching / architecture).

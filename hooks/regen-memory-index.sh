@@ -71,6 +71,7 @@ emit_section() {
 
 {
   printf '# Memory Index\n'
+  printf '<!-- regenerated: %s -->\n' "$(date '+%Y-%m-%d %H:%M:%S')"
   emit_section "Strategies" "strategies"
   emit_section "Feedback" "feedback"
   emit_section "Mistakes" "mistakes"
