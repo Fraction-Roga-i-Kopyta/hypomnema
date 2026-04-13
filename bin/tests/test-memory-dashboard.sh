@@ -78,6 +78,14 @@ assert_eq "ab"   "$(truncate "ab" 4)" "truncate/short"
 line=$(render_two_col "left" "right")
 assert_eq "80" "${#line}" "two_col/width"
 
+# health_check_frontmatter
+hc=$(health_check_frontmatter "$FIX")
+# Fixtures: mistakes/sample.md (has type+created), notes/n1.md (yes), notes/n2.md (yes), projects/p1.md (yes) = 4/4
+assert_eq "4/4" "$hc" "health/frontmatter"
+
+# hook_last_run on missing file
+assert_eq "-" "$(hook_last_run /nonexistent/path/hook.sh)" "hook/missing"
+
 echo
 echo "$PASS passed, $FAIL failed"
 [[ $FAIL -eq 0 ]]

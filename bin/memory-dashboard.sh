@@ -320,6 +320,64 @@ render_overview() {
     done
 }
 
+# stat_mtime FILE — portable mtime in epoch seconds
+stat_mtime() {
+    local f=$1
+    [[ -e "$f" ]] || { echo ""; return; }
+    stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null
+}
+
+# hook_last_run HOOK_PATH -> "HH:MM" (today) / "Nd ago" (older) / "-" (missing)
+hook_last_run() {
+    local f=$1
+    local mt; mt=$(stat_mtime "$f")
+    [[ -n "$mt" ]] || { echo "-"; return; }
+    local now; now=$(date +%s)
+    local age=$(( now - mt ))
+    if (( age < 86400 )); then
+        date -r "$mt" '+%H:%M' 2>/dev/null || date -d "@$mt" '+%H:%M' 2>/dev/null || echo "?"
+    else
+        echo "$((age / 86400))d ago"
+    fi
+}
+
+# health_check_frontmatter ROOT -> "valid/total"
+# A note is "valid" if frontmatter has both 'type' and 'created'.
+health_check_frontmatter() {
+    local root=$1 valid=0 total=0
+    for cat in "${MEMORY_CATEGORIES[@]}"; do
+        local d="$root/$cat"
+        [[ -d "$d" ]] || continue
+        while IFS= read -r f; do
+            [[ -f "$f" ]] || continue
+            total=$((total + 1))
+            local t; t=$(parse_frontmatter_field "$f" type)
+            local c; c=$(parse_frontmatter_field "$f" created)
+            [[ -n "$t" && -n "$c" ]] && valid=$((valid + 1))
+        done < <(find "$d" -maxdepth 1 -name "*.md" -type f 2>/dev/null)
+    done
+    echo "$valid/$total"
+}
+
+# health_check_orphans MEMORY_MD -> count of broken .md links
+# Parses "(../../../.claude/memory/.../foo.md)" style links and checks existence.
+health_check_orphans() {
+    local memory_md=$1
+    [[ -f "$memory_md" ]] || { echo 0; return; }
+    local broken=0
+    local md_dir; md_dir=$(dirname "$memory_md")
+    while IFS= read -r link; do
+        local resolved
+        if [[ "$link" = /* ]]; then
+            resolved="$link"
+        else
+            resolved="$md_dir/$link"
+        fi
+        [[ -f "$resolved" ]] || broken=$((broken + 1))
+    done < <(grep -oE '\([^)]+\.md\)' "$memory_md" 2>/dev/null | tr -d '()')
+    echo "$broken"
+}
+
 main() {
     echo "memory-dashboard: not implemented yet"
 }
