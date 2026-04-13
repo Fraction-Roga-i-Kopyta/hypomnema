@@ -29,6 +29,33 @@ parse_frontmatter_field() {
     ' "$file" 2>/dev/null
 }
 
+# Categories scanned for note counts
+MEMORY_CATEGORIES=(mistakes notes projects feedback knowledge continuity strategies seeds decisions journal)
+
+count_notes_by_category() {
+    local root=$1 cat=$2
+    local dir="$root/$cat"
+    [[ -d "$dir" ]] || { echo 0; return; }
+    find "$dir" -maxdepth 1 -name "*.md" -type f 2>/dev/null | wc -l | awk '{print $1}'
+}
+
+count_notes_total() {
+    local root=$1 total=0
+    for cat in "${MEMORY_CATEGORIES[@]}"; do
+        total=$((total + $(count_notes_by_category "$root" "$cat")))
+    done
+    echo "$total"
+}
+
+format_age() {
+    local secs=$1
+    if   (( secs < 60 ));     then echo "just now"
+    elif (( secs < 3600 ));   then echo "$((secs / 60))m ago"
+    elif (( secs < 86400 ));  then echo "$((secs / 3600))h ago"
+    else                           echo "$((secs / 86400))d ago"
+    fi
+}
+
 main() {
     echo "memory-dashboard: not implemented yet"
 }
