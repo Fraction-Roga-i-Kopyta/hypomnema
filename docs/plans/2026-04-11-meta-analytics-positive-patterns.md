@@ -1372,7 +1372,7 @@ Expected: all PASS
 
 - [ ] **Step 5: Create symlink for analytics hook**
 
-Run: `ln -sf /Users/akamash/Development/hypomnema/hooks/memory-analytics.sh /Users/akamash/.claude/hooks/memory-analytics.sh`
+Run: `ln -sf $HYPOMNEMA_ROOT/hooks/memory-analytics.sh ~/.claude/hooks/memory-analytics.sh`
 
 - [ ] **Step 6: Commit**
 
