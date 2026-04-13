@@ -467,6 +467,53 @@ render_ops() {
     done
 }
 
+# run_operation N  (1-based index into OPS_CMD)
+# Exits alt-screen, runs the command, waits for keypress, re-enters alt-screen.
+run_operation() {
+    local n=$1
+    local idx=$((n - 1))
+    [[ $idx -ge 0 && $idx -lt ${#OPS_CMD[@]} ]] || return 0
+    local cmd="${OPS_CMD[idx]}"
+    local cmd_first="${cmd%% *}"
+
+    # Exit alt-screen, restore normal terminal
+    tput rmcup 2>/dev/null
+    tput cnorm 2>/dev/null
+    echo
+    echo "==> Running: ${OPS_LABEL[idx]}"
+    echo "    Command: $cmd"
+    echo "    -----------------"
+
+    local rc=0
+    # Check availability: absolute path needs -x; otherwise try PATH via command -v
+    if [[ "$cmd_first" = /* ]]; then
+        if [[ ! -x "$cmd_first" ]]; then
+            echo "    ERROR: '$cmd_first' not executable or missing"
+            rc=127
+        else
+            eval "$cmd"
+            rc=$?
+        fi
+    else
+        if ! command -v "$cmd_first" >/dev/null 2>&1; then
+            echo "    ERROR: '$cmd_first' not in PATH"
+            rc=127
+        else
+            eval "$cmd"
+            rc=$?
+        fi
+    fi
+
+    echo "    -----------------"
+    echo "    Exit code: $rc"
+    echo
+    printf "Press any key to return to dashboard..."
+    read -rsn1
+    # Re-enter alt-screen
+    tput smcup 2>/dev/null
+    tput civis 2>/dev/null
+}
+
 main() {
     echo "memory-dashboard: not implemented yet"
 }
