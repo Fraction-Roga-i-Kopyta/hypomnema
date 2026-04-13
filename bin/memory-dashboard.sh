@@ -89,12 +89,13 @@ recurring_mistakes() {
     local root=$1
     local dir="$root/mistakes"
     [[ -d "$dir" ]] || return 0
-    for f in "$dir"/*.md; do
+    while IFS= read -r f; do
         [[ -f "$f" ]] || continue
-        local rec; rec=$(parse_frontmatter_field "$f" recurrence)
+        local rec=$(parse_frontmatter_field "$f" recurrence)
         [[ -n "$rec" && "$rec" -ge 2 ]] 2>/dev/null || continue
         printf "%s\t%s\n" "$(basename "$f" .md)" "$rec"
-    done | sort -t$'\t' -k2 -rn
+    done < <(find "$dir" -maxdepth 1 -name "*.md" -type f 2>/dev/null) \
+        | sort -t$'\t' -k2 -rn
 }
 
 # recently_created ROOT LIMIT
@@ -103,12 +104,12 @@ recently_created() {
     for cat in "${MEMORY_CATEGORIES[@]}"; do
         local d="$root/$cat"
         [[ -d "$d" ]] || continue
-        for f in "$d"/*.md; do
+        while IFS= read -r f; do
             [[ -f "$f" ]] || continue
-            local cr; cr=$(parse_frontmatter_field "$f" created)
+            local cr=$(parse_frontmatter_field "$f" created)
             [[ -n "$cr" ]] || continue
             printf "%s\t%s\n" "$(basename "$f" .md)" "$cr"
-        done
+        done < <(find "$d" -maxdepth 1 -name "*.md" -type f 2>/dev/null)
     done | sort -t$'\t' -k2 -r | head -n "$limit"
 }
 
@@ -120,33 +121,35 @@ stale_notes() {
     for cat in "${MEMORY_CATEGORIES[@]}"; do
         local d="$root/$cat"
         [[ -d "$d" ]] || continue
-        for f in "$d"/*.md; do
+        while IFS= read -r f; do
             [[ -f "$f" ]] || continue
-            local rc; rc=$(parse_frontmatter_field "$f" ref_count)
+            local rc=$(parse_frontmatter_field "$f" ref_count)
             [[ "$rc" == "0" ]] || continue
-            local ref; ref=$(parse_frontmatter_field "$f" referenced)
+            local ref=$(parse_frontmatter_field "$f" referenced)
             [[ -n "$ref" ]] || continue
-            local ref_epoch
+            local ref_epoch=""
             ref_epoch=$(date -j -f "%Y-%m-%d" "$ref" +%s 2>/dev/null) \
                 || ref_epoch=$(date -d "$ref" +%s 2>/dev/null) \
                 || continue
             local age_days=$(( (today_epoch - ref_epoch) / 86400 ))
             (( age_days > threshold )) || continue
             printf "%s\t%dd\n" "$(basename "$f" .md)" "$age_days"
-        done
+        done < <(find "$d" -maxdepth 1 -name "*.md" -type f 2>/dev/null)
     done
 }
 
 active_project() {
     local f="$1/_agent_context.md"
-    [[ -f "$f" ]] || { echo "-"; return; }
-    awk '/\*\*Active project:\*\*/ {sub(/.*\*\*[[:space:]]*/, ""); gsub(/[[:space:]]+$/, ""); print; exit}' "$f"
+    [[ -f "$f" ]] || { printf '%s\n' "-"; return; }
+    local v; v=$(awk '/\*\*Active project:\*\*/ {sub(/.*\*\*[[:space:]]*/, ""); gsub(/[[:space:]]+$/, ""); print; exit}' "$f")
+    printf '%s\n' "${v:--}"
 }
 
 active_domains() {
     local f="$1/_agent_context.md"
-    [[ -f "$f" ]] || { echo "-"; return; }
-    awk '/\*\*Active domains:\*\*/ {sub(/.*\*\*[[:space:]]*/, ""); gsub(/[[:space:]]+$/, ""); print; exit}' "$f"
+    [[ -f "$f" ]] || { printf '%s\n' "-"; return; }
+    local v; v=$(awk '/\*\*Active domains:\*\*/ {sub(/.*\*\*[[:space:]]*/, ""); gsub(/[[:space:]]+$/, ""); print; exit}' "$f")
+    printf '%s\n' "${v:--}"
 }
 
 TUI_WIDTH=80
@@ -160,7 +163,7 @@ pad() {
 truncate() {
     local s=$1 w=$2
     if (( ${#s} > w )); then
-        printf "%s" "${s:0:w}"
+        printf "%s" "${s:0:$w}"
     else
         printf "%s" "$s"
     fi
@@ -212,6 +215,109 @@ draw_tab_header() {
     fi
     render_two_col "$left" "                              q: exit"
     echo
+}
+
+# render_overview ROOT
+# Composes the Overview tab content (between header and footer).
+render_overview() {
+    local root=$1
+
+    # Gather data
+    local total; total=$(count_notes_total "$root")
+    local mist; mist=$(count_notes_by_category "$root" mistakes)
+    local note; note=$(count_notes_by_category "$root" notes)
+    local proj; proj=$(count_notes_by_category "$root" projects)
+    local fb;   fb=$(count_notes_by_category "$root" feedback)
+    local kn;   kn=$(count_notes_by_category "$root" knowledge)
+    local cont; cont=$(count_notes_by_category "$root" continuity)
+    local strat; strat=$(count_notes_by_category "$root" strategies)
+    local seed; seed=$(count_notes_by_category "$root" seeds)
+
+    local wal_lines=0 wal_size="-"
+    if [[ -d "$root/.wal" ]]; then
+        wal_lines=$(find "$root/.wal" -name "*.jsonl" -exec cat {} \; 2>/dev/null | wc -l | awk '{print $1}')
+        wal_size=$(du -sh "$root/.wal" 2>/dev/null | awk '{print $1}')
+    fi
+
+    local proj_act dom_act
+    proj_act=$(active_project "$root")
+    dom_act=$(active_domains "$root")
+
+    # Right column data
+    local top; top=$(top_triggered "$root/.wal" 7 4)
+    local rec; rec=$(recurring_mistakes "$root" | head -3)
+    local recent; recent=$(recently_created "$root" 3)
+    local stale; stale=$(stale_notes "$root" 90 | head -3)
+
+    # Build left column lines
+    local L=()
+    L+=("Storage")
+    L+=("-------")
+    L+=("Total notes:    $(printf '%4d' "$total")")
+    L+=("  mistakes:     $(printf '%4d' "$mist")")
+    L+=("  notes:        $(printf '%4d' "$note")")
+    L+=("  projects:     $(printf '%4d' "$proj")")
+    L+=("  feedback:     $(printf '%4d' "$fb")")
+    L+=("  knowledge:    $(printf '%4d' "$kn")")
+    L+=("  continuity:   $(printf '%4d' "$cont")")
+    L+=("  strategies:   $(printf '%4d' "$strat")")
+    L+=("  seeds:        $(printf '%4d' "$seed")")
+    L+=("")
+    L+=("WAL: $wal_lines entries ($wal_size)")
+    L+=("")
+    L+=("Active project: $proj_act")
+    L+=("Active domains: $dom_act")
+
+    # Build right column lines
+    local R=()
+    R+=("Top Triggered (7d)")
+    R+=("------------------")
+    if [[ -z "$top" ]]; then
+        R+=("(no WAL data)")
+    else
+        while IFS=$'\t' read -r _rname _rcnt; do
+            R+=("$(printf '%-25s x%d' "$(truncate "$_rname" 25)" "$_rcnt")")
+        done < <(printf '%s\n' "$top")
+    fi
+    R+=("")
+    R+=("Recurring Mistakes")
+    R+=("------------------")
+    if [[ -z "$rec" ]]; then
+        R+=("(none)")
+    else
+        while IFS=$'\t' read -r _rname _rcnt; do
+            R+=("$(printf '%-25s [x%d]' "$(truncate "$_rname" 25)" "$_rcnt")")
+        done < <(printf '%s\n' "$rec")
+    fi
+    R+=("")
+    R+=("Recently Created")
+    R+=("----------------")
+    if [[ -z "$recent" ]]; then
+        R+=("(empty)")
+    else
+        while IFS=$'\t' read -r _rname _rdt; do
+            R+=("$(printf '%-25s (%s)' "$(truncate "$_rname" 25)" "$_rdt")")
+        done < <(printf '%s\n' "$recent")
+    fi
+    R+=("")
+    R+=("Stale (>90d, no refs)")
+    R+=("---------------------")
+    if [[ -z "$stale" ]]; then
+        R+=("(none)")
+    else
+        while IFS=$'\t' read -r _rname _rage; do
+            R+=("$(printf '%-25s %s' "$(truncate "$_rname" 25)" "$_rage")")
+        done < <(printf '%s\n' "$stale")
+    fi
+
+    # Pair lines
+    local n_left=${#L[@]} n_right=${#R[@]}
+    local n_max=$(( n_left > n_right ? n_left : n_right ))
+    local i
+    for ((i = 0; i < n_max; i++)); do
+        render_two_col "${L[i]:-}" "${R[i]:-}"
+        echo
+    done
 }
 
 main() {
