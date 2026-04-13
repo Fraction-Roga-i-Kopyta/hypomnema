@@ -56,6 +56,24 @@ format_age() {
     fi
 }
 
+# wal_events_in_window WAL_DIR DAYS
+# Prints all JSONL lines from .wal/ files modified within last DAYS days.
+wal_events_in_window() {
+    local wal_dir=$1 days=$2
+    [[ -d "$wal_dir" ]] || return 0
+    find "$wal_dir" -name "*.jsonl" -type f -mtime -"$days" 2>/dev/null \
+        | sort \
+        | xargs -I{} cat {} 2>/dev/null
+}
+
+# wal_count_event WAL_DIR DAYS EVENT_TYPE
+wal_count_event() {
+    local wal_dir=$1 days=$2 evt=$3
+    wal_events_in_window "$wal_dir" "$days" \
+        | grep -c "\"event\":\"$evt\"" 2>/dev/null \
+        | awk '{print $1+0}'
+}
+
 main() {
     echo "memory-dashboard: not implemented yet"
 }

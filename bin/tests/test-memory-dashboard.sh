@@ -36,6 +36,16 @@ assert_eq "5m ago"   "$(format_age 300)"    "age/5m"
 assert_eq "2h ago"   "$(format_age 7200)"   "age/2h"
 assert_eq "3d ago"   "$(format_age 259200)" "age/3d"
 
+# wal_events_in_window
+lines=()
+while IFS= read -r line; do lines+=("$line"); done < <(wal_events_in_window "$FIX/.wal" 7)
+assert_eq "5" "${#lines[@]}" "wal/count_in_7d"
+
+# wal_count_event
+assert_eq "3" "$(wal_count_event "$FIX/.wal" 7 trigger)"   "wal/triggers"
+assert_eq "1" "$(wal_count_event "$FIX/.wal" 7 create)"    "wal/creates"
+assert_eq "1" "$(wal_count_event "$FIX/.wal" 7 reference)" "wal/refs"
+
 echo
 echo "$PASS passed, $FAIL failed"
 [[ $FAIL -eq 0 ]]
