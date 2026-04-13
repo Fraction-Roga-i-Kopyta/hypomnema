@@ -67,6 +67,17 @@ assert_eq "n2" "$(echo "$st" | head -1 | cut -f1)" "stale/first"
 assert_eq "akasha"              "$(active_project "$FIX")" "active/project"
 assert_eq "frontend, debugging" "$(active_domains "$FIX")" "active/domains"
 
+# pad: right-pad with spaces
+assert_eq "ab    " "$(pad "ab" 6)" "pad/right"
+
+# truncate: cut at width, no ellipsis
+assert_eq "abcd" "$(truncate "abcdefgh" 4)" "truncate/cut"
+assert_eq "ab"   "$(truncate "ab" 4)" "truncate/short"
+
+# render_two_col: total width 80
+line=$(render_two_col "left" "right")
+assert_eq "80" "${#line}" "two_col/width"
+
 echo
 echo "$PASS passed, $FAIL failed"
 [[ $FAIL -eq 0 ]]

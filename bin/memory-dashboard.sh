@@ -149,6 +149,71 @@ active_domains() {
     awk '/\*\*Active domains:\*\*/ {sub(/.*\*\*[[:space:]]*/, ""); gsub(/[[:space:]]+$/, ""); print; exit}' "$f"
 }
 
+TUI_WIDTH=80
+COL_WIDTH=37   # inner-col width; "| <37> <2sp> <37> |" variant with padding = 80
+
+pad() {
+    local s=$1 w=$2
+    printf "%-${w}s" "$s"
+}
+
+truncate() {
+    local s=$1 w=$2
+    if (( ${#s} > w )); then
+        printf "%s" "${s:0:w}"
+    else
+        printf "%s" "$s"
+    fi
+}
+
+# render_two_col LEFT RIGHT
+# Produces: "| <LEFT_37>  <RIGHT_37> |"  (total 80 chars)
+render_two_col() {
+    local left right
+    left=$(pad "$(truncate "$1" $COL_WIDTH)" $COL_WIDTH)
+    right=$(pad "$(truncate "$2" $COL_WIDTH)" $COL_WIDTH)
+    printf "| %s  %s |" "$left" "$right"
+}
+
+# draw_top TITLE TIMESTAMP
+# "+-- TITLE -- ... -- TIMESTAMP --+"  total 80
+draw_top() {
+    local title=$1 ts=$2
+    local body=" $title "
+    local right=" $ts "
+    local fill=$(( TUI_WIDTH - 2 - ${#body} - ${#right} - 4 ))
+    local dashes
+    dashes=$(printf -- '-%.0s' $(seq 1 $fill))
+    printf "+--%s%s%s--+\n" "$body" "$dashes" "$right"
+}
+
+draw_sep() {
+    local dashes
+    dashes=$(printf -- '-%.0s' $(seq 1 $((TUI_WIDTH - 2))))
+    printf "+%s+\n" "$dashes"
+}
+
+draw_bottom() {
+    local hint=$1
+    local body=" $hint "
+    local fill=$(( TUI_WIDTH - 2 - ${#body} - 2 ))
+    local dashes
+    dashes=$(printf -- '-%.0s' $(seq 1 $fill))
+    printf "+--%s%s+\n" "$body" "$dashes"
+}
+
+# draw_tab_header ACTIVE_TAB  ("overview" or "ops")
+draw_tab_header() {
+    local active=$1 left=""
+    if [[ "$active" == "overview" ]]; then
+        left="[ Overview ]  Ops"
+    else
+        left="  Overview  [ Ops ]"
+    fi
+    render_two_col "$left" "                              q: exit"
+    echo
+}
+
 main() {
     echo "memory-dashboard: not implemented yet"
 }
