@@ -30,12 +30,6 @@ assert_eq "1" "$(count_notes_by_category "$FIX" projects)"  "count/projects"
 assert_eq "0" "$(count_notes_by_category "$FIX" missing)"   "count/missing"
 assert_eq "4" "$(count_notes_total "$FIX")"                  "count/total"
 
-# format_age
-assert_eq "just now" "$(format_age 0)"      "age/0"
-assert_eq "5m ago"   "$(format_age 300)"    "age/5m"
-assert_eq "2h ago"   "$(format_age 7200)"   "age/2h"
-assert_eq "3d ago"   "$(format_age 259200)" "age/3d"
-
 # wal_events_in_window
 lines=()
 while IFS= read -r line; do lines+=("$line"); done < <(wal_events_in_window "$FIX/.wal" 7)

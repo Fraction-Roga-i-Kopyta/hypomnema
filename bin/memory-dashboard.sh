@@ -48,15 +48,6 @@ count_notes_total() {
     echo "$total"
 }
 
-format_age() {
-    local secs=$1
-    if   (( secs < 60 ));     then echo "just now"
-    elif (( secs < 3600 ));   then echo "$((secs / 60))m ago"
-    elif (( secs < 86400 ));  then echo "$((secs / 3600))h ago"
-    else                           echo "$((secs / 86400))d ago"
-    fi
-}
-
 # wal_events_in_window WAL_DIR DAYS
 # Prints all JSONL lines from .wal/ files modified within last DAYS days.
 wal_events_in_window() {
@@ -189,12 +180,6 @@ draw_top() {
     local dashes
     dashes=$(printf -- '-%.0s' $(seq 1 $fill))
     printf "+--%s%s%s--+\n" "$body" "$dashes" "$right"
-}
-
-draw_sep() {
-    local dashes
-    dashes=$(printf -- '-%.0s' $(seq 1 $((TUI_WIDTH - 2))))
-    printf "+%s+\n" "$dashes"
 }
 
 draw_bottom() {
@@ -366,7 +351,7 @@ health_check_orphans() {
     local memory_md=$1
     [[ -f "$memory_md" ]] || { echo 0; return; }
     local broken=0
-    local md_dir; md_dir=$(dirname "$memory_md")
+    local md_dir; md_dir=$(dirname "$(dirname "$memory_md")")
     while IFS= read -r link; do
         local resolved
         if [[ "$link" = /* ]]; then
