@@ -46,6 +46,27 @@ assert_eq "3" "$(wal_count_event "$FIX/.wal" 7 trigger)"   "wal/triggers"
 assert_eq "1" "$(wal_count_event "$FIX/.wal" 7 create)"    "wal/creates"
 assert_eq "1" "$(wal_count_event "$FIX/.wal" 7 reference)" "wal/refs"
 
+# top_triggered (tab-separated "name<TAB>count", sorted desc, limit N)
+result=$(top_triggered "$FIX/.wal" 7 5)
+assert_eq $'wrong-root-cause\t2' "$(echo "$result" | head -1)" "top/first"
+assert_eq $'code-approach\t1'    "$(echo "$result" | sed -n 2p)" "top/second"
+
+# recurring_mistakes: prints "<name>\t<recurrence>" for recurrence >= 2
+rec=$(recurring_mistakes "$FIX")
+assert_eq $'sample\t5' "$(echo "$rec" | head -1)" "recurring/first"
+
+# recently_created: prints "<name>\t<created>" sorted desc, limit N
+rc=$(recently_created "$FIX" 10)
+assert_eq "n1" "$(echo "$rc" | head -1 | cut -f1)" "recent/first"
+
+# stale_notes: ref_count == 0 AND referenced older than threshold days
+st=$(stale_notes "$FIX" 90)
+assert_eq "n2" "$(echo "$st" | head -1 | cut -f1)" "stale/first"
+
+# active_context: parse _agent_context.md
+assert_eq "akasha"              "$(active_project "$FIX")" "active/project"
+assert_eq "frontend, debugging" "$(active_domains "$FIX")" "active/domains"
+
 echo
 echo "$PASS passed, $FAIL failed"
 [[ $FAIL -eq 0 ]]

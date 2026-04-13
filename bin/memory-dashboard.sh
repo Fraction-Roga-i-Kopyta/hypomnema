@@ -74,6 +74,81 @@ wal_count_event() {
         | awk '{print $1+0}'
 }
 
+# top_triggered WAL_DIR DAYS LIMIT
+top_triggered() {
+    local wal_dir=$1 days=$2 limit=$3
+    wal_events_in_window "$wal_dir" "$days" \
+        | grep '"event":"trigger"' \
+        | sed -E 's/.*"note":"([^"]+)".*/\1/' \
+        | sort | uniq -c | sort -rn \
+        | awk -v lim="$limit" 'NR<=lim {printf "%s\t%d\n", $2, $1}'
+}
+
+# recurring_mistakes ROOT
+recurring_mistakes() {
+    local root=$1
+    local dir="$root/mistakes"
+    [[ -d "$dir" ]] || return 0
+    for f in "$dir"/*.md; do
+        [[ -f "$f" ]] || continue
+        local rec; rec=$(parse_frontmatter_field "$f" recurrence)
+        [[ -n "$rec" && "$rec" -ge 2 ]] 2>/dev/null || continue
+        printf "%s\t%s\n" "$(basename "$f" .md)" "$rec"
+    done | sort -t$'\t' -k2 -rn
+}
+
+# recently_created ROOT LIMIT
+recently_created() {
+    local root=$1 limit=$2
+    for cat in "${MEMORY_CATEGORIES[@]}"; do
+        local d="$root/$cat"
+        [[ -d "$d" ]] || continue
+        for f in "$d"/*.md; do
+            [[ -f "$f" ]] || continue
+            local cr; cr=$(parse_frontmatter_field "$f" created)
+            [[ -n "$cr" ]] || continue
+            printf "%s\t%s\n" "$(basename "$f" .md)" "$cr"
+        done
+    done | sort -t$'\t' -k2 -r | head -n "$limit"
+}
+
+# stale_notes ROOT DAYS_THRESHOLD
+# A note is stale if ref_count == 0 AND referenced is older than DAYS_THRESHOLD.
+stale_notes() {
+    local root=$1 threshold=$2
+    local today_epoch; today_epoch=$(date +%s)
+    for cat in "${MEMORY_CATEGORIES[@]}"; do
+        local d="$root/$cat"
+        [[ -d "$d" ]] || continue
+        for f in "$d"/*.md; do
+            [[ -f "$f" ]] || continue
+            local rc; rc=$(parse_frontmatter_field "$f" ref_count)
+            [[ "$rc" == "0" ]] || continue
+            local ref; ref=$(parse_frontmatter_field "$f" referenced)
+            [[ -n "$ref" ]] || continue
+            local ref_epoch
+            ref_epoch=$(date -j -f "%Y-%m-%d" "$ref" +%s 2>/dev/null) \
+                || ref_epoch=$(date -d "$ref" +%s 2>/dev/null) \
+                || continue
+            local age_days=$(( (today_epoch - ref_epoch) / 86400 ))
+            (( age_days > threshold )) || continue
+            printf "%s\t%dd\n" "$(basename "$f" .md)" "$age_days"
+        done
+    done
+}
+
+active_project() {
+    local f="$1/_agent_context.md"
+    [[ -f "$f" ]] || { echo "-"; return; }
+    awk '/\*\*Active project:\*\*/ {sub(/.*\*\*[[:space:]]*/, ""); gsub(/[[:space:]]+$/, ""); print; exit}' "$f"
+}
+
+active_domains() {
+    local f="$1/_agent_context.md"
+    [[ -f "$f" ]] || { echo "-"; return; }
+    awk '/\*\*Active domains:\*\*/ {sub(/.*\*\*[[:space:]]*/, ""); gsub(/[[:space:]]+$/, ""); print; exit}' "$f"
+}
+
 main() {
     echo "memory-dashboard: not implemented yet"
 }
