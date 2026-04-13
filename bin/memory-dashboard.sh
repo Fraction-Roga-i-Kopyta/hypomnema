@@ -378,6 +378,95 @@ health_check_orphans() {
     echo "$broken"
 }
 
+# Ops registry (parallel arrays — bash 3.2 has no assoc arrays)
+OPS_LABEL=(
+    "Regenerate index"
+    "Run consolidate"
+    "Run dedup (dry-run)"
+    "Backfill ref_count"
+    "Enrich frontmatter"
+    "Score strategies"
+    "Self-profile refresh"
+    "WAL compact"
+)
+OPS_CMD=(
+    "$HOOKS_DIR/regen-memory-index.sh"
+    "$BIN_DIR/memory-consolidate.sh"
+    "python3 $BIN_DIR/memory-dedup.py --dry-run"
+    "$BIN_DIR/memory-backfill-refcount.sh"
+    "$BIN_DIR/memory-enrich-frontmatter.sh"
+    "$BIN_DIR/memory-strategy-score.sh"
+    "$BIN_DIR/memory-self-profile.sh"
+    "$HOOKS_DIR/wal-compact.sh"
+)
+
+# Hooks tracked in "Last Hook Runs" panel
+HOOK_PATHS=(
+    "$HOOKS_DIR/memory-session-start.sh"
+    "$HOOKS_DIR/memory-user-prompt-submit.sh"
+    "$HOOKS_DIR/memory-stop.sh"
+    "$HOOKS_DIR/memory-index.sh"
+)
+HOOK_LABELS=(
+    "session-start"
+    "user-prompt"
+    "memory-stop"
+    "memory-index"
+)
+
+# render_ops ROOT
+# Composes the Ops tab content (between header and footer).
+render_ops() {
+    local root=$1
+
+    # Left column: Operations + Health Checks
+    local L=()
+    L+=("Operations")
+    L+=("----------")
+    local i
+    for ((i = 0; i < ${#OPS_LABEL[@]}; i++)); do
+        local cmd_first="${OPS_CMD[i]%% *}"
+        local marker=""
+        if [[ "$cmd_first" = /* ]]; then
+            [[ -x "$cmd_first" ]] || marker="  (missing)"
+        else
+            command -v "$cmd_first" >/dev/null 2>&1 || marker="  (missing)"
+        fi
+        L+=("$(printf '[%d] %s%s' "$((i + 1))" "${OPS_LABEL[i]}" "$marker")")
+    done
+    L+=("")
+    L+=("Health Checks")
+    L+=("-------------")
+    local fm; fm=$(health_check_frontmatter "$root")
+    local memory_md="$HOME/.claude/projects/-Users-akamash/memory/MEMORY.md"
+    local orph; orph=$(health_check_orphans "$memory_md")
+    L+=("Frontmatter valid: $fm")
+    L+=("Broken md links:   $orph")
+
+    # Right column: Last Hook Runs + Activity
+    local R=()
+    R+=("Last Hook Runs")
+    R+=("--------------")
+    for ((i = 0; i < ${#HOOK_PATHS[@]}; i++)); do
+        local last; last=$(hook_last_run "${HOOK_PATHS[i]}")
+        R+=("$(printf '%-15s %s' "${HOOK_LABELS[i]}" "$last")")
+    done
+    R+=("")
+    R+=("Activity (7d)")
+    R+=("-------------")
+    R+=("Notes created:    $(wal_count_event "$root/.wal" 7 create)")
+    R+=("Notes referenced: $(wal_count_event "$root/.wal" 7 reference)")
+    R+=("Triggers fired:   $(wal_count_event "$root/.wal" 7 trigger)")
+
+    # Pair and render
+    local n_left=${#L[@]} n_right=${#R[@]}
+    local n_max=$(( n_left > n_right ? n_left : n_right ))
+    for ((i = 0; i < n_max; i++)); do
+        render_two_col "${L[i]:-}" "${R[i]:-}"
+        echo
+    done
+}
+
 main() {
     echo "memory-dashboard: not implemented yet"
 }
