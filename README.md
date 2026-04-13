@@ -8,7 +8,7 @@ Persistent memory system for [Claude Code](https://docs.anthropic.com/en/docs/cl
 
 Claude Code starts every session from zero. Hypomnema fixes that.
 
-144 smoke tests, 25 benchmarks, hook time ~0.3 sec.
+164 smoke tests, 25 benchmarks, hook time ~0.3 sec.
 
 ## The problem
 
@@ -74,6 +74,7 @@ referenced: 2025-06-28
 status: pinned
 severity: major
 recurrence: 5
+scope: universal
 root-cause: "Jumps to first hypothesis without listing alternatives"
 prevention: "List 2-3 possible root causes before attempting the first fix"
 keywords: [debugging, hypothesis, root, cause, diagnosis, fix, cascade]
@@ -178,11 +179,12 @@ The hooks activate on next session start.
 
 ### Stop hook
 
-1. Runs lifecycle rotation with type-specific decay rates (mistakes 60/180d, feedback 45/120d, knowledge 90/365d)
+1. Runs lifecycle rotation with type-specific decay rates (mistakes 60/180d, feedback 45/120d, knowledge 90/365d). v0.7+ logs `rotation-stale`, `rotation-archive`, `rotation-summary` to WAL — no longer silent.
 2. Auto-generates continuity from git state (branch, uncommitted, last commit)
 3. Rebuilds TF-IDF index if memory files changed (background, non-blocking)
 4. Shows structured continuity prompt with git context if continuity is stale
 5. Reminds Claude to record findings if nothing was saved
+6. v0.7 — runs `memory-strategy-score.sh` (updates `success_count` in strategies from WAL `strategy-used` events) and `memory-self-profile.sh` (regenerates `self-profile.md`)
 
 ### PreToolUse hook (fuzzy dedup)
 
@@ -249,6 +251,33 @@ During SessionStart, after the main scoring pass:
 5. **Contradicts** — the newer record (by `referenced` date) gets `[ПРИОРИТЕТ]` header annotation; a `⚠ Конфликт` warning explains which is outdated
 6. **Cascade signals** — when a file with `instance_of` children is updated, the children get `[REVIEW: parent updated YYYY-MM-DD]` markers for 14 days via the outcome hook writing `cascade-review` WAL events
 
+## Self-awareness (v0.7)
+
+The system aggregates WAL signals into a derived view of itself. No manual bookkeeping.
+
+### `memory/self-profile.md` — auto-generated
+
+Regenerated on every Stop hook from WAL + mistakes/ + strategies/. Four sections:
+
+- **Meta-signals** — counts: total sessions logged, clean sessions (0 errors), `outcome-positive` (mistake injected but not repeated), `outcome-negative` (mistake repeated anyway), `strategy-used`, `strategy-gap` (clean session but no strategy injected), `trigger-useful` vs `trigger-silent`.
+- **Strengths** — top strategies ranked by `success_count` (synced from WAL `strategy-used` by `bin/memory-strategy-score.sh`).
+- **Weaknesses** — top mistakes by `recurrence`. Entries with `scope: universal` get a 🔴 marker — these are systemic tendencies, not project-specific quirks.
+- **Calibration** — domains sorted by average error rate per session, derived from `session-metrics` WAL events.
+
+Never edit manually — it's a pure function of WAL. Delete it and it regenerates.
+
+### `scope` field for mistakes
+
+Defaults to `domain` if missing. Changes SessionStart behavior:
+
+- `universal` — always injected (systemic patterns like "jumps to first hypothesis")
+- `domain` — injected when active domains intersect with file domains (current pre-v0.7 behavior)
+- `narrow` — only injected via explicit keyword-match; **not** included by domain alone
+
+Narrow scope solves the signal-to-noise problem: library-specific gotchas (`bcrypt-shell-escape`, `html2canvas-oklch`) are useful *when relevant* but were cluttering SessionStart for every backend/frontend session. Now they wait for a keyword hit.
+
+`pinned` status bypasses scope — always injected.
+
 ## Lifecycle
 
 Every memory file has two date fields:
@@ -296,6 +325,10 @@ description: "..."     # optional one-liner; auto-picked by regen-memory-index.s
 # Mistakes only
 severity: major        # minor | major | critical (critical=pinned priority)
 recurrence: 3          # how many times this happened
+scope: domain          # v0.7 — universal | domain | narrow
+                       #   universal = always injected at SessionStart
+                       #   domain    = injected when domain matches (default)
+                       #   narrow    = only on explicit keyword-match, never by domain alone
 root-cause: "..."      # also used as fallback description in MEMORY.md index
 prevention: "..."
 keywords: [css, layout]  # for TF-IDF content matching
@@ -346,6 +379,7 @@ triggers:
 ├── .wal                   # Write-Ahead Log (injection + outcome + error-detect)
 ├── .wal.lockd/            # mkdir-based lock for WAL compaction (v0.6+)
 ├── .runtime/              # per-session dedup lists (v0.6+, replaces /tmp)
+├── self-profile.md        # v0.7 — auto-generated strengths/weaknesses/calibration view
 └── _agent_context.md      # auto-generated compact context for subagents
 ```
 
