@@ -16,10 +16,17 @@ echo ""
 
 # --- Create directory structure ---
 echo "[1/4] Creating memory directories..."
-for dir in mistakes feedback knowledge strategies projects notes journal continuity; do
+for dir in mistakes feedback knowledge strategies projects notes journal continuity seeds; do
   mkdir -p "$MEMORY_DIR/$dir"
 done
-echo "  Created: mistakes/ feedback/ knowledge/ strategies/ projects/ notes/ journal/ continuity/"
+echo "  Created: mistakes/ feedback/ knowledge/ strategies/ projects/ notes/ journal/ continuity/ seeds/"
+
+# Populate seeds/ on first install only (empty target = fresh install).
+# Skip if user already has seeds to preserve their edits/additions.
+if [ -d "$SCRIPT_DIR/seeds" ] && [ -z "$(ls -A "$MEMORY_DIR/seeds" 2>/dev/null)" ]; then
+  cp "$SCRIPT_DIR/seeds/"*.md "$MEMORY_DIR/seeds/" 2>/dev/null
+  echo "  Seeded seeds/ with starter patterns (dormant hints, activate on prompt triggers)"
+fi
 
 # --- Symlink hooks ---
 echo "[2/4] Installing hooks (symlinks)..."

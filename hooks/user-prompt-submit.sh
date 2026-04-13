@@ -158,7 +158,7 @@ fi
 # Priority: sort key built from status+severity+recurrence+ref_count
 CANDIDATES=""
 
-for _dir in mistakes feedback strategies knowledge notes; do
+for _dir in mistakes feedback strategies knowledge notes seeds; do
   [ -d "$MEMORY_DIR/$_dir" ] || continue
   for _f in "$MEMORY_DIR/$_dir"/*.md; do
     [ -f "$_f" ] || continue

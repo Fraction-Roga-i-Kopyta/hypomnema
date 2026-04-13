@@ -174,7 +174,7 @@ EOF
 - [ ] **Step 2: Коммит fixtures**
 
 ```bash
-cd /Users/akamash/Development/hypomnema
+cd $HYPOMNEMA_ROOT
 git add hooks/test-memory-hooks.sh
 git commit -m "test: add cluster/related fixtures for v0.4"
 ```
@@ -291,7 +291,7 @@ rm -rf "$CLUSTER_DIR"
 - [ ] **Step 2: Запустить тесты, убедиться что cluster-тесты FAIL**
 
 ```bash
-cd /Users/akamash/Development/hypomnema
+cd $HYPOMNEMA_ROOT
 bash hooks/test-memory-hooks.sh 2>&1 | grep -E "✗.*Cluster|Passed:"
 ```
 
@@ -600,7 +600,7 @@ fi
 - [ ] **Step 4: Запустить тесты**
 
 ```bash
-cd /Users/akamash/Development/hypomnema
+cd $HYPOMNEMA_ROOT
 bash hooks/test-memory-hooks.sh 2>&1 | tail -30
 ```
 
@@ -956,7 +956,7 @@ related:
 - [ ] **Step 5: Проверить parse_related на живых файлах**
 
 ```bash
-source /Users/akamash/Development/hypomnema/hooks/session-start.sh <<< '{}' 2>/dev/null || true
+source $HYPOMNEMA_ROOT/hooks/session-start.sh <<< '{}' 2>/dev/null || true
 # Или напрямую:
 awk '
   /^---$/ { fm++; if (fm >= 2) exit; next }
@@ -974,7 +974,7 @@ Expected output: `wrong-root-cause-diagnosis:instance_of css-layout-debugging:re
 - [ ] **Step 6: Коммит**
 
 ```bash
-cd /Users/akamash/Development/hypomnema
+cd $HYPOMNEMA_ROOT
 git add -A
 git commit -m "data: add initial related links to 5 memory files"
 ```
@@ -989,7 +989,7 @@ git commit -m "data: add initial related links to 5 memory files"
 - [ ] **Step 1: Запустить полный тест-сьют**
 
 ```bash
-cd /Users/akamash/Development/hypomnema
+cd $HYPOMNEMA_ROOT
 bash hooks/test-memory-hooks.sh
 ```
 
@@ -1006,7 +1006,7 @@ Expected: session-start.sh завершается за < 500ms (с учётом 
 - [ ] **Step 3: Тест на живых данных**
 
 ```bash
-echo '{"session_id":"v04-live-test","cwd":"/Users/akamash"}' | \
+echo '{"session_id":"v04-live-test","cwd":"$HOME"}' | \
   bash ~/.claude/hooks/memory-session-start.sh 2>/dev/null | \
   jq -r '.hookSpecificOutput.additionalContext' | head -60
 ```
