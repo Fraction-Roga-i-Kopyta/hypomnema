@@ -45,6 +45,9 @@ lifecycle_rotate() {
   done
   [ ${#all_files[@]} -gt 0 ] || return 0
 
+  local rotation_today rotation_stale_count=0 rotation_archive_count=0 rotation_checked=${#all_files[@]}
+  rotation_today=$(date +%Y-%m-%d)
+
   # Single-pass awk: extract status, referenced, created for all files
   awk '
   { gsub(/\r/, "") }
@@ -94,17 +97,24 @@ lifecycle_rotate() {
     if [ "$file_status" = "stale" ] && [ "$age" -gt "$archive_days" ]; then
       local rel="${f#$MEMORY_DIR/}"
       mkdir -p "$ARCHIVE_DIR/$(dirname "$rel")"
-      mv "$f" "$ARCHIVE_DIR/$rel"
+      if mv "$f" "$ARCHIVE_DIR/$rel" 2>/dev/null; then
+        rotation_archive_count=$((rotation_archive_count + 1))
+        wal_append "$rotation_today|rotation-archive|$rel|age_${age}d" 2>/dev/null
+      fi
       continue
     fi
 
     if [ "$age" -gt "$stale_days" ] && [ "$file_status" = "active" ]; then
-      perl -pi -e '
+      if perl -pi -e '
         $in_fm = 1 if /^---$/ && !$seen_fm++;
         $in_fm = 0 if /^---$/ && $seen_fm > 1;
         s/^status: active/status: stale/ if $in_fm;
         if (eof) { $seen_fm = 0; $in_fm = 0; }
-      ' "$f" 2>/dev/null || true
+      ' "$f" 2>/dev/null; then
+        local rel="${f#$MEMORY_DIR/}"
+        rotation_stale_count=$((rotation_stale_count + 1))
+        wal_append "$rotation_today|rotation-stale|$rel|age_${age}d" 2>/dev/null
+      fi
     fi
   done
 
@@ -121,9 +131,15 @@ lifecycle_rotate() {
     if [ "$fage" -gt 90 ]; then
       local rel="${f#$MEMORY_DIR/}"
       mkdir -p "$ARCHIVE_DIR/$(dirname "$rel")"
-      mv "$f" "$ARCHIVE_DIR/$rel"
+      if mv "$f" "$ARCHIVE_DIR/$rel" 2>/dev/null; then
+        rotation_archive_count=$((rotation_archive_count + 1))
+        wal_append "$rotation_today|rotation-archive|$rel|no_frontmatter_age_${fage}d" 2>/dev/null
+      fi
     fi
   done
+
+  # Single summary event per rotation run — easy to grep/verify
+  wal_append "$rotation_today|rotation-summary|checked_${rotation_checked}|stale_${rotation_stale_count},archived_${rotation_archive_count}" 2>/dev/null
 }
 
 lifecycle_rotate 2>/dev/null || true
@@ -495,6 +511,20 @@ if [ -n "$REMINDER" ]; then
   cat <<EOF
 {"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":$(printf '%s\n' "$REMINDER" | jq -Rs .)}}
 EOF
+fi
+
+# Strategy scorer — update success_count in strategies/*.md from WAL.
+SCORE_SCRIPT="$HOME/.claude/bin/memory-strategy-score.sh"
+if [ -x "$SCORE_SCRIPT" ]; then
+  CLAUDE_MEMORY_DIR="$MEMORY_DIR" bash "$SCORE_SCRIPT" 2>/dev/null &
+  disown 2>/dev/null || true
+fi
+
+# Self-profile generator — derived view of WAL + mistakes + strategies.
+PROFILE_SCRIPT="$HOME/.claude/bin/memory-self-profile.sh"
+if [ -x "$PROFILE_SCRIPT" ]; then
+  CLAUDE_MEMORY_DIR="$MEMORY_DIR" bash "$PROFILE_SCRIPT" 2>/dev/null &
+  disown 2>/dev/null || true
 fi
 
 # WAL compaction — ensure WAL doesn't grow unbounded between sessions.

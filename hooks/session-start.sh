@@ -211,13 +211,13 @@ AWK_MISTAKES='
 { gsub(/\r/, "") }
 FNR == 1 {
   if (prev_file != "") {
-    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", \
-      prev_file, status, project, recurrence, injected, severity, root_cause, prevention, domains, keywords, body
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", \
+      prev_file, status, project, recurrence, injected, severity, root_cause, prevention, domains, keywords, scope, body
   }
   in_fm = 0; fm_end_count = 0
   status = "_empty_"; project = "_empty_"; recurrence = "0"; injected = "0000-00-00"
   severity = "_empty_"; root_cause = "_empty_"; prevention = "_empty_"; domains = "_none_"; keywords = "_none_"
-  body = ""; past_fm = 0; prev_file = FILENAME
+  scope = "domain"; body = ""; past_fm = 0; prev_file = FILENAME
 }
 /^---$/ {
   fm_end_count++
@@ -233,12 +233,13 @@ in_fm && /^root-cause:/ { sub(/^root-cause: */, ""); root_cause = $0; next }
 in_fm && /^prevention:/ { sub(/^prevention: */, ""); prevention = $0; next }
 in_fm && /^domains:/ { sub(/^domains: *\[?/, ""); sub(/\].*/, ""); gsub(/, */, " "); domains = $0; next }
 in_fm && /^keywords:/ { sub(/^keywords: *\[?/, ""); sub(/\].*/, ""); gsub(/, */, " "); keywords = $0; next }
+in_fm && /^scope:/ { sub(/^scope: */, ""); scope = $0; next }
 past_fm && !/^$/ { gsub(/\t/, " ", $0); body = body $0 "\x1e" }
 END {
   if (prev_file != "") {
     gsub(/\t/, " ", root_cause); gsub(/\t/, " ", prevention)
-    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", \
-      prev_file, status, project, recurrence, injected, severity, root_cause, prevention, domains, keywords, body
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", \
+      prev_file, status, project, recurrence, injected, severity, root_cause, prevention, domains, keywords, scope, body
   }
 }'
 
@@ -362,13 +363,19 @@ collect_mistakes() {
         [ "${m_top_score:-0}" -gt 0 ] && m_has_scored=1 && m_max_zero=2
       fi
 
-      while IFS=$'\t' read -r kscore file status file_project recurrence injected severity root_cause prevention file_domains file_keywords body; do
+      while IFS=$'\t' read -r kscore file status file_project recurrence injected severity root_cause prevention file_domains file_keywords file_scope body; do
         [ -z "$file" ] && continue
         body=$(printf '%s' "$body" | tr $'\x1e' '\n')
         [ "$status" != "active" ] && [ "$status" != "pinned" ] && continue
 
         # Recurrence threshold: skip unconfirmed mistakes (rec=0) unless pinned
         [ "$recurrence" = "0" ] && [ "$status" != "pinned" ] && continue
+
+        # Scope filter: narrow mistakes inject only via explicit keyword match (not domain alone)
+        # Pinned bypasses scope — always inject.
+        if [ "$file_scope" = "narrow" ] && [ "${kscore:-0}" -eq 0 ] && [ "$status" != "pinned" ]; then
+          continue
+        fi
 
         # Domain filtering: skip if domains don't match active context
         domain_matches "$file_domains" || continue

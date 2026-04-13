@@ -44,7 +44,9 @@ echo "             bench-memory.sh, test-memory-hooks.sh, lib/"
 echo "[3/4] Installing utilities (symlinks)..."
 mkdir -p "$CLAUDE_DIR/bin"
 ln -sf "$SCRIPT_DIR/bin/consolidate.sh" "$CLAUDE_DIR/bin/memory-consolidate.sh"
-echo "  Symlinked: memory-consolidate.sh"
+ln -sf "$SCRIPT_DIR/bin/memory-strategy-score.sh" "$CLAUDE_DIR/bin/memory-strategy-score.sh"
+ln -sf "$SCRIPT_DIR/bin/memory-self-profile.sh" "$CLAUDE_DIR/bin/memory-self-profile.sh"
+echo "  Symlinked: memory-consolidate.sh, memory-strategy-score.sh, memory-self-profile.sh"
 
 # --- Patch settings.json ---
 echo "[4/4] Patching settings.json..."
