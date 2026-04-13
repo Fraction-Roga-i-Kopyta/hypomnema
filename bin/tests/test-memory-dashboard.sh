@@ -18,6 +18,11 @@ FIX="$(dirname "$0")/fixtures/memory"
 
 # --- tests appended in subsequent tasks ---
 
+# parse_frontmatter_field
+assert_eq "5"      "$(parse_frontmatter_field "$FIX/mistakes/sample.md" recurrence)" "fm/recurrence"
+assert_eq "major"  "$(parse_frontmatter_field "$FIX/mistakes/sample.md" severity)"   "fm/severity"
+assert_eq ""       "$(parse_frontmatter_field "$FIX/mistakes/sample.md" missing)"    "fm/missing"
+
 echo
 echo "$PASS passed, $FAIL failed"
 [[ $FAIL -eq 0 ]]
