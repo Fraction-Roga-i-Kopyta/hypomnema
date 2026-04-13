@@ -7,6 +7,7 @@ set -u
 MEMORY_DIR="${MEMORY_DIR:-$HOME/.claude/memory}"
 BIN_DIR="${BIN_DIR:-$HOME/.claude/bin}"
 HOOKS_DIR="${HOOKS_DIR:-$HOME/.claude/hooks}"
+MEMORY_MD_PATH="${MEMORY_MD_PATH:-$HOME/.claude/projects/-Users-akamash/memory/MEMORY.md}"
 
 # parse_frontmatter_field FILE FIELD
 # Extracts a top-level YAML field from frontmatter (between --- markers).
@@ -438,7 +439,7 @@ render_ops() {
     L+=("Health Checks")
     L+=("-------------")
     local fm; fm=$(health_check_frontmatter "$root")
-    local memory_md="$HOME/.claude/projects/-Users-akamash/memory/MEMORY.md"
+    local memory_md="$MEMORY_MD_PATH"
     local orph; orph=$(health_check_orphans "$memory_md")
     L+=("Frontmatter valid: $fm")
     L+=("Broken md links:   $orph")
@@ -514,8 +515,65 @@ run_operation() {
     tput civis 2>/dev/null
 }
 
+validate_terminal() {
+    local cols; cols=$(tput cols 2>/dev/null || echo 80)
+    local lines; lines=$(tput lines 2>/dev/null || echo 24)
+    if (( cols < TUI_WIDTH || lines < 24 )); then
+        echo "memory-dashboard: terminal too small (need >= ${TUI_WIDTH}x24, got ${cols}x${lines})" >&2
+        exit 1
+    fi
+}
+
+cleanup() {
+    tput cnorm 2>/dev/null
+    tput rmcup 2>/dev/null
+    stty echo 2>/dev/null
+    echo
+}
+
+draw_screen() {
+    local active=$1 root=$2
+    clear
+    draw_top "Memory Dashboard" "$(date '+%Y-%m-%d %H:%M')"
+    draw_tab_header "$active"
+    if [[ "$active" == "overview" ]]; then
+        render_overview "$root"
+        draw_bottom "[Tab] switch  [r] refresh  [q] quit"
+    else
+        render_ops "$root"
+        draw_bottom "[1-8] run  [Tab] switch  [r] refresh  [q] quit"
+    fi
+}
+
 main() {
-    echo "memory-dashboard: not implemented yet"
+    validate_terminal
+    trap cleanup EXIT INT TERM
+
+    tput smcup 2>/dev/null
+    tput civis 2>/dev/null
+
+    local active="overview"
+    local root="$MEMORY_DIR"
+
+    while true; do
+        draw_screen "$active" "$root"
+        local key
+        IFS= read -rsn1 key
+        case "$key" in
+            q|Q) break ;;
+            r|R) continue ;;
+            $'\t') [[ "$active" == "overview" ]] && active="ops" || active="overview" ;;
+            1) active="ops"; run_operation 1 ;;
+            2) active="ops"; run_operation 2 ;;
+            3) active="ops"; run_operation 3 ;;
+            4) active="ops"; run_operation 4 ;;
+            5) active="ops"; run_operation 5 ;;
+            6) active="ops"; run_operation 6 ;;
+            7) active="ops"; run_operation 7 ;;
+            8) active="ops"; run_operation 8 ;;
+            *) ;;
+        esac
+    done
 }
 
 [[ "${SOURCE_ONLY:-0}" == "1" ]] && return 0
