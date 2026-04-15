@@ -4,6 +4,8 @@
 # Exit 2 = block write (high similarity duplicate found)
 # Requires: uv + python3 (graceful: exit 0 if unavailable)
 
+set -o pipefail
+
 MEMORY_DIR="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}"
 
 INPUT=$(cat)

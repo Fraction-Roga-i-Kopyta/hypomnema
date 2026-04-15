@@ -1,5 +1,6 @@
 #!/bin/bash
 # UserPromptSubmit hook — inject memory files matching prompt triggers (v0.5)
+set -o pipefail
 # Scans memory/*/*.md frontmatter for `trigger:` (single) and `triggers:` (array),
 # matches case-insensitive substring against the prompt, and injects up to
 # MAX_TRIGGERED matching files as a "## Triggered (from prompt)" section.
@@ -7,8 +8,6 @@
 # Dedup: skips files already injected at SessionStart (tracked in /tmp).
 # WAL: logs `trigger-match|<slug>|<session_id>` per match.
 # Graceful degradation: any error → exit 0 with no output.
-
-set -o pipefail
 
 MEMORY_DIR="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}"
 MAX_TRIGGERED=4

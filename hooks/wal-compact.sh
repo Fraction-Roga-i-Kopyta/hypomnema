@@ -1,5 +1,6 @@
 #!/bin/bash
 # WAL compaction: keep last 14 days raw, aggregate older entries
+set -o pipefail
 MEMORY_DIR="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}"
 WAL_FILE="$MEMORY_DIR/.wal"
 [ -f "$WAL_FILE" ] || exit 0

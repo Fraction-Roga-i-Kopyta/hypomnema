@@ -5,6 +5,8 @@
 # Output: hint to Claude context if known pattern detected
 # Graceful: any error → exit 0
 
+set -o pipefail
+
 MEMORY_DIR="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}"
 PATTERNS_FILE="$MEMORY_DIR/.error-patterns"
 WAL_FILE="$MEMORY_DIR/.wal"
