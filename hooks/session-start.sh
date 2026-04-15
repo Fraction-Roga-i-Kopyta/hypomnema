@@ -27,6 +27,8 @@ TODAY=$(date +%Y-%m-%d)
 . "$(dirname "$0")/lib/wal-lock.sh" 2>/dev/null || true
 # shellcheck source=lib/stat-helpers.sh
 . "$(dirname "$0")/lib/stat-helpers.sh" 2>/dev/null || true
+# shellcheck source=lib/detect-project.sh
+. "$(dirname "$0")/lib/detect-project.sh" 2>/dev/null || true
 
 # Escape a string for safe interpolation inside a perl regex pattern.
 # Used wherever user-supplied slugs/names land in `perl -pe "s/.../"` patterns.
@@ -56,19 +58,8 @@ fi
 
 # --- Detect project ---
 
-PROJECT=""
 PROJECTS_JSON="$MEMORY_DIR/projects.json"
-if [ -f "$PROJECTS_JSON" ] && jq empty "$PROJECTS_JSON" 2>/dev/null; then
-  while read -r prefix; do
-    # Exact match or prefix with / boundary (prevents /fly matching /fly-other)
-    case "$CWD" in
-      "${prefix}"|"${prefix}"/*)
-        PROJECT=$(jq -r --arg k "$prefix" '.[$k]' "$PROJECTS_JSON" 2>/dev/null)
-        break
-        ;;
-    esac
-  done < <(jq -r 'to_entries | sort_by(.key | length) | reverse | .[].key' "$PROJECTS_JSON" 2>/dev/null)
-fi
+PROJECT=$(detect_project "$CWD")
 
 # Create session marker early (ensures stop hook can run even if we crash later)
 # Sanitize session_id for marker filename (slashes create subdirs)
