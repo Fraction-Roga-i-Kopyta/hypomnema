@@ -2130,33 +2130,75 @@ assert "Ranking — major severity beats fresh minor" '
 '
 rm -f "$TR_MEM/mistakes/trigger-fresh-minor.md" "$TR_MEM/mistakes/trigger-old-major.md"
 
-# --- Test 20: feedback loop — trigger-useful when assistant references slug ---
+# --- Test 20e: feedback loop end-to-end — useful via evidence: frontmatter ---
 FB_DIR=$(mktemp -d); FB_MEM="$FB_DIR/memory"
 mkdir -p "$FB_MEM/mistakes"
-cat > "$FB_MEM/mistakes/referenced-mistake.md" << 'EOF'
+cat > "$FB_MEM/mistakes/sql-rule.md" << 'EOF'
+---
+type: mistake
+status: active
+evidence:
+  - "parameterized query"
+---
+Always parameterize.
+EOF
+cat > "$FB_MEM/mistakes/unused-rule.md" << 'EOF'
+---
+type: mistake
+status: active
+evidence:
+  - "xyzzy nonexistent phrase"
+---
+Never applied.
+EOF
+
+TODAY=$(date +%Y-%m-%d)
+printf '%s|inject|sql-rule|fb-e2e\n' "$TODAY" > "$FB_MEM/.wal"
+printf '%s|inject|unused-rule|fb-e2e\n' "$TODAY" >> "$FB_MEM/.wal"
+
+cat > "$FB_DIR/transcript.jsonl" << 'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"fix the SQL bug"}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"I will use a parameterized query to prevent injection."}]}}
+EOF
+FB_MARKER="/tmp/.claude-session-fb-e2e"
+touch -t 202601010000 "$FB_MARKER"
+
+printf '{"session_id":"fb-e2e","transcript_path":"%s/transcript.jsonl"}' "$FB_DIR" | \
+  CLAUDE_MEMORY_DIR="$FB_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null >/dev/null
+
+assert "Feedback e2e — evidence match → trigger-useful" \
+  'grep -q "|trigger-useful|sql-rule|fb-e2e" "$FB_MEM/.wal"'
+assert "Feedback e2e — no evidence match → trigger-silent" \
+  'grep -q "|trigger-silent|unused-rule|fb-e2e" "$FB_MEM/.wal"'
+
+rm -rf "$FB_DIR" "$FB_MARKER"
+
+# --- Test 20f: feedback loop end-to-end — body-mining fallback ---
+FB_DIR=$(mktemp -d); FB_MEM="$FB_DIR/memory"
+mkdir -p "$FB_MEM/mistakes"
+cat > "$FB_MEM/mistakes/bodyonly-rule.md" << 'EOF'
 ---
 type: mistake
 status: active
 ---
-Body.
+Use timezone-aware datetime objects for all reporting pipelines.
 EOF
-printf '%s|inject|referenced-mistake|fb-useful\n' "$(date +%Y-%m-%d)" > "$FB_MEM/.wal"
-printf '%s|inject|ghost-mistake|fb-useful\n' "$(date +%Y-%m-%d)" >> "$FB_MEM/.wal"
+
+TODAY=$(date +%Y-%m-%d)
+printf '%s|inject|bodyonly-rule|fb-body\n' "$TODAY" > "$FB_MEM/.wal"
 
 cat > "$FB_DIR/transcript.jsonl" << 'EOF'
-{"type":"user","message":{"content":[{"type":"text","text":"help me"}]}}
-{"type":"assistant","message":{"content":[{"type":"text","text":"Based on referenced-mistake, we need to handle this carefully."}]}}
+{"type":"user","message":{"content":[{"type":"text","text":"fix date handling"}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Using timezone-aware datetime with explicit UTC for reporting."}]}}
 EOF
-FB_MARKER="/tmp/.claude-session-fb-useful"
+FB_MARKER="/tmp/.claude-session-fb-body"
 touch -t 202601010000 "$FB_MARKER"
 
-printf '{"session_id":"fb-useful","transcript_path":"%s/transcript.jsonl"}' "$FB_DIR" | \
+printf '{"session_id":"fb-body","transcript_path":"%s/transcript.jsonl"}' "$FB_DIR" | \
   CLAUDE_MEMORY_DIR="$FB_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null >/dev/null
 
-assert "Feedback — trigger-useful written when slug referenced" \
-  'grep -q "trigger-useful|referenced-mistake|fb-useful" "$FB_MEM/.wal"'
-assert "Feedback — trigger-silent written when slug not referenced" \
-  'grep -q "trigger-silent|ghost-mistake|fb-useful" "$FB_MEM/.wal"'
+assert "Feedback e2e — body-mining ≥2 tokens → trigger-useful" \
+  'grep -q "|trigger-useful|bodyonly-rule|fb-body" "$FB_MEM/.wal"'
 
 rm -rf "$FB_DIR" "$FB_MARKER"
 

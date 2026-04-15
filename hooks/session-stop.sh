@@ -460,16 +460,14 @@ if [ -f "$WAL_FILE" ] && [ -n "$SAFE_SESSION_ID" ]; then
 fi
 
 # --- Feedback loop: useful/silent signal for injected memories ---
-# Check if assistant ever referenced the slug of an injected memory.
-# Useful = explicit reference; Silent = injected but never named (either
-# applied silently or was noise — future per-trigger precision will tell).
+# Uses hooks/lib/evidence-extract.sh to match memory content against assistant text.
+# evidence: frontmatter path (threshold ≥1) or body-mining fallback (threshold ≥2).
 if [ -f "$WAL_FILE" ] && [ -n "$SAFE_SESSION_ID" ] && [ -n "$TRANSCRIPT_PATH" ] && [ -f "$TRANSCRIPT_PATH" ]; then
   _INJECTED_ALL=$(awk -F'|' -v sid="$SAFE_SESSION_ID" '
     $4 == sid && ($2 == "inject" || $2 == "trigger-match") { print $3 }
   ' "$WAL_FILE" 2>/dev/null | sort -u)
 
   if [ -n "$_INJECTED_ALL" ]; then
-    # Extract assistant text only — skip tool calls and user messages.
     _ASSIST_TEXT=$(awk '
       /"type":"assistant"/ && /"text":/ {
         t = $0
@@ -480,10 +478,55 @@ if [ -f "$WAL_FILE" ] && [ -n "$SAFE_SESSION_ID" ] && [ -n "$TRANSCRIPT_PATH" ] 
       }
     ' "$TRANSCRIPT_PATH" 2>/dev/null)
 
+    _ASSIST_TEXT_LC=$(printf '%s' "$_ASSIST_TEXT" | tr '[:upper:]' '[:lower:]')
+
+    # shellcheck source=lib/evidence-extract.sh
+    . "$(dirname "$0")/lib/evidence-extract.sh" 2>/dev/null || true
+    # shellcheck source=lib/wal-lock.sh
+    . "$(dirname "$0")/lib/wal-lock.sh" 2>/dev/null || true
+
     _FEEDBACK_LINES=""
+    _DIAG_LINES=""
     while IFS= read -r _inj_slug; do
       [ -z "$_inj_slug" ] && continue
-      if printf '%s' "$_ASSIST_TEXT" | grep -qF "$_inj_slug" 2>/dev/null; then
+
+      _MEM_FILE=$(find "$MEMORY_DIR" -maxdepth 3 -name "${_inj_slug}.md" 2>/dev/null | head -1)
+      if [ -z "$_MEM_FILE" ]; then
+        _DIAG_LINES="${_DIAG_LINES}${TODAY}|evidence-missing|${_inj_slug}|${SAFE_SESSION_ID}
+"
+        _FEEDBACK_LINES="${_FEEDBACK_LINES}${TODAY}|trigger-silent|${_inj_slug}|${SAFE_SESSION_ID}
+"
+        continue
+      fi
+
+      _EVID=$(evidence_from_frontmatter "$_MEM_FILE" 2>/dev/null)
+      if [ -n "$_EVID" ]; then
+        _THRESHOLD=1
+      else
+        _EVID=$(evidence_from_body "$_MEM_FILE" 2>/dev/null)
+        if [ -z "$_EVID" ]; then
+          _DIAG_LINES="${_DIAG_LINES}${TODAY}|evidence-empty|${_inj_slug}|${SAFE_SESSION_ID}
+"
+          _FEEDBACK_LINES="${_FEEDBACK_LINES}${TODAY}|trigger-silent|${_inj_slug}|${SAFE_SESSION_ID}
+"
+          continue
+        fi
+        _THRESHOLD=2
+      fi
+
+      _HITS=0
+      _SEEN=""
+      while IFS= read -r _phrase; do
+        [ -z "$_phrase" ] && continue
+        _phrase_lc=$(printf '%s' "$_phrase" | tr '[:upper:]' '[:lower:]')
+        case "|$_SEEN|" in *"|$_phrase_lc|"*) continue ;; esac
+        if printf '%s' "$_ASSIST_TEXT_LC" | grep -qF "$_phrase_lc" 2>/dev/null; then
+          _HITS=$((_HITS + 1))
+          _SEEN="${_SEEN}|${_phrase_lc}"
+        fi
+      done <<< "$_EVID"
+
+      if [ "$_HITS" -ge "$_THRESHOLD" ]; then
         _FEEDBACK_LINES="${_FEEDBACK_LINES}${TODAY}|trigger-useful|${_inj_slug}|${SAFE_SESSION_ID}
 "
       else
@@ -492,10 +535,9 @@ if [ -f "$WAL_FILE" ] && [ -n "$SAFE_SESSION_ID" ] && [ -n "$TRANSCRIPT_PATH" ] 
       fi
     done <<< "$_INJECTED_ALL"
 
-    if [ -n "$_FEEDBACK_LINES" ]; then
-      # shellcheck source=lib/wal-lock.sh
-      . "$(dirname "$0")/lib/wal-lock.sh" 2>/dev/null || true
-      wal_run_locked bash -c 'printf "%s" "$1" >> "$2"' _ "$_FEEDBACK_LINES" "$WAL_FILE" 2>/dev/null || true
+    if [ -n "$_FEEDBACK_LINES" ] || [ -n "$_DIAG_LINES" ]; then
+      wal_run_locked bash -c 'printf "%s%s" "$1" "$2" >> "$3"' _ \
+        "$_FEEDBACK_LINES" "$_DIAG_LINES" "$WAL_FILE" 2>/dev/null || true
     fi
   fi
 fi
