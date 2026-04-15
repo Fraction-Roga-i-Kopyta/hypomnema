@@ -2257,6 +2257,52 @@ assert "evidence_from_frontmatter — extracts YAML array entries" \
 
 rm -rf "$EX_DIR"
 
+# --- Test 20b: evidence_from_body extracts content tokens, excludes stop-words + frontmatter ---
+EX_DIR=$(mktemp -d); EX_MEM="$EX_DIR/memory"
+mkdir -p "$EX_MEM/mistakes"
+cat > "$EX_MEM/mistakes/ex-body.md" << 'EOF'
+---
+type: mistake
+description: SQL injection prevention
+---
+Always use parameterized queries; never interpolate strings.
+**Why:** Injection attacks are common.
+**How to apply:** cursor.execute with placeholders.
+EOF
+
+set +e
+. "$HOME/.claude/hooks/lib/evidence-extract.sh" 2>/dev/null || \
+  . "$(dirname "$0")/lib/evidence-extract.sh" 2>/dev/null || \
+  . "/Users/akamash/Development/hypomnema/hooks/lib/evidence-extract.sh"
+set -e
+EX_BODY=$(evidence_from_body "$EX_MEM/mistakes/ex-body.md")
+
+# Must include content words from body
+assert "evidence_from_body — includes 'parameterized'" \
+  'printf "%s\n" "$EX_BODY" | grep -qx "parameterized"'
+assert "evidence_from_body — includes 'queries'" \
+  'printf "%s\n" "$EX_BODY" | grep -qx "queries"'
+assert "evidence_from_body — includes 'interpolate'" \
+  'printf "%s\n" "$EX_BODY" | grep -qx "interpolate"'
+
+# Must EXCLUDE tokens from Why/How sections
+assert "evidence_from_body — excludes tokens from **Why:** line" \
+  '! printf "%s\n" "$EX_BODY" | grep -qx "injection"'
+assert "evidence_from_body — excludes tokens from **How to apply:** line" \
+  '! printf "%s\n" "$EX_BODY" | grep -qx "placeholders"'
+
+# Must EXCLUDE frontmatter (description contains "prevention")
+assert "evidence_from_body — excludes frontmatter description" \
+  '! printf "%s\n" "$EX_BODY" | grep -qx "prevention"'
+
+# Must EXCLUDE stop-words
+assert "evidence_from_body — excludes stop-word 'never'" \
+  '! printf "%s\n" "$EX_BODY" | grep -qx "never"'
+assert "evidence_from_body — excludes stop-word 'always'" \
+  '! printf "%s\n" "$EX_BODY" | grep -qx "always"'
+
+rm -rf "$EX_DIR"
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="
