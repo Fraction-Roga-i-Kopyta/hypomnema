@@ -352,11 +352,11 @@ fi
 TODAY=$(date +%Y-%m-%d)
 WAL_FILE="$MEMORY_DIR/.wal"
 if [ -f "$WAL_FILE" ] && [ -n "$SAFE_SESSION_ID" ]; then
-  INJECTED_MISTAKES=$(awk -F'|' -v sid="$SAFE_SESSION_ID" '
+  INJECTED_MISTAKES=$(wal_run_locked awk -F'|' -v sid="$SAFE_SESSION_ID" '
     $4 == sid && $2 == "inject" { print $3 }
   ' "$WAL_FILE" 2>/dev/null)
 
-  NEGATIVE_MISTAKES=$(awk -F'|' -v sid="$SAFE_SESSION_ID" '
+  NEGATIVE_MISTAKES=$(wal_run_locked awk -F'|' -v sid="$SAFE_SESSION_ID" '
     $4 == sid && $2 == "outcome-negative" { print $3 }
   ' "$WAL_FILE" 2>/dev/null)
 
@@ -433,7 +433,7 @@ fi
 
 # --- Strategy tracking ---
 if [ -f "$WAL_FILE" ] && [ -n "$SAFE_SESSION_ID" ]; then
-  INJECTED_STRATEGIES=$(awk -F'|' -v sid="$SAFE_SESSION_ID" '
+  INJECTED_STRATEGIES=$(wal_run_locked awk -F'|' -v sid="$SAFE_SESSION_ID" '
     $4 == sid && $2 == "inject" { print $3 }
   ' "$WAL_FILE" 2>/dev/null)
 
@@ -463,7 +463,7 @@ fi
 # Uses hooks/lib/evidence-extract.sh to match memory content against assistant text.
 # evidence: frontmatter path (threshold ≥1) or body-mining fallback (threshold ≥2).
 if [ -f "$WAL_FILE" ] && [ -n "$SAFE_SESSION_ID" ] && [ -n "$TRANSCRIPT_PATH" ] && [ -f "$TRANSCRIPT_PATH" ]; then
-  _INJECTED_ALL=$(awk -F'|' -v sid="$SAFE_SESSION_ID" '
+  _INJECTED_ALL=$(wal_run_locked awk -F'|' -v sid="$SAFE_SESSION_ID" '
     $4 == sid && ($2 == "inject" || $2 == "trigger-match") { print $3 }
   ' "$WAL_FILE" 2>/dev/null | sort -u)
 

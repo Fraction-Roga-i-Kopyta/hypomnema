@@ -2534,6 +2534,15 @@ assert "perl-injection — source body still present" \
 
 rm -rf "$T21_DIR" "$T21_STDERR"
 
+# --- Test 22: WAL feedback-loop read is locked (v0.8) ---
+# session-stop.sh awk-reads $WAL_FILE for inject/trigger-match events;
+# without a lock, concurrent appends from other sessions truncate lines.
+T22_HOOK_SRC="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)/hooks/session-stop.sh"
+[ -f "$T22_HOOK_SRC" ] || T22_HOOK_SRC="hooks/session-stop.sh"
+
+assert "wal-lock — feedback awk read wrapped in wal_run_locked" \
+  'grep -E "wal_run_locked[[:space:]]+awk" "$T22_HOOK_SRC" >/dev/null'
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="
