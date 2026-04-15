@@ -176,6 +176,11 @@ if [ ! -f "$MEMORY_DIR/.confidence-excludes" ] && [ -f "$SCRIPT_DIR/hooks/.confi
   cp "$SCRIPT_DIR/hooks/.confidence-excludes" "$MEMORY_DIR/.confidence-excludes"
   echo "  Copied default .confidence-excludes"
 fi
+# v0.8: copy .config.sh.example to .config.sh on fresh install
+if [ ! -f "$MEMORY_DIR/.config.sh" ] && [ -f "$SCRIPT_DIR/templates/.config.sh.example" ]; then
+  cp "$SCRIPT_DIR/templates/.config.sh.example" "$MEMORY_DIR/.config.sh"
+  echo "  Copied default .config.sh (edit to override caps/limits)"
+fi
 
 echo ""
 echo "=== Done ==="

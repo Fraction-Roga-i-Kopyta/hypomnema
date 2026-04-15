@@ -1,0 +1,23 @@
+# Hypomnema runtime configuration. Copy to ~/.claude/memory/.config.sh and edit.
+# Hooks source this file at startup; missing values fall back to built-in defaults.
+# All values are integers.
+
+# --- Injection caps (session-start.sh) ---
+MAX_FILES=22                    # total files injected per session
+MAX_SCORED_TOTAL=12             # adaptive pool: feedback/knowledge/strategies/decisions/notes
+MAX_CLUSTER=4                   # max related-link expansion per seed
+MAX_GLOBAL_MISTAKES=3
+MAX_PROJECT_MISTAKES=3
+
+# Per-type caps within the adaptive pool
+CAP_FEEDBACK=6
+CAP_KNOWLEDGE=4
+CAP_STRATEGIES=4
+CAP_DECISIONS=3
+CAP_NOTES=2
+
+# --- Trigger injection (user-prompt-submit.sh) ---
+MAX_TRIGGERED=4                 # max files injected per prompt match
+
+# --- Stop hook (session-stop.sh) ---
+MIN_SESSION_SECONDS=120         # below this, skip checkpoint reminder
