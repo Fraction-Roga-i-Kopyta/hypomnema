@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.7.1] - 2026-04-15
+
+Фикс мёртвого feedback-детектора. v0.7 dogfooding показал **1472 инжекта, 0 `trigger-useful`, 39 `trigger-silent`** — сигнал полностью не работал, потому что `session-stop.sh:486` делал `grep -F "$slug"` по имени файла памяти в тексте ассистента, а на практике правило применяется молча ("добавил tz-aware datetime", без упоминания `code-approach`).
+
+### Fixed
+
+- **`session-stop.sh` feedback detector** — заменён slug-grep на content-based matching через новую библиотеку `hooks/lib/evidence-extract.sh`. Теперь сигнал отражает реальное применение правила.
+
+### Added
+
+- **`hooks/lib/evidence-extract.sh`** — две чистые функции:
+  - `evidence_from_frontmatter` — парсит опциональное поле `evidence:` (YAML-массив) из frontmatter памяти. Порог: ≥1 фраза в ответе ассистента (case-insensitive substring) → `trigger-useful`.
+  - `evidence_from_body` — fallback. Извлекает уникальные content-токены из тела памяти (исключает frontmatter, `**Why:**`/`**How to apply:**`, fenced code blocks, blockquotes, сам slug). Фильтры: длина ≥4, встроенный ~70-словный ru+en stop-list. Порог: ≥2 уникальных токена совпало → `trigger-useful`.
+- **`evidence:` frontmatter field** — опциональный массив фраз-доказательств применения. Автор указывает концепты решения ("parameterized query", "tz-aware"), не проблемы.
+- **Новые WAL-события:**
+  - `evidence-missing|slug|session` — инжектнутый файл памяти не найден на session-stop (подозрение на сломанный MEMORY.md regen или удаление в сессии).
+  - `evidence-empty|slug|session` — у памяти нет `evidence:` и body-mining дал 0 токенов. Сигнал, что память слишком короткая / целиком во frontmatter — кандидат на доработку автором.
+
+### Signal bias
+
+Детектор сознательно смещён в сторону `trigger-useful` (низкий порог). Обоснование: downstream auto-disable шумных триггеров должен избегать штрафа работающих памятей. False `silent` дороже false `useful`.
+
+### Limitations
+
+- Body-mining ASCII-ориентирован (BWK awk на macOS трактует Cyrillic побайтно). Памяти с кириллическим телом должны использовать явное `evidence:` поле.
+- Memories с несколькими независимыми правилами (например `code-approach` с 5 правилами) могут всегда показывать useful по overlap любого из них. Если auto-disable потом это высветит — сигнал расщепить такую память на атомарные, что и так хорошая практика.
+
+### Tests
+
+177 → 183 (6 новых assert'ов; Test 20 перезаписан с slug-grep на content-based end-to-end + evidence-missing/empty/case-insensitive тесты). ALL TESTS PASSED.
+
+### Dogfood validation
+
+После установки: провести 2-3 сессии, проверить `awk -F'|' '$2=="trigger-useful"' ~/.claude/memory/.wal | wc -l` — ожидаем ≥1 (раньше 0). Если всё ещё 0 — добавить `evidence:` к core memories (`code-approach`, `debugging-approach`, `wrong-root-cause-diagnosis`).
+
+---
+
 ## [0.7.0] - 2026-04-13
 
 "Самопознание" — система теперь видит себя через WAL-метрики. Плюс гигиена v0.6 (H1-H4).
