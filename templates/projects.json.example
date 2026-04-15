@@ -1,0 +1,6 @@
+{
+  "_comment": "Map absolute project root paths to short project slugs. SessionStart uses longest-prefix match. Slugs are referenced in mistake/strategy frontmatter as `project: <slug>`. Use `project: global` in frontmatter for cross-project content.",
+  "/Users/you/Development/webapp": "webapp",
+  "/Users/you/Development/api": "api-service",
+  "/Users/you/code/cli-tool": "cli"
+}
