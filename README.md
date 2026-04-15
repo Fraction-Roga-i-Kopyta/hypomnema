@@ -348,6 +348,11 @@ related:
 triggers:
   - "css layout"
   - "flex gap"
+
+# v0.7.1 — evidence of application (used by session-stop feedback detector)
+evidence:
+  - "parameterized query"
+  - "timezone-aware datetime"
 ---
 ```
 
@@ -356,6 +361,13 @@ triggers:
 - negation window: match skipped if ±40 chars around it contain не/без/уже/нет/already/fixed/skip/no/don't
 - priority key: `project_rank → status → severity → recency → log₁₀(ref_count) → recurrence → ref_count`
 - malformed frontmatter (no closing `---`) produces `schema-error` WAL event, file skipped
+
+**Feedback detector (v0.7.1):**
+- session-stop writes `trigger-useful` if memory content was applied in the assistant's responses, else `trigger-silent`
+- if `evidence:` is present: match is case-insensitive substring over those phrases, threshold ≥1
+- if `evidence:` is absent: fallback to body-mining — extract content tokens from the body (length ≥4, ru+en stop-list filtered, slug filtered, excludes `**Why:**` / `**How to apply:**` / fenced code blocks / blockquotes), threshold ≥2 unique tokens
+- body-mining is ASCII-oriented (BWK awk on macOS treats Cyrillic as bytes) — Cyrillic-heavy memories should declare explicit `evidence:`
+- new WAL events: `evidence-missing` (injected memory file not found at session-stop), `evidence-empty` (body mining yielded zero tokens — candidate to add `evidence:` or enrich body)
 
 ## Project structure
 
