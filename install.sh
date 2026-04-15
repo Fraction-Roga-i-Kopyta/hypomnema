@@ -3,6 +3,22 @@
 # Install script: creates directory structure, copies hooks, patches settings.json
 set -eo pipefail
 
+# --- Pre-flight: required tools and platform ---
+_die() { echo "ERROR: $*" >&2; exit 1; }
+
+command -v jq   >/dev/null 2>&1 || _die "jq is required (brew install jq | apt-get install jq)"
+command -v perl >/dev/null 2>&1 || _die "perl is required (preinstalled on macOS/Linux; install via package manager if missing)"
+command -v awk  >/dev/null 2>&1 || _die "awk is required"
+
+if [ "${BASH_VERSINFO[0]:-0}" -lt 3 ]; then
+  _die "bash 3.2+ required, got ${BASH_VERSION:-unknown}"
+fi
+
+if [ ! -d "$HOME/.claude" ]; then
+  _die "~/.claude not found — install Claude Code first (https://docs.anthropic.com/en/docs/claude-code)"
+fi
+# --- /Pre-flight ---
+
 CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
 MEMORY_DIR="${CLAUDE_DIR}/memory"
 HOOKS_DIR="${CLAUDE_DIR}/hooks"
