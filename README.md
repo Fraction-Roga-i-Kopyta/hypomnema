@@ -8,7 +8,7 @@ Persistent memory system for [Claude Code](https://docs.anthropic.com/en/docs/cl
 
 Claude Code starts every session from zero. Hypomnema fixes that.
 
-164 smoke tests, 25 benchmarks, hook time ~0.3 sec.
+200 smoke tests, 25 benchmarks, hook time ~0.3 sec.
 
 ## The problem
 
@@ -111,23 +111,30 @@ domains: [css, frontend]
 ```bash
 git clone https://github.com/Fraction-Roga-i-Kopyta/hypomnema.git
 cd hypomnema
-./install.sh
+./install.sh                                # base install
+./install.sh --discover --patch-claude-md   # interactive setup
 ```
 
-The installer:
-- Creates `~/.claude/memory/` with subdirectories for each memory type
-- Copies SessionStart and Stop hooks to `~/.claude/hooks/`
-- Installs the consolidation utility to `~/.claude/bin/`
+See `docs/QUICKSTART.md` for the 5-minute walkthrough, `docs/TROUBLESHOOTING.md` if anything goes wrong, `docs/FAQ.md` for cross-machine sync and upgrades, and `CLAUDE.md` (in this repo) for the agent protocol.
+
+The installer (v0.8+):
+- Pre-flight checks: `jq`, `perl`, `awk`, `bash 3.2+`, `~/.claude` (fails fast with clear errors)
+- Creates `~/.claude/memory/` with subdirectories for each memory type, seeds, `.config.sh` (runtime overrides)
+- Symlinks hooks and lib/ into `~/.claude/hooks/`
+- Symlinks utilities into `~/.claude/bin/`
 - Patches `~/.claude/settings.json` with hook entries (backs up first)
-- Creates empty `projects.json` for project mapping
+- `--discover` interactively scans `~/Development`/`~/code`/`~/projects`/`~/src` for git repos and adds them to `projects.json`
+- `--patch-claude-md` appends a four-line memory section to `~/.claude/CLAUDE.md` (idempotent)
+- `--dry-run` previews without writing
 
 ### Requirements
 
 - Claude Code
 - bash 3.2+ (macOS default works)
 - jq
+- perl 5 (preinstalled on macOS/Linux)
 - awk (BSD or GNU)
-- uv (optional — enables fuzzy dedup via rapidfuzz)
+- uv (optional — enables fuzzy dedup via rapidfuzz in `bin/memory-dedup.py`)
 
 ## Setup
 
@@ -392,7 +399,27 @@ evidence:
 ├── .wal.lockd/            # mkdir-based lock for WAL compaction (v0.6+)
 ├── .runtime/              # per-session dedup lists (v0.6+, replaces /tmp)
 ├── self-profile.md        # v0.7 — auto-generated strengths/weaknesses/calibration view
+├── .config.sh             # v0.8 — runtime overrides for caps/limits (copied from templates/)
 └── _agent_context.md      # auto-generated compact context for subagents
+```
+
+Hook structure (in repo):
+
+```
+hooks/
+├── session-start.sh           # SessionStart — main injector
+├── session-stop.sh            # Stop — lifecycle rotation, feedback loop, continuity
+├── user-prompt-submit.sh      # UserPromptSubmit — trigger-based injection
+├── memory-{outcome,dedup,error-detect,index,precompact,analytics}.sh
+├── wal-compact.sh
+├── regen-memory-index.sh
+├── bench-memory.sh            # perf benchmarks
+├── test-memory-hooks.sh       # 200 smoke tests
+└── lib/                       # v0.8 — shared sourced helpers
+    ├── wal-lock.sh            # mkdir-based WAL locking
+    ├── stat-helpers.sh        # portable _stat_mtime/_stat_size (v0.8)
+    ├── detect-project.sh      # shared project detection (v0.8)
+    └── evidence-extract.sh    # feedback detector token extraction (UTF-8 via perl, v0.8)
 ```
 
 ## Subagents

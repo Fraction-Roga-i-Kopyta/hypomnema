@@ -1,5 +1,52 @@
 # Changelog
 
+## [0.8.0] - 2026-04-15
+
+Major audit + safety release. Four-agent code review (architecture, functionality, bugs, onboarding) surfaced 5 critical fixes, large onboarding gaps, and architecture seams. v0.8 ships safety fixes, a frictionless install path with interactive wizard, repo-root agent protocol, four onboarding docs, and three new shared `lib/` modules. Backward compatible.
+
+### Fixed (critical)
+
+- **Perl regex injection in section markers** (`session-start.sh:1010-1023`, `:1117`) — slugs containing regex metacharacters (e.g. `foo)bar`) crashed perl in the `[ПРИОРИТЕТ]` tagging pass and the cascade-review pass, silently nuking section content. Added `_perl_re_escape` helper using `quotemeta`.
+- **WAL read race in feedback loop** (`session-stop.sh:466`, `:354`, `:358`, `:435`) — four `awk` reads of `$WAL_FILE` now wrap in `wal_run_locked`. Eliminates undercount of `inject` events and over-reporting of `trigger-silent` when multiple sessions run concurrently.
+- **`set -o pipefail` audit** — added to 9 hooks/bin/install scripts where missing. Test 23 enforces at meta level. `set -e` deliberately NOT added to graceful-degradation hooks (`session-start/stop`) — they intentionally use `|| true` patterns.
+- **`install.sh` pre-flight checks** — missing `jq`/`perl`/`awk`/`bash 3.2+`/`~/.claude` now fails fast with clear errors instead of silently corrupting `settings.json`.
+- **UTF-8 aware `evidence_from_body`** (`hooks/lib/evidence-extract.sh`) — replaced byte-oriented BWK awk tokenization with perl `\w{4,}` under `/u` flag. Cyrillic, CJK, Greek, mixed-language memories now tokenize cleanly without explicit `evidence:` field.
+
+### Added
+
+- **Repo-root `CLAUDE.md`** — agent protocol with full schema and obfuscated examples (mistake/strategy/feedback). New agents entering the repo learn the memory system on first read.
+- **`docs/QUICKSTART.md`** — 5-minute zero-to-first-injection walkthrough.
+- **`docs/TROUBLESHOOTING.md`** — common failures (silent injection, missing jq, broken symlinks, WAL growth, fresh-start procedure).
+- **`docs/FAQ.md`** — cross-machine sync via git, upgrades, scope semantics, scripting patterns, evidence in non-ASCII.
+- **`docs/MIGRATION.md`** — v0.7 → v0.8 changes (no required actions, all backward-compatible).
+- **`install.sh` interactive wizard:**
+  - `--discover` — scans `~/Development`/`~/code`/`~/projects`/`~/src` for git repos, prompts y/n/q, jq-merges accepted entries into `projects.json`.
+  - `--patch-claude-md` — appends a four-line memory section to `~/.claude/CLAUDE.md`, idempotent via marker comment.
+  - `--dry-run` — preview without writes.
+  - `--skip-base` — run only flagged actions on already-installed systems.
+  - `--help` — full usage with examples.
+- **`templates/projects.json.example`** — annotated config template.
+- **`~/.claude/memory/.config.sh`** — runtime constants (caps, limits) externalized; install copies `templates/.config.sh.example` on first run. Existing installs continue using built-in defaults.
+- **Concurrent-session smoke test** (Test 25) — verifies parallel SessionStarts do not corrupt WAL or dedup lists.
+
+### Refactor
+
+- **`hooks/lib/detect-project.sh`** — shared `detect_project()` helper. Eliminates 12-line duplicate block in `session-start.sh:60-71` and `session-stop.sh:191-202`.
+- **`hooks/lib/stat-helpers.sh`** — portable `_stat_mtime`/`_stat_size`. Replaces 5 inline `stat -f %m vs stat -c %Y` blocks across `session-start.sh` and `session-stop.sh`. One typo on the wrong OS would have silently disabled lifecycle rotation.
+
+### Deferred to v0.9
+
+- **Decomposition of `session-start.sh` (1288 lines)** into `hooks/lib/{parse-memory,score-records,build-context}.sh` modules. Risky refactor of a monolith with ~50 globals and intertwined AWK heredocs; deserves a dedicated session and plan.
+- **Multi-word `domains:` frontmatter values** — currently split on space after YAML parse. Use kebab-case (`machine-learning`) as workaround. Fix requires deeper YAML parsing.
+
+### Tests
+
+183 → 200 (17 new assertions: Test 21 perl injection, Test 22 WAL lock assertion, Test 23 shell-safety meta, Test 24a/b/c Cyrillic + mixed + ASCII regression for evidence_from_body, Test 25 concurrent sessions). ALL TESTS PASSED.
+
+### Architectural notes
+
+Four-agent code review scored: architecture 6.5/10, functionality 8.5/10, bugs 6.5/10, onboarding 5.5/10. v0.8 closes critical bug + onboarding gaps; architecture refactor lands in v0.9. See `docs/plans/2026-04-15-v0.8-cleanup-and-onboarding.md` for full task breakdown.
+
 ## [0.7.1] - 2026-04-15
 
 Фикс мёртвого feedback-детектора. v0.7 dogfooding показал **1472 инжекта, 0 `trigger-useful`, 39 `trigger-silent`** — сигнал полностью не работал, потому что `session-stop.sh:486` делал `grep -F "$slug"` по имени файла памяти в тексте ассистента, а на практике правило применяется молча ("добавил tz-aware datetime", без упоминания `code-approach`).
