@@ -2620,6 +2620,45 @@ assert "ascii-body — regression: 'cascade' present" \
 
 rm -rf "$T24_DIR"
 
+# --- Test 25: concurrent session-start does not corrupt WAL or dedup (v0.8) ---
+T25_DIR=$(mktemp -d); T25_MEM="$T25_DIR/memory"
+mkdir -p "$T25_MEM"/{mistakes,feedback,knowledge,strategies,decisions,projects,continuity,.runtime}
+
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  cat > "$T25_MEM/mistakes/seed-$i.md" << EOF
+---
+type: mistake
+project: global
+status: pinned
+severity: minor
+recurrence: 1
+referenced: 2026-04-15
+---
+Body $i.
+EOF
+done
+
+# Run two SessionStarts concurrently
+T25_OUT_A=$(mktemp); T25_OUT_B=$(mktemp); T25_ERR_A=$(mktemp); T25_ERR_B=$(mktemp)
+( echo '{"session_id":"sa","cwd":"/tmp"}' | CLAUDE_MEMORY_DIR="$T25_MEM" bash "$HOOK" >"$T25_OUT_A" 2>"$T25_ERR_A" ) &
+T25_PID_A=$!
+( echo '{"session_id":"sb","cwd":"/tmp"}' | CLAUDE_MEMORY_DIR="$T25_MEM" bash "$HOOK" >"$T25_OUT_B" 2>"$T25_ERR_B" ) &
+T25_PID_B=$!
+wait "$T25_PID_A"; T25_RC_A=$?
+wait "$T25_PID_B"; T25_RC_B=$?
+
+assert "concurrent — both sessions exit 0" '[ "$T25_RC_A" -eq 0 ] && [ "$T25_RC_B" -eq 0 ]'
+assert "concurrent — both produce non-empty JSON" \
+  '[ -s "$T25_OUT_A" ] && [ -s "$T25_OUT_B" ] && jq empty "$T25_OUT_A" >/dev/null 2>&1 && jq empty "$T25_OUT_B" >/dev/null 2>&1'
+# WAL corruption check: every line should be empty OR start with YYYY-MM-DD or 'YYYY-MM-DDTHH...'
+assert "concurrent — WAL has no malformed lines" \
+  '[ ! -f "$T25_MEM/.wal" ] || ! grep -nE "^[^[:space:]]" "$T25_MEM/.wal" 2>/dev/null | grep -vE ":[0-9]{4}-[0-9]{2}-[0-9]{2}" >/dev/null'
+# Dedup lists: should have one per session
+assert "concurrent — dedup lists for both sessions present" \
+  '[ -f "$T25_MEM/.runtime/injected-sa.list" ] && [ -f "$T25_MEM/.runtime/injected-sb.list" ]'
+
+rm -rf "$T25_DIR" "$T25_OUT_A" "$T25_OUT_B" "$T25_ERR_A" "$T25_ERR_B"
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="
