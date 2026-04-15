@@ -6,7 +6,11 @@
 set -o pipefail
 
 MEMORY_DIR="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}"
-MIN_SESSION_SECONDS=120  # 2 minutes
+
+# User-overridable runtime config (templates/.config.sh.example)
+[ -f "$MEMORY_DIR/.config.sh" ] && . "$MEMORY_DIR/.config.sh" 2>/dev/null || true
+
+MIN_SESSION_SECONDS=${MIN_SESSION_SECONDS:-120}  # 2 minutes
 WAL_FILE="$MEMORY_DIR/.wal"
 
 # shellcheck source=lib/wal-lock.sh

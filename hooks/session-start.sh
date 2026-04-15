@@ -8,19 +8,23 @@
 set -o pipefail
 
 MEMORY_DIR="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}"
-MAX_GLOBAL_MISTAKES=3
-MAX_PROJECT_MISTAKES=3
+
+# User-overridable runtime config (templates/.config.sh.example)
+[ -f "$MEMORY_DIR/.config.sh" ] && . "$MEMORY_DIR/.config.sh" 2>/dev/null || true
+
+MAX_GLOBAL_MISTAKES=${MAX_GLOBAL_MISTAKES:-3}
+MAX_PROJECT_MISTAKES=${MAX_PROJECT_MISTAKES:-3}
 # Adaptive quotas: shared flex pool across scored types
 # Total budget for scored types (feedback+knowledge+strategies+notes): 12 slots
-MAX_SCORED_TOTAL=12
+MAX_SCORED_TOTAL=${MAX_SCORED_TOTAL:-12}
 # Per-type caps (prevent any single type from dominating)
-CAP_FEEDBACK=6
-CAP_KNOWLEDGE=4
-CAP_STRATEGIES=4
-CAP_NOTES=2
-CAP_DECISIONS=3
-MAX_FILES=22
-MAX_CLUSTER=4
+CAP_FEEDBACK=${CAP_FEEDBACK:-6}
+CAP_KNOWLEDGE=${CAP_KNOWLEDGE:-4}
+CAP_STRATEGIES=${CAP_STRATEGIES:-4}
+CAP_NOTES=${CAP_NOTES:-2}
+CAP_DECISIONS=${CAP_DECISIONS:-3}
+MAX_FILES=${MAX_FILES:-22}
+MAX_CLUSTER=${MAX_CLUSTER:-4}
 TODAY=$(date +%Y-%m-%d)
 
 # shellcheck source=lib/wal-lock.sh
