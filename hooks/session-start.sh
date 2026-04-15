@@ -26,6 +26,12 @@ TODAY=$(date +%Y-%m-%d)
 # shellcheck source=lib/wal-lock.sh
 . "$(dirname "$0")/lib/wal-lock.sh" 2>/dev/null || true
 
+# Escape a string for safe interpolation inside a perl regex pattern.
+# Used wherever user-supplied slugs/names land in `perl -pe "s/.../"` patterns.
+_perl_re_escape() {
+  printf '%s' "$1" | perl -ne 'chomp; print quotemeta'
+}
+
 # --- Main ---
 
 INPUT=$(cat)
@@ -1012,13 +1018,15 @@ fi
 if [ "$_PRIORITY_SLUGS" != " " ]; then
   for _ps in $_PRIORITY_SLUGS; do
     [ -z "$_ps" ] && continue
+    # Escape regex metacharacters so slugs like "foo)bar" or "x[y" do not crash perl.
+    _ps_re=$(_perl_re_escape "$_ps")
     # Replace "### slug\n" with "### slug [ПРИОРИТЕТ]\n" in section variables (exact match, not already tagged)
-    MISTAKES_MD=$(printf '%s' "$MISTAKES_MD" | perl -pe "s/^(### ${_ps})(\\s|$)/\$1 [ПРИОРИТЕТ]\$2/")
-    FEEDBACK_MD=$(printf '%s' "$FEEDBACK_MD" | perl -pe "s/^(### ${_ps})(\\s|$)/\$1 [ПРИОРИТЕТ]\$2/")
-    KNOWLEDGE_MD=$(printf '%s' "$KNOWLEDGE_MD" | perl -pe "s/^(### ${_ps})(\\s|$)/\$1 [ПРИОРИТЕТ]\$2/")
-    STRATEGIES_MD=$(printf '%s' "$STRATEGIES_MD" | perl -pe "s/^(### ${_ps})(\\s|$)/\$1 [ПРИОРИТЕТ]\$2/")
-    DECISIONS_MD=$(printf '%s' "$DECISIONS_MD" | perl -pe "s/^(### ${_ps})(\\s|$)/\$1 [ПРИОРИТЕТ]\$2/")
-    NOTES_MD=$(printf '%s' "$NOTES_MD" | perl -pe "s/^(### ${_ps})(\\s|$)/\$1 [ПРИОРИТЕТ]\$2/")
+    MISTAKES_MD=$(printf '%s' "$MISTAKES_MD" | perl -pe "s/^(### ${_ps_re})(\\s|$)/\$1 [ПРИОРИТЕТ]\$2/")
+    FEEDBACK_MD=$(printf '%s' "$FEEDBACK_MD" | perl -pe "s/^(### ${_ps_re})(\\s|$)/\$1 [ПРИОРИТЕТ]\$2/")
+    KNOWLEDGE_MD=$(printf '%s' "$KNOWLEDGE_MD" | perl -pe "s/^(### ${_ps_re})(\\s|$)/\$1 [ПРИОРИТЕТ]\$2/")
+    STRATEGIES_MD=$(printf '%s' "$STRATEGIES_MD" | perl -pe "s/^(### ${_ps_re})(\\s|$)/\$1 [ПРИОРИТЕТ]\$2/")
+    DECISIONS_MD=$(printf '%s' "$DECISIONS_MD" | perl -pe "s/^(### ${_ps_re})(\\s|$)/\$1 [ПРИОРИТЕТ]\$2/")
+    NOTES_MD=$(printf '%s' "$NOTES_MD" | perl -pe "s/^(### ${_ps_re})(\\s|$)/\$1 [ПРИОРИТЕТ]\$2/")
   done
 fi
 
@@ -1106,7 +1114,8 @@ if [ -f "$WAL_FILE" ]; then
       [ -z "$_cr_slug" ] && continue
       # Replace "### slug" with "### slug [REVIEW: parent updated YYYY-MM-DD]" in CONTEXT
       _cr_marker="[REVIEW: ${_cr_parent} updated ${_cr_date}]"
-      CONTEXT=$(printf '%s' "$CONTEXT" | perl -pe "s/^(### ${_cr_slug})( |$)/\$1 ${_cr_marker}\$2/")
+      _cr_slug_re=$(_perl_re_escape "$_cr_slug")
+      CONTEXT=$(printf '%s' "$CONTEXT" | perl -pe "s/^(### ${_cr_slug_re})( |\$)/\$1 ${_cr_marker}\$2/")
     done <<< "$_CASCADE_MAP"
   fi
 fi
