@@ -31,13 +31,16 @@ Major audit + safety release. Four-agent code review (architecture, functionalit
 
 ### Refactor
 
-- **`hooks/lib/detect-project.sh`** — shared `detect_project()` helper. Eliminates 12-line duplicate block in `session-start.sh:60-71` and `session-stop.sh:191-202`.
-- **`hooks/lib/stat-helpers.sh`** — portable `_stat_mtime`/`_stat_size`. Replaces 5 inline `stat -f %m vs stat -c %Y` blocks across `session-start.sh` and `session-stop.sh`. One typo on the wrong OS would have silently disabled lifecycle rotation.
+- **`hooks/session-start.sh` decomposed** from 1289 → 722 lines (−44%). Heavy lifting moved to three new lib modules:
+  - `hooks/lib/parse-memory.sh` — `AWK_MISTAKES`, `AWK_SCORED`, `parse_related`, `find_memory_file`, `domain_matches`
+  - `hooks/lib/score-records.sh` — `compute_wal_scores` (spread × decay × Bayesian effectiveness), `compute_tfidf_scores`, `load_noise_candidates`
+  - `hooks/lib/build-context.sh` — `expand_clusters` (forward + reverse + cross-injected scans + provenance), `apply_priority_markers`, `assemble_context`, `apply_cascade_markers`
+- **`hooks/lib/detect-project.sh`** — shared `detect_project()` helper. Eliminates 12-line duplicate block in `session-start.sh` and `session-stop.sh`.
+- **`hooks/lib/stat-helpers.sh`** — portable `_stat_mtime`/`_stat_size`. Replaces 5 inline `stat -f %m vs stat -c %Y` blocks. One typo on the wrong OS would have silently disabled lifecycle rotation.
 
-### Deferred to v0.9
+### Known non-issue
 
-- **Decomposition of `session-start.sh` (1288 lines)** into `hooks/lib/{parse-memory,score-records,build-context}.sh` modules. Risky refactor of a monolith with ~50 globals and intertwined AWK heredocs; deserves a dedicated session and plan.
-- **Multi-word `domains:` frontmatter values** — currently split on space after YAML parse. Use kebab-case (`machine-learning`) as workaround. Fix requires deeper YAML parsing.
+- **Multi-word `domains:` frontmatter values** — currently split on space after YAML parse. Use kebab-case (`machine-learning`) as workaround. Fix requires deeper YAML parsing; out of scope for v0.8.
 
 ### Tests
 
@@ -45,7 +48,7 @@ Major audit + safety release. Four-agent code review (architecture, functionalit
 
 ### Architectural notes
 
-Four-agent code review scored: architecture 6.5/10, functionality 8.5/10, bugs 6.5/10, onboarding 5.5/10. v0.8 closes critical bug + onboarding gaps; architecture refactor lands in v0.9. See `docs/plans/2026-04-15-v0.8-cleanup-and-onboarding.md` for full task breakdown.
+Four-agent code review scored: architecture 6.5/10, functionality 8.5/10, bugs 6.5/10, onboarding 5.5/10. v0.8 closes critical bug + onboarding gaps AND lands the architecture decomposition. See `docs/plans/2026-04-15-v0.8-cleanup-and-onboarding.md` for full task breakdown.
 
 ## [0.7.1] - 2026-04-15
 

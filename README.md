@@ -407,7 +407,7 @@ Hook structure (in repo):
 
 ```
 hooks/
-├── session-start.sh           # SessionStart — main injector
+├── session-start.sh           # SessionStart — orchestration (v0.8: 1289 → 722 lines)
 ├── session-stop.sh            # Stop — lifecycle rotation, feedback loop, continuity
 ├── user-prompt-submit.sh      # UserPromptSubmit — trigger-based injection
 ├── memory-{outcome,dedup,error-detect,index,precompact,analytics}.sh
@@ -417,9 +417,12 @@ hooks/
 ├── test-memory-hooks.sh       # 200 smoke tests
 └── lib/                       # v0.8 — shared sourced helpers
     ├── wal-lock.sh            # mkdir-based WAL locking
-    ├── stat-helpers.sh        # portable _stat_mtime/_stat_size (v0.8)
-    ├── detect-project.sh      # shared project detection (v0.8)
-    └── evidence-extract.sh    # feedback detector token extraction (UTF-8 via perl, v0.8)
+    ├── stat-helpers.sh        # portable _stat_mtime/_stat_size
+    ├── detect-project.sh      # shared project detection (CWD → projects.json)
+    ├── parse-memory.sh        # AWK_MISTAKES, AWK_SCORED, parse_related, find_memory_file, domain_matches
+    ├── score-records.sh       # compute_wal_scores, compute_tfidf_scores, load_noise_candidates
+    ├── build-context.sh       # expand_clusters, apply_priority_markers, assemble_context, apply_cascade_markers
+    └── evidence-extract.sh    # feedback detector token extraction (UTF-8 via perl)
 ```
 
 ## Subagents
