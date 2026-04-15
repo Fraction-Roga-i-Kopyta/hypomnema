@@ -13,6 +13,8 @@ WAL_FILE="$MEMORY_DIR/.wal"
 . "$(dirname "$0")/lib/wal-lock.sh" 2>/dev/null || true
 # shellcheck source=lib/stat-helpers.sh
 . "$(dirname "$0")/lib/stat-helpers.sh" 2>/dev/null || true
+# shellcheck source=lib/detect-project.sh
+. "$(dirname "$0")/lib/detect-project.sh" 2>/dev/null || true
 
 INPUT=$(cat)
 SESSION_ID=$(printf '%s\n' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
@@ -188,18 +190,9 @@ fi
 CWD=$(printf '%s\n' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)
 [ -z "$CWD" ] && CWD="$PWD"
 
-# Detect project (same logic as session-start)
-PROJECT=""
+# Detect project (shared helper from lib/detect-project.sh)
 PROJECTS_JSON="$MEMORY_DIR/projects.json"
-if [ -f "$PROJECTS_JSON" ] && jq empty "$PROJECTS_JSON" 2>/dev/null; then
-  while read -r prefix; do
-    case "$CWD" in
-      "${prefix}"|"${prefix}"/*)
-        PROJECT=$(jq -r --arg k "$prefix" '.[$k]' "$PROJECTS_JSON" 2>/dev/null)
-        break ;;
-    esac
-  done < <(jq -r 'to_entries | sort_by(.key | length) | reverse | .[].key' "$PROJECTS_JSON" 2>/dev/null)
-fi
+PROJECT=$(detect_project "$CWD")
 
 # Generate git-based continuity if in a git repo with a known project
 if [ -n "$PROJECT" ] && { [ -d "$CWD/.git" ] || git -C "$CWD" rev-parse --git-dir >/dev/null 2>&1; }; then
