@@ -366,7 +366,7 @@ evidence:
 - session-stop writes `trigger-useful` if memory content was applied in the assistant's responses, else `trigger-silent`
 - if `evidence:` is present: match is case-insensitive substring over those phrases, threshold ≥1
 - if `evidence:` is absent: fallback to body-mining — extract content tokens from the body (length ≥4, ru+en stop-list filtered, slug filtered, excludes `**Why:**` / `**How to apply:**` / fenced code blocks / blockquotes), threshold ≥2 unique tokens
-- body-mining is ASCII-oriented (BWK awk on macOS treats Cyrillic as bytes) — Cyrillic-heavy memories should declare explicit `evidence:`
+- body-mining is UTF-8 aware (v0.8: perl `\w{4,}` with `/u` flag) — works for Cyrillic, CJK, Greek, etc., no need for explicit `evidence:` on non-ASCII memories
 - new WAL events: `evidence-missing` (injected memory file not found at session-stop), `evidence-empty` (body mining yielded zero tokens — candidate to add `evidence:` or enrich body)
 
 ## Project structure

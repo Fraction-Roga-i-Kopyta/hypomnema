@@ -60,49 +60,36 @@ body text content file path memory line code block
 #   - Fenced code blocks (between triple backticks)
 #   - Blockquote lines (`>`)
 #   - The slug (filename stem) itself — filtered post-tokenization
-# Tokenization: lowercase, split on non-alphanumeric, filter len<4 and stop-words.
+# Tokenization: lowercase, perl \w{4,} with /u flag (UTF-8 aware — works for
+# Cyrillic, CJK, Greek, etc.), filter stop-words.
 # Output: unique tokens, one per line.
 # Truncates input at 10 KB to bound work.
-#
-# Note: BWK awk on macOS is byte-oriented, so Cyrillic gets split into byte
-# fragments that fall below the length-4 filter. Cyrillic-heavy memories
-# should use explicit `evidence:` frontmatter instead.
 evidence_from_body() {
   local file="$1"
   [ -f "$file" ] || return 0
   local slug
   slug=$(basename "$file" .md | tr '[:upper:]' '[:lower:]')
-  local stop
-  stop=$(printf "%s" "$_EVIDENCE_STOPWORDS" | tr '\n' ' ')
 
-  head -c 10240 "$file" 2>/dev/null | awk -v slug="$slug" -v stop="$stop" '
-    BEGIN {
-      n = split(stop, a, /[[:space:]]+/)
-      for (i = 1; i <= n; i++) if (a[i] != "") stopset[a[i]] = 1
-      stopset[slug] = 1
-      in_fm = 0; fm_closed = 0; in_code = 0
-    }
-    /^---[[:space:]]*$/ {
-      if (fm_closed == 0 && in_fm == 0) { in_fm = 1; next }
-      if (fm_closed == 0 && in_fm == 1) { in_fm = 0; fm_closed = 1; next }
-    }
-    in_fm == 1 { next }
-    fm_closed == 0 { next }
-    /^```/ { in_code = 1 - in_code; next }
-    in_code == 1 { next }
-    /^[[:space:]]*>/ { next }
-    /^[[:space:]]*\*\*Why:\*\*/ { next }
-    /^[[:space:]]*\*\*How to apply:\*\*/ { next }
-    {
-      line = tolower($0)
-      gsub(/[^a-z0-9_]+/, " ", line)
-      n = split(line, tok, /[[:space:]]+/)
-      for (i = 1; i <= n; i++) {
-        t = tok[i]
-        if (length(t) < 4) continue
-        if (t in stopset) continue
-        if (!(t in seen)) { seen[t] = 1; print t }
+  head -c 10240 "$file" 2>/dev/null | \
+    SLUG="$slug" STOP="$_EVIDENCE_STOPWORDS" perl -CSD -Mutf8 -e '
+      use strict; use warnings;
+      my $slug = $ENV{SLUG} // "";
+      my %stop = map { lc($_) => 1 } grep { length } split /\s+/, ($ENV{STOP} // "");
+      $stop{$slug} = 1;
+      local $/; my $c = <STDIN>;
+      $c =~ s/\A---\n.*?\n---\n//s;
+      $c =~ s/```.*?```//gs;
+      my %seen;
+      for my $line (split /\n/, $c) {
+        next if $line =~ /^\s*>/;
+        next if $line =~ /^\s*\*\*Why:\*\*/;
+        next if $line =~ /^\s*\*\*How to apply:\*\*/;
+        while ($line =~ /(\w{4,})/gu) {
+          my $t = lc($1);
+          next if $stop{$t};
+          next if $seen{$t}++;
+          print "$t\n";
+        }
       }
-    }
-  ' 2>/dev/null
+    ' 2>/dev/null
 }
