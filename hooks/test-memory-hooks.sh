@@ -2303,6 +2303,49 @@ assert "evidence_from_body — excludes stop-word 'always'" \
 
 rm -rf "$EX_DIR"
 
+# --- Test 20c: evidence_from_body filters slug name ---
+EX_DIR=$(mktemp -d); EX_MEM="$EX_DIR/memory"
+mkdir -p "$EX_MEM/mistakes"
+cat > "$EX_MEM/mistakes/selfslug.md" << 'EOF'
+---
+type: mistake
+---
+This memory is about selfslug concepts and parameterized handling.
+EOF
+
+set +e
+. "$HOME/.claude/hooks/lib/evidence-extract.sh" 2>/dev/null || \
+  . "$(dirname "$0")/lib/evidence-extract.sh" 2>/dev/null || \
+  . "/Users/akamash/Development/hypomnema/hooks/lib/evidence-extract.sh"
+set -e
+EX_SELF=$(evidence_from_body "$EX_MEM/mistakes/selfslug.md")
+
+assert "evidence_from_body — slug name filtered from tokens" \
+  '! printf "%s\n" "$EX_SELF" | grep -qx "selfslug"'
+assert "evidence_from_body — other content words still present" \
+  'printf "%s\n" "$EX_SELF" | grep -qx "parameterized"'
+
+rm -rf "$EX_DIR"
+
+# --- Test 20d: evidence_from_body truncates at 10 KB ---
+EX_DIR=$(mktemp -d); EX_MEM="$EX_DIR/memory"
+mkdir -p "$EX_MEM/mistakes"
+{
+  printf -- '---\ntype: mistake\n---\n'
+  printf 'uniquestart '
+  # ~11 KB of filler between uniquestart and uniqueend
+  head -c 11000 /dev/urandom | base64 | tr -d '=+/' | head -c 11000
+  printf '\nuniqueend\n'
+} > "$EX_MEM/mistakes/huge.md"
+
+EX_HUGE=$(evidence_from_body "$EX_MEM/mistakes/huge.md")
+assert "evidence_from_body — 'uniquestart' present (within 10 KB)" \
+  'printf "%s\n" "$EX_HUGE" | grep -qx "uniquestart"'
+assert "evidence_from_body — 'uniqueend' absent (beyond 10 KB)" \
+  '! printf "%s\n" "$EX_HUGE" | grep -qx "uniqueend"'
+
+rm -rf "$EX_DIR"
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="
