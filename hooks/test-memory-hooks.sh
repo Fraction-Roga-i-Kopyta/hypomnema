@@ -2559,6 +2559,67 @@ done
 assert "shell-safety — every hook/bin/install has pipefail (missing:$T23_MISSING )" \
   '[ -z "$T23_MISSING" ]'
 
+# --- Test 24: evidence_from_body UTF-8 — Cyrillic / mixed / ASCII regression (v0.8) ---
+T24_REPO="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)"
+[ -d "$T24_REPO/hooks/lib" ] || T24_REPO="."
+T24_DIR=$(mktemp -d); T24_MEM="$T24_DIR/memory"
+mkdir -p "$T24_MEM/mistakes"
+
+# (a) Pure Cyrillic body — current awk impl loses these as <4-byte fragments
+cat > "$T24_MEM/mistakes/cyrillic-only.md" << 'EOF'
+---
+type: mistake
+project: global
+created: 2026-04-15
+keywords: [debug]
+---
+Перечислить две гипотезы перед первым фиксом. Каскадные неудачные попытки засоряют контекст.
+EOF
+
+T24A_OUT=$(source "$T24_REPO/hooks/lib/evidence-extract.sh" && evidence_from_body "$T24_MEM/mistakes/cyrillic-only.md")
+assert "cyrillic-body — extracts 'перечислить'" \
+  'printf "%s\n" "$T24A_OUT" | grep -q "перечислить"'
+assert "cyrillic-body — extracts 'гипотезы'" \
+  'printf "%s\n" "$T24A_OUT" | grep -q "гипотезы"'
+assert "cyrillic-body — extracts 'каскадные'" \
+  'printf "%s\n" "$T24A_OUT" | grep -q "каскадные"'
+
+# (b) Mixed EN+RU
+cat > "$T24_MEM/mistakes/mixed-lang.md" << 'EOF'
+---
+type: mistake
+project: global
+created: 2026-04-15
+keywords: [debug]
+---
+List 2-3 hypotheses перед фиксом — иначе каскад failed attempts.
+EOF
+
+T24B_OUT=$(source "$T24_REPO/hooks/lib/evidence-extract.sh" && evidence_from_body "$T24_MEM/mistakes/mixed-lang.md")
+assert "mixed-body — extracts English token 'hypotheses'" \
+  'printf "%s\n" "$T24B_OUT" | grep -q "hypotheses"'
+assert "mixed-body — extracts Cyrillic token 'фиксом'" \
+  'printf "%s\n" "$T24B_OUT" | grep -q "фиксом"'
+
+# (c) ASCII regression — must still tokenize as before
+cat > "$T24_MEM/mistakes/ascii-only.md" << 'EOF'
+---
+type: mistake
+project: global
+created: 2026-04-15
+keywords: [debug]
+---
+List two or three hypotheses before the first fix — cascade failed attempts.
+EOF
+
+T24C_OUT=$(source "$T24_REPO/hooks/lib/evidence-extract.sh" && evidence_from_body "$T24_MEM/mistakes/ascii-only.md")
+assert "ascii-body — regression: 'hypotheses' present" \
+  'printf "%s\n" "$T24C_OUT" | grep -q "hypotheses"'
+assert "ascii-body — regression: 'cascade' present" \
+  'printf "%s\n" "$T24C_OUT" | grep -q "cascade"'
+
+rm -rf "$T24_DIR"
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="
