@@ -11,6 +11,8 @@ WAL_FILE="$MEMORY_DIR/.wal"
 
 # shellcheck source=lib/wal-lock.sh
 . "$(dirname "$0")/lib/wal-lock.sh" 2>/dev/null || true
+# shellcheck source=lib/stat-helpers.sh
+. "$(dirname "$0")/lib/stat-helpers.sh" 2>/dev/null || true
 
 INPUT=$(cat)
 SESSION_ID=$(printf '%s\n' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
@@ -124,11 +126,7 @@ lifecycle_rotate() {
   for f in "${all_files[@]}"; do
     head_line=$(head -1 "$f" 2>/dev/null)
     [ "$head_line" = "---" ] && continue
-    if [[ "$OSTYPE" == darwin* ]]; then
-      fmtime=$(stat -f %m "$f" 2>/dev/null || echo 0)
-    else
-      fmtime=$(stat -c %Y "$f" 2>/dev/null || echo 0)
-    fi
+    fmtime=$(_stat_mtime "$f")
     local fage=$(( (NOW_SEC - fmtime) / 86400 ))
     if [ "$fage" -gt 90 ]; then
       local rel="${f#$MEMORY_DIR/}"
@@ -150,11 +148,7 @@ lifecycle_rotate 2>/dev/null || true
 [ -f "$MARKER" ] || exit 0
 
 # Check session duration
-if [[ "$OSTYPE" == darwin* ]]; then
-  MARKER_TIME=$(stat -f %m "$MARKER" 2>/dev/null || echo 0)
-else
-  MARKER_TIME=$(stat -c %Y "$MARKER" 2>/dev/null || echo 0)
-fi
+MARKER_TIME=$(_stat_mtime "$MARKER")
 NOW=$(date +%s)
 ELAPSED=$((NOW - MARKER_TIME))
 
@@ -178,11 +172,7 @@ ANALYTICS_STALE=0
 if [ ! -f "$ANALYTICS_REPORT" ]; then
   ANALYTICS_STALE=1
 elif [ -f "$WAL_FILE" ]; then
-  if [[ "$OSTYPE" == darwin* ]]; then
-    ar_mtime=$(stat -f %m "$ANALYTICS_REPORT" 2>/dev/null || echo 0)
-  else
-    ar_mtime=$(stat -c %Y "$ANALYTICS_REPORT" 2>/dev/null || echo 0)
-  fi
+  ar_mtime=$(_stat_mtime "$ANALYTICS_REPORT")
   ar_age=$(( (NOW - ar_mtime) / 86400 ))
   [ "$ar_age" -gt 7 ] && ANALYTICS_STALE=1
 fi

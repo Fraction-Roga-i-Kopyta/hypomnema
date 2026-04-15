@@ -25,6 +25,8 @@ TODAY=$(date +%Y-%m-%d)
 
 # shellcheck source=lib/wal-lock.sh
 . "$(dirname "$0")/lib/wal-lock.sh" 2>/dev/null || true
+# shellcheck source=lib/stat-helpers.sh
+. "$(dirname "$0")/lib/stat-helpers.sh" 2>/dev/null || true
 
 # Escape a string for safe interpolation inside a perl regex pattern.
 # Used wherever user-supplied slugs/names land in `perl -pe "s/.../"` patterns.
@@ -518,11 +520,7 @@ TFIDF_INDEX="$MEMORY_DIR/.tfidf-index"
 TFIDF_SCORES=""
 if [ -f "$TFIDF_INDEX" ]; then
   # Check freshness: skip if older than 7 days
-  if [[ "$OSTYPE" == darwin* ]]; then
-    idx_mtime=$(stat -f %m "$TFIDF_INDEX" 2>/dev/null || echo 0)
-  else
-    idx_mtime=$(stat -c %Y "$TFIDF_INDEX" 2>/dev/null || echo 0)
-  fi
+  idx_mtime=$(_stat_mtime "$TFIDF_INDEX")
   idx_age=$(( ($(date +%s) - idx_mtime) / 86400 ))
   if [ "$idx_age" -le 7 ]; then
     if [ -n "$KEYWORDS" ]; then
@@ -570,11 +568,7 @@ fi
 NOISE_CANDIDATES=""
 ANALYTICS_REPORT="$MEMORY_DIR/.analytics-report"
 if [ -f "$ANALYTICS_REPORT" ]; then
-  if [[ "$OSTYPE" == darwin* ]]; then
-    ar_mtime=$(stat -f %m "$ANALYTICS_REPORT" 2>/dev/null || echo 0)
-  else
-    ar_mtime=$(stat -c %Y "$ANALYTICS_REPORT" 2>/dev/null || echo 0)
-  fi
+  ar_mtime=$(_stat_mtime "$ANALYTICS_REPORT")
   ar_age=$(( ($(date +%s) - ar_mtime) / 86400 ))
   if [ "$ar_age" -le 7 ]; then
     NOISE_CANDIDATES=$(awk '
