@@ -35,6 +35,8 @@ TODAY=$(date +%Y-%m-%d)
 . "$(dirname "$0")/lib/detect-project.sh" 2>/dev/null || true
 # shellcheck source=lib/parse-memory.sh
 . "$(dirname "$0")/lib/parse-memory.sh" 2>/dev/null || true
+# shellcheck source=lib/score-records.sh
+. "$(dirname "$0")/lib/score-records.sh" 2>/dev/null || true
 
 # Escape a string for safe interpolation inside a perl regex pattern.
 # Used wherever user-supplied slugs/names land in `perl -pe "s/.../"` patterns.
@@ -313,149 +315,37 @@ ${body}
 collect_mistakes
 MISTAKES_MD="$_MISTAKES_RESULT"
 
-# --- WAL-based spaced repetition scoring ---
-# Formula: spread × decay(recency) × effectiveness
-# spread = unique days with inject in 30 days (min 2 injects to count)
-# decay = 1 / (1 + days_since_last / 7)
-# effectiveness = Bayesian (positive + 1) / (positive + negative + 2)
+# --- Compute scoring signals (lib/score-records.sh) ---
 WAL_FILE="$MEMORY_DIR/.wal"
-WAL_SCORES=""
-if [ -f "$WAL_FILE" ]; then
-  if [[ "$OSTYPE" == darwin* ]]; then
-    CUTOFF_30D=$(date -v-30d +%Y-%m-%d 2>/dev/null || echo "0000-00-00")
-  else
-    CUTOFF_30D=$(date -d "30 days ago" +%Y-%m-%d 2>/dev/null || echo "0000-00-00")
-  fi
-  # Output: "name:score;name:score;..." (semicolon-separated, no newlines)
-  # NOTE: BSD awk — no multidimensional arrays. Use SUBSEP for days tracking.
-  WAL_SCORES=$(awk -F'|' -v cutoff="$CUTOFF_30D" -v today="$TODAY" '
-    $1 >= cutoff && $2 == "inject" {
-      count[$3]++
-      days[$3, $1] = 1
-      if ($1 > last_day[$3] || last_day[$3] == "") last_day[$3] = $1
-    }
-    $1 >= cutoff && $2 == "inject-agg" {
-      count[$3] += $4
-      days[$3, $1] = 1
-      if ($1 > last_day[$3] || last_day[$3] == "") last_day[$3] = $1
-    }
-    $1 >= cutoff && $2 == "outcome-positive" {
-      pos_count[$3]++
-    }
-    $1 >= cutoff && $2 == "outcome-negative" {
-      neg_count[$3]++
-    }
-    $1 >= cutoff && $2 == "trigger-match" {
-      pos_count[$3]++
-    }
-    $1 >= cutoff && $2 == "strategy-used" {
-      strat_used[$3]++
-    }
-    function jdn(y, m, d) {
-      if (m <= 2) { y--; m += 12 }
-      return int(365.25*(y+4716)) + int(30.6001*(m+1)) + d - 1524
-    }
-    function days_between(d1, d2) {
-      split(d1, a, "-"); split(d2, b, "-")
-      return jdn(b[1]+0, b[2]+0, b[3]+0) - jdn(a[1]+0, a[2]+0, a[3]+0)
-    }
-    END {
-      first = 1
-      for (name in count) {
-        if (count[name] < 2) continue
+WAL_SCORES=$(compute_wal_scores "$WAL_FILE" "$TODAY")
 
-        # spread = unique days (count SUBSEP keys for this name)
-        spread = 0
-        for (key in days) {
-          split(key, kp, SUBSEP)
-          if (kp[1] == name) spread++
-        }
-
-        # decay
-        ds = days_between(last_day[name], today)
-        if (ds < 0) ds = 0
-        decay = 1.0 / (1.0 + ds / 7.0)
-
-        # Bayesian effectiveness
-        pc = 0; nc = 0
-        if (name in pos_count) pc = pos_count[name]
-        if (name in neg_count) nc = neg_count[name]
-        effectiveness = (pc + 1) / (pc + nc + 2)
-
-        raw = spread * decay * effectiveness
-        if (raw > 10) raw = 10
-
-        su = 0
-        if (name in strat_used) su = strat_used[name]
-        if (!first) printf ";"
-        printf "%s:%.1f:%d", name, raw, su
-        first = 0
-      }
-    }
-  ' "$WAL_FILE" 2>/dev/null || true)
-fi
-
-# --- TF-IDF index scoring ---
 TFIDF_INDEX="$MEMORY_DIR/.tfidf-index"
 TFIDF_SCORES=""
+idx_age=999
 if [ -f "$TFIDF_INDEX" ]; then
-  # Check freshness: skip if older than 7 days
   idx_mtime=$(_stat_mtime "$TFIDF_INDEX")
   idx_age=$(( ($(date +%s) - idx_mtime) / 86400 ))
   if [ "$idx_age" -le 7 ]; then
-    if [ -n "$KEYWORDS" ]; then
-      TFIDF_SCORES=$(awk -F'\t' -v kw="$KEYWORDS" '
-        BEGIN { n=split(kw, kws, " ") }
-        {
-          term=$1
-          for (i=1; i<=n; i++) {
-            if (term == kws[i]) {
-              for (j=2; j<=NF; j++) {
-                split($j, fp, ":")
-                scores[fp[1]] += fp[2]+0
-              }
-            }
-          }
-        }
-        END {
-          first=1
-          for (f in scores) {
-            if (!first) printf ";"
-            printf "%s:%.2f", f, scores[f]
-            first=0
-          }
-        }
-      ' "$TFIDF_INDEX")
-    fi
+    TFIDF_SCORES=$(compute_tfidf_scores "$TFIDF_INDEX" "$KEYWORDS")
   else
     wal_append "$TODAY|index-stale|tfidf|$SESSION_ID" "index-stale|tfidf|$SESSION_ID"
   fi
 fi
 
-# Auto-rebuild TF-IDF if missing or stale
-_tfidf_needs_rebuild=0
-if [ ! -f "$TFIDF_INDEX" ]; then
-  _tfidf_needs_rebuild=1
-elif [ "${idx_age:-999}" -gt 7 ]; then
-  _tfidf_needs_rebuild=1
-fi
-if [ "$_tfidf_needs_rebuild" -eq 1 ]; then
+# Auto-rebuild TF-IDF if missing or stale (background, non-blocking)
+if [ ! -f "$TFIDF_INDEX" ] || [ "$idx_age" -gt 7 ]; then
   CLAUDE_MEMORY_DIR="$MEMORY_DIR" bash "$(dirname "$0")/memory-index.sh" 2>/dev/null &
   disown 2>/dev/null || true
 fi
 
-# --- Load noise candidates from analytics report ---
+# Noise candidates from analytics report (skip if older than 7 days)
 NOISE_CANDIDATES=""
 ANALYTICS_REPORT="$MEMORY_DIR/.analytics-report"
 if [ -f "$ANALYTICS_REPORT" ]; then
   ar_mtime=$(_stat_mtime "$ANALYTICS_REPORT")
   ar_age=$(( ($(date +%s) - ar_mtime) / 86400 ))
   if [ "$ar_age" -le 7 ]; then
-    NOISE_CANDIDATES=$(awk '
-      /^## Noise candidates/ { in_noise=1; next }
-      in_noise && /^## / { exit }
-      in_noise && /^- / { sub(/^- /, ""); sub(/ .*/, ""); print }
-    ' "$ANALYTICS_REPORT" 2>/dev/null | tr '\n' ' ')
+    NOISE_CANDIDATES=$(load_noise_candidates "$ANALYTICS_REPORT")
   fi
 fi
 
