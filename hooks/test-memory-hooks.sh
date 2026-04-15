@@ -2476,6 +2476,64 @@ assert "Feedback — case-insensitive match works" \
 
 rm -rf "$FB_DIR" "$FB_MARKER"
 
+# --- Test 21: perl regex injection in section markers (v0.8) ---
+# Two injected files cross-referencing via related: contradicts. The newer slug
+# contains regex-special chars ([, ]) which would crash perl without escaping.
+T21_DIR=$(mktemp -d); T21_MEM="$T21_DIR/memory"
+mkdir -p "$T21_MEM"/{mistakes,feedback,knowledge,strategies,decisions,projects,continuity}
+
+cat > "$T21_MEM/mistakes/normal-source.md" << 'EOF'
+---
+type: mistake
+project: global
+status: pinned
+severity: critical
+recurrence: 5
+referenced: 2026-04-10
+keywords: [shared, kw]
+related:
+  - edge)case: contradicts
+root-cause: "Source bug"
+prevention: "Source prevention"
+---
+
+Normal source body.
+EOF
+
+cat > "$T21_MEM/mistakes/edge)case.md" << 'EOF'
+---
+type: mistake
+project: global
+status: pinned
+severity: critical
+recurrence: 3
+referenced: 2026-04-15
+keywords: [shared, kw]
+root-cause: "Target with regex-special slug"
+prevention: "Target prevention"
+---
+
+Target body should survive perl pass.
+EOF
+
+T21_STDERR=$(mktemp)
+T21_OUT=$(echo '{"session_id":"t21","cwd":"/tmp"}' | \
+  CLAUDE_MEMORY_DIR="$T21_MEM" bash "$HOOK" 2>"$T21_STDERR")
+T21_RC=$?
+T21_CTX=$(printf '%s' "$T21_OUT" | jq -r '.hookSpecificOutput.additionalContext // ""' 2>/dev/null)
+T21_ERR=$(cat "$T21_STDERR")
+
+assert "perl-injection — hook exits 0 with regex-special slug" \
+  '[ "$T21_RC" -eq 0 ]'
+assert "perl-injection — no perl warning in stderr" \
+  '! printf "%s" "$T21_ERR" | grep -qiE "(unmatched|trailing|nothing to repeat)"'
+assert "perl-injection — target body survives perl pass" \
+  'printf "%s" "$T21_CTX" | grep -q "Target body should survive perl pass"'
+assert "perl-injection — source body still present" \
+  'printf "%s" "$T21_CTX" | grep -q "Normal source body"'
+
+rm -rf "$T21_DIR" "$T21_STDERR"
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="
