@@ -2231,6 +2231,32 @@ rm -rf "$TR_DIR"
 
 # --- End prompt triggers tests ---
 
+# --- Test 20a: evidence-extract.sh — evidence_from_frontmatter parses YAML array ---
+EX_DIR=$(mktemp -d); EX_MEM="$EX_DIR/memory"
+mkdir -p "$EX_MEM/mistakes"
+cat > "$EX_MEM/mistakes/ex-fm.md" << 'EOF'
+---
+type: mistake
+evidence:
+  - "parameterized query"
+  - "timezone-aware datetime"
+---
+Body text.
+EOF
+
+# Source the lib and call the function
+set +e
+. "$HOME/.claude/hooks/lib/evidence-extract.sh" 2>/dev/null || \
+  . "$(dirname "$0")/lib/evidence-extract.sh" 2>/dev/null || \
+  . "/Users/akamash/Development/hypomnema/hooks/lib/evidence-extract.sh"
+set -e
+EX_OUT=$(evidence_from_frontmatter "$EX_MEM/mistakes/ex-fm.md")
+
+assert "evidence_from_frontmatter — extracts YAML array entries" \
+  'printf "%s" "$EX_OUT" | grep -qF "parameterized query" && printf "%s" "$EX_OUT" | grep -qF "timezone-aware datetime"'
+
+rm -rf "$EX_DIR"
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="
