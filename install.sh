@@ -19,15 +19,68 @@ if [ ! -d "$HOME/.claude" ]; then
 fi
 # --- /Pre-flight ---
 
+# --- Flag parsing ---
+DRY_RUN=0
+DISCOVER=0
+PATCH_CLAUDE_MD=0
+SKIP_BASE=0
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dry-run)         DRY_RUN=1; shift ;;
+    --discover)        DISCOVER=1; shift ;;
+    --patch-claude-md) PATCH_CLAUDE_MD=1; shift ;;
+    --skip-base)       SKIP_BASE=1; shift ;;
+    --help|-h)
+      cat <<EOF
+Usage: ./install.sh [OPTIONS]
+
+Without options: standard install (creates ~/.claude/memory/, symlinks hooks,
+patches settings.json). Idempotent — safe to re-run after upgrades.
+
+Options:
+  --discover         Interactive wizard: scan ~/Development, ~/code,
+                     ~/projects, ~/src for git repos and add selected
+                     ones to ~/.claude/memory/projects.json.
+  --patch-claude-md  Append a four-line memory section to ~/.claude/CLAUDE.md
+                     (idempotent — checks for existing marker).
+  --dry-run          Print what would happen; make no changes.
+  --skip-base        Skip the base install and run only flagged actions.
+  --help             Show this message.
+
+Examples:
+  ./install.sh                                # base install
+  ./install.sh --discover --patch-claude-md   # base + wizard + claude-md patch
+  ./install.sh --skip-base --discover         # only run wizard (already installed)
+  ./install.sh --discover --dry-run           # preview discover, no writes
+EOF
+      exit 0
+      ;;
+    *) _die "unknown flag: $1 (try --help)" ;;
+  esac
+done
+
+_run() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] $*"
+  else
+    eval "$*"
+  fi
+}
+# --- /Flag parsing ---
+
 CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
 MEMORY_DIR="${CLAUDE_DIR}/memory"
 HOOKS_DIR="${CLAUDE_DIR}/hooks"
 SETTINGS="${CLAUDE_DIR}/settings.json"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+if [ "$SKIP_BASE" -eq 0 ]; then
+
 echo "=== Hypomnema installer ==="
 echo "Claude dir: $CLAUDE_DIR"
 echo "Memory dir: $MEMORY_DIR"
+[ "$DRY_RUN" -eq 1 ] && echo "(dry-run mode — no changes will be made)"
 echo ""
 
 # --- Create directory structure ---
@@ -109,7 +162,7 @@ fi
 # --- Create projects.json if missing ---
 if [ ! -f "$MEMORY_DIR/projects.json" ]; then
   echo '{}' > "$MEMORY_DIR/projects.json"
-  echo "  Created empty projects.json"
+  echo "  Created empty projects.json (see templates/projects.json.example)"
 fi
 if [ ! -f "$MEMORY_DIR/projects-domains.json" ]; then
   echo '{}' > "$MEMORY_DIR/projects-domains.json"
@@ -128,12 +181,106 @@ echo ""
 echo "=== Done ==="
 echo ""
 echo "Next steps:"
-echo "  1. Add project mappings to $MEMORY_DIR/projects.json:"
-echo '     {"~/Development/myproject": "myproject"}'
-echo "  2. Add to your CLAUDE.md:"
-echo "     - Mistakes → ~/.claude/memory/mistakes/"
-echo "     - Strategies → ~/.claude/memory/strategies/"
-echo "     - Continuity → ~/.claude/memory/continuity/{project}.md"
+echo "  1. Add project mappings to $MEMORY_DIR/projects.json"
+echo "     (or run: ./install.sh --discover for an interactive wizard)"
+echo "  2. Add memory section to ~/.claude/CLAUDE.md"
+echo "     (or run: ./install.sh --patch-claude-md)"
 echo "  3. Restart Claude Code"
 echo ""
 echo "Backup saved: ${SETTINGS}.backup-hypomnema"
+
+fi  # /SKIP_BASE
+
+# ---------- Optional: --discover wizard ----------
+discover_projects() {
+  echo ""
+  echo "=== Discover wizard ==="
+  local roots=("$HOME/Development" "$HOME/code" "$HOME/projects" "$HOME/src")
+  local found=()
+  for root in "${roots[@]}"; do
+    [ -d "$root" ] || continue
+    while IFS= read -r repo; do
+      found+=("$repo")
+    done < <(find "$root" -maxdepth 3 -type d -name .git 2>/dev/null | sed 's|/.git$||')
+  done
+
+  if [ ${#found[@]} -eq 0 ]; then
+    echo "No git repos found in standard dev folders (${roots[*]})."
+    return 0
+  fi
+
+  echo "Found ${#found[@]} git repos. For each: [y]es to track, [n]o to skip, [q]uit."
+  echo ""
+  local accepted=()
+  for repo in "${found[@]}"; do
+    local slug
+    slug=$(basename "$repo")
+    printf "  %s  (slug: %s) [y/n/q]: " "$repo" "$slug"
+    if [ "$DRY_RUN" -eq 1 ]; then
+      echo "[dry-run]"
+      accepted+=("$repo:$slug")
+      continue
+    fi
+    read -r ans </dev/tty || ans="n"
+    case "$ans" in
+      y|Y) accepted+=("$repo:$slug") ;;
+      q|Q) break ;;
+      *) ;;
+    esac
+  done
+
+  if [ ${#accepted[@]} -eq 0 ]; then
+    echo ""
+    echo "Nothing selected."
+    return 0
+  fi
+
+  local projects_json="$MEMORY_DIR/projects.json"
+  [ -f "$projects_json" ] || _run "echo '{}' > '$projects_json'"
+  for entry in "${accepted[@]}"; do
+    local path="${entry%:*}"
+    local slug="${entry##*:}"
+    if [ "$DRY_RUN" -eq 1 ]; then
+      echo "[dry-run] would map $path → $slug"
+    else
+      jq --arg p "$path" --arg s "$slug" '. + {($p): $s}' "$projects_json" > "$projects_json.tmp" \
+        && mv "$projects_json.tmp" "$projects_json"
+    fi
+  done
+  echo ""
+  echo "Added ${#accepted[@]} project(s) to $projects_json."
+}
+
+# ---------- Optional: --patch-claude-md ----------
+patch_claude_md() {
+  echo ""
+  echo "=== Patch ~/.claude/CLAUDE.md ==="
+  local f="$HOME/.claude/CLAUDE.md"
+  local marker="<!-- hypomnema-section -->"
+  if [ -f "$f" ] && grep -q "$marker" "$f"; then
+    echo "$f already contains hypomnema section — skipping."
+    return 0
+  fi
+  local block
+  block=$(cat <<'BLOCK'
+
+<!-- hypomnema-section -->
+## Memory (hypomnema)
+- Storage: `~/.claude/memory/` — read schema in the hypomnema repo `CLAUDE.md`.
+- SessionStart hook auto-injects relevant mistakes, strategies, feedback.
+- When you learn something durable: write to `mistakes/`, `strategies/`, or `feedback/` per the protocol.
+<!-- /hypomnema-section -->
+BLOCK
+)
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] would append memory section to $f"
+    printf '%s\n' "$block"
+  else
+    [ -f "$f" ] || touch "$f"
+    printf '%s\n' "$block" >> "$f"
+    echo "Appended memory section to $f"
+  fi
+}
+
+[ "$DISCOVER" -eq 1 ]        && discover_projects
+[ "$PATCH_CLAUDE_MD" -eq 1 ] && patch_claude_md
