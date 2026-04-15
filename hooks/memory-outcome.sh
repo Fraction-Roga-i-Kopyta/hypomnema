@@ -3,6 +3,8 @@
 # Triggered on Write|Edit to memory/**/*.md
 # Graceful: any error → exit 0
 
+set -o pipefail
+
 MEMORY_DIR="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}"
 WAL_FILE="$MEMORY_DIR/.wal"
 

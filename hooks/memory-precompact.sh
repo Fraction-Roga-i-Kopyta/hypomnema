@@ -4,6 +4,8 @@
 # Output: additionalContext with reminder (stronger if nothing saved this session)
 # Graceful: any error → exit 0
 
+set -o pipefail
+
 MEMORY_DIR="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}"
 
 INPUT=$(cat)

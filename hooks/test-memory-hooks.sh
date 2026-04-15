@@ -2543,6 +2543,22 @@ T22_HOOK_SRC="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)/hooks/session-stop.s
 assert "wal-lock — feedback awk read wrapped in wal_run_locked" \
   'grep -E "wal_run_locked[[:space:]]+awk" "$T22_HOOK_SRC" >/dev/null'
 
+# --- Test 23: shell safety — pipefail in all executable hooks (v0.8) ---
+T23_REPO="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)"
+[ -d "$T23_REPO/hooks" ] || T23_REPO="."
+T23_MISSING=""
+for f in "$T23_REPO"/hooks/*.sh "$T23_REPO"/bin/*.sh "$T23_REPO"/install.sh; do
+  [ -f "$f" ] || continue
+  case "$(basename "$f")" in
+    bench-memory.sh|test-memory-hooks.sh) continue ;;  # bench has set -e; tests have own discipline
+  esac
+  if ! head -10 "$f" | grep -q 'pipefail'; then
+    T23_MISSING="$T23_MISSING $(basename "$f")"
+  fi
+done
+assert "shell-safety — every hook/bin/install has pipefail (missing:$T23_MISSING )" \
+  '[ -z "$T23_MISSING" ]'
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="

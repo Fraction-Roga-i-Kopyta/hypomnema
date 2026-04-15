@@ -1,5 +1,6 @@
 #!/bin/bash
 # Finds consolidation candidates in mistakes/
+set -o pipefail
 MEMORY_DIR="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}"
 
 echo "=== Consolidation Candidates ==="

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Hypomnema — persistent memory system for Claude Code
 # Install script: creates directory structure, copies hooks, patches settings.json
-set -e
+set -eo pipefail
 
 CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
 MEMORY_DIR="${CLAUDE_DIR}/memory"

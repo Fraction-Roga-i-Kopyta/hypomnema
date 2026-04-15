@@ -3,6 +3,8 @@
 # Dependencies: jq, find, stat
 # Graceful degradation: any error → exit 0
 
+set -o pipefail
+
 MEMORY_DIR="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}"
 MIN_SESSION_SECONDS=120  # 2 minutes
 WAL_FILE="$MEMORY_DIR/.wal"
