@@ -2388,6 +2388,94 @@ assert "evidence_from_body — 'uniqueend' absent (beyond 10 KB)" \
 
 rm -rf "$EX_DIR"
 
+# --- Test 20e: evidence-missing WAL event when memory file absent ---
+FB_DIR=$(mktemp -d); FB_MEM="$FB_DIR/memory"
+mkdir -p "$FB_MEM/mistakes"
+# NOTE: no ghost-file.md is created!
+
+TODAY=$(date +%Y-%m-%d)
+printf '%s|inject|ghost-file|fb-miss\n' "$TODAY" > "$FB_MEM/.wal"
+
+cat > "$FB_DIR/transcript.jsonl" << 'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"x"}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"y"}]}}
+EOF
+FB_MARKER="/tmp/.claude-session-fb-miss"
+touch -t 202601010000 "$FB_MARKER"
+
+printf '{"session_id":"fb-miss","transcript_path":"%s/transcript.jsonl"}' "$FB_DIR" | \
+  CLAUDE_MEMORY_DIR="$FB_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null >/dev/null
+
+assert "Feedback — evidence-missing event when file absent" \
+  'grep -q "|evidence-missing|ghost-file|fb-miss" "$FB_MEM/.wal"'
+assert "Feedback — trigger-silent also written for missing file" \
+  'grep -q "|trigger-silent|ghost-file|fb-miss" "$FB_MEM/.wal"'
+
+rm -rf "$FB_DIR" "$FB_MARKER"
+
+# --- Test 20f: evidence-empty WAL event when memory has no extractable evidence ---
+FB_DIR=$(mktemp -d); FB_MEM="$FB_DIR/memory"
+mkdir -p "$FB_MEM/mistakes"
+cat > "$FB_MEM/mistakes/noevid.md" << 'EOF'
+---
+type: mistake
+status: active
+---
+the.
+EOF
+# Body is one stop-word. No evidence frontmatter. evidence_from_body returns empty.
+
+TODAY=$(date +%Y-%m-%d)
+printf '%s|inject|noevid|fb-empty\n' "$TODAY" > "$FB_MEM/.wal"
+
+cat > "$FB_DIR/transcript.jsonl" << 'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"x"}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"y"}]}}
+EOF
+FB_MARKER="/tmp/.claude-session-fb-empty"
+touch -t 202601010000 "$FB_MARKER"
+
+printf '{"session_id":"fb-empty","transcript_path":"%s/transcript.jsonl"}' "$FB_DIR" | \
+  CLAUDE_MEMORY_DIR="$FB_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null >/dev/null
+
+assert "Feedback — evidence-empty event when body has no content tokens" \
+  'grep -q "|evidence-empty|noevid|fb-empty" "$FB_MEM/.wal"'
+assert "Feedback — trigger-silent also written for empty evidence" \
+  'grep -q "|trigger-silent|noevid|fb-empty" "$FB_MEM/.wal"'
+
+rm -rf "$FB_DIR" "$FB_MARKER"
+
+# --- Test 20g: case-insensitive evidence match ---
+FB_DIR=$(mktemp -d); FB_MEM="$FB_DIR/memory"
+mkdir -p "$FB_MEM/mistakes"
+cat > "$FB_MEM/mistakes/case-rule.md" << 'EOF'
+---
+type: mistake
+status: active
+evidence:
+  - "SQL injection"
+---
+Body.
+EOF
+
+TODAY=$(date +%Y-%m-%d)
+printf '%s|inject|case-rule|fb-case\n' "$TODAY" > "$FB_MEM/.wal"
+
+cat > "$FB_DIR/transcript.jsonl" << 'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"x"}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Preventing sql injection via prepared statements."}]}}
+EOF
+FB_MARKER="/tmp/.claude-session-fb-case"
+touch -t 202601010000 "$FB_MARKER"
+
+printf '{"session_id":"fb-case","transcript_path":"%s/transcript.jsonl"}' "$FB_DIR" | \
+  CLAUDE_MEMORY_DIR="$FB_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null >/dev/null
+
+assert "Feedback — case-insensitive match works" \
+  'grep -q "|trigger-useful|case-rule|fb-case" "$FB_MEM/.wal"'
+
+rm -rf "$FB_DIR" "$FB_MARKER"
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="
