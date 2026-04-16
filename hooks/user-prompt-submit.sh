@@ -10,8 +10,13 @@ set -o pipefail
 # Graceful degradation: any error → exit 0 with no output.
 
 MEMORY_DIR="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}"
-MEMORY_DIR_FOR_CFG="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}"
-[ -f "$MEMORY_DIR_FOR_CFG/.config.sh" ] && . "$MEMORY_DIR_FOR_CFG/.config.sh" 2>/dev/null || true
+
+# User-overridable runtime config (templates/.config.sh.example)
+# SECURITY: do NOT source .config.sh as shell — it is LLM-writable.
+# Parse only whitelisted integer keys via load_memory_config (see load-config.sh).
+# shellcheck source=lib/load-config.sh
+. "$(dirname "$0")/lib/load-config.sh" 2>/dev/null || true
+load_memory_config "$MEMORY_DIR/.config.sh"
 MAX_TRIGGERED=${MAX_TRIGGERED:-4}
 TODAY=$(date +%Y-%m-%d)
 NOW_EPOCH=$(date +%s)

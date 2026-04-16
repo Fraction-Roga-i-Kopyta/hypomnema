@@ -10,7 +10,11 @@ set -o pipefail
 MEMORY_DIR="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}"
 
 # User-overridable runtime config (templates/.config.sh.example)
-[ -f "$MEMORY_DIR/.config.sh" ] && . "$MEMORY_DIR/.config.sh" 2>/dev/null || true
+# SECURITY: do NOT source .config.sh as shell — it is LLM-writable.
+# Parse only whitelisted integer keys via load_memory_config (see load-config.sh).
+# shellcheck source=lib/load-config.sh
+. "$(dirname "$0")/lib/load-config.sh" 2>/dev/null || true
+load_memory_config "$MEMORY_DIR/.config.sh"
 
 MAX_GLOBAL_MISTAKES=${MAX_GLOBAL_MISTAKES:-3}
 MAX_PROJECT_MISTAKES=${MAX_PROJECT_MISTAKES:-3}
