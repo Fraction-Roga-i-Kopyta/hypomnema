@@ -237,7 +237,10 @@ collect_mistakes() {
     local MISTAKE_FILES=()
     while IFS= read -r f; do
       MISTAKE_FILES+=("$f")
-    done < <(find "$MEMORY_DIR/mistakes" -name "*.md" -type f 2>/dev/null)
+    # R10: cap files at 512KB. Larger files (usually misuse — dumps of
+    # logs or test output) blow past the 15s SessionStart timeout through
+    # AWK parsing. (audit-2026-04-16 R10)
+    done < <(find "$MEMORY_DIR/mistakes" -name "*.md" -type f -size -512k 2>/dev/null)
 
     if [ ${#MISTAKE_FILES[@]} -gt 0 ]; then
       # Add keyword scoring to mistakes: keyword_hits*3 as primary sort, then recurrence desc
@@ -380,7 +383,7 @@ collect_scored() {
   local files=()
   while IFS= read -r f; do
     files+=("$f")
-  done < <(find "$MEMORY_DIR/$dir" -name "*.md" -type f 2>/dev/null)
+  done < <(find "$MEMORY_DIR/$dir" -name "*.md" -type f -size -512k 2>/dev/null)
 
   [ ${#files[@]} -gt 0 ] || return 0
 
