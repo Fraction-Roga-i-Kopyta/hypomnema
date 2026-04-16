@@ -166,8 +166,17 @@ find_memory_file() {
   esac
   local f
   for dir in mistakes feedback strategies knowledge notes decisions; do
+    [ -d "$MEMORY_DIR/$dir" ] || continue
+    # Flat path first — the common case, avoids spawning find.
     f="$MEMORY_DIR/$dir/${slug}.md"
     [ -f "$f" ] && printf '%s' "$f" && return 0
+    # R14: session-start scans mistakes/ recursively (via find), so files
+    # under mistakes/<subdir>/ can be injected but were unreachable by
+    # cluster expansion with a flat lookup. Fall back to a bounded find.
+    # Basename-match only — the S2 guard above still rejects slugs that
+    # could traverse via `..`, `/`, or a leading dot. (audit-2026-04-16 R14)
+    f=$(find "$MEMORY_DIR/$dir" -name "${slug}.md" -type f 2>/dev/null | head -1)
+    [ -n "$f" ] && [ -f "$f" ] && printf '%s' "$f" && return 0
   done
   return 1
 }

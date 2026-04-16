@@ -2904,6 +2904,103 @@ assert "R8 — UTF-8 BOM file: frontmatter parsed as active/major" \
 
 rm -rf "$RX_DIR"
 
+# --- Test: R13 (minor) — horizontal rule '---' in body preserved as standalone line ---
+# Regression for audit-2026-04-16 R13: a `---` line after the frontmatter was
+# consumed by the frontmatter-close rule, causing adjacent paragraphs to
+# collapse into `Para1.---Para2.` with no whitespace.
+R13_DIR=$(mktemp -d)
+R13_MEM="$R13_DIR/memory"
+mkdir -p "$R13_MEM/mistakes"
+cat > "$R13_MEM/mistakes/r13-hr.md" <<'R13MD'
+---
+type: mistake
+project: global
+status: active
+severity: minor
+recurrence: 1
+---
+
+Para1.
+
+---
+
+Para2.
+R13MD
+
+# shellcheck source=/dev/null
+. /Users/akamash/Development/hypomnema/hooks/lib/parse-memory.sh
+R13_BODY=$(awk "$AWK_MISTAKES" "$R13_MEM/mistakes/r13-hr.md" | awk -F'\t' '{print $12}' | tr $'\x1e' '\n')
+assert "R13 — HR '---' preserved as standalone body line" \
+  'printf "%s\n" "$R13_BODY" | grep -Fxq -- "---"'
+assert "R13 — paragraphs NOT collapsed across HR" \
+  '! printf "%s\n" "$R13_BODY" | grep -Fq -- "Para1.---Para2."'
+rm -rf "$R13_DIR"
+
+# --- Test: R14 (minor) — find_memory_file resolves slugs in nested subdirs ---
+# Regression for audit-2026-04-16 R14: session-start collects mistakes
+# recursively via find, but find_memory_file looked only in the flat
+# `$MEMORY_DIR/<dir>/<slug>.md` path. Files under mistakes/<subdir>/ were
+# injected but not reachable by cluster expansion or contradicts detection.
+R14_DIR=$(mktemp -d)
+R14_MEM="$R14_DIR/memory"
+mkdir -p "$R14_MEM/mistakes/deep"
+cat > "$R14_MEM/mistakes/deep/r14-nested.md" <<'R14MD'
+---
+type: mistake
+project: global
+status: active
+severity: minor
+recurrence: 1
+---
+R14MD
+# shellcheck source=/dev/null
+. /Users/akamash/Development/hypomnema/hooks/lib/parse-memory.sh
+R14_PATH=$(MEMORY_DIR="$R14_MEM" find_memory_file "r14-nested" 2>/dev/null || true)
+assert "R14 — find_memory_file resolves slug in nested subdir" \
+  '[ -n "$R14_PATH" ] && [ -f "$R14_PATH" ]'
+# Make sure the traversal reject from S2 still holds — slugs with separators rejected.
+R14_RC_SLASH=0
+R14_OUT_SLASH=$(MEMORY_DIR="$R14_MEM" find_memory_file "deep/r14-nested" 2>/dev/null) || R14_RC_SLASH=$?
+assert "R14 — slug with '/' still rejected (S2 regression guard)" \
+  '[ "$R14_RC_SLASH" -ne 0 ] && [ -z "$R14_OUT_SLASH" ]'
+rm -rf "$R14_DIR"
+
+# --- Test: R15 (minor) — symlinked memory files are included in scan ---
+# Regression for audit-2026-04-16 R15: `find -type f` silently skips
+# symlinks, so a memory file linked into mistakes/ was invisible to the
+# scanner. Policy: follow symlinks within the fixture dir, broken links
+# are still skipped.
+R15_DIR=$(mktemp -d)
+R15_MEM="$R15_DIR/memory"
+R15_STORE="$R15_DIR/store"
+mkdir -p "$R15_MEM/mistakes" "$R15_STORE"
+cat > "$R15_STORE/linked-source.md" <<'R15MD'
+---
+type: mistake
+project: global
+status: active
+severity: major
+recurrence: 3
+root-cause: "Symlink target reachable"
+prevention: "Follow symlinks"
+---
+
+Linked mistake body.
+R15MD
+ln -s "$R15_STORE/linked-source.md" "$R15_MEM/mistakes/linked.md"
+# Also plant a broken symlink — it must NOT break the hook.
+ln -s "$R15_DIR/nonexistent.md" "$R15_MEM/mistakes/broken.md"
+cat > "$R15_MEM/projects.json" <<'R15J'
+{}
+R15J
+R15_OUT=$(echo '{"session_id":"r15-test","cwd":"/tmp"}' | CLAUDE_MEMORY_DIR="$R15_MEM" bash "$HOOK" 2>/dev/null)
+R15_CTX=$(printf '%s' "$R15_OUT" | jq -r '.hookSpecificOutput.additionalContext // ""')
+assert "R15 — symlinked mistake file injected" \
+  'printf "%s" "$R15_CTX" | grep -q "linked"'
+assert "R15 — broken symlink does not crash hook" \
+  '[ -n "$R15_OUT" ] && printf "%s" "$R15_OUT" | jq empty 2>/dev/null'
+rm -rf "$R15_DIR"
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="
