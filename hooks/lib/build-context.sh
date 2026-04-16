@@ -108,19 +108,25 @@ ${_prio}|${_target}|${_source_slug}|${_rtype}"
   done
 
   # --- Reverse scan ---
-  local _rdir _rf _rslug _rrels _rrel _rtarget _rrtype _rstatus _rprio
+  # P1: pre-filter to files that actually contain `related:` before paying
+  # the awk-per-file cost of parse_related. Typical corpora have related:
+  # on <10% of files; grep -l with glob is one process per directory vs
+  # one awk per file. (audit-2026-04-16 P1)
+  local _rdir _rf _rslug _rrels _rrel _rtarget _rrtype _rstatus _rprio _rel_files
   for _rdir in mistakes feedback strategies knowledge notes decisions; do
     [ -d "$MEMORY_DIR/$_rdir" ] || continue
-    for _rf in "$MEMORY_DIR/$_rdir"/*.md; do
+    _rel_files=$(grep -l -m1 '^related:' "$MEMORY_DIR/$_rdir"/*.md 2>/dev/null) || true
+    [ -z "$_rel_files" ] && continue
+    while IFS= read -r _rf; do
       [ -f "$_rf" ] || continue
-      _rslug=$(basename "$_rf" .md)
+      _rslug="${_rf##*/}"; _rslug="${_rslug%.md}"
       case "$INJECTED_SLUGS" in *" ${_rslug} "*) continue ;; esac
       case "$CLUSTER_CANDIDATES" in *"|${_rslug}|"*) continue ;; esac
       _rrels=$(parse_related "$_rf")
       [ -z "$_rrels" ] && continue
       for _rrel in $_rrels; do
-        _rtarget=$(printf '%s' "$_rrel" | cut -d: -f1)
-        _rrtype=$(printf '%s' "$_rrel" | cut -d: -f2)
+        _rtarget="${_rrel%%:*}"
+        _rrtype="${_rrel##*:}"
         case "$INJECTED_SLUGS" in
           *" ${_rtarget} "*)
             _rstatus=$(awk '/^---$/{n++} n==1 && /^status:/{sub(/^status: */,""); print; exit}' "$_rf" 2>/dev/null)
@@ -139,7 +145,7 @@ ${_rprio}|${_rslug}|${_rtarget}|${_rrtype}"
             ;;
         esac
       done
-    done
+    done <<< "$_rel_files"
   done
 
   # --- Cross-injected contradicts ---

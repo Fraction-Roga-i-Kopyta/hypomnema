@@ -107,15 +107,18 @@ extract_meta() {
       if (fm_count < 2) { printf "SCHEMA_ERROR"; exit }
       if (!printed) print_out()
     }
-    function print_out(   i, joined, SEP) {
+    function print_out(   i, joined, SEP, FS_OUT) {
       SEP = "\x1f"
+      # Field separator: \x1e (RS). Non-whitespace so IFS read preserves
+      # empty fields (tabs would be collapsed as whitespace IFS).
+      FS_OUT = "\x1e"
       joined = ""
       if (trig_single != "") joined = trig_single
       for (i = 1; i <= trig_count; i++) {
         if (joined != "") joined = joined SEP trig_arr[i]
         else joined = trig_arr[i]
       }
-      printf "%s\t%s\t%d\t%d\t%s\t%s\t%s", status, severity, recurrence, ref_count, project, created, joined
+      printf "%s%s%s%s%d%s%d%s%s%s%s%s%s", status, FS_OUT, severity, FS_OUT, recurrence, FS_OUT, ref_count, FS_OUT, project, FS_OUT, created, FS_OUT, joined
     }
   ' "$file"
 }
@@ -173,7 +176,8 @@ for _dir in mistakes feedback strategies knowledge notes seeds; do
   [ -d "$MEMORY_DIR/$_dir" ] || continue
   for _f in "$MEMORY_DIR/$_dir"/*.md; do
     [ -f "$_f" ] || continue
-    _slug=$(basename "$_f" .md)
+    # P5: param expansion instead of basename subshell.
+    _slug="${_f##*/}"; _slug="${_slug%.md}"
 
     # Dedup: skip if already in SessionStart injection
     case "$DEDUP_SLUGS" in *" ${_slug} "*) continue ;; esac
@@ -191,13 +195,11 @@ for _dir in mistakes feedback strategies knowledge notes seeds; do
       continue
     fi
 
-    _status=$(printf '%s' "$_meta" | cut -f1)
-    _severity=$(printf '%s' "$_meta" | cut -f2)
-    _recurrence=$(printf '%s' "$_meta" | cut -f3)
-    _ref_count=$(printf '%s' "$_meta" | cut -f4)
-    _project=$(printf '%s' "$_meta" | cut -f5)
-    _created=$(printf '%s' "$_meta" | cut -f6)
-    _phrases=$(printf '%s' "$_meta" | cut -f7-)
+    # P2: one IFS read replaces 7 printf|cut subshells (~20ms -> ~0.3ms per
+    # file). Uses \x1e (RS) as field separator — non-whitespace so
+    # consecutive empties (project+created often blank) are not collapsed.
+    # (audit-2026-04-16 P2)
+    IFS=$'\x1e' read -r _status _severity _recurrence _ref_count _project _created _phrases <<< "$_meta"
 
     # Status filter
     case "$_status" in active|pinned) ;; *) continue ;; esac
