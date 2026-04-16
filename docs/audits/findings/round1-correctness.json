@@ -1,0 +1,137 @@
+{
+  "round": 1,
+  "category": "correctness",
+  "agent": "general-purpose",
+  "scanned_files": [
+    "hooks/lib/score-records.sh",
+    "hooks/lib/parse-memory.sh",
+    "hooks/lib/build-context.sh",
+    "hooks/lib/wal-lock.sh",
+    "hooks/lib/evidence-extract.sh",
+    "hooks/lib/detect-project.sh",
+    "hooks/lib/stat-helpers.sh",
+    "hooks/session-start.sh",
+    "hooks/session-stop.sh",
+    "hooks/user-prompt-submit.sh",
+    "hooks/memory-dedup.sh",
+    "hooks/wal-compact.sh",
+    "hooks/memory-index.sh",
+    "bin/memory-dedup.py",
+    "bin/memory-strategy-score.sh",
+    "bin/memory-self-profile.sh",
+    "templates/mistake.md"
+  ],
+  "findings": [
+    {
+      "id": "C1",
+      "severity": "major",
+      "file": "hooks/session-stop.sh",
+      "line": 403,
+      "title": "grep -c || echo 0 duplicates output, corrupts WAL metrics line",
+      "evidence": "TOOL_CALLS=$(grep -c '\"tool_use\"' \"$TRANSCRIPT_PATH\" 2>/dev/null || echo 0). When grep -c has no matches on an existing file, it prints '0' to stdout AND exits 1, so the `|| echo 0` fallback runs and appends another '0'. The $(...) captures both: TOOL_CALLS becomes '0\\n0'. This value is later embedded on line 416 inside a WAL line: `wal_append \"$TODAY|session-metrics|$METRIC_DOMAINS|error_count:$METRIC_ERROR_COUNT,tool_calls:$TOOL_CALLS,duration:${METRIC_DURATION}s\"`. The embedded newline splits the WAL record into two lines — the second starts with '0,duration:...' and is neither a valid timestamped event nor parseable by wal-compact's session-metrics handler. Note: session-start.sh line 686 explicitly warns about this exact anti-pattern ('NOTE: grep -c outputs \"0\" with exit 1 when no matches, so || fallback would duplicate the count.'); session-stop.sh fell into the trap anyway.",
+      "reproducer": "TOOL_CALLS=$(grep -c 'xyz' /etc/hostname 2>/dev/null || echo 0); echo \"TOOL_CALLS=[$TOOL_CALLS]\"; printf '%s' \"$TOOL_CALLS\" | wc -l  # prints value with embedded newline, wc -l shows 1 internal newline",
+      "proposed_fix": "Drop the `|| echo 0` fallback (grep -c always writes a number to stdout on existing files) and rely on `${TOOL_CALLS:-0}` when consuming.",
+      "failing_test_hint": "Write a session where TRANSCRIPT_PATH exists but has no tool_use markers; tail -1 $WAL_FILE after stop hook and assert it contains exactly one line and no embedded newline inside tool_calls field."
+    },
+    {
+      "id": "C2",
+      "severity": "major",
+      "file": "hooks/session-stop.sh",
+      "line": 148,
+      "title": "rotation counters lost: while-pipe subshell makes rotation-summary always report 0",
+      "evidence": "Lines 74–129 run `awk ... | while IFS=$'\\t' read -r ... do ... rotation_stale_count=$((rotation_stale_count + 1)); rotation_archive_count=$((rotation_archive_count + 1)); done`. The pipe `|` spawns a subshell for the while loop, so updates to `rotation_stale_count` and `rotation_archive_count` never propagate to the parent shell. Line 148 then writes `$rotation_today|rotation-summary|checked_${rotation_checked}|stale_${rotation_stale_count},archived_${rotation_archive_count}` — always reporting `stale_0,archived_0` regardless of how many files were actually rotated. The individual per-file `wal_append` calls inside the loop still run (they don't need to return data), but the summary event is permanently wrong.",
+      "reproducer": "Create two .md files in ~/.claude/memory/mistakes/ with `referenced: 2020-01-01` and `status: active`, then run `bash hooks/session-stop.sh < <(echo '{\"session_id\":\"x\"}')`. Expect WAL to show `rotation-stale|path|age_Nd` events (they exist) AND a matching rotation-summary with stale_2; actually observe rotation-summary|checked_X|stale_0,archived_0.",
+      "proposed_fix": "Replace the pipe with process substitution: `while IFS=$'\\t' read -r ...; do ... done < <(awk '...' \"${all_files[@]}\" 2>/dev/null)` — keeps the loop in the parent shell.",
+      "failing_test_hint": "grep '|rotation-stale|' $WAL_FILE | wc -l  →  >0 files rotated, then grep '|rotation-summary|' $WAL_FILE | tail -1  →  parse stale_N; assert N matches the first count."
+    },
+    {
+      "id": "C3",
+      "severity": "major",
+      "file": "bin/memory-dedup.py",
+      "line": 20,
+      "title": "root-cause extractor captures '|' literal when frontmatter uses YAML block scalar",
+      "evidence": "extract_root_cause() uses `re.search(r'^root-cause:\\s*[\"\\']?(.+?)[\"\\']?\\s*$', text, re.MULTILINE)`. This is a single-line regex (.+? terminated by end-of-line). For a mistake file written with a YAML block scalar: `root-cause: |\\n  Multi-line cause\\n  continued\\n`, the regex matches the FIRST line only and captures the literal `|` character. Downstream token_set_ratio then compares `|` (length 1) against the existing files' root-cause — both the MERGE_THRESHOLD=80 and CANDIDATE_THRESHOLD=50 comparisons become meaningless noise. Wrong-merge risk: a new well-written mistake that happens to share no words can still be merged into an unrelated existing mistake whose root-cause is also just `|`, because token_set_ratio('|','|')=100.",
+      "reproducer": "python3 -c 'import re; t=\"\"\"---\\nroot-cause: |\\n  Real cause\\n  explained\\n---\"\"\"; print(re.search(r\"^root-cause:\\s*[\\\"\\x27]?(.+?)[\\\"\\x27]?\\s*$\", t, re.MULTILINE).group(1))'  →  prints '|' instead of 'Real cause explained'.",
+      "proposed_fix": "Detect `|`/`>` block scalar markers and instead capture the indented continuation lines; or fall back to parsing with a YAML library (PyYAML is already a common dep).",
+      "failing_test_hint": "Write mistakes/sample.md with `root-cause: |` plus two indented lines; assert extract_root_cause returns non-empty multi-word string, not just '|'."
+    },
+    {
+      "id": "C4",
+      "severity": "major",
+      "file": "templates/mistake.md",
+      "line": 1,
+      "title": "ref_count field missing from all templates — priority key log10(ref_count) bucket stuck at 0",
+      "evidence": "CLAUDE.md documents ref_count as a first-class ranking field in the priority key v0.6 formula (`project_rank → status → severity → recency → log₁₀(ref_count) → recurrence → ref_count`). user-prompt-submit.sh line 578 has `s/^ref_count: (\\d+)/\"ref_count: \" . ($1 + 1)/e` inside a perl -pi -e pipeline — it ONLY substitutes an existing line; it does NOT insert a new one. None of the templates (mistake.md, feedback.md, knowledge.md, strategy.md, continuity.md) declare `ref_count: 0`, so every file created from a template is permanently stuck at ref_count=0 / log10=0, and two contributions of the priority key (the log₁₀ bucket and the raw tiebreaker) collapse to zero for the entire project. This silently breaks the documented ranking — frequently-used vs. one-off records are indistinguishable.",
+      "reproducer": "grep -l '^ref_count:' /Users/akamash/Development/hypomnema/templates/*.md  →  no matches. Then create a file with `referenced: 2026-04-16` from mistake.md template, run session-start.sh, and `grep ref_count ~/.claude/memory/mistakes/<slug>.md` — no line appears.",
+      "proposed_fix": "Add `ref_count: 0` to every template's frontmatter; also make session-start's perl pipeline idempotently insert `ref_count: 1` if missing.",
+      "failing_test_hint": "Create a file from template, run session-start 3 times, assert ref_count in the file's frontmatter is 3."
+    },
+    {
+      "id": "C5",
+      "severity": "minor",
+      "file": "hooks/user-prompt-submit.sh",
+      "line": 236,
+      "title": "log10 ref_count bucket boundaries disagree with inline spec comment",
+      "evidence": "Line 235 comment: `# log10-bucket of ref_count (0=1-9, 1=10-99, 2=100-999, 3=1000+)`. Line 236 implementation: `_log_ref=$(awk -v r=\"$_ref_count\" 'BEGIN{v=log(r+1)/log(10); print int(v)}')`. Because of the +1 adjustment: r=9 → log10(10)=1.0 → int=1 (comment says 0). r=99 → log10(100)=2 (comment says 1). Every decade boundary rolls one bucket early. Consequence: the 'popular' bucket 3 is reached at ref_count=999 (not 1000 as documented), bucket 2 is reached at ref_count=99 (not 100), etc. Minor — ranking still monotonic, but the documented bucket mapping is wrong and anyone who reasons about it from the comment will get the cutoffs wrong.",
+      "reproducer": "for r in 9 99 999; do awk -v r=\"$r\" 'BEGIN{print r, int(log(r+1)/log(10))}'; done  →  9 1 (comment expects 0); 99 2 (comment expects 1); 999 2 (comment OK).",
+      "proposed_fix": "Either rewrite the comment as `(0=1-9, 1=10-99, 2=100-999, 3=1000+)` using `int(log(r)/log(10))` (no +1) with r>=1 guard; or change code to `v=(r<1)?0:log(r)/log(10)` so the comment is correct.",
+      "failing_test_hint": "Parameterized test: for r in [1,9,10,99,100,999,1000,9999] assert _log_ref equals the bucket named in the adjacent comment."
+    },
+    {
+      "id": "C6",
+      "severity": "minor",
+      "file": "hooks/lib/parse-memory.sh",
+      "line": 89,
+      "title": "parse_related silently drops inline-array 'related: [a, b]' form documented in schema",
+      "evidence": "CLAUDE.md schema example (knowledge/decision/note section): `related: [other-slug-1, other-slug-2]`. parse_related() only recognizes block list items matched by `/^  - /` (two-space-prefixed `- slug[: type]`). When a file uses the inline-array form from the documented example, the awk scanner never enters the `in_rel` branch productively, and the function outputs an empty string. Downstream build-context.sh::expand_clusters treats the empty output as 'no related links' (line 85 `[ -z \"$_rels\" ] && continue`) and skips cluster expansion entirely for that file.",
+      "reproducer": "Create ~/.claude/memory/knowledge/x.md with frontmatter `related: [foo, bar]`, then run `MEMORY_DIR=~/.claude/memory bash -c 'source hooks/lib/parse-memory.sh; parse_related ~/.claude/memory/knowledge/x.md'` — prints nothing. Replace with block form and it prints `foo: bar:` correctly.",
+      "proposed_fix": "Add a second branch that detects `^related:\\s*\\[` and splits the array by comma; or update all docs/templates to require block-list form only.",
+      "failing_test_hint": "Create two files — one inline, one block — both with identical logical `related: [a, b]`. Assert parse_related output is equal for both."
+    },
+    {
+      "id": "C7",
+      "severity": "minor",
+      "file": "hooks/lib/build-context.sh",
+      "line": 88,
+      "title": "related link without type: suffix makes cut -d: -f2 echo the slug as the rtype",
+      "evidence": "expand_clusters lines 87-88: `_target=$(printf '%s' \"$_rel\" | cut -d: -f1); _rtype=$(printf '%s' \"$_rel\" | cut -d: -f2)`. When the parsed token is a bare slug without `:type` (e.g. parse_related output `slug-a` for a list item written `- slug-a`), `cut -d: -f2` on a string with no delimiter prints the whole input — `_rtype` becomes `slug-a`. Subsequent `case \"$_rtype\" in contradicts|reinforces|instance_of|supersedes) ... *) _prio=2` falls through to the default priority 2, which is benign for sorting. However the human-facing cluster label at line 212 `via ${_source} → ${_rtype}` renders as `via parent → slug-a`, which is confusing. More importantly, the contradicts-specific logic at lines 98-103 and 189-208 will silently never trigger for typeless related entries — so conflict markers are lost.",
+      "reproducer": "Populate related: block with `- slug-only-no-type`; run expand_clusters and inspect CLUSTER_MD — the emitted label reads 'via src → slug-only-no-type' (proving _rtype == slug) and no contradicts warning is generated even when intent was 'contradicts'.",
+      "proposed_fix": "After cut, validate `[ \"$_rtype\" = \"$_target\" ] && _rtype=\"\"` so typeless entries fall into the default branch cleanly without poisoning the label.",
+      "failing_test_hint": "Test parse_related output 'bar-only ' (no colon) → expand_clusters should set _rtype to '' (or 'unknown'), not 'bar-only'."
+    },
+    {
+      "id": "C8",
+      "severity": "minor",
+      "file": "hooks/user-prompt-submit.sh",
+      "line": 224,
+      "title": "future-dated `created:` gets recency_rank=3 (highest boost), inflating priority",
+      "evidence": "Line 224: `_age_days=$(( (NOW_EPOCH - _created_sec) / 86400 ))`. Line 225: `if [ \"$_age_days\" -le 7 ]; then _recency_rank=3`. For any future-dated memory (e.g. `created: 2099-01-01`), _age_days is a large negative number which satisfies `-le 7`, granting the maximum recency rank. A single typo in a `created:` date (common when manually editing frontmatter) or a clock skew can permanently over-boost the record above all correctly-aged ones. Nothing else in the priority key compensates: higher recency_rank wins the tiebreaker outright.",
+      "reproducer": "Create a mistake with created: 2099-01-01 and a legitimate mistake with created: 2026-04-10; inject both for the same prompt; observe the 2099 one sorted first. Verified by: `awk -v r=0 'BEGIN{if (r <= 7) print \"bucket3\"}'`.",
+      "proposed_fix": "Clamp `_age_days=$(( _age_days < 0 ? 0 : _age_days ))` before the comparison (or treat negative ages as recency_rank=0 to penalise obviously-wrong dates).",
+      "failing_test_hint": "Unit test the recency_rank branch with NOW_EPOCH=1700000000 and _created_sec=2000000000 — assert _recency_rank is 0, not 3."
+    },
+    {
+      "id": "C9",
+      "severity": "minor",
+      "file": "hooks/lib/score-records.sh",
+      "line": 43,
+      "title": "trigger-match events count as positive outcomes, conflating exposure with effectiveness",
+      "evidence": "compute_wal_scores line 41-43: `outcome-positive { pos_count++ }`, `outcome-negative { neg_count++ }`, `trigger-match { pos_count++ }`. effectiveness = (pos+1)/(pos+neg+2). trigger-match means 'the user's prompt mentioned a trigger phrase → this record was injected via UserPromptSubmit' — it is a retrieval signal, NOT evidence that the mistake did not repeat or the strategy was used. Counting it as positive means a record can float to the top of WAL-based scoring just by being triggered often, even if it never actually helped (trigger-useful) and never prevented a repeat (outcome-positive). This contradicts the docstring at lines 14-17 ('spread × decay(recency) × effectiveness') where effectiveness is defined Bayesian-style over outcome events, not mixed with exposure events.",
+      "reproducer": "Seed WAL with `TODAY|trigger-match|sample|sid` 50 times, 0 outcome-positive, 0 outcome-negative; compute_wal_scores assigns effectiveness ≈ 51/52 = 0.98, pushing sample to the top — yet 'useful' events are zero.",
+      "proposed_fix": "Remove the `trigger-match { pos_count++ }` clause, or track it in a separate exposure_count multiplier rather than mixing into the Bayesian effectiveness term.",
+      "failing_test_hint": "Populate WAL with only trigger-match events for slug X and only outcome-positive for slug Y; assert compute_wal_scores ranks Y ≥ X."
+    },
+    {
+      "id": "C10",
+      "severity": "minor",
+      "file": "hooks/session-stop.sh",
+      "line": 132,
+      "title": "pinned files with malformed frontmatter get archived by mtime, contradicting 'pinned never auto-archive'",
+      "evidence": "The pinned exemption at line 75 (`[ \"$file_status\" = \"pinned\" ] && continue`) runs inside the awk→while pipeline that consumes parsed frontmatter. A file that lacks a closing `---` or is otherwise unparseable yields no frontmatter row, so the exemption branch is never evaluated for it. The fallback loop at lines 132-145 iterates `for f in \"${all_files[@]}\"` regardless of status, matches `head_line != \"---\"`, and `mv` any such file older than 90d (by mtime) into ARCHIVE_DIR. CLAUDE.md promises `status: pinned files never archive automatically`; this fallback breaks that guarantee for any pinned file whose frontmatter has been corrupted by (for instance) an earlier edit that dropped the closing delimiter.",
+      "reproducer": "Create mistakes/oldpinned.md with `---\\nstatus: pinned\\n`(missing second `---`), touch -d '2024-01-01' on it, run session-stop.sh — file is moved to archive/mistakes/oldpinned.md. Same file with valid closing `---` would be preserved.",
+      "proposed_fix": "In the mtime-fallback loop, read status via a one-shot awk and still honour pinned before moving.",
+      "failing_test_hint": "Setup a pinned file with broken frontmatter and mtime >90d; run session-stop; assert file is still at its original path."
+    }
+  ],
+  "notes": "Suspected but not reproduced: (a) awk locale-sensitive printf — on the audit host (ru_RU.UTF-8) `awk 'BEGIN{printf \"%.1f\", 1.5}'` emits `1,5` with comma; within awk pipelines both write and read use the same locale so round-trip values survive, but if a user edits the index manually or the index file is carried between hosts with different LC_NUMERIC, downstream `\"1,5\"+0` parses as `1` (dropping the fractional part). Worth forcing `LC_ALL=C` at each awk invocation that prints/reads floats. (b) BOM-prefixed memory files are flagged as SCHEMA_ERROR by user-prompt-submit.sh extract_meta (line 70) because `/^---$/` fails to match `\\xEF\\xBB\\xBF---`; this falls under Robustness rather than Correctness but worth noting. (c) Non-existent `wal_append` second-argument dedup: wal-lock.sh wal_append uses `grep -qF \"$key\"` against the whole WAL file, not tied to a specific date — yesterday's event with the same dedup_key silently suppresses today's write. The call-sites in session-stop.sh always append today's slug/session components into the key so in practice collisions are rare, but the dedup is day-agnostic. Not filed as a finding because no reproducer where it causes wrong output was produced within the 20-min budget. Verified OK and NOT filed: AWK_MISTAKES/AWK_SCORED field counts match downstream reads (13 vs 8 including prepended score); JDN math in days_between is correct for leap years and month boundaries; sort ties in both priority-key sorts are broken deterministically because slug/file path participate in the last-resort lexicographic tiebreaker; division by zero guards in score-records.sh (effectiveness, decay) and memory-self-profile.sh (rate) are correct; WAL lock is shared between wal-compact.sh and session-start's append path (no race on the main path, only the fallback `tail -1000` at session-start:604 skips the lock — benign because it's a degraded-mode path)."
+}
