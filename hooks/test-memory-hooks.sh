@@ -2812,6 +2812,98 @@ assert "S4 — </system-reminder> marker neutralized in injected context" '! pri
 assert "S4 — <system> wrapper marker neutralized in injected context"  '! printf "%s" "$S4_CTX" | grep -qE "<system>[^<]*</system>"'
 rm -rf "$S4_DIR"
 
+# --- Test: R2/R4/R6/R7/R8 — parser robustness cluster ---
+# Regression for audit-2026-04-16 parser findings: tabs after YAML key,
+# quoted values, block scalars, block-style arrays, BOM prefix.
+RX_DIR=$(mktemp -d)
+RX_MEM="$RX_DIR/memory"
+mkdir -p "$RX_MEM/mistakes" "$RX_MEM/feedback"
+
+# R2 — tab after key
+cat > "$RX_MEM/mistakes/r2-tab.md" <<EOF
+---
+type: mistake
+project: global
+status:	active
+severity: major
+recurrence: 3
+---
+Body R2
+EOF
+
+# R4 — quoted status
+cat > "$RX_MEM/mistakes/r4-quoted.md" <<'EOF'
+---
+type: mistake
+project: global
+status: "active"
+severity: "major"
+recurrence: 3
+---
+Body R4
+EOF
+
+# R6 — block scalar root-cause
+cat > "$RX_MEM/mistakes/r6-block.md" <<'EOF'
+---
+type: mistake
+project: global
+status: active
+severity: minor
+recurrence: 1
+root-cause: |
+  line one
+  line two
+---
+Body R6
+EOF
+
+# R7 — block-style keywords array
+cat > "$RX_MEM/feedback/r7-block.md" <<'EOF'
+---
+type: feedback
+project: global
+status: active
+keywords:
+  - api
+  - auth
+---
+Body R7
+EOF
+
+# R8 — UTF-8 BOM at file start
+printf '\xef\xbb\xbf' > "$RX_MEM/mistakes/r8-bom.md"
+cat >> "$RX_MEM/mistakes/r8-bom.md" <<'EOF'
+---
+type: mistake
+project: global
+status: active
+severity: major
+recurrence: 3
+---
+Body R8
+EOF
+
+# shellcheck source=/dev/null
+. /Users/akamash/Development/hypomnema/hooks/lib/parse-memory.sh
+RX_MIST=$(awk "$AWK_MISTAKES" "$RX_MEM/mistakes"/*.md)
+RX_FB=$(awk "$AWK_SCORED" "$RX_MEM/feedback"/*.md)
+
+assert "R2 — tab after key: status parsed as 'active'" \
+  'printf "%s\n" "$RX_MIST" | grep -q "r2-tab.md\tactive\t"'
+assert "R4 — quoted value: quotes stripped from status and severity" \
+  'printf "%s\n" "$RX_MIST" | awk -F$"\t" "/r4-quoted/{print \$2 \"|\" \$6}" | grep -q "^active|major$"'
+assert "R6 — block scalar: '|' replaced with placeholder, parse does not fail" \
+  'printf "%s\n" "$RX_MIST" | awk -F$"\t" "/r6-block/{print \$7}" | grep -q "_multiline_unsupported_"'
+assert "R7 — block-style keywords: collected into space-separated list" \
+  'printf "%s\n" "$RX_FB"   | awk -F$"\t" "/r7-block/{print \$6}" | grep -q "api"'
+assert "R7 — block-style keywords: both list items present" \
+  'printf "%s\n" "$RX_FB"   | awk -F$"\t" "/r7-block/{print \$6}" | grep -q "auth"'
+assert "R8 — UTF-8 BOM file: frontmatter parsed as active/major" \
+  'printf "%s\n" "$RX_MIST" | awk -F$"\t" "/r8-bom/{print \$2 \"|\" \$6}" | grep -q "^active|major$"'
+
+rm -rf "$RX_DIR"
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="
