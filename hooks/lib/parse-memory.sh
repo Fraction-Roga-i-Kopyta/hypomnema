@@ -27,7 +27,12 @@ FNR == 1 {
   # R3: only emit a record if the previous file had a closed frontmatter
   # (past_fm == 1). Unclosed files used to appear as empty-body entries
   # with valid-looking metadata. (audit-2026-04-16 R3)
+  # R16: apply the empty→_none_ fallback on list fields here too so
+  # `keywords: []` does not starve a file of both keyword score and
+  # TF-IDF bonus. (audit-2026-04-16 R16)
   if (prev_file != "" && past_fm == 1) {
+    if (keywords == "") keywords = "_none_"
+    if (domains  == "") domains  = "_none_"
     printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", \
       prev_file, status, project, recurrence, injected, severity, root_cause, prevention, domains, keywords, scope, body
   }
@@ -82,7 +87,10 @@ FNR == 1 { sub(/^'"$_UTF8_BOM"'/, "") }
 { gsub(/\r/, "") }
 FNR == 1 {
   # R3: only emit when previous file had a closed frontmatter.
+  # R16: empty→_none_ fallback on list fields.
   if (prev_file != "" && past_fm == 1) {
+    if (keywords == "") keywords = "_none_"
+    if (domains  == "") domains  = "_none_"
     printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", prev_file, status, project, referenced, domains, keywords, body
   }
   in_fm = 0; fm_end_count = 0
