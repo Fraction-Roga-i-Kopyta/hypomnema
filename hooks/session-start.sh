@@ -266,7 +266,9 @@ collect_mistakes() {
 
       while IFS=$'\t' read -r kscore file status file_project recurrence injected severity root_cause prevention file_domains file_keywords file_scope body; do
         [ -z "$file" ] && continue
-        body=$(printf '%s' "$body" | tr $'\x1e' '\n')
+        # P3: decode body only AFTER cheap filters — most candidates get
+        # dropped on status/recurrence/scope/domain/project.
+        # (audit-2026-04-16 P3)
         [ "$status" != "active" ] && [ "$status" != "pinned" ] && continue
 
         # Recurrence threshold: skip unconfirmed mistakes (rec=0) unless pinned
@@ -301,7 +303,11 @@ collect_mistakes() {
         fi
 
         local filename
-        filename=$(basename "$file" .md)
+        filename="${file##*/}"
+        filename="${filename%.md}"
+
+        # Body decode only here — after every filter. (P3/P5)
+        body=$(printf '%s' "$body" | tr $'\x1e' '\n')
 
         # If body is whitespace-only, use root-cause and prevention
         local clean_body
@@ -447,7 +453,9 @@ collect_scored() {
 
   while IFS=$'\t' read -r kscore file status file_project referenced file_domains file_keywords body; do
     [ -z "$file" ] && continue
-    body=$(printf '%s' "$body" | tr $'\x1e' '\n')
+    # P3: run the body tr-decode only AFTER all cheap filters. Previously every
+    # candidate paid the decode; ~90% of them get filtered out at status/domain/
+    # project checks, so the work was wasted. (audit-2026-04-16 P3)
     [ "$status" != "active" ] && [ "$status" != "pinned" ] && continue
     domain_matches "$file_domains" || continue
 
@@ -469,12 +477,14 @@ collect_scored() {
       zero_count=$((zero_count + 1))
     fi
 
+    body=$(printf '%s' "$body" | tr $'\x1e' '\n')
     local clean_body
     clean_body=$(printf '%s' "$body" | tr -d '[:space:]')
     [ -z "$clean_body" ] && continue
 
     local filename
-    filename=$(basename "$file" .md)
+    filename="${file##*/}"
+    filename="${filename%.md}"
     _COLLECT_RESULT="${_COLLECT_RESULT}
 ### ${filename}
 ${body}
@@ -561,7 +571,8 @@ DEDUP_FILE_V05="$RUNTIME_DIR_V05/injected-${SAFE_MARKER_ID_V05}.list"
 mkdir -p "$RUNTIME_DIR_V05" 2>/dev/null || true
 {
   for f in "${INJECTED_FILES[@]}"; do
-    basename "$f" .md
+    _b="${f##*/}"
+    printf '%s\n' "${_b%.md}"
   done
 } > "$DEDUP_FILE_V05" 2>/dev/null || true
 
@@ -600,7 +611,8 @@ WAL_FILE="$MEMORY_DIR/.wal"
 
 _INJECT_LINES=""
 for f in "${INJECTED_FILES[@]}"; do
-  _INJECT_LINES="${_INJECT_LINES}${TODAY}|inject|$(basename "$f" .md)|${SAFE_SESSION_ID}
+  _b="${f##*/}"; _b="${_b%.md}"
+  _INJECT_LINES="${_INJECT_LINES}${TODAY}|inject|${_b}|${SAFE_SESSION_ID}
 "
 done
 if [ -n "$_INJECT_LINES" ]; then
