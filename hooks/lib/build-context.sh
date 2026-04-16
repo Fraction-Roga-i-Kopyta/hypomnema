@@ -66,11 +66,18 @@ expand_clusters() {
 
   [ ${#INJECTED_FILES[@]} -gt 0 ] || return 0
 
-  # Build space-separated list of injected slugs
+  # Build space-separated list of injected slugs.
+  # R9: filenames with whitespace would make the space-delimited set
+  # match word-prefixes of other slugs (e.g. 'file with spaces' makes
+  # 'file' and 'with' falsely appear injected). Such filenames are
+  # non-idiomatic; skip them from the dedup set rather than fabricate
+  # a parallel escaping scheme. They still inject normally; they just
+  # won't participate in cluster dedup. (audit-2026-04-16 R9)
   local INJECTED_SLUGS=" "
   local _cf _cs
   for _cf in "${INJECTED_FILES[@]}"; do
-    _cs=$(basename "$_cf" .md)
+    _cs="${_cf##*/}"; _cs="${_cs%.md}"
+    case "$_cs" in *[[:space:]]*) continue ;; esac
     INJECTED_SLUGS="${INJECTED_SLUGS}${_cs} "
   done
 
