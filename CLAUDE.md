@@ -10,39 +10,48 @@ The point: you remember things across sessions without a database, embeddings, o
 
 ## Memory layout
 
-`~/.claude/memory/` contains nine subdirectories:
+`~/.claude/memory/` contains nine subdirectories. Decay column shows **stale → archive** in days: files flip `status: active → stale` at the stale threshold and move to `archive/` at the archive threshold.
 
-| Directory | Contents | Injected at start | Decay |
+| Directory | Contents | Injected at start | Stale → Archive |
 |---|---|:-:|---|
-| `mistakes/` | Bugs you should not repeat | yes (3 global + 3 per project) | slow (180d) |
-| `strategies/` | Proven approaches that worked | yes (cap 4) | medium (90d) |
-| `feedback/` | Behavioral rules from the user | yes (cap 6) | slow (180d) |
-| `knowledge/` | Domain facts, API docs | yes (cap 4) | medium (90d) |
-| `decisions/` | Architecture & technology choices | yes (cap 3) | slow (365d) |
-| `notes/` | Long-form references | yes (cap 2) | slow (180d) |
-| `projects/` | Project descriptions | yes (current only) | none |
-| `continuity/` | "Where we left off" last session | yes (current only) | fast (14d) |
-| `journal/` | Session logs | no | fast (30d) |
+| `mistakes/` | Bugs you should not repeat | yes (3 global + 3 per project) | 60 → 180 |
+| `strategies/` | Proven approaches that worked | yes (cap 4) | 90 → 180 |
+| `feedback/` | Behavioral rules from the user | yes (cap 6) | 45 → 120 |
+| `knowledge/` | Domain facts, API docs | yes (cap 4) | 90 → 365 |
+| `decisions/` | Architecture & technology choices | yes (cap 3) | 90 → 365 |
+| `notes/` | Long-form references | yes (cap 2) | 30 → 90 |
+| `projects/` | Project descriptions | yes (current only) | no rotation |
+| `continuity/` | "Where we left off" last session | yes (current only) | auto-generated, not rotated |
+| `journal/` | Session logs | no | 30 → 90 |
 
-`feedback/`, `knowledge/`, `strategies/`, `decisions/`, `notes/` share an adaptive 12-slot pool — if one type has fewer relevant files, the budget flows to others.
+`feedback/`, `knowledge/`, `strategies/`, `decisions/`, `notes/` share an adaptive 12-slot pool — if one type has fewer relevant files, the budget flows to others. The pool shrinks to 8 or 10 slots when keyword signal is strong (≥10 or ≥5 keywords respectively), so noise does not dilute high-confidence matches.
 
 ## Frontmatter schema (universal)
 
-Every memory file is a markdown document with YAML frontmatter:
+Every memory file is a markdown document with YAML frontmatter. Fields marked **auto** are managed by hooks; set everything else yourself.
 
 ```yaml
 ---
 type: mistake | strategy | feedback | knowledge | project | continuity | decision | note
 project: global | <project-slug>
-created: YYYY-MM-DD
-injected: YYYY-MM-DD       # auto-updated by SessionStart
-referenced: YYYY-MM-DD     # auto-updated when read by hooks
-status: active | pinned | archived
+created: YYYY-MM-DD          # you set — used by recency-boost ranking
+injected: YYYY-MM-DD          # auto — first-injected timestamp, SessionStart writes it
+referenced: YYYY-MM-DD        # auto — SessionStart refreshes it on every inject
+ref_count: 0                  # auto — SessionStart increments on every inject
+status: active | pinned | stale | archived
 description: <one-line description>   # used in MEMORY.md index
 keywords: [tag1, tag2, tag3]
 domains: [domain1, domain2]            # use kebab-case for multi-word
 ---
 ```
+
+`ref_count` feeds the `log₁₀(ref_count)` bucket of the priority key (see "How injection ranks files"). New templates ship with `ref_count: 0` so the field exists for the auto-increment pass to find.
+
+**Tolerated syntax variants** (parser normalises them):
+- Tab after a key (`status:\tactive`) works the same as a space
+- Quoted scalars (`status: "active"`) are unquoted on read
+- Block-style arrays (`keywords:\n  - api\n  - auth`) collapse into a single list the same way as inline `[api, auth]`
+- Multi-line block scalars (`root-cause: |`) are **not** supported — use a single-line scalar or put the prose in the body
 
 ## Type-specific fields
 
@@ -58,8 +67,14 @@ prevention: "..."
 **strategy** (additional):
 ```yaml
 trigger: "..."             # one situation cue (substring-matched against prompt)
+# — OR — block-style array for multiple triggers:
+triggers:
+  - "situation cue A"
+  - "situation cue B"
 success_count: <integer>
 ```
+
+Both singular `trigger:` (legacy) and `triggers:` (array) are accepted; UserPromptSubmit merges them into a single phrase list.
 
 **feedback** (additional):
 ```yaml
@@ -172,20 +187,41 @@ At session end, if you stopped mid-task. Three lines max: what you were doing, c
 
 ## Lifecycle
 
-The Stop hook rotates files based on age and decay rate:
-- `status: active` files older than the type's stale threshold → `status: archived` (still on disk, not injected).
-- `status: pinned` files never archive automatically.
-- Archived files are kept indefinitely; you can manually re-pin them.
+The Stop hook rotates files using the two-stage thresholds from the memory-layout table:
+- `status: active` files older than the type's **stale** threshold → `status: stale` (still on disk, still injected if nothing fresher matches).
+- `status: stale` files older than the **archive** threshold → moved to `~/.claude/memory/archive/<type>/` (not injected).
+- `status: pinned` files never decay automatically.
+- Archived files are kept indefinitely; manually move one back and set `status: active` to revive it.
+- `continuity/` and `projects/` are exempt from rotation — they represent per-project state, not decay-able records.
 
 ## How injection ranks files
 
-1. **Project filter** — files matching the current project rank above `project: global`.
-2. **Status** — `pinned` > `active`.
-3. **Severity / recurrence** — for mistakes, higher = injected first.
-4. **WAL spaced repetition** — files that were injected and then proved useful (positive outcome) bubble up.
-5. **TF-IDF body match** against current keywords — relevance to the current task.
+Two call sites use two different rankings — keep them straight:
 
-You do NOT need to set ranks manually. Just write good frontmatter and the hooks do the rest.
+**UserPromptSubmit** (trigger match → priority key). Higher wins, ties broken left-to-right:
+
+1. **Project** — current project > `global` > other project.
+2. **Status** — `pinned` > `active`.
+3. **Severity** — `critical` > `major` > `minor` > unset.
+4. **Recency (by `created`)** — ≤7d > ≤30d > ≤90d > older.
+5. **log₁₀(`ref_count`)** — diminishing-returns bucket (0, 1, 2, 3+).
+6. **`recurrence`** — higher wins.
+7. **`ref_count`** — raw value as last tiebreaker.
+
+**SessionStart** (context assembly) uses a composite **score**, not a pure priority key:
+
+```
+score = keyword_hits × 3
+      + project_boost × 1              (file.project == current project)
+      + wal_spaced_repetition (0–10)   (files that proved useful recur faster)
+      + strategy_bonus (min(success_count × 2, 6))
+      + tfidf_body_match × 2 (capped)  (only for records with no keywords)
+      − 3 if record matches no active signals (noise penalty)
+```
+
+Filter first (project ∈ {current, global}; status ∈ {active, pinned}; domains intersect current; recurrence ≥ threshold), then score, then apply adaptive quotas (3+3 mistakes; 12/10/8-slot flex pool depending on keyword signal strength).
+
+You do NOT need to set ranks manually. Write good frontmatter, let the hooks do the rest.
 
 ## Reading what was injected
 
