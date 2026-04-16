@@ -83,6 +83,8 @@ evidence:                  # phrases that signal the rule applies (case-insensit
   - "phrase two"
 ```
 
+`evidence:` is listed here because feedback files use it most, but the field is type-agnostic — the session-stop feedback detector reads it from any injected memory file (mistake, strategy, knowledge, …). If body mining would give ambiguous tokens for a given rule, add explicit `evidence:` regardless of type.
+
 **knowledge / decision / note** (additional):
 ```yaml
 related: [other-slug-1, other-slug-2]   # optional cluster links
