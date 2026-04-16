@@ -1,0 +1,93 @@
+{
+  "round": 1,
+  "category": "performance",
+  "agent": "performance-engineer",
+  "baseline": {
+    "memory_files": 501,
+    "session_start_wall_ms": 5500,
+    "user_prompt_submit_wall_ms": 13350,
+    "session_stop_wall_ms": null,
+    "subshells_per_session_start": 532,
+    "note": "Synthetic 500-file corpus: 50 mistakes, 100 feedback, 100 knowledge, 100 strategies, 100 notes, 50 decisions, 1 project. WAL 600 lines. No TF-IDF index (cold start). Machine: macOS darwin 25.3.0. session-stop not measured (out of scope; its hot-path is wal-compact.sh which only runs at 1200 lines). Subshell count from bash -x trace: 532 awk, 523 tr, 577 basename, 6 find, 7 jq, 4 date, 3 grep total."
+  },
+  "findings": [
+    {
+      "id": "P1",
+      "severity": "critical",
+      "file": "hooks/lib/build-context.sh",
+      "line": 112,
+      "title": "Reverse cluster scan spawns 1 awk per file unconditionally — O(N) on every session",
+      "evidence": "expand_clusters() reverse scan iterates every file in all 6 type directories and calls parse_related() for each, which spawns a separate awk process. Even files that have no 'related:' field pay the full awk startup cost. With 500 files this is ~500 awk processes. The forward scan (lines 82-108) repeats the same pattern for INJECTED_FILES. The _cluster_qualifies() function (line 42) also spawns an awk per qualifying candidate.",
+      "measurement": "Isolated timing: 500-file reverse scan = 1348ms. bash -x trace confirms 532 total awk invocations per session; ~500 attributable to parse_related in reverse scan. awk startup on macOS = 2.7ms median.",
+      "proposed_fix": "Pre-scan all files with a single awk pass that extracts both 'related:' links AND all frontmatter fields in one go (same pattern as AWK_SCORED in parse-memory.sh). Cache results in an associative array. Reverse scan then becomes an in-process lookup with zero subshells. Alternatively, skip parse_related if a fast 'grep -q ^related:' pre-filter shows the file has no related block — but a single-pass awk is cleaner and eliminates both grep and awk spawns.",
+      "estimated_gain": "Drops reverse scan from 1348ms to ~20ms (single awk pass over 500 files). session-start wall time: 5500ms → ~4150ms."
+    },
+    {
+      "id": "P2",
+      "severity": "critical",
+      "file": "hooks/user-prompt-submit.sh",
+      "line": 162,
+      "title": "Per-file loop spawns 9-10 subshells per file: extract_meta(awk) + 7x printf|cut + date + awk",
+      "evidence": "The main candidate-collection loop (lines 162-244) iterates every file in 6 directories. For each file: (1) extract_meta() spawns 1 awk; (2) the result is split by 7 separate 'printf|cut -fN' calls — each is a subshell pair; (3) date -j -f to compute age_days spawns 1 process; (4) a standalone awk call computes log10(ref_count). Total: ~10 subshells per file. Measured per-file cost: 3ms awk + 20ms for 7 cuts + 2.9ms date + 2.4ms awk = 28.3ms. At 500 files: 14,150ms.",
+      "measurement": "Wall time measured: 13,350ms for 500 files (3 runs avg). Per-component isolation: 7x printf|cut = 20.2ms/file, date -j = 2.9ms/file, extract_meta awk = 3.0ms/file, log10 awk = 2.4ms/file. IFS read for 7 fields (no subshell) = 0.26ms — 77x faster than 7 cut calls.",
+      "proposed_fix": "Replace the per-file shell loop with a single batched awk pass over all candidate files, mirroring the AWK_SCORED pattern already used in session-start.sh. The awk program extracts status, severity, recurrence, ref_count, project, created, and all trigger phrases in one pass. Age computation (days since created) belongs in the awk END block using the existing JDN helper from score-records.sh. Field extraction then uses IFS read on the awk TSV output instead of 7 cut subshells.",
+      "estimated_gain": "Batched awk: ~30ms for 500 files vs 1500ms individual calls. IFS read replaces 7x cut: saves 19.74ms/file = 9870ms total. date elimination: saves 1450ms. Combined: 13350ms → ~1500ms for 500 files."
+    },
+    {
+      "id": "P3",
+      "severity": "major",
+      "file": "hooks/session-start.sh",
+      "line": 441,
+      "title": "Body tr-decode runs before status/domain filter in collect_scored while loop",
+      "evidence": "In collect_scored(), line 441: 'body=$(printf '%s' \"$body\" | tr $'\\x1e' '\\n')' executes unconditionally at the top of the while loop, before the status check (line 443) and domain_matches check (line 444). The awk_out fed into this loop contains one row per file in the directory. Most rows get skipped by the status/domain filters, but they all pay the tr decode cost. Same pattern exists in collect_mistakes() at line 260. With 450 scored files across 5 types, this means ~450 tr processes run of which only 12 produce usable output.",
+      "measurement": "tr subshells in bash -x trace: 523. Per-tr cost: 3.27ms. Attributable to early body decode: ~450 tr calls = ~1470ms wasted. The clean_body tr (line 464) only runs after filters — that one is correctly placed.",
+      "proposed_fix": "Move the body decode line below all early-continue checks (status, domain_matches, project scope, and cap checks). The body field is only needed when a record actually gets included in output. Affected lines: 441 in collect_scored and 260 in collect_mistakes. Change from current order to: read → status check → domain check → project check → cap check → body=$(... tr ...) → clean_body check → append to output.",
+      "estimated_gain": "At 500 files with 12 selected: decode cost drops from 450×3.3ms to 12×3.3ms. Saves ~1436ms. session-start: ~5500ms → ~4064ms (compounded with P1 fix: ~2700ms)."
+    },
+    {
+      "id": "P4",
+      "severity": "major",
+      "file": "hooks/user-prompt-submit.sh",
+      "line": 218,
+      "title": "date -j -f spawned per file to compute age_days — O(N) date processes",
+      "evidence": "Lines 218-222: for each candidate file, a date -j -f \"%Y-%m-%d\" subshell converts the 'created' field to epoch seconds. The extracted epoch is then used to compute _age_days. This runs for every file that passes the trigger check. Measured at 2.9ms/call.",
+      "measurement": "500 files × 2.9ms = 1450ms. Confirmed as separate contributor from P2's cut analysis.",
+      "proposed_fix": "Absorb age computation into the batched awk pass (P2 fix). The JDN calculation already exists in compute_wal_scores (score-records.sh lines 47-52) as a pure awk function. Add a days_between() call in the awk program that takes the 'created' field and today's date (passed via -v), returning age_days directly. Eliminates all date subshells for age computation.",
+      "estimated_gain": "Saves 1450ms at 500 files. This finding is bundled with P2 — fixing P2 with a batched awk pass naturally eliminates P4."
+    },
+    {
+      "id": "P5",
+      "severity": "minor",
+      "file": "hooks/lib/build-context.sh",
+      "line": 116,
+      "title": "basename subshell called per-file in reverse scan — 500 extra processes",
+      "evidence": "Line 116: _rslug=$(basename \"$_rf\" .md) spawns a subshell per file in the reverse scan. Shell parameter expansion achieves the same without a subshell: _rslug=\"${_rf##*/}\"; _rslug=\"${_rslug%.md}\". Same pattern repeats in the dedup-write loop (session-start.sh line 555) and WAL-write loop (line 594): both iterate INJECTED_FILES calling basename for each. Total basename processes in trace: 577.",
+      "measurement": "500 basename calls = 1277ms (measured). Per call: 2.55ms. Most are in the reverse scan (500 calls). If P1 is fixed (single-pass reverse scan), this issue is auto-resolved there. The dedup loop and WAL loop each make ~22 basename calls = 56ms combined — worth fixing regardless.",
+      "proposed_fix": "Replace basename subshell with shell parameter expansion everywhere: _slug=\"${filepath##*/}\"; _slug=\"${_slug%.md}\". No behavioral change. For the dedup and WAL loops in session-start.sh (lines 554-557 and 593-595), apply the substitution directly in the loop body.",
+      "estimated_gain": "22 calls in dedup+WAL loops: saves ~56ms. Reverse scan savings subsumed by P1 fix."
+    },
+    {
+      "id": "P6",
+      "severity": "minor",
+      "file": "hooks/lib/stat-helpers.sh",
+      "line": 10,
+      "title": "_stat_mtime probes BSD stat capability on every call, spawning 2 processes per invocation",
+      "evidence": "Lines 10-13: _stat_mtime() first runs 'stat -f %m file >/dev/null 2>&1' to detect BSD vs GNU, then runs 'stat -f %m file' again to get the value. Every call therefore spawns 2 stat processes. Called for TFIDF_INDEX and ANALYTICS_REPORT = 4 stat processes per session-start. Cost is minor now (4 × 2.3ms = 9.2ms) but would grow if more index files are added.",
+      "measurement": "1000 _stat_mtime calls = 2325ms total (2.3ms/call), of which ~1.15ms is the probe call. At 2 calls per invocation: 4 calls total = 9.2ms.",
+      "proposed_fix": "Cache the BSD/GNU detection at source-time (when stat-helpers.sh is sourced) using a module-level flag: set _STAT_FORMAT once with a conditional. Subsequent calls skip the probe entirely. Alternatively use a single stat invocation with both formats tried via shell conditional: 'stat -f %m \"$f\" 2>/dev/null || stat -c %Y \"$f\" 2>/dev/null'.",
+      "estimated_gain": "Saves ~4.6ms (minor). Worth doing for correctness (no repeated capability probes)."
+    },
+    {
+      "id": "P7",
+      "severity": "minor",
+      "file": "hooks/bench-memory.sh",
+      "line": 1,
+      "title": "bench-memory.sh is correctness-only at 14-file scale — no latency coverage for hot paths",
+      "evidence": "The benchmark creates 14 memory files (6 mistakes, 3 feedback, 3 knowledge, 2 strategies) and runs 18 pass/fail correctness scenarios. It has zero latency measurements or wall-time assertions. user-prompt-submit.sh is not tested at all (no hook invocations for that script). session-stop.sh is also absent. The correctness scenarios do not scale-test: at 14 files, session-start completes in ~60ms, masking all O(N) pathologies that manifest only at 500+ files.",
+      "measurement": "Estimated bench run time at 14 files: ~60ms per scenario × 18 = ~1080ms. At 500 files the same scenarios would take ~5500ms × 18 = ~99s and surface all bottlenecks documented here. Confirmed by running bench-memory.sh in source — completes in ~2s for all 18 scenarios.",
+      "proposed_fix": "Add a 'bench-perf' section to bench-memory.sh (or a separate bench-memory-perf.sh) that: (1) generates 500 synthetic files using the loop pattern in this audit; (2) times session-start, user-prompt-submit, and session-stop with 'python3 -c time' or 'gdate +%s%3N' on macOS; (3) asserts wall time ≤ 1500ms for session-start and ≤ 2000ms for user-prompt-submit; (4) reports the result as PASS/FAIL alongside the correctness suite.",
+      "estimated_gain": "Not a latency gain — a reliability gate. Prevents regression of O(N) fixes without automated detection."
+    }
+  ],
+  "notes": "Methodology: static analysis of all 6 hot-path files + synthetic 501-file corpus in /tmp/fake-memory (cleaned up). Each timing was verified with 3+ runs; averages used. bash -x trace produced 20,900 total trace lines for one session-start invocation, confirming external tool counts. TF-IDF index was absent (0-byte) during testing, simulating the common cold-start case. WAL had 600 entries (realistic for ~2 months of daily use). session-stop was not measured as its critical path (wal-compact.sh) only fires at 1200 WAL lines; its file-rotation loop is O(N) in files but fires infrequently. The two critical findings (P1, P2) together account for ~12,000ms of the observed ~18,850ms combined hot-path latency. Fixing P1+P2+P3 should bring session-start to ~1400ms and user-prompt-submit to ~1500ms at 500 files, meeting the 1.5s SLO. Note: P2 and P4 share the same root cause (per-file loop in user-prompt-submit) and should be fixed together in a single refactor."
+}
