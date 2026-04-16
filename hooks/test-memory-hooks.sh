@@ -2659,6 +2659,44 @@ assert "concurrent — dedup lists for both sessions present" \
 
 rm -rf "$T25_DIR" "$T25_OUT_A" "$T25_OUT_B" "$T25_ERR_A" "$T25_ERR_B"
 
+# --- Test: S1 (CWE-78) — .config.sh must NOT be sourced as shell code ---
+# Regression for audit-2026-04-16 S1: an LLM with Write access to
+# ~/.claude/memory/ can plant shell commands in .config.sh. Hooks must
+# parse only whitelisted integer keys, never source the file.
+
+# session-start
+S1_DIR1=$(mktemp -d); mkdir -p "$S1_DIR1/mistakes"
+S1_CANARY1="$S1_DIR1/PWNED"
+printf "MAX_FILES=22\ntouch '%s'\nCAP_FEEDBACK=6\n" "$S1_CANARY1" > "$S1_DIR1/.config.sh"
+cat > "$S1_DIR1/mistakes/x.md" << 'S1MD'
+---
+type: mistake
+project: global
+status: active
+severity: minor
+recurrence: 1
+---
+S1MD
+echo '{"session_id":"s1ss","cwd":"/tmp"}' | CLAUDE_MEMORY_DIR="$S1_DIR1" bash "$HOOK" >/dev/null 2>&1 || true
+assert "S1 — session-start: .config.sh shell code NOT executed" '[ ! -f "$S1_CANARY1" ]'
+rm -rf "$S1_DIR1"
+
+# session-stop
+S1_DIR2=$(mktemp -d); mkdir -p "$S1_DIR2"
+S1_CANARY2="$S1_DIR2/PWNED"
+printf "touch '%s'\n" "$S1_CANARY2" > "$S1_DIR2/.config.sh"
+echo '{"session_id":"s1stop","cwd":"/tmp","transcript_path":"/dev/null"}' | CLAUDE_MEMORY_DIR="$S1_DIR2" bash "$HOME/.claude/hooks/memory-stop.sh" >/dev/null 2>&1 || true
+assert "S1 — session-stop: .config.sh shell code NOT executed" '[ ! -f "$S1_CANARY2" ]'
+rm -rf "$S1_DIR2"
+
+# user-prompt-submit
+S1_DIR3=$(mktemp -d); mkdir -p "$S1_DIR3"
+S1_CANARY3="$S1_DIR3/PWNED"
+printf "touch '%s'\n" "$S1_CANARY3" > "$S1_DIR3/.config.sh"
+echo '{"session_id":"s1ups","cwd":"/tmp","prompt":"hi"}' | CLAUDE_MEMORY_DIR="$S1_DIR3" bash "$HOME/.claude/hooks/memory-user-prompt-submit.sh" >/dev/null 2>&1 || true
+assert "S1 — user-prompt-submit: .config.sh shell code NOT executed" '[ ! -f "$S1_CANARY3" ]'
+rm -rf "$S1_DIR3"
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="
