@@ -12,6 +12,10 @@ set -o pipefail
 # awk +0 coercion silently truncates (audit-2026-04-16 R1).
 export LC_ALL=C
 
+# S5 (audit-2026-04-16): WAL and runtime files are session-private; create
+# them mode 0600 so they are not world-readable on multi-user systems.
+umask 077
+
 MEMORY_DIR="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}"
 
 # User-overridable runtime config (templates/.config.sh.example)
@@ -615,6 +619,11 @@ WAL_FILE="$MEMORY_DIR/.wal"
 _INJECT_LINES=""
 for f in "${INJECTED_FILES[@]}"; do
   _b="${f##*/}"; _b="${_b%.md}"
+  # S6 (audit-2026-04-16): basenames containing '|' would split the WAL
+  # field boundary and let an LLM forge an outcome-positive event by
+  # naming a file 'slug|outcome-positive|other.md'. Sanitize here to
+  # match the session_id sanitization already applied above.
+  _b="${_b//|/_}"
   _INJECT_LINES="${_INJECT_LINES}${TODAY}|inject|${_b}|${SAFE_SESSION_ID}
 "
 done

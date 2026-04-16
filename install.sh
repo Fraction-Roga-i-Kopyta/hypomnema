@@ -60,11 +60,15 @@ EOF
   esac
 done
 
+# S7 (audit-2026-04-16): _run no longer eval's its arguments. The single
+# call site needed a redirection, so we pass through the arguments as a
+# normal command. If future call sites need redirection, write them
+# inline with a DRY_RUN guard instead of reaching for eval.
 _run() {
   if [ "$DRY_RUN" -eq 1 ]; then
     echo "[dry-run] $*"
   else
-    eval "$*"
+    "$@"
   fi
 }
 # --- /Flag parsing ---
@@ -241,7 +245,13 @@ discover_projects() {
   fi
 
   local projects_json="$MEMORY_DIR/projects.json"
-  [ -f "$projects_json" ] || _run "echo '{}' > '$projects_json'"
+  if [ ! -f "$projects_json" ]; then
+    if [ "$DRY_RUN" -eq 1 ]; then
+      echo "[dry-run] would seed empty projects.json at $projects_json"
+    else
+      printf '%s\n' '{}' > "$projects_json"
+    fi
+  fi
   for entry in "${accepted[@]}"; do
     local path="${entry%:*}"
     local slug="${entry##*:}"
