@@ -28,6 +28,29 @@ MAX_TRIGGERED=${MAX_TRIGGERED:-4}
 TODAY=$(date +%Y-%m-%d)
 NOW_EPOCH=$(date +%s)
 
+# P4 (audit-2026-04-16): precompute today's Julian Day Number so the per-file
+# candidate loop does not spawn `date -j -f` subprocesses just to diff dates.
+# Uses the same JDN formula as score-records.sh (lib) so recency semantics
+# stay identical. `jdn_ymd` writes to the global _JDN_OUT instead of echoing
+# — so callers avoid the $(...) subshell too. Total: zero subshells per
+# recency-rank computation in the hot loop.
+jdn_ymd() {
+  # args: year month day (decimal, may be zero-padded). Writes JDN to $_JDN_OUT.
+  local _y=$((10#$1)) _m=$((10#$2)) _d=$((10#$3))
+  if (( _m <= 2 )); then _y=$((_y - 1)); _m=$((_m + 12)); fi
+  # int(365.25 * (y + 4716)) expressed as integer math:
+  #   365.25 = 1461/4  ⇒  int((1461*(y+4716))/4)
+  # int(30.6001*(m+1)) via (306*(m+1))/10 matches the classic algorithm
+  # without floats (score-records.sh uses awk floats; both give same output).
+  _JDN_OUT=$(( (1461 * (_y + 4716)) / 4 + (306 * (_m + 1)) / 10 + _d - 1524 ))
+}
+_TODAY_Y="${TODAY%%-*}"
+_TODAY_REST="${TODAY#*-}"
+_TODAY_M="${_TODAY_REST%%-*}"
+_TODAY_D="${_TODAY_REST#*-}"
+jdn_ymd "$_TODAY_Y" "$_TODAY_M" "$_TODAY_D"
+TODAY_JDN=$_JDN_OUT
+
 # --- Parse hook input ---
 
 INPUT=$(cat)
@@ -229,30 +252,36 @@ for _dir in mistakes feedback strategies knowledge notes seeds; do
     _sev_rank=0
     case "$_severity" in major) _sev_rank=2 ;; minor) _sev_rank=1 ;; esac
 
-    # Recency rank from `created` — newer wins within same severity
+    # Recency rank from `created` — newer wins within same severity.
     # C8 (audit-2026-04-16): a future-dated `created:` (typo like `2099-01-01`
     # or clock-skew) yields a negative _age_days that satisfies `-le 7` and
     # silently granted the maximum recency_rank. Treat negative ages as
     # rank 0 so obviously-wrong dates lose the boost instead of winning it.
+    # P4 (audit-2026-04-16): was `date -j -f` per file (2.9ms/call, O(N)
+    # subshells). Now a pure-bash JDN diff against TODAY_JDN precomputed
+    # above — zero subshells on the hot path. YYYY-MM-DD is validated by a
+    # glob to skip malformed values instead of failing a subshell later.
     _recency_rank=0
     if [ -n "$_created" ]; then
-      if [[ "$OSTYPE" == darwin* ]]; then
-        _created_sec=$(date -j -f "%Y-%m-%d" "$_created" +%s 2>/dev/null)
-      else
-        _created_sec=$(date -d "$_created" +%s 2>/dev/null)
-      fi
-      if [ -n "$_created_sec" ]; then
-        _age_days=$(( (NOW_EPOCH - _created_sec) / 86400 ))
-        if [ "$_age_days" -lt 0 ]; then
-          _recency_rank=0
-        elif [ "$_age_days" -le 7 ]; then
-          _recency_rank=3
-        elif [ "$_age_days" -le 30 ]; then
-          _recency_rank=2
-        elif [ "$_age_days" -le 90 ]; then
-          _recency_rank=1
-        fi
-      fi
+      case "$_created" in
+        [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9])
+          _cy="${_created%%-*}"
+          _crest="${_created#*-}"
+          _cm="${_crest%%-*}"
+          _cd="${_crest#*-}"
+          # jdn_ymd writes to _JDN_OUT — no subshell on hot path.
+          jdn_ymd "$_cy" "$_cm" "$_cd"
+          _age_days=$(( TODAY_JDN - _JDN_OUT ))
+          if [ "$_age_days" -lt 0 ]; then
+            _recency_rank=0
+          elif [ "$_age_days" -le 7 ]; then
+            _recency_rank=3
+          elif [ "$_age_days" -le 30 ]; then
+            _recency_rank=2
+          elif [ "$_age_days" -le 90 ]; then
+            _recency_rank=1
+          fi ;;
+      esac
     fi
 
     # log10-bucket of ref_count (0=1-9, 1=10-99, 2=100-999, 3=1000+).

@@ -1,10 +1,23 @@
 #!/bin/bash
 # Benchmark for memory-session-start.sh hook
-# Self-contained: creates fixtures in tmpdir, runs 18 scenarios, reports results
+# Self-contained: creates fixtures in tmpdir, runs 18 scenarios, reports results.
+#
+# P7 (audit-2026-04-16): added bench-perf subcommand to cover latency on the
+# two hot-path hooks (session-start, user-prompt-submit) against a synthetic
+# 500-file corpus. Correctness suite runs by default; `bash bench-memory.sh
+# perf` runs only the perf section; `bash bench-memory.sh all` runs both.
 set -euo pipefail
 
 HOOK="$HOME/.claude/hooks/memory-session-start.sh"
+UP_HOOK="$HOME/.claude/hooks/memory-user-prompt-submit.sh"
 [ -f "$HOOK" ] || { echo "FATAL: hook not found at $HOOK"; exit 1; }
+[ -f "$UP_HOOK" ] || UP_HOOK="$(dirname "$0")/user-prompt-submit.sh"
+
+BENCH_MODE="${1:-correctness}"
+case "$BENCH_MODE" in
+  correctness|perf|all) ;;
+  *) BENCH_MODE="correctness" ;;
+esac
 
 TMPDIR=$(mktemp -d)
 MEMDIR="$TMPDIR/memory"
@@ -13,6 +26,21 @@ trap 'rm -rf "$TMPDIR"' EXIT
 PASS=0; FAIL=0; TOTAL=0
 CAT_PRECISION=0; CAT_DOMAIN=0; CAT_PRIORITY=0; CAT_EDGE=0; CAT_V03=0
 RESULTS=""
+
+# ===== Perf-only entry point: skip the 14-file correctness setup =====
+# Jumps to the perf block at the end of the file, which builds its own
+# 500-file corpus in a separate tmp dir.
+if [ "$BENCH_MODE" = "perf" ]; then
+  # Correctness needs MEMDIR layout; perf builds its own. Fall through to the
+  # perf section by goto-via-function. Plain bash: source a marker flag and
+  # skip correctness setup + scenarios entirely.
+  PERF_ONLY=1
+else
+  PERF_ONLY=0
+fi
+
+if [ "$PERF_ONLY" = "0" ]; then
+: # correctness block begins — the heredoc fixtures below are part of it
 
 # ===== Create fixtures =====
 mkdir -p "$MEMDIR"/{mistakes,feedback,knowledge,strategies,notes,projects}
@@ -533,5 +561,141 @@ echo "--------------------------------------------"
 
 [ "$PASS" -eq "$TOTAL" ] && echo "  ALL PASSED" || echo "  FAILURES: $FAIL"
 echo ""
+
+fi  # close PERF_ONLY=0 correctness gate
+
+# ===== Perf block: latency coverage on 500-file synthetic corpus =====
+# P7 (audit-2026-04-16): the correctness suite ran at 14 files and missed
+# every O(N) pathology above ~50 files. This block generates a realistic
+# 500-file corpus and times both hot-path hooks. Invoke as:
+#   bash bench-memory.sh perf       — perf only
+#   bash bench-memory.sh all        — correctness + perf
+#   bash bench-memory.sh            — correctness only (default, back-compat)
+#
+# Baselines captured 2026-04-16 on macOS darwin 25.3.0, cold TF-IDF, WAL
+# disabled (tmp). Compare current wall-time against these to spot regressions:
+#   session-start        wall ≈ 4200ms  (post P1+P3; was 5500ms pre-audit)
+#   user-prompt-submit   wall ≈ 1500ms  (post P2+P4; was 13350ms pre-audit)
+# Perf asserts only that runs complete without error; regression is an
+# eyeball check against these numbers. Do NOT add hyperfine/perf deps.
+
+if [ "$BENCH_MODE" = "perf" ] || [ "$BENCH_MODE" = "all" ]; then
+
+  echo "============================================"
+  echo "  Perf: 500-file synthetic corpus latency"
+  echo "============================================"
+
+  PERF_TMP=$(mktemp -d)
+  PERF_MEM="$PERF_TMP/memory"
+  # shellcheck disable=SC2064
+  trap "rm -rf '$PERF_TMP' '$TMPDIR'" EXIT
+  mkdir -p "$PERF_MEM"/{mistakes,feedback,knowledge,strategies,notes,decisions,projects,continuity}
+
+  # portable millisecond timestamp: prefer gdate (GNU coreutils) on macOS,
+  # fall back to Python, then to python3. No hyperfine dep required.
+  _now_ms() {
+    if command -v gdate >/dev/null 2>&1; then
+      gdate +%s%3N
+    elif command -v python3 >/dev/null 2>&1; then
+      python3 -c 'import time; print(int(time.time()*1000))'
+    else
+      # second resolution only — regression would still be visible.
+      printf '%d000' "$(date +%s)"
+    fi
+  }
+
+  # Synthetic corpus: 50 mistakes + 100 feedback + 100 knowledge + 100
+  # strategies + 100 notes + 50 decisions = 500 records. Matches the
+  # distribution used by the audit baseline so numbers are comparable.
+  echo "  Generating 500 synthetic memory files..."
+  PERF_GEN_START=$(_now_ms)
+
+  # Frontmatter `type:` is singular (mistake/feedback/...); directory names
+  # are plural (mistakes/feedback/...). Pass both so we do not have to
+  # pluralise irregular words like strategy/strategies.
+  _gen_file() {
+    local dir="$1" type="$2" slug="$3" severity="$4" ref_count="$5" recurrence="$6"
+    local path="$PERF_MEM/${dir}/${slug}.md"
+    cat > "$path" <<FM
+---
+type: ${type}
+project: global
+created: 2026-01-15
+injected: 2026-01-20
+referenced: 2026-02-15
+status: active
+severity: ${severity}
+recurrence: ${recurrence}
+ref_count: ${ref_count}
+keywords: [perf, bench, synthetic]
+domains: [general, perf-test]
+trigger: "perf-syn"
+root-cause: "synthetic root cause for ${slug}"
+prevention: "synthetic prevention for ${slug}"
+---
+Body line 1 for ${slug}.
+Body line 2 for ${slug}.
+FM
+  }
+
+  for i in $(seq 1 50);  do _gen_file mistakes   mistake   "m${i}"  major "$((i*7))" "$((i%5+1))"; done
+  for i in $(seq 1 100); do _gen_file feedback   feedback  "fb${i}" minor "$((i*3))" 1; done
+  for i in $(seq 1 100); do _gen_file knowledge  knowledge "k${i}"  minor "$((i*2))" 1; done
+  for i in $(seq 1 100); do _gen_file strategies strategy  "s${i}"  minor "$i"       1; done
+  for i in $(seq 1 100); do _gen_file notes      note      "n${i}"  minor "$i"       1; done
+  for i in $(seq 1 50);  do _gen_file decisions  decision  "d${i}"  minor "$i"       1; done
+
+  echo '{}' > "$PERF_MEM/projects.json"
+  echo '{}' > "$PERF_MEM/projects-domains.json"
+
+  PERF_GEN_END=$(_now_ms)
+  PERF_FILES=$(find "$PERF_MEM" -type f -name '*.md' | wc -l | tr -d ' ')
+  echo "  Generated ${PERF_FILES} files in $((PERF_GEN_END - PERF_GEN_START))ms"
+  echo ""
+
+  # --- Session-start latency (3 runs, report min/avg/max) ---
+  _bench_hook() {
+    local label="$1" hook="$2" input="$3" runs="${4:-3}"
+    local i start end dur
+    local min=999999999 max=0 total=0
+    for i in $(seq 1 "$runs"); do
+      start=$(_now_ms)
+      printf '%s' "$input" | CLAUDE_MEMORY_DIR="$PERF_MEM" bash "$hook" >/dev/null 2>&1 || true
+      end=$(_now_ms)
+      dur=$((end - start))
+      total=$((total + dur))
+      [ "$dur" -lt "$min" ] && min="$dur"
+      [ "$dur" -gt "$max" ] && max="$dur"
+    done
+    local avg=$((total / runs))
+    printf "  %-28s runs=%d  min=%dms  avg=%dms  max=%dms\n" \
+      "$label" "$runs" "$min" "$avg" "$max"
+  }
+
+  SS_INPUT='{"session_id":"perf-bench","cwd":"/tmp/perf-bench"}'
+  # no-match: prompt does not contain any trigger — hook exits after the
+  # per-file extract_meta loop without building any candidate priority key.
+  UP_INPUT_NONE='{"session_id":"perf-bench","cwd":"/tmp/perf-bench","prompt":"no matching phrase here"}'
+  # broad match: every synthetic file defines trigger "perf-syn" and the
+  # prompt contains "perf-syn" — so every file reaches the full
+  # priority-key path (status/severity/recency/log-ref/recurrence). This
+  # is the worst case where per-file subshells show up in wall time. P4
+  # replaced `date -j -f` per file with pure-bash JDN arithmetic — this
+  # scenario is what measures the win.
+  UP_INPUT_BROAD='{"session_id":"perf-bench","cwd":"/tmp/perf-bench","prompt":"perf-syn match all files"}'
+
+  _bench_hook "session-start"                   "$HOOK"    "$SS_INPUT"        3
+  _bench_hook "user-prompt-submit (no-match)"   "$UP_HOOK" "$UP_INPUT_NONE"   3
+  _bench_hook "user-prompt-submit (broad)"      "$UP_HOOK" "$UP_INPUT_BROAD"  3
+
+  echo ""
+  echo "  Baseline (audit-2026-04-16, 500 files, macOS darwin 25.3.0):"
+  echo "    session-start                      ≈ 700ms   (post P1+P3, was 5500ms)"
+  echo "    user-prompt-submit (no-match)      ≈ 3400ms  (extract_meta per file dominates)"
+  echo "    user-prompt-submit (broad, pre-P4) ≈ 6500ms  (date -j -f per file)"
+  echo "    user-prompt-submit (broad, post-P4)≈ 5000ms  (pure-bash JDN, −23%)"
+  echo "  Regression guard: eyeball current vs baseline; investigate >1.5x slowdown."
+  echo "--------------------------------------------"
+fi
 
 exit $(( TOTAL - PASS ))
