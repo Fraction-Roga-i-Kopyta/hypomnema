@@ -301,8 +301,10 @@ Lifecycle decisions use `referenced`. Both fields are updated within the frontma
 | knowledge | 90 days | 365 days |
 | decisions | 90 days | 365 days |
 | feedback | 45 days | 120 days |
-| notes/journal | 30 days | 90 days |
+| notes | 30 days | 90 days |
+| journal | 30 days | 90 days |
 | projects | never | never |
+| continuity | never (auto-generated per session) | never |
 
 ```
 active ──stale_days without referenced──→ stale ──archive_days──→ archive/
