@@ -15,10 +15,29 @@ MERGE_THRESHOLD = 80
 CANDIDATE_THRESHOLD = 50
 
 
+_BLOCK_SCALAR_MARKERS = {"|", ">", ""}
+_MIN_ROOT_CAUSE_LEN = 10
+
+
 def extract_root_cause(filepath: Path) -> str:
+    """Extract the `root-cause:` scalar, ignoring block-scalar markers.
+
+    audit-2026-04-16 C3/R11: the regex used to capture a literal `|` or `>`
+    when the frontmatter used YAML block-scalar form. Two such files would
+    then score 100% under token_set_ratio and auto-merge, deleting the
+    newer file (data loss). Reject any extracted value that is a bare block
+    marker or shorter than _MIN_ROOT_CAUSE_LEN.
+    """
     text = filepath.read_text(encoding="utf-8", errors="replace")
     m = re.search(r'^root-cause:\s*["\']?(.+?)["\']?\s*$', text, re.MULTILINE)
-    return m.group(1).strip() if m else ""
+    if not m:
+        return ""
+    value = m.group(1).strip()
+    if value in _BLOCK_SCALAR_MARKERS:
+        return ""
+    if len(value) < _MIN_ROOT_CAUSE_LEN:
+        return ""
+    return value
 
 
 def increment_recurrence(filepath: Path) -> None:
@@ -53,7 +72,16 @@ def main():
     for f in mistakes_dir.glob("*.md"):
         if f == new_file:
             continue
-        existing_rc = extract_root_cause(f)
+        # audit-2026-04-16 R12: broken symlinks or deleted files used to
+        # raise FileNotFoundError mid-glob, producing a Python traceback
+        # on stderr that hooks then injected into Claude's context as a
+        # "dedup warning". Skip anything we cannot read cleanly.
+        if not f.is_file():
+            continue
+        try:
+            existing_rc = extract_root_cause(f)
+        except (FileNotFoundError, PermissionError, OSError):
+            continue
         if not existing_rc:
             continue
         score = token_set_ratio(new_rc, existing_rc)

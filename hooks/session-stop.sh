@@ -66,20 +66,12 @@ lifecycle_rotate() {
   local rotation_today rotation_stale_count=0 rotation_archive_count=0 rotation_checked=${#all_files[@]}
   rotation_today=$(date +%Y-%m-%d)
 
-  # Single-pass awk: extract status, referenced, created for all files
-  awk '
-  { gsub(/\r/, "") }
-  FNR == 1 {
-    if (prev_file != "") printf "%s\t%s\t%s\t%s\t%s\n", prev_file, status, ref, created, decay
-    in_fm = 0; n = 0; status = "_empty_"; ref = ""; created = ""; decay = ""; prev_file = FILENAME
-  }
-  /^---$/ { n++; if (n==1) in_fm=1; if (n==2) in_fm=0 }
-  in_fm && /^status:/ { sub(/^status: */, ""); status = $0 }
-  in_fm && /^referenced:/ { sub(/^referenced: */, ""); ref = $0 }
-  in_fm && /^created:/ { sub(/^created: */, ""); created = $0 }
-  in_fm && /^decay_rate:/ { sub(/^decay_rate: */, ""); decay = $0 }
-  END { if (prev_file != "") printf "%s\t%s\t%s\t%s\t%s\n", prev_file, status, ref, created, decay }
-  ' "${all_files[@]}" 2>/dev/null | while IFS=$'\t' read -r f file_status ref_date created_date file_decay; do
+  # Single-pass awk: extract status, referenced, created for all files.
+  # C2: process-substitution (< <(...)) keeps the while-loop in the current
+  # shell so rotation_stale_count / rotation_archive_count updates survive
+  # for the rotation-summary WAL event. Piping through `| while` runs the
+  # loop in a subshell and the counters were lost. (audit-2026-04-16 C2)
+  while IFS=$'\t' read -r f file_status ref_date created_date file_decay; do
     [ "$file_status" = "pinned" ] && continue
     [ "$file_status" = "archived" ] && continue
 
@@ -134,7 +126,19 @@ lifecycle_rotate() {
         wal_append "$rotation_today|rotation-stale|$rel|age_${age}d" 2>/dev/null
       fi
     fi
-  done
+  done < <(awk '
+  { gsub(/\r/, "") }
+  FNR == 1 {
+    if (prev_file != "") printf "%s\t%s\t%s\t%s\t%s\n", prev_file, status, ref, created, decay
+    in_fm = 0; n = 0; status = "_empty_"; ref = ""; created = ""; decay = ""; prev_file = FILENAME
+  }
+  /^---$/ { n++; if (n==1) in_fm=1; if (n==2) in_fm=0 }
+  in_fm && /^status:/ { sub(/^status: */, ""); status = $0 }
+  in_fm && /^referenced:/ { sub(/^referenced: */, ""); ref = $0 }
+  in_fm && /^created:/ { sub(/^created: */, ""); created = $0 }
+  in_fm && /^decay_rate:/ { sub(/^decay_rate: */, ""); decay = $0 }
+  END { if (prev_file != "") printf "%s\t%s\t%s\t%s\t%s\n", prev_file, status, ref, created, decay }
+  ' "${all_files[@]}" 2>/dev/null)
 
   # Archive files without valid frontmatter if older than 90 days by mtime
   for f in "${all_files[@]}"; do
@@ -408,9 +412,15 @@ fi
 
 # --- Session metrics ---
 if [ -n "$TRANSCRIPT_PATH" ] && [ -f "$TRANSCRIPT_PATH" ]; then
-  TOOL_CALLS=$(grep -c '"tool_use"' "$TRANSCRIPT_PATH" 2>/dev/null || echo 0)
+  # C1: `grep -c ... || echo 0` produced "0\n0" when the pattern didn't
+  # match (grep still prints "0" then exits 1, triggering the fallback).
+  # The embedded newline then corrupted the session-metrics WAL record.
+  # (audit-2026-04-16 C1)
+  TOOL_CALLS=$(grep -c '"tool_use"' "$TRANSCRIPT_PATH" 2>/dev/null)
+  TOOL_CALLS=${TOOL_CALLS:-0}
   if [ -n "$ERROR_SUMMARY" ]; then
     METRIC_ERROR_COUNT=$(printf '%s\n' "$ERROR_SUMMARY" | grep -c '.' 2>/dev/null)
+    METRIC_ERROR_COUNT=${METRIC_ERROR_COUNT:-0}
   else
     METRIC_ERROR_COUNT=0
   fi

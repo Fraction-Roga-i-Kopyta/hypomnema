@@ -24,7 +24,10 @@ AWK_MISTAKES='
 FNR == 1 { sub(/^'"$_UTF8_BOM"'/, "") }
 { gsub(/\r/, "") }
 FNR == 1 {
-  if (prev_file != "") {
+  # R3: only emit a record if the previous file had a closed frontmatter
+  # (past_fm == 1). Unclosed files used to appear as empty-body entries
+  # with valid-looking metadata. (audit-2026-04-16 R3)
+  if (prev_file != "" && past_fm == 1) {
     printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", \
       prev_file, status, project, recurrence, injected, severity, root_cause, prevention, domains, keywords, scope, body
   }
@@ -60,8 +63,11 @@ in_fm && (in_kw || in_dom) && /^[[:space:]]+-[[:space:]]/ {
 }
 in_fm && (in_kw || in_dom) && !/^[[:space:]]+-[[:space:]]/ { in_kw = 0; in_dom = 0 }
 past_fm && !/^$/ { gsub(/\t/, " ", $0); body = body $0 "\x1e" }
+# R3: track that the second '---' was seen; END block refuses to emit a
+# record for files with unclosed frontmatter.
 END {
-  if (prev_file != "") {
+  # R3: skip unclosed frontmatter.
+  if (prev_file != "" && past_fm == 1) {
     gsub(/\t/, " ", root_cause); gsub(/\t/, " ", prevention)
     if (keywords == "") keywords = "_none_"
     if (domains  == "") domains  = "_none_"
@@ -75,7 +81,8 @@ AWK_SCORED='
 FNR == 1 { sub(/^'"$_UTF8_BOM"'/, "") }
 { gsub(/\r/, "") }
 FNR == 1 {
-  if (prev_file != "") {
+  # R3: only emit when previous file had a closed frontmatter.
+  if (prev_file != "" && past_fm == 1) {
     printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", prev_file, status, project, referenced, domains, keywords, body
   }
   in_fm = 0; fm_end_count = 0
@@ -102,8 +109,11 @@ in_fm && (in_kw || in_dom) && /^[[:space:]]+-[[:space:]]/ {
 }
 in_fm && (in_kw || in_dom) && !/^[[:space:]]+-[[:space:]]/ { in_kw = 0; in_dom = 0 }
 past_fm && !/^$/ { gsub(/\t/, " ", $0); body = body $0 "\x1e" }
+# R3: track that the second '---' was seen; END block refuses to emit a
+# record for files with unclosed frontmatter.
 END {
-  if (prev_file != "") {
+  # R3: skip unclosed frontmatter.
+  if (prev_file != "" && past_fm == 1) {
     if (keywords == "") keywords = "_none_"
     if (domains  == "") domains  = "_none_"
     printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", prev_file, status, project, referenced, domains, keywords, body

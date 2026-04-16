@@ -7,6 +7,7 @@ referenced: YYYY-MM-DD
 status: active
 severity: minor
 recurrence: 1
+ref_count: 0
 root-cause: ""
 prevention: ""
 domains: [general]
