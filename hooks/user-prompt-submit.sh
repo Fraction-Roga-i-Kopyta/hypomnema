@@ -230,6 +230,10 @@ for _dir in mistakes feedback strategies knowledge notes seeds; do
     case "$_severity" in major) _sev_rank=2 ;; minor) _sev_rank=1 ;; esac
 
     # Recency rank from `created` — newer wins within same severity
+    # C8 (audit-2026-04-16): a future-dated `created:` (typo like `2099-01-01`
+    # or clock-skew) yields a negative _age_days that satisfies `-le 7` and
+    # silently granted the maximum recency_rank. Treat negative ages as
+    # rank 0 so obviously-wrong dates lose the boost instead of winning it.
     _recency_rank=0
     if [ -n "$_created" ]; then
       if [[ "$OSTYPE" == darwin* ]]; then
@@ -239,7 +243,9 @@ for _dir in mistakes feedback strategies knowledge notes seeds; do
       fi
       if [ -n "$_created_sec" ]; then
         _age_days=$(( (NOW_EPOCH - _created_sec) / 86400 ))
-        if [ "$_age_days" -le 7 ]; then
+        if [ "$_age_days" -lt 0 ]; then
+          _recency_rank=0
+        elif [ "$_age_days" -le 7 ]; then
           _recency_rank=3
         elif [ "$_age_days" -le 30 ]; then
           _recency_rank=2
@@ -249,8 +255,14 @@ for _dir in mistakes feedback strategies knowledge notes seeds; do
       fi
     fi
 
-    # log10-bucket of ref_count (0=1-9, 1=10-99, 2=100-999, 3=1000+)
-    _log_ref=$(awk -v r="$_ref_count" 'BEGIN{v=log(r+1)/log(10); print int(v)}')
+    # log10-bucket of ref_count (0=1-9, 1=10-99, 2=100-999, 3=1000+).
+    # C5 (audit-2026-04-16): earlier implementation used `log(r+1)/log(10)`
+    # which rolls every decade one bucket early (r=9 → bucket 1, r=99 →
+    # bucket 2). Plain `log(r)/log(10)` is correct mathematically but
+    # `log(1000)/log(10)` evaluates to 2.999999… in awk, so `int()` would
+    # return 2 for a clean-decade value. Add a small epsilon before
+    # truncating so exact decade boundaries round to the next bucket.
+    _log_ref=$(awk -v r="$_ref_count" 'BEGIN{if (r < 1) { print 0; exit } v=log(r)/log(10); print int(v + 1e-9)}')
 
     # Zero-pad for lex sort (descending)
     _key=$(printf '%d.%d.%d.%d.%d.%06d.%06d' "$_project_rank" "$_status_rank" "$_sev_rank" "$_recency_rank" "$_log_ref" "$_recurrence" "$_ref_count")

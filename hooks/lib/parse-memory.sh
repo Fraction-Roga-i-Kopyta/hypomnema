@@ -130,11 +130,34 @@ END {
 
 # --- Parse related links from a memory file ---
 # Input: file path. Output: space-separated "target:type" pairs.
+# C6 (audit-2026-04-16): CLAUDE.md documents `related: [slug1, slug2]` as the
+# inline-array form but the original scanner only matched block list items
+# (`  - slug`). Inline entries silently produced empty output, so clusters
+# never expanded for any knowledge/decision/note file that used the
+# documented form. The new inline branch splits on `,` and emits the same
+# space-separated tokens as the block branch.
 parse_related() {
   local file="$1"
   [ -f "$file" ] || return 0
   awk '
     /^---$/ { fm_count++; if (fm_count >= 2) exit; next }
+    fm_count == 1 && /^related:[[:space:]]*\[/ {
+      line = $0
+      sub(/^related:[[:space:]]*\[/, "", line)
+      sub(/\].*/, "", line)
+      n = split(line, arr, /,[[:space:]]*/)
+      for (i = 1; i <= n; i++) {
+        item = arr[i]
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", item)
+        gsub(/["\x27]/, "", item)
+        if (item == "") continue
+        # Normalize "slug: type" → "slug:type" to match the block-form output.
+        gsub(/: /, ":", item)
+        gsub(/ /, "", item)
+        printf "%s ", item
+      }
+      next
+    }
     fm_count == 1 && /^related:/ { in_rel = 1; next }
     fm_count == 1 && in_rel && /^  - / {
       line = $0

@@ -94,6 +94,11 @@ expand_clusters() {
       _target=$(printf '%s' "$_rel" | cut -d: -f1)
       _rtype=$(printf '%s' "$_rel" | cut -d: -f2)
       [ -z "$_target" ] && continue
+      # C7 (audit-2026-04-16): `cut -d: -f2` on a delimiter-less string
+      # echoes the whole token, so a typeless entry like `- slug-a` leaked
+      # the slug into _rtype. Blank it out so the default `_prio=2` branch
+      # is the only one selected and the human label reads cleanly.
+      [ "$_rtype" = "$_target" ] && _rtype=""
       CLUSTER_PROVENANCE="${CLUSTER_PROVENANCE}
 ${_target}|${_source_slug}|${_rtype}"
       case "$INJECTED_SLUGS" in *" ${_target} "*) continue ;; esac
@@ -134,6 +139,10 @@ ${_prio}|${_target}|${_source_slug}|${_rtype}"
       for _rrel in $_rrels; do
         _rtarget="${_rrel%%:*}"
         _rrtype="${_rrel##*:}"
+        # C7 (audit-2026-04-16): typeless entry (`- slug-a`) made the
+        # bash expansion echo the slug as its own type. Blank it so the
+        # default _rprio=2 branch is the only one picked.
+        [ "$_rrtype" = "$_rtarget" ] && _rrtype=""
         case "$INJECTED_SLUGS" in
           *" ${_rtarget} "*)
             _rstatus=$(awk '/^---$/{n++} n==1 && /^status:/{sub(/^status: */,""); print; exit}' "$_rf" 2>/dev/null)
@@ -164,6 +173,8 @@ ${_rprio}|${_rslug}|${_rtarget}|${_rrtype}"
     for _rel in $_rels; do
       _target=$(printf '%s' "$_rel" | cut -d: -f1)
       _rtype=$(printf '%s' "$_rel" | cut -d: -f2)
+      # C7 (audit-2026-04-16): same typeless-slug guard as the forward scan.
+      [ "$_rtype" = "$_target" ] && _rtype=""
       [ "$_rtype" = "contradicts" ] || continue
       case "$INJECTED_SLUGS" in
         *" ${_target} "*)

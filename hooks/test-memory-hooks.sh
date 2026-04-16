@@ -3001,6 +3001,221 @@ assert "R15 — broken symlink does not crash hook" \
   '[ -n "$R15_OUT" ] && printf "%s" "$R15_OUT" | jq empty 2>/dev/null'
 rm -rf "$R15_DIR"
 
+# --- Test: C5 (minor) — log10 ref_count bucket boundaries match inline spec ---
+# Regression for audit-2026-04-16 C5: the earlier implementation used
+# `log(r+1)/log(10)` which rolled every decade one bucket early
+# (r=9 → bucket 1 instead of 0, r=99 → 2 instead of 1). Spec comment
+# documents `(0=1-9, 1=10-99, 2=100-999, 3=1000+)`.
+C5_LOG_REF() {
+  awk -v r="$1" 'BEGIN{if (r < 1) { print 0; exit } v=log(r)/log(10); print int(v + 1e-9)}'
+}
+assert "C5 — r=1 → bucket 0" '[ "$(C5_LOG_REF 1)" = "0" ]'
+assert "C5 — r=9 → bucket 0 (was 1 before fix)" '[ "$(C5_LOG_REF 9)" = "0" ]'
+assert "C5 — r=10 → bucket 1" '[ "$(C5_LOG_REF 10)" = "1" ]'
+assert "C5 — r=99 → bucket 1 (was 2 before fix)" '[ "$(C5_LOG_REF 99)" = "1" ]'
+assert "C5 — r=100 → bucket 2" '[ "$(C5_LOG_REF 100)" = "2" ]'
+assert "C5 — r=999 → bucket 2 (was 3 before fix)" '[ "$(C5_LOG_REF 999)" = "2" ]'
+assert "C5 — r=1000 → bucket 3" '[ "$(C5_LOG_REF 1000)" = "3" ]'
+assert "C5 — r=0 guarded → bucket 0" '[ "$(C5_LOG_REF 0)" = "0" ]'
+# Parity with the hook: ensure the inline awk in user-prompt-submit.sh
+# uses the same formula (not `r+1`).
+assert "C5 — hook formula matches spec comment" \
+  'grep -q "if (r < 1) { print 0; exit } v=log(r)/log(10); print int(v + 1e-9)" /Users/akamash/Development/hypomnema/hooks/user-prompt-submit.sh'
+
+# --- Test: C6 (minor) — parse_related accepts inline-array form ---
+# Regression for audit-2026-04-16 C6: CLAUDE.md schema example uses
+# `related: [slug-a, slug-b]` but the original awk scanner only handled
+# block list items (`  - slug`). Inline entries silently produced empty
+# output, suppressing cluster expansion entirely.
+C6_DIR=$(mktemp -d)
+C6_MEM="$C6_DIR/memory"
+mkdir -p "$C6_MEM/knowledge"
+cat > "$C6_MEM/knowledge/c6-inline.md" <<'C6MD'
+---
+type: knowledge
+project: global
+status: active
+related: [foo, bar]
+---
+
+Inline related body.
+C6MD
+cat > "$C6_MEM/knowledge/c6-block.md" <<'C6MD'
+---
+type: knowledge
+project: global
+status: active
+related:
+  - foo
+  - bar
+---
+
+Block related body.
+C6MD
+# shellcheck source=/dev/null
+. /Users/akamash/Development/hypomnema/hooks/lib/parse-memory.sh
+C6_INLINE=$(parse_related "$C6_MEM/knowledge/c6-inline.md" | tr -s ' ')
+C6_BLOCK=$(parse_related "$C6_MEM/knowledge/c6-block.md" | tr -s ' ')
+assert "C6 — inline-array parses to non-empty output" '[ -n "$C6_INLINE" ]'
+assert "C6 — inline-array emits both slugs" \
+  'printf "%s" "$C6_INLINE" | grep -q "foo" && printf "%s" "$C6_INLINE" | grep -q "bar"'
+assert "C6 — inline and block produce equivalent tokens" \
+  '[ "$C6_INLINE" = "$C6_BLOCK" ]'
+# With colon types in inline form:
+cat > "$C6_MEM/knowledge/c6-typed.md" <<'C6MD'
+---
+type: knowledge
+project: global
+status: active
+related: [foo: contradicts, bar: reinforces]
+---
+
+Typed inline body.
+C6MD
+C6_TYPED=$(parse_related "$C6_MEM/knowledge/c6-typed.md")
+assert "C6 — inline-array preserves type suffix (foo:contradicts)" \
+  'printf "%s" "$C6_TYPED" | grep -q "foo:contradicts"'
+assert "C6 — inline-array preserves type suffix (bar:reinforces)" \
+  'printf "%s" "$C6_TYPED" | grep -q "bar:reinforces"'
+rm -rf "$C6_DIR"
+
+# --- Test: C7 (minor) — typeless related entry does not leak slug into _rtype ---
+# Regression for audit-2026-04-16 C7: forward/reverse cluster scans used
+# `cut -d: -f2` (or `${var##*:}`) on a token without a delimiter, which
+# echoes the whole slug. The human-facing cluster label then rendered as
+# "via src → slug-only" and case branches on _rtype silently never matched.
+C7_TOKEN="bar-only-no-type"
+C7_TARGET=$(printf '%s' "$C7_TOKEN" | cut -d: -f1)
+C7_RTYPE=$(printf '%s' "$C7_TOKEN" | cut -d: -f2)
+# Mimic the guard applied in build-context.sh forward/cross scans.
+[ "$C7_RTYPE" = "$C7_TARGET" ] && C7_RTYPE=""
+assert "C7 — typeless token _rtype blanked after guard" '[ -z "$C7_RTYPE" ]'
+# Bash expansion form used by reverse scan.
+C7_RTARGET="${C7_TOKEN%%:*}"
+C7_RRTYPE="${C7_TOKEN##*:}"
+[ "$C7_RRTYPE" = "$C7_RTARGET" ] && C7_RRTYPE=""
+assert "C7 — typeless token _rrtype blanked after guard (bash expansion)" '[ -z "$C7_RRTYPE" ]'
+# Ensure typed tokens survive the guard untouched.
+C7_TYPED="foo:contradicts"
+C7_TT_TARGET=$(printf '%s' "$C7_TYPED" | cut -d: -f1)
+C7_TT_RTYPE=$(printf '%s' "$C7_TYPED" | cut -d: -f2)
+[ "$C7_TT_RTYPE" = "$C7_TT_TARGET" ] && C7_TT_RTYPE=""
+assert "C7 — typed token retains its type" '[ "$C7_TT_RTYPE" = "contradicts" ]'
+# Guard present in the actual hook source.
+assert "C7 — build-context forward scan has typeless guard" \
+  'grep -q "\[ \"\$_rtype\" = \"\$_target\" \] && _rtype=\"\"" /Users/akamash/Development/hypomnema/hooks/lib/build-context.sh'
+assert "C7 — build-context reverse scan has typeless guard" \
+  'grep -q "\[ \"\$_rrtype\" = \"\$_rtarget\" \] && _rrtype=\"\"" /Users/akamash/Development/hypomnema/hooks/lib/build-context.sh'
+
+# --- Test: C8 (minor) — future-dated `created:` does not grant recency_rank=3 ---
+# Regression for audit-2026-04-16 C8: `_age_days=$(( (NOW - created) / 86400 ))`
+# is negative for future dates, and `-le 7` evaluates true for negatives,
+# giving the maximum recency boost to typo-dated or clock-skewed files.
+C8_SIM() {
+  # Simulate the recency-rank branch as it appears in user-prompt-submit.sh
+  # after the fix. Takes an age in days (may be negative) and echoes the rank.
+  local _age_days="$1"
+  local _recency_rank=0
+  if [ "$_age_days" -lt 0 ]; then
+    _recency_rank=0
+  elif [ "$_age_days" -le 7 ]; then
+    _recency_rank=3
+  elif [ "$_age_days" -le 30 ]; then
+    _recency_rank=2
+  elif [ "$_age_days" -le 90 ]; then
+    _recency_rank=1
+  fi
+  printf '%s' "$_recency_rank"
+}
+assert "C8 — future date (age=-10) → rank 0 (was 3 before fix)" '[ "$(C8_SIM -10)" = "0" ]'
+assert "C8 — future date (age=-1000) → rank 0" '[ "$(C8_SIM -1000)" = "0" ]'
+assert "C8 — age 0 (today) → rank 3" '[ "$(C8_SIM 0)" = "3" ]'
+assert "C8 — age 7 → rank 3" '[ "$(C8_SIM 7)" = "3" ]'
+assert "C8 — age 8 → rank 2" '[ "$(C8_SIM 8)" = "2" ]'
+# Guard present in the actual hook source.
+assert "C8 — hook source clamps negative ages" \
+  'grep -q "_age_days.*-lt 0" /Users/akamash/Development/hypomnema/hooks/user-prompt-submit.sh'
+
+# --- Test: C9 (minor) — trigger-match is NOT counted as outcome-positive ---
+# Regression for audit-2026-04-16 C9: retrieval-signal conflation inflated
+# effectiveness for frequently-injected-but-never-useful records.
+C9_DIR=$(mktemp -d)
+C9_WAL="$C9_DIR/.wal"
+cat > "$C9_WAL" <<'C9W'
+2026-04-14|inject|exposure-only|sess-a
+2026-04-14|trigger-match|exposure-only|sess-a
+2026-04-15|inject|exposure-only|sess-b
+2026-04-15|trigger-match|exposure-only|sess-b
+2026-04-15|trigger-match|exposure-only|sess-c
+2026-04-14|inject|real-helper|sess-a
+2026-04-14|outcome-positive|real-helper|sess-a
+2026-04-15|inject|real-helper|sess-b
+2026-04-15|outcome-positive|real-helper|sess-b
+C9W
+# shellcheck source=/dev/null
+. /Users/akamash/Development/hypomnema/hooks/lib/score-records.sh
+C9_SCORES=$(compute_wal_scores "$C9_WAL" "2026-04-16")
+# Extract effectiveness-driven raw score per slug (2nd field in name:raw:strat_used).
+C9_EXPOSURE_RAW=$(printf '%s' "$C9_SCORES" | tr ';' '\n' | awk -F: '$1=="exposure-only"{print $2}')
+C9_HELPER_RAW=$(printf '%s' "$C9_SCORES" | tr ';' '\n' | awk -F: '$1=="real-helper"{print $2}')
+assert "C9 — exposure-only has non-empty score (still scored)" '[ -n "$C9_EXPOSURE_RAW" ]'
+assert "C9 — real-helper has non-empty score" '[ -n "$C9_HELPER_RAW" ]'
+# Helper (2 inject + 2 positive) must rank at least as high as exposure-only
+# (2 inject + 3 trigger-match). Before the fix the trigger-match events
+# pushed exposure-only's effectiveness to 4/5=0.8 vs helper's 3/4=0.75,
+# and with matching spread/decay exposure could win by exposure alone.
+C9_HELPER_CMP=$(awk -v h="$C9_HELPER_RAW" -v e="$C9_EXPOSURE_RAW" 'BEGIN{print (h >= e) ? "ok" : "bad"}')
+assert "C9 — outcome-positive record ranks >= trigger-only record" '[ "$C9_HELPER_CMP" = "ok" ]'
+# Guard: source no longer treats trigger-match as pos_count.
+assert "C9 — score-records.sh no longer mixes trigger-match into pos_count" \
+  '! grep -q "trigger-match.*pos_count" /Users/akamash/Development/hypomnema/hooks/lib/score-records.sh'
+rm -rf "$C9_DIR"
+
+# --- Test: C10 (minor) — pinned file with malformed frontmatter is NOT archived ---
+# Regression for audit-2026-04-16 C10: CLAUDE.md guarantees pinned files never
+# auto-archive, but the mtime-fallback branch moved any file missing the
+# closing `---` if its mtime was >90d — stripping protection from a pinned
+# record whose delimiters were accidentally broken by an earlier edit.
+C10_DIR=$(mktemp -d)
+C10_MEM="$C10_DIR/memory"
+mkdir -p "$C10_MEM/mistakes" "$C10_MEM/notes"
+# Pinned file with broken frontmatter (no closing ---). Must NOT be archived.
+cat > "$C10_MEM/mistakes/c10-pinned-broken.md" <<'C10MD'
+---
+type: mistake
+project: global
+status: pinned
+severity: major
+
+Body without closing frontmatter delimiter.
+C10MD
+# Note with proper status: pinned but truly missing frontmatter open/close.
+# (Head line is not `---` so it falls into the fallback branch.)
+printf 'status: pinned\nJust a raw text pinned note, no frontmatter at all.\n' \
+  > "$C10_MEM/notes/c10-raw-pinned.md"
+# Regular unparseable note — SHOULD be archived (ensures we did not disable
+# the fallback wholesale).
+printf '# Plain text\nNo frontmatter here.\n' > "$C10_MEM/notes/c10-regular-nofm.md"
+# Touch all three to 100 days old.
+if [[ "$OSTYPE" == darwin* ]]; then
+  touch -t "$(date -v-100d +%Y%m%d0000)" "$C10_MEM/mistakes/c10-pinned-broken.md"
+  touch -t "$(date -v-100d +%Y%m%d0000)" "$C10_MEM/notes/c10-raw-pinned.md"
+  touch -t "$(date -v-100d +%Y%m%d0000)" "$C10_MEM/notes/c10-regular-nofm.md"
+else
+  touch -d "100 days ago" "$C10_MEM/mistakes/c10-pinned-broken.md"
+  touch -d "100 days ago" "$C10_MEM/notes/c10-raw-pinned.md"
+  touch -d "100 days ago" "$C10_MEM/notes/c10-regular-nofm.md"
+fi
+echo '{"session_id":"c10-test"}' | CLAUDE_MEMORY_DIR="$C10_MEM" \
+  bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null || true
+assert "C10 — pinned file with broken frontmatter preserved (not archived)" \
+  '[ -f "$C10_MEM/mistakes/c10-pinned-broken.md" ] && [ ! -f "$C10_MEM/archive/mistakes/c10-pinned-broken.md" ]'
+assert "C10 — raw pinned note (no frontmatter) preserved" \
+  '[ -f "$C10_MEM/notes/c10-raw-pinned.md" ] && [ ! -f "$C10_MEM/archive/notes/c10-raw-pinned.md" ]'
+assert "C10 — regular unparseable note still archived (fallback still active)" \
+  '[ ! -f "$C10_MEM/notes/c10-regular-nofm.md" ] && [ -f "$C10_MEM/archive/notes/c10-regular-nofm.md" ]'
+rm -rf "$C10_DIR"
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="
