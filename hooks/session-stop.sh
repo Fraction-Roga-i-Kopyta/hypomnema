@@ -142,10 +142,21 @@ lifecycle_rotate() {
   END { if (prev_file != "") printf "%s\t%s\t%s\t%s\t%s\n", prev_file, status, ref, created, decay }
   ' "${all_files[@]}" 2>/dev/null)
 
-  # Archive files without valid frontmatter if older than 90 days by mtime
+  # Archive files without valid frontmatter if older than 90 days by mtime.
+  # C10 (audit-2026-04-16): CLAUDE.md promises pinned files never auto-
+  # archive. A pinned file whose frontmatter was corrupted (e.g. missing
+  # closing `---`) would fall into this branch and be moved by mtime alone.
+  # Do a one-shot status sniff over the unparseable remnant so an explicit
+  # `status: pinned` line still wins — even when the delimiters are broken.
+  local f_status
   for f in "${all_files[@]}"; do
     head_line=$(head -1 "$f" 2>/dev/null)
     [ "$head_line" = "---" ] && continue
+    # Honour pinned even when frontmatter is malformed: scan the first
+    # 20 lines for `status: pinned` literally, outside any frontmatter
+    # delimiter assumptions.
+    f_status=$(awk 'NR <= 20 && /^status:[[:space:]]*["\x27]?pinned["\x27]?[[:space:]]*$/ { print "pinned"; exit }' "$f" 2>/dev/null)
+    [ "$f_status" = "pinned" ] && continue
     fmtime=$(_stat_mtime "$f")
     local fage=$(( (NOW_SEC - fmtime) / 86400 ))
     if [ "$fage" -gt 90 ]; then

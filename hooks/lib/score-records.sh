@@ -40,7 +40,11 @@ compute_wal_scores() {
     }
     $1 >= cutoff && $2 == "outcome-positive" { pos_count[$3]++ }
     $1 >= cutoff && $2 == "outcome-negative" { neg_count[$3]++ }
-    $1 >= cutoff && $2 == "trigger-match"    { pos_count[$3]++ }
+    # C9 (audit-2026-04-16): trigger-match is a retrieval/exposure signal,
+    # NOT evidence that a record actually helped. Counting it into the
+    # Bayesian effectiveness term let frequently-injected-but-never-useful
+    # records float to the top by exposure alone. The docstring above
+    # defines effectiveness purely over outcome-* events; keep it that way.
     $1 >= cutoff && $2 == "strategy-used"    { strat_used[$3]++ }
     function jdn(y, m, d) {
       if (m <= 2) { y--; m += 12 }
