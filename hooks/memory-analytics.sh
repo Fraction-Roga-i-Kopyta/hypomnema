@@ -5,6 +5,9 @@
 
 set -o pipefail
 
+# LC_ALL=C: locale-stable decimal separator (audit-2026-04-16 R1).
+export LC_ALL=C
+
 MEMORY_DIR="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}"
 WAL_FILE="$MEMORY_DIR/.wal"
 REPORT_FILE="$MEMORY_DIR/.analytics-report"

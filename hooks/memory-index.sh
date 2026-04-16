@@ -5,6 +5,11 @@
 
 set -o pipefail
 
+# LC_ALL=C keeps awk printf "%.4f" output using '.' as decimal separator.
+# Non-C numeric locales produce commas that downstream parsers coerce to int,
+# silently corrupting every TF-IDF score (audit-2026-04-16 R1).
+export LC_ALL=C
+
 MEMORY_DIR="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}"
 INDEX_FILE="$MEMORY_DIR/.tfidf-index"
 STOPWORDS_FILE="$MEMORY_DIR/.stopwords"

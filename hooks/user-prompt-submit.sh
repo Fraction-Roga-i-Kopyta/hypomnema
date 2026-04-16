@@ -1,6 +1,11 @@
 #!/bin/bash
 # UserPromptSubmit hook — inject memory files matching prompt triggers (v0.5)
 set -o pipefail
+
+# LC_ALL=C keeps awk/perl printf float output using '.' as decimal separator
+# (audit-2026-04-16 R1).
+export LC_ALL=C
+
 # Scans memory/*/*.md frontmatter for `trigger:` (single) and `triggers:` (array),
 # matches case-insensitive substring against the prompt, and injects up to
 # MAX_TRIGGERED matching files as a "## Triggered (from prompt)" section.

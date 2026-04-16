@@ -314,11 +314,15 @@ apply_cascade_markers() {
   ' "$WAL_FILE" 2>/dev/null)
 
   [ -z "$_CASCADE_MAP" ] && return 0
-  local _cr_slug _cr_parent _cr_date _cr_marker _cr_slug_re
+  local _cr_slug _cr_parent _cr_date _cr_marker
+  # SECURITY (audit-2026-04-16 S3, CWE-94): _cr_parent originates from WAL
+  # field `parent:NAME`. A `/` in NAME would terminate the `s///` delimiter
+  # early when interpolated into a shell-built perl script, wiping CONTEXT
+  # for the entire session. Pass slug and marker to perl via -s so they are
+  # perl-side variables, never textually spliced into the s/// expression.
   while IFS='|' read -r _cr_slug _cr_parent _cr_date; do
     [ -z "$_cr_slug" ] && continue
     _cr_marker="[REVIEW: ${_cr_parent} updated ${_cr_date}]"
-    _cr_slug_re=$(_perl_re_escape "$_cr_slug")
-    CONTEXT=$(printf '%s' "$CONTEXT" | perl -pe "s/^(### ${_cr_slug_re})( |\$)/\$1 ${_cr_marker}\$2/")
+    CONTEXT=$(printf '%s' "$CONTEXT" | perl -s -pe 's/^(### \Q$slug\E)( |$)/$1 $marker$2/' -- -slug="$_cr_slug" -marker="$_cr_marker" 2>/dev/null)
   done <<< "$_CASCADE_MAP"
 }
