@@ -8,6 +8,8 @@ set -o pipefail
 # LC_ALL=C keeps awk/perl printf float output using '.' as decimal separator
 # (audit-2026-04-16 R1).
 export LC_ALL=C
+# S5 (audit-2026-04-16): session-private files created mode 0600.
+umask 077
 
 MEMORY_DIR="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}"
 
