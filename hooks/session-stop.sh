@@ -5,6 +5,10 @@
 
 set -o pipefail
 
+# LC_ALL=C keeps awk/perl printf float output using '.' as decimal separator
+# (audit-2026-04-16 R1).
+export LC_ALL=C
+
 MEMORY_DIR="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}"
 
 # User-overridable runtime config (templates/.config.sh.example)

@@ -100,8 +100,20 @@ parse_related() {
 
 # --- Find memory file by slug (basename without .md) ---
 # Searches mistakes, feedback, strategies, knowledge, notes, decisions in $MEMORY_DIR.
+# SECURITY (audit-2026-04-16 S2, CWE-22): `related:` slugs originate from
+# LLM-authored frontmatter. A slug like `../../victim` would resolve outside
+# $MEMORY_DIR and the caller would later rewrite `referenced:` / `ref_count:`
+# on the traversed file via `perl -pi -e`. Reject any slug that contains a
+# path separator, `..`, NUL, or a leading dot — keep the identifier space
+# restricted to filesystem-safe basenames.
 find_memory_file() {
   local slug="$1"
+  [ -n "$slug" ] || return 1
+  # Reject slugs that could escape the memory dir or break downstream tools.
+  # NUL is already impossible in a shell variable.
+  case "$slug" in
+    */*|*..*|.*|*$'\n'*) return 1 ;;
+  esac
   local f
   for dir in mistakes feedback strategies knowledge notes decisions; do
     f="$MEMORY_DIR/$dir/${slug}.md"

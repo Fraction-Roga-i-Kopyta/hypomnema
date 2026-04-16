@@ -7,6 +7,11 @@
 
 set -o pipefail
 
+# LC_ALL=C keeps awk/perl printf float output using '.' as decimal separator.
+# Without this, ru_RU/de_DE/fr_FR locales produce commas that downstream
+# awk +0 coercion silently truncates (audit-2026-04-16 R1).
+export LC_ALL=C
+
 MEMORY_DIR="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}"
 
 # User-overridable runtime config (templates/.config.sh.example)
@@ -712,15 +717,24 @@ if [ "$_EARLY_EMPTY_CONTEXT" = "1" ] && [ -z "$HEALTH_WARNING" ]; then
   exit 0
 fi
 
-# Output for Claude Code
+# Output for Claude Code.
+# SECURITY (audit-2026-04-16 S4, CWE-116): memory bodies are LLM-authored
+# and may contain Claude Code structural markers (`</system-reminder>`,
+# `<tool_use>`, `<invoke>`, etc.). jq -Rs escapes for JSON transport but
+# once decoded as `additionalContext`, the raw markers could be interpreted
+# as structure. Entity-encode the leading `<` on the known marker list so
+# the text renders visibly but cannot close an outer tag.
 MARKDOWN="# Memory Context
 ${CONTEXT}${HEALTH_WARNING:+
 
 ## System Health
 ${HEALTH_WARNING}}"
 
+MARKDOWN_SAFE=$(printf '%s' "$MARKDOWN" | perl -pe 's{<(/?(?:system-reminder|system|function_calls|invoke|parameter|tool_use|tool_result|user-prompt-submit-hook))(?=[\s/>])}{\&lt;$1}g' 2>/dev/null)
+[ -z "$MARKDOWN_SAFE" ] && MARKDOWN_SAFE="$MARKDOWN"
+
 cat <<EOF
-{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":$(printf '%s\n' "$MARKDOWN" | jq -Rs .)}}
+{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":$(printf '%s\n' "$MARKDOWN_SAFE" | jq -Rs .)}}
 EOF
 
 exit 0
