@@ -29,7 +29,14 @@ CONTENT=$(printf '%s\n' "$INPUT" | jq -r '.tool_input.content // empty' 2>/dev/n
 [ -z "$CONTENT" ] && exit 0
 
 SESSION_ID=$(printf '%s\n' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
-export HYPOMNEMA_SESSION_ID="${SESSION_ID:-unknown}"
+# R17: session_id propagates into the WAL via `memory-dedup.py`. If it
+# contains `|` or a newline, downstream awk -F'|' splitters see extra
+# fields or spurious records. Mirror the sanitization used in
+# session-start.sh / memory-outcome.sh. (audit-2026-04-16 R17)
+SAFE_SID="${SESSION_ID//|/_}"
+SAFE_SID="${SAFE_SID//$'\n'/_}"
+SAFE_SID="${SAFE_SID//$'\r'/_}"
+export HYPOMNEMA_SESSION_ID="${SAFE_SID:-unknown}"
 export CLAUDE_MEMORY_DIR="$MEMORY_DIR"
 
 DEDUP_SCRIPT="$HOME/.claude/bin/memory-dedup.py"
