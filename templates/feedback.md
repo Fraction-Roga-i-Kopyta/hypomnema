@@ -8,6 +8,8 @@ status: active
 ref_count: 0
 domains: [general]
 keywords: []
+# evidence: [ "phrase" ]         # optional (v0.7.1) — match phrases for trigger-useful
+# precision_class: ambient       # optional (v0.8.1) — exclude from precision denominator
 ---
 
 Rule statement here.

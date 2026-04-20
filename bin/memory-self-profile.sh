@@ -93,8 +93,79 @@ outcome_pos=$(awk -F'|' '$2 == "outcome-positive"' "$WAL_FILE" 2>/dev/null | wc 
 outcome_neg=$(awk -F'|' '$2 == "outcome-negative"' "$WAL_FILE" 2>/dev/null | wc -l | tr -d ' ')
 strategy_used=$(awk -F'|' '$2 == "strategy-used"' "$WAL_FILE" 2>/dev/null | wc -l | tr -d ' ')
 strategy_gap=$(awk -F'|' '$2 == "strategy-gap"' "$WAL_FILE" 2>/dev/null | wc -l | tr -d ' ')
-trigger_useful=$(awk -F'|' '$2 == "trigger-useful"' "$WAL_FILE" 2>/dev/null | wc -l | tr -d ' ')
-trigger_silent=$(awk -F'|' '$2 == "trigger-silent"' "$WAL_FILE" 2>/dev/null | wc -l | tr -d ' ')
+# Build ambient set: files with precision_class: ambient in frontmatter.
+# Ambient rules (language, code-approach, meta-philosophy) shape behavior silently
+# and don't produce trigger-useful events — excluding from precision denominator.
+ambient_list=$(grep -rl "^precision_class: ambient" "$MEMORY_DIR" 2>/dev/null \
+  | xargs -n1 basename 2>/dev/null | sed 's/\.md$//' | tr '\n' ',' | sed 's/,$//')
+
+# All trigger events (for totals and ambient breakdown)
+trigger_useful_all=$(awk -F'|' '$2 == "trigger-useful"' "$WAL_FILE" 2>/dev/null | wc -l | tr -d ' ')
+trigger_silent_all=$(awk -F'|' '$2 == "trigger-silent"' "$WAL_FILE" 2>/dev/null | wc -l | tr -d ' ')
+
+# Diagnostic signals (previously write-only — now surfaced):
+# evidence-empty: rules with no frontmatter.evidence and no body-extractable phrases
+#   → cannot match trigger-useful by design. These need evidence added or deletion.
+evidence_empty_unique=$(awk -F'|' '$2 == "evidence-empty" { print $3 }' "$WAL_FILE" 2>/dev/null | sort -u | wc -l | tr -d ' ')
+
+# outcome-new: fresh mistakes recorded (mistake edited but not injected this session)
+#   → rate of new learning. High = corpus growing, low = stable/stagnant.
+outcome_new_count=$(awk -F'|' '$2 == "outcome-new"' "$WAL_FILE" 2>/dev/null | wc -l | tr -d ' ')
+
+# Ambient activations: trigger events on ambient-classified files
+ambient_activations=$(awk -F'|' -v list="$ambient_list" '
+  BEGIN {
+    n = split(list, arr, ",")
+    for (i = 1; i <= n; i++) ambient[arr[i]] = 1
+  }
+  ($2 == "trigger-useful" || $2 == "trigger-silent") && ($3 in ambient) { c++ }
+  END { print c+0 }
+' "$WAL_FILE" 2>/dev/null)
+
+# Measurable-only: exclude ambient from both buckets
+trigger_useful=$(awk -F'|' -v list="$ambient_list" '
+  BEGIN {
+    n = split(list, arr, ",")
+    for (i = 1; i <= n; i++) ambient[arr[i]] = 1
+  }
+  $2 == "trigger-useful" && !($3 in ambient) { c++ }
+  END { print c+0 }
+' "$WAL_FILE" 2>/dev/null)
+
+trigger_silent_total=$(awk -F'|' -v list="$ambient_list" '
+  BEGIN {
+    n = split(list, arr, ",")
+    for (i = 1; i <= n; i++) ambient[arr[i]] = 1
+  }
+  $2 == "trigger-silent" && !($3 in ambient) { c++ }
+  END { print c+0 }
+' "$WAL_FILE" 2>/dev/null)
+
+# silent-applied: trigger-silent but outcome-positive in same session for same file
+# (measurable-only — ambient already excluded above)
+silent_applied=$(awk -F'|' -v list="$ambient_list" '
+  BEGIN {
+    n = split(list, arr, ",")
+    for (i = 1; i <= n; i++) ambient[arr[i]] = 1
+  }
+  $2 == "trigger-silent" && !($3 in ambient) { silent[$3 "|" $4] = 1 }
+  $2 == "outcome-positive" { positive[$3 "|" $4] = 1 }
+  END {
+    n = 0
+    for (k in silent) if (k in positive) n++
+    print n
+  }
+' "$WAL_FILE" 2>/dev/null)
+silent_noise=$((trigger_silent_total - silent_applied))
+
+# Precision over measurable-only denominator
+trigger_total=$((trigger_useful + trigger_silent_total))
+if [ "$trigger_total" -gt 0 ]; then
+  precision_pct=$(awk -v u="$trigger_useful" -v s="$silent_applied" -v t="$trigger_total" \
+    'BEGIN { printf "%.0f", (u + s) * 100 / t }')
+else
+  precision_pct="n/a"
+fi
 
 cat > "$OUT" <<EOF
 ---
@@ -116,8 +187,13 @@ source: derived from .wal + mistakes/ + strategies/
 | outcome-negative (mistake repeated) | ${outcome_neg} |
 | strategy-used (clean session + strategy injected) | ${strategy_used} |
 | strategy-gap (clean session, no strategy) | ${strategy_gap} |
-| trigger-useful (injected memory referenced) | ${trigger_useful} |
-| trigger-silent (injected memory not referenced) | ${trigger_silent} |
+| ambient activations (rules excluded from precision by design) | ${ambient_activations} |
+| trigger-useful measurable (referenced explicitly) | ${trigger_useful} |
+| silent-applied measurable (silent + outcome-positive) | ${silent_applied} |
+| silent-noise (silent, no application signal — **tuning targets**) | ${silent_noise} |
+| **measurable precision** (useful + applied) / (useful + silent) | **${precision_pct}%** |
+| evidence-empty rules (unique, cannot match trigger by design) | ${evidence_empty_unique} |
+| outcome-new (fresh mistakes recorded — learning rate) | ${outcome_new_count} |
 
 ## Strengths (top strategies by success_count)
 ${strengths:-_нет данных_}

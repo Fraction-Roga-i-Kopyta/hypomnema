@@ -362,6 +362,9 @@ triggers:
 evidence:
   - "parameterized query"
   - "timezone-aware datetime"
+
+# v0.8.1 — precision-class (optional; excludes file from measurable precision denominator)
+precision_class: ambient
 ---
 ```
 
@@ -377,6 +380,8 @@ evidence:
 - if `evidence:` is absent: fallback to body-mining — extract content tokens from the body (length ≥4, ru+en stop-list filtered, slug filtered, excludes `**Why:**` / `**How to apply:**` / fenced code blocks / blockquotes), threshold ≥2 unique tokens
 - body-mining is UTF-8 aware (v0.8: perl `\w{4,}` with `/u` flag) — works for Cyrillic, CJK, Greek, etc., no need for explicit `evidence:` on non-ASCII memories
 - new WAL events: `evidence-missing` (injected memory file not found at session-stop), `evidence-empty` (body mining yielded zero tokens — candidate to add `evidence:` or enrich body)
+
+**Precision metric (v0.8.1):** self-profile classifies trigger events into three buckets — `trigger-useful` (rule cited in text), `silent-applied` (silent in same session as `outcome-positive` for the same file — applied without citation), and `silent-noise` (silent with no application signal; the concrete list for trigger tuning). Files with `precision_class: ambient` in frontmatter are reported separately and excluded from the denominator.
 
 ## Project structure
 

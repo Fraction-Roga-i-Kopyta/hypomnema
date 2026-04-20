@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.8.1] - 2026-04-20
+
+Metric hygiene release. Five days of v0.8 dogfooding surfaced two measurement defects and a WAL noise problem. Fixes are small and surgical — one optional frontmatter field, no new hooks. Backward compatible.
+
+> **Note on versioning.** The repo uses standard semver for release tags; the conceptual capability tiers in `notes/memory-system-roadmap.md` (v0.7 "Самопознание", v0.8 "Рефлексия", …) are a different axis. This 0.8.1 tag is a patch on top of the 0.8.0 audit release — the roadmap capability tier remains at **v0.7-A/B** (self-profile + strategy-score shipped 2026-04-13). v0.7-C (meta-pattern detector) is still deferred pending ≥25 mistakes in the corpus. v0.8 "Рефлексия" is not started and is gated on validating current mechanisms against real data first (see H1 open question below).
+
+### Fixed
+
+- **Methodological bias in precision metric** (`bin/memory-self-profile.sh`) — the `trigger-useful / trigger-silent` split treated all injected rules as explicitly-cited or noise. Rules that shape behaviour silently (language preference, security baseline, meta-philosophy) were structurally incapable of producing `trigger-useful` events and were counted as noise, dragging reported precision to 27% while actual useful signal was 53%. Introduced `precision_class: ambient` frontmatter flag — self-profile now excludes ambient files from the precision denominator and reports them as a separate `ambient activations` line.
+- **Broken evidence matching on `wrong-root-cause-diagnosis`** (user memory) — the top-1 universal mistake had no `evidence:` field and an empty body, so the v0.7.1 detector could not match it against assistant text. It accumulated `recurrence: 6` without ever registering `trigger-useful`. Added 9 evidence phrases (ru + en) and body content with explicit hypothesis-enumeration markers. This is a content fix in user memory, not a code change — documented here because the infrastructure story matters for audit.
+- **`rotation-summary` WAL spam** (`hooks/session-stop.sh:172-175`) — lifecycle-rotation wrote a summary row on every Stop event, producing 40+ identical `checked_N|stale_0,archived_0` lines per active day. Now writes only when stale or archive count is non-zero. The rare `rotation-stale` / `rotation-archive` events remain (they already fire only on actual activity).
+
+### Added
+
+- **`precision_class` frontmatter field** — optional, values: `ambient` (excluded from precision denominator). Future values reserved for `factual` (cited-or-not is meaningful) and `measurable` (default, current behaviour).
+- **`silent-applied` metric** (self-profile) — measurable silent events that coincide with an `outcome-positive` event in the same session are reclassified as silent-applied (rule was applied without explicit citation). Reported alongside `trigger-useful` in the effective-precision calculation.
+- **`evidence-empty` and `outcome-new` readers** (self-profile) — both events existed in the WAL since v0.7.1 but had no consumer. Self-profile now surfaces `evidence-empty rules (unique)` as a tuning target (rules that cannot match by design — candidates for adding `evidence:` or deletion) and `outcome-new` as a learning-rate indicator.
+
+### Metric output
+
+Self-profile `Meta-signals` table grew from 8 rows to 13, separating ambient activations from the measurable pool and surfacing the previously-hidden noise denominator (`silent-noise`) as the concrete list to tune.
+
+### Dogfood validation
+
+- Before: reported precision 27% (misleading — included ambient rules as noise).
+- After: measurable precision 53%, ambient activations 13, evidence-empty 6 (actionable tuning list), silent-noise 37 (remaining real noise).
+
+### Open question (H1 — gates roadmap v0.8 "Рефлексия")
+
+Does an injected rule actually change behaviour? `wrong-root-cause-diagnosis` has recurrence 6 despite being top-1 universal and injected in every session. Previously the metric was blind to this: the file had no `evidence:` and an empty body, so the detector could never register `trigger-useful`. Content fix landed in user memory as part of this work; the next 5 debug sessions will produce a first honest answer. If the rule continues to silent-fire despite being matchable, text-injection is the wrong mechanism for behaviour change and the "Рефлексия" tier needs rethinking before any debrief/prediction infrastructure is built.
+
+---
+
 ## [0.8.0] - 2026-04-15
 
 Major audit + safety release. Four-agent code review (architecture, functionality, bugs, onboarding) surfaced 5 critical fixes, large onboarding gaps, and architecture seams. v0.8 ships safety fixes, a frictionless install path with interactive wizard, repo-root agent protocol, four onboarding docs, and three new shared `lib/` modules. Backward compatible.
