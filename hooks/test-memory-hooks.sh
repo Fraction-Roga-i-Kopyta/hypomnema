@@ -3216,6 +3216,70 @@ assert "C10 — regular unparseable note still archived (fallback still active)"
   '[ ! -f "$C10_MEM/notes/c10-regular-nofm.md" ] && [ -f "$C10_MEM/archive/notes/c10-regular-nofm.md" ]'
 rm -rf "$C10_DIR"
 
+# --- Test 26: self-profile excludes precision_class:ambient files from denominator (v0.8.1) ---
+PC_DIR=$(mktemp -d); PC_MEM="$PC_DIR/memory"
+mkdir -p "$PC_MEM/feedback" "$PC_MEM/mistakes"
+
+# Ambient feedback file — should be counted in "ambient activations", not precision denominator
+cat > "$PC_MEM/feedback/pc-ambient.md" << 'EOF'
+---
+type: feedback
+status: active
+precision_class: ambient
+---
+Ambient rule body.
+EOF
+
+# Measurable mistake — should be counted in measurable precision
+cat > "$PC_MEM/mistakes/pc-measurable.md" << 'EOF'
+---
+type: mistake
+status: active
+evidence:
+  - "measurable phrase"
+---
+Measurable body.
+EOF
+
+TODAY=$(date +%Y-%m-%d)
+{
+  printf '%s|inject|pc-ambient|pc-sess\n' "$TODAY"
+  printf '%s|inject|pc-measurable|pc-sess\n' "$TODAY"
+  printf '%s|trigger-silent|pc-ambient|pc-sess\n' "$TODAY"
+  printf '%s|trigger-useful|pc-measurable|pc-sess\n' "$TODAY"
+  printf '%s|session-metrics|unknown|error_count:0,tool_calls:5,duration:60s\n' "$TODAY"
+} > "$PC_MEM/.wal"
+
+CLAUDE_MEMORY_DIR="$PC_MEM" bash "$HOME/.claude/bin/memory-self-profile.sh" 2>/dev/null
+PC_OUT="$PC_MEM/self-profile.md"
+
+assert "v0.8.1 — self-profile reports ambient activations separately" \
+  'grep -qE "ambient activations[^|]*\| 1 \|" "$PC_OUT"'
+assert "v0.8.1 — measurable precision excludes ambient from denominator" \
+  'grep -q "measurable precision.*100%" "$PC_OUT"'
+rm -rf "$PC_DIR"
+
+# --- Test 27: rotation-summary WAL event suppressed on idle runs (v0.8.1) ---
+RS_DIR=$(mktemp -d); RS_MEM="$RS_DIR/memory"
+mkdir -p "$RS_MEM/mistakes"
+# Fresh file, nothing to rotate
+cat > "$RS_MEM/mistakes/rs-fresh.md" << 'EOF'
+---
+type: mistake
+status: active
+created: 2026-04-20
+---
+Recent.
+EOF
+touch "$RS_MEM/.wal"
+
+# Run session-stop without a marker so only lifecycle_rotate fires
+CLAUDE_MEMORY_DIR="$RS_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null || true
+
+assert "v0.8.1 — rotation-summary NOT written when no activity" \
+  '! grep -q "|rotation-summary|" "$RS_MEM/.wal"'
+rm -rf "$RS_DIR"
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="

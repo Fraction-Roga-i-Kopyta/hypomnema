@@ -81,9 +81,12 @@ Both singular `trigger:` (legacy) and `triggers:` (array) are accepted; UserProm
 evidence:                  # phrases that signal the rule applies (case-insensitive)
   - "phrase one"
   - "phrase two"
+precision_class: ambient   # optional (v0.8.1+) — excludes file from precision denominator
 ```
 
 `evidence:` is listed here because feedback files use it most, but the field is type-agnostic — the session-stop feedback detector reads it from any injected memory file (mistake, strategy, knowledge, …). If body mining would give ambiguous tokens for a given rule, add explicit `evidence:` regardless of type.
+
+`precision_class: ambient` marks rules that shape behaviour silently and cannot produce `trigger-useful` events by design (e.g. language preference, security baseline, meta-philosophy). Such files continue to be injected and ranked normally; they are simply excluded from the self-profile precision denominator so they do not drag the ratio down as false noise. Use it only when the rule is applied without being referenced in text — not to mask genuinely noisy triggers.
 
 **knowledge / decision / note** (additional):
 ```yaml

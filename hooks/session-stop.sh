@@ -169,8 +169,11 @@ lifecycle_rotate() {
     fi
   done
 
-  # Single summary event per rotation run — easy to grep/verify
-  wal_append "$rotation_today|rotation-summary|checked_${rotation_checked}|stale_${rotation_stale_count},archived_${rotation_archive_count}" 2>/dev/null
+  # Log summary only when something actually happened — avoid WAL spam from
+  # idle rotation runs (fires on every Stop event, ~40+ per active day otherwise)
+  if [ "$rotation_stale_count" -gt 0 ] || [ "$rotation_archive_count" -gt 0 ]; then
+    wal_append "$rotation_today|rotation-summary|checked_${rotation_checked}|stale_${rotation_stale_count},archived_${rotation_archive_count}" 2>/dev/null
+  fi
 }
 
 lifecycle_rotate 2>/dev/null || true
