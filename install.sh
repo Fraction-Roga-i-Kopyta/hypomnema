@@ -126,7 +126,11 @@ mkdir -p "$CLAUDE_DIR/bin"
 ln -sf "$SCRIPT_DIR/bin/consolidate.sh" "$CLAUDE_DIR/bin/memory-consolidate.sh"
 ln -sf "$SCRIPT_DIR/bin/memory-strategy-score.sh" "$CLAUDE_DIR/bin/memory-strategy-score.sh"
 ln -sf "$SCRIPT_DIR/bin/memory-self-profile.sh" "$CLAUDE_DIR/bin/memory-self-profile.sh"
-echo "  Symlinked: memory-consolidate.sh, memory-strategy-score.sh, memory-self-profile.sh"
+ln -sf "$SCRIPT_DIR/bin/memory-fts-sync.sh" "$CLAUDE_DIR/bin/memory-fts-sync.sh"
+ln -sf "$SCRIPT_DIR/bin/memory-fts-query.sh" "$CLAUDE_DIR/bin/memory-fts-query.sh"
+ln -sf "$SCRIPT_DIR/bin/memory-fts-shadow.sh" "$CLAUDE_DIR/bin/memory-fts-shadow.sh"
+echo "  Symlinked: memory-consolidate.sh, memory-strategy-score.sh, memory-self-profile.sh,"
+echo "             memory-fts-sync.sh, memory-fts-query.sh, memory-fts-shadow.sh"
 
 # --- Patch settings.json ---
 echo "[4/4] Patching settings.json..."

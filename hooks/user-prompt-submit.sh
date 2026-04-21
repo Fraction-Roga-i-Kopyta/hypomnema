@@ -349,6 +349,16 @@ if [ -n "$NEW_INJECTED" ]; then
   wal_run_locked bash -c 'printf "%s" "$1" >> "$2"' _ "$NEW_INJECTED" "$DEDUP_FILE" 2>/dev/null || true
 fi
 
+# --- Shadow retrieval (fire-and-forget): FTS5/BM25 recall signal ---
+# Log files that an FTS5 shadow pass would have surfaced but the primary
+# trigger pipeline did not inject. Feeds roadmap v0.8 trigger-tuning.
+# Detached subshell: cannot slow the hook or affect output.
+if [ -x "$HOME/.claude/bin/memory-fts-shadow.sh" ]; then
+  ( "$HOME/.claude/bin/memory-fts-shadow.sh" "$CLEAN_PROMPT" "$SAFE_SESSION_ID" "$NEW_INJECTED" ) \
+    >/dev/null 2>&1 &
+  disown 2>/dev/null || true
+fi
+
 # --- Emit hookSpecificOutput JSON ---
 
 cat <<EOF

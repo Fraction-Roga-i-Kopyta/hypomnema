@@ -228,6 +228,16 @@ Filter first (project ∈ {current, global}; status ∈ {active, pinned}; domain
 
 You do NOT need to set ranks manually. Write good frontmatter, let the hooks do the rest.
 
+## Shadow retrieval signal (v0.8)
+
+Parallel to the substring-trigger pipeline, a background pass runs FTS5/BM25 search over memory body content for every user prompt. Files the shadow pass surfaces but the primary pipeline never triggered are logged as `shadow-miss|<slug>|<session_id>` WAL events — a recall signal for trigger tuning.
+
+What this means for you as an agent:
+
+- **Do not edit `~/.claude/memory/index.db`** — it is a derivative SQLite FTS5 store, rebuilt automatically on drift by `bin/memory-fts-sync.sh`. Delete it and it will regenerate from markdown content on next query.
+- **`shadow-miss` events are diagnostic, not prescriptive** — they do not appear in your context, they only accumulate in the WAL. When you see many `shadow-miss` hits for the same slug in `.wal` during analysis, it means that file's `triggers:` are too narrow and should be expanded to match how users actually phrase the problem.
+- **The shadow pass is fail-safe** — any error inside `memory-fts-shadow.sh` exits silently. It never blocks the main hook or changes what gets injected. Treat it as observational instrumentation.
+
 ## Reading what was injected
 
 Look at the start of your context for `# Memory Context` and `## Active Mistakes` / `## Feedback` / etc. sections. Files marked `[ПРИОРИТЕТ]` are flagged as contradicting another active record — read both before acting.
