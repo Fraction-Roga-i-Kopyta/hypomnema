@@ -435,7 +435,11 @@ cat > "$SR_MEM/.wal" << 'EOF'
 2026-04-09|inject|burst-file|s5d
 2026-04-09|inject|burst-file|s5e
 EOF
-SR_OUT=$(printf '{"session_id":"sr-test","cwd":"/tmp"}' | CLAUDE_MEMORY_DIR="$SR_MEM" bash "$HOOK" 2>/dev/null)
+# Freeze "today" so fixture dates (2026-04-05..09) stay in-window regardless
+# of the real wall clock. Without this the test drifts out of spec on any day
+# > ~30 days after 2026-04-09 and the `compute_wal_scores` cutoff drops
+# every event, leaving both files with score 0 and a hash-order tie.
+SR_OUT=$(printf '{"session_id":"sr-test","cwd":"/tmp"}' | HYPOMNEMA_TODAY=2026-04-12 CLAUDE_MEMORY_DIR="$SR_MEM" bash "$HOOK" 2>/dev/null)
 SR_CTX=$(printf '%s' "$SR_OUT" | jq -r '.hookSpecificOutput.additionalContext')
 SR_POS_SPREAD=$(printf '%s\n' "$SR_CTX" | grep -n "spread-file" | head -1 | cut -d: -f1)
 SR_POS_BURST=$(printf '%s\n' "$SR_CTX" | grep -n "burst-file" | head -1 | cut -d: -f1)
@@ -1197,7 +1201,7 @@ EOF
   echo "2026-04-06|outcome-negative|proven-bad|s2"
   echo "2026-04-07|outcome-negative|proven-bad|s3"
 } > "$BAYES_MEM/.wal"
-BAYES_OUT=$(printf '{"session_id":"bayes-test","cwd":"/tmp"}' | CLAUDE_MEMORY_DIR="$BAYES_MEM" bash "$HOOK" 2>/dev/null)
+BAYES_OUT=$(printf '{"session_id":"bayes-test","cwd":"/tmp"}' | HYPOMNEMA_TODAY=2026-04-10 CLAUDE_MEMORY_DIR="$BAYES_MEM" bash "$HOOK" 2>/dev/null)
 BAYES_CTX=$(printf '%s' "$BAYES_OUT" | jq -r '.hookSpecificOutput.additionalContext')
 BAYES_POS_GOOD=$(printf '%s\n' "$BAYES_CTX" | grep -n "proven-good" | head -1 | cut -d: -f1)
 BAYES_POS_BAD=$(printf '%s\n' "$BAYES_CTX" | grep -n "proven-bad" | head -1 | cut -d: -f1)
@@ -1244,7 +1248,7 @@ EOF
   echo "2026-04-06|inject|unused-strat|s2"
   echo "2026-04-07|inject|unused-strat|s3"
 } > "$SBONUS_MEM/.wal"
-SBONUS_OUT=$(printf '{"session_id":"sbonus-test","cwd":"/tmp"}' | CLAUDE_MEMORY_DIR="$SBONUS_MEM" bash "$HOOK" 2>/dev/null)
+SBONUS_OUT=$(printf '{"session_id":"sbonus-test","cwd":"/tmp"}' | HYPOMNEMA_TODAY=2026-04-10 CLAUDE_MEMORY_DIR="$SBONUS_MEM" bash "$HOOK" 2>/dev/null)
 SBONUS_CTX=$(printf '%s' "$SBONUS_OUT" | jq -r '.hookSpecificOutput.additionalContext')
 SBONUS_POS_USED=$(printf '%s\n' "$SBONUS_CTX" | grep -n "used-strat" | head -1 | cut -d: -f1)
 SBONUS_POS_UNUSED=$(printf '%s\n' "$SBONUS_CTX" | grep -n "unused-strat" | head -1 | cut -d: -f1)
@@ -1408,7 +1412,7 @@ clean_ratio: 0.70
 ## Noise candidates
 - noisy-fb (eff: 0.20, injects: 8, +0/-3)
 EOF
-NP_OUT=$(printf '{"session_id":"np-test","cwd":"/tmp"}' | CLAUDE_MEMORY_DIR="$NP_MEM" bash "$HOOK" 2>/dev/null)
+NP_OUT=$(printf '{"session_id":"np-test","cwd":"/tmp"}' | HYPOMNEMA_TODAY=2026-04-10 CLAUDE_MEMORY_DIR="$NP_MEM" bash "$HOOK" 2>/dev/null)
 NP_CTX=$(printf '%s' "$NP_OUT" | jq -r '.hookSpecificOutput.additionalContext')
 NP_POS_GOOD=$(printf '%s\n' "$NP_CTX" | grep -n "good-fb" | head -1 | cut -d: -f1)
 NP_POS_NOISY=$(printf '%s\n' "$NP_CTX" | grep -n "noisy-fb" | head -1 | cut -d: -f1)

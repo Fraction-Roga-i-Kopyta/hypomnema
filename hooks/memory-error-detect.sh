@@ -39,7 +39,7 @@ fi
 SESSION_ID=$(printf '%s\n' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
 SAFE_SESSION_ID="${SESSION_ID//|/_}"
 SAFE_SESSION_ID="${SAFE_SESSION_ID//\//_}"
-TODAY=$(date +%Y-%m-%d)
+TODAY="${HYPOMNEMA_TODAY:-$(date +%Y-%m-%d)}"
 
 # Single-pass awk: match patterns against response text
 # Returns first match only (lowest noise)

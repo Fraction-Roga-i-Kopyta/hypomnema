@@ -27,7 +27,7 @@ SAFE_SESSION_ID="${SESSION_ID//|/_}"
 SAFE_SESSION_ID="${SAFE_SESSION_ID//\//_}"
 
 FILENAME=$(basename "$FILE_PATH" .md)
-TODAY=$(date +%Y-%m-%d)
+TODAY="${HYPOMNEMA_TODAY:-$(date +%Y-%m-%d)}"
 
 # --- Negative outcome detection (mistakes only) ---
 case "$FILE_PATH" in

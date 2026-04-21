@@ -1,0 +1,64 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends jq sqlite3
+
+      - name: Install system deps (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          # jq + sqlite3 preinstalled on macos-latest, but confirm
+          command -v jq      >/dev/null
+          command -v sqlite3 >/dev/null
+
+      - name: Install uv (for fuzzy-dedup tests)
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Seed ~/.claude (install.sh refuses to run without it)
+        run: mkdir -p "$HOME/.claude"
+
+      - name: Run install.sh (dry-run first, then for real)
+        run: |
+          bash install.sh --dry-run
+          bash install.sh
+
+      - name: Run smoke tests
+        run: bash hooks/test-memory-hooks.sh
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get install -y shellcheck
+      - name: Run shellcheck across repo
+        run: |
+          # -S error: only fail on hard errors. Warnings (SC2034 unused vars,
+          # SC2155 declare+assign) are tracked separately, not blocking.
+          # SC1091: "Not following sourced file" — expected for runtime-sourced libs.
+          find . -type f -name "*.sh" \
+            -not -path "./.git/*" \
+            -not -path "./docs/*" \
+            -print0 \
+          | xargs -0 shellcheck -e SC1091 -S error

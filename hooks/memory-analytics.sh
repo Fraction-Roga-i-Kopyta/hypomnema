@@ -11,7 +11,7 @@ export LC_ALL=C
 MEMORY_DIR="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}"
 WAL_FILE="$MEMORY_DIR/.wal"
 REPORT_FILE="$MEMORY_DIR/.analytics-report"
-TODAY=$(date +%Y-%m-%d)
+TODAY="${HYPOMNEMA_TODAY:-$(date +%Y-%m-%d)}"
 
 [ -f "$WAL_FILE" ] || exit 0
 

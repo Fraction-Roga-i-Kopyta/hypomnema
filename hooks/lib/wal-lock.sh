@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Portable WAL lock via mkdir atomicity (POSIX, no external deps).
 # Source from hook scripts AFTER $MEMORY_DIR is set:
 #   source "$(dirname "$0")/lib/wal-lock.sh"
