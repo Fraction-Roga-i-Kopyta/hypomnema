@@ -596,10 +596,16 @@ mkdir -p "$PERL_MEM"/{continuity,projects}
 cat > "$PERL_MEM/projects.json" << 'PEOF'
 {"/tmp/perl-test": "perl-proj"}
 PEOF
-# Init a git repo with special chars in commit message
+# Init a git repo with special chars in commit message. Pass user.email
+# and user.name inline via -c so the test works on CI runners where the
+# global git config is empty (git commit returns 128 without an identity,
+# and set -e above would kill the rest of the suite).
 mkdir -p /tmp/perl-test
 git -C /tmp/perl-test init -q 2>/dev/null
-git -C /tmp/perl-test commit --allow-empty -m 'fix: handle $var @array (parens)' -q 2>/dev/null
+git -C /tmp/perl-test \
+  -c user.email=test@hypomnema.local \
+  -c user.name=hypomnema-test \
+  commit --allow-empty -m 'fix: handle $var @array (parens)' -q 2>/dev/null
 # Create existing continuity with Git State section
 cat > "$PERL_MEM/continuity/perl-proj.md" << 'CEOF'
 ---
