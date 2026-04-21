@@ -144,6 +144,14 @@ for src in "$SCRIPT_DIR"/bin/*.sh "$SCRIPT_DIR"/bin/*.py; do
 done
 echo "  Linked $linked_bin utility script(s) into $CLAUDE_DIR/bin"
 
+# Optional: pick up the compiled Go binary if the user ran `make build`.
+# memoryctl is a drop-in replacement for selected shell utilities (fts shadow
+# today; more to come). It's not required — bash hooks stay authoritative.
+if [ -x "$SCRIPT_DIR/bin/memoryctl" ]; then
+  ln -sf "$SCRIPT_DIR/bin/memoryctl" "$CLAUDE_DIR/bin/memoryctl"
+  echo "  Linked memoryctl (Go) into $CLAUDE_DIR/bin"
+fi
+
 # --- Patch settings.json ---
 echo "[4/4] Patching settings.json..."
 if [ ! -f "$SETTINGS" ]; then

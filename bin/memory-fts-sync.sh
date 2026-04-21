@@ -8,8 +8,8 @@
 
 set -euo pipefail
 
-DB="$HOME/.claude/memory/index.db"
-MEM="$HOME/.claude/memory"
+MEM="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}"
+DB="$MEM/index.db"
 
 mkdir -p "$(dirname "$DB")"
 

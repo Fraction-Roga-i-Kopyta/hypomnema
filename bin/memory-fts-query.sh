@@ -11,7 +11,7 @@ set -euo pipefail
 
 QUERY="${1:?query string required as first argument}"
 LIMIT="${2:-10}"
-DB="$HOME/.claude/memory/index.db"
+DB="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}/index.db"
 BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Keep the index honest before querying.
