@@ -448,7 +448,13 @@ collect_scored() {
         if (ts > 3) ts = 3
         score += ts * 2
       }
-      printf "%d\t%s\n", score, $0
+      # WAL score is a float 0-10; the other components are integers.
+      # `printf "%d"` truncated the fractional part, so any record whose
+      # only signal was WAL (raw < 1) collapsed to 0 and lost to hash-order
+      # ties in sort. Scale by 100 to preserve two decimal digits of
+      # resolution — relative proportions between all score components are
+      # preserved, and downstream bash `-gt 0` / `-eq 0` tests stay integer.
+      printf "%d\t%s\n", int(score * 100 + 0.5), $0
     }' | sort -t$'\t' -k1,1rn -k5,5r)
 
   # Unified pass: score-first, project as tiebreaker (+1 for project match)

@@ -1,4 +1,5 @@
 #!/bin/bash
+set -uo pipefail
 # memory-fts-shadow.sh — FTS5 recall shadow for UserPromptSubmit (v0.8 signal).
 #
 # The primary UserPromptSubmit hook matches substring triggers on frontmatter.
@@ -18,8 +19,6 @@
 #   $3 = newline-separated slugs the primary hook injected this prompt
 #
 # Fail-safe: any failure → silent exit 0. Running in background, nobody reads stderr.
-
-set -uo pipefail
 
 PROMPT="${1:-}"
 SESSION_ID="${2:-}"
