@@ -31,9 +31,10 @@ jobs:
           command -v sqlite3 >/dev/null
 
       - name: Install uv (for fuzzy-dedup tests)
+        # No uv.lock in the repo — hypomnema uses `uv run --with rapidfuzz`
+        # ad-hoc, not a managed Python project. Enabling the cache would
+        # make the action error out looking for a non-existent lockfile.
         uses: astral-sh/setup-uv@v3
-        with:
-          enable-cache: true
 
       - name: Seed ~/.claude (install.sh refuses to run without it)
         run: mkdir -p "$HOME/.claude"
