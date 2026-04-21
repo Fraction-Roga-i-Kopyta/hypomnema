@@ -285,6 +285,31 @@ Narrow scope solves the signal-to-noise problem: library-specific gotchas (`bcry
 
 `pinned` status bypasses scope — always injected.
 
+## FTS5 shadow retrieval (v0.8)
+
+Parallel to the substring-trigger pipeline, a fire-and-forget background pass runs FTS5/BM25 search over memory body content for every user prompt. Files the shadow pass would surface but the primary pipeline did NOT inject become `shadow-miss` WAL events — a recall signal for trigger tuning, closing a gap left open by v0.8 (which measures precision but cannot measure recall without ground truth).
+
+Stack (all bash + SQLite FTS5, no embeddings, no services, no network):
+
+- **`bin/memory-fts-sync.sh`** — lazy reconciler of `~/.claude/memory/index.db`. Drift check via `SUM(mtime) + COUNT(*)` (microseconds when nothing changed), diff reconciliation via temp table otherwise. Safe to call before every query.
+- **`bin/memory-fts-query.sh`** — BM25 lookup over FTS5 `tokenize='trigram'`. Handles Cyrillic case-folding, arbitrary punctuation, and FTS5 reserved keywords (`OR`/`AND`/`NOT`/`NEAR`) without crashing the parser.
+- **`bin/memory-fts-shadow.sh`** — diffs FTS5 top-K against the primary trigger-match list plus the SessionStart dedup file. Scans only the dirs the trigger pipeline uses (`mistakes|feedback|strategies|knowledge|notes|seeds`); auto-generated files like `self-profile.md` or `_agent_context.md` are excluded. Caps at `MEMORY_FTS_SHADOW_MAX=4` events per prompt.
+- **New WAL event** `shadow-miss|<slug>|<session_id>` — deduped per key within the session by `wal_append`.
+- **Hook integration** — `( memory-fts-shadow.sh ... ) >/dev/null 2>&1 & disown` appended at the end of `hooks/user-prompt-submit.sh`. Detached subshell — zero impact on hook latency or output.
+
+Read the signal:
+
+```bash
+awk -F'|' '$2=="shadow-miss" {print $3}' ~/.claude/memory/.wal \
+  | sort | uniq -c | sort -rn | head -10
+```
+
+Slugs that shadow repeatedly surfaces but the primary pipeline never triggers are candidates for `triggers:` expansion.
+
+**Trigram tokenization tradeoffs** — substring match is asymmetric: query-token must be ⊆ corpus-token (`деплой` finds docs with `деплоили`, but `деплоили` does not find docs with just `деплой`). For typical recall use (prompts shorter/more generic than memory bodies) this works in practice and avoids stemming dependencies.
+
+Latency: cold full build ~370ms for 90 files; steady-state no-op sync ~18ms; typical query ~25ms. Entire shadow pass runs after the hook returns.
+
 ## Lifecycle
 
 Every memory file has two date fields:
@@ -407,6 +432,7 @@ precision_class: ambient
 ├── .runtime/              # per-session dedup lists (v0.6+, replaces /tmp)
 ├── self-profile.md        # v0.7 — auto-generated strengths/weaknesses/calibration view
 ├── .config.sh             # v0.8 — runtime overrides for caps/limits (copied from templates/)
+├── index.db               # v0.8 — SQLite FTS5 shadow-retrieval index (rebuildable, git-ignored)
 └── _agent_context.md      # auto-generated compact context for subagents
 ```
 
@@ -522,7 +548,7 @@ The format (YAML frontmatter + markdown) is a stable contract. Any future engine
 
 **Why split quotas for mistakes?** Without split quotas (3 global + 3 project), a frequently-recurring global mistake (like "jumps to first hypothesis") would push out all project-specific mistakes. Split quotas guarantee both types get representation.
 
-**Why not embeddings?** At 40 files and ~30KB total, keyword matching + TF-IDF covers the use cases. Embeddings add ML dependencies, network calls, and latency for marginal gain at this scale.
+**Why not embeddings?** At 40 files and ~30KB total, keyword matching + TF-IDF covers the primary injection path. v0.8 added SQLite FTS5 with `tokenize='trigram'` as a parallel shadow channel for recall measurement — still no embeddings, no ML dependencies, no network, just the `sqlite3` that ships with macOS. Cyrillic morphology and arbitrary punctuation work out of the box.
 
 **Why spaced repetition, not raw frequency?** A record injected 50 times in one benchmarking session is not 50× more important. Spread (unique days) rewards consistent real usage. Decay prevents stale records from hogging slots. Negative ratio deprioritizes warnings that don't actually help.
 
