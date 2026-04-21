@@ -113,12 +113,13 @@ ln -sf "$SCRIPT_DIR/hooks/memory-dedup.sh" "$HOOKS_DIR/memory-dedup.sh"
 ln -sf "$SCRIPT_DIR/hooks/wal-compact.sh" "$HOOKS_DIR/wal-compact.sh"
 ln -sf "$SCRIPT_DIR/hooks/regen-memory-index.sh" "$HOOKS_DIR/regen-memory-index.sh"
 ln -sf "$SCRIPT_DIR/hooks/bench-memory.sh" "$HOOKS_DIR/bench-memory.sh"
+ln -sf "$SCRIPT_DIR/hooks/memory-analytics.sh" "$HOOKS_DIR/memory-analytics.sh"
 ln -sf "$SCRIPT_DIR/hooks/test-memory-hooks.sh" "$HOOKS_DIR/test-memory-hooks.sh"
 # Shared library (wal-lock.sh, sourced by hooks at runtime)
 ln -sfn "$SCRIPT_DIR/hooks/lib" "$HOOKS_DIR/lib"
 echo "  Symlinked: memory-session-start.sh, memory-stop.sh, memory-user-prompt-submit.sh,"
 echo "             memory-index.sh, memory-outcome.sh, memory-dedup.sh, wal-compact.sh,"
-echo "             bench-memory.sh, test-memory-hooks.sh, lib/"
+echo "             bench-memory.sh, memory-analytics.sh, test-memory-hooks.sh, lib/"
 
 # --- Symlink utilities ---
 echo "[3/4] Installing utilities (symlinks)..."
@@ -301,5 +302,9 @@ BLOCK
   fi
 }
 
-[ "$DISCOVER" -eq 1 ]        && discover_projects
-[ "$PATCH_CLAUDE_MD" -eq 1 ] && patch_claude_md
+if [ "$DISCOVER" -eq 1 ]; then
+  discover_projects
+fi
+if [ "$PATCH_CLAUDE_MD" -eq 1 ]; then
+  patch_claude_md
+fi
