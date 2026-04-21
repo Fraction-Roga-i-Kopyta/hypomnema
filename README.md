@@ -117,6 +117,23 @@ cd hypomnema
 
 See `docs/QUICKSTART.md` for the 5-minute walkthrough, `docs/TROUBLESHOOTING.md` if anything goes wrong, `docs/FAQ.md` for cross-machine sync and upgrades, and `CLAUDE.md` (in this repo) for the agent protocol.
 
+### Upgrading
+
+```bash
+cd /path/to/hypomnema && git pull && ./install.sh --skip-base
+```
+
+Symlinks rebuild from the enumerated `hooks/` and `bin/` listings, so new files added upstream get picked up automatically. `--skip-base` preserves your `~/.claude/memory/` contents and only refreshes the symlinks and `settings.json` entries.
+
+### Uninstalling
+
+```bash
+./uninstall.sh             # remove symlinks, keep memory
+./uninstall.sh --dry-run   # preview
+```
+
+Surgically strips hypomnema entries from `~/.claude/settings.json` — foreign hooks you added yourself are preserved. Memory directory is kept by default; pass `--purge-memory --yes` to wipe it too.
+
 The installer (v0.8+):
 - Pre-flight checks: `jq`, `perl`, `awk`, `bash 3.2+`, `~/.claude` (fails fast with clear errors)
 - Creates `~/.claude/memory/` with subdirectories for each memory type, seeds, `.config.sh` (runtime overrides)
