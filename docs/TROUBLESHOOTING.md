@@ -66,6 +66,12 @@ Normal: hypomnema compacts the WAL when it crosses ~1200 lines. Manual compactio
 bash ~/.claude/hooks/wal-compact.sh
 ```
 
+## My rule shows under "ambient activations" in `self-profile.md` and never in `trigger-useful` / `silent-applied`
+
+That's by design when the file has `precision_class: ambient` in frontmatter. Ambient rules shape behaviour continuously (tone, language preference, security baseline) without producing citation events, so they're excluded from the precision denominator on purpose — counting them as "silent-noise" would drag the measurable-precision ratio down as false noise.
+
+If the rule *is* supposed to produce visible citations and you want it in the measurable pool, remove `precision_class: ambient` from the frontmatter and add `evidence:` phrases. See README § Precision metric.
+
 ## Memory injection feels noisy
 
 Edit `~/.claude/memory/.config.sh` (created on first install of v0.8+) to lower caps:

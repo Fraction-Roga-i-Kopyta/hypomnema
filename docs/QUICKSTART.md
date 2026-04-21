@@ -12,6 +12,19 @@ cd hypomnema
 
 The installer checks for `jq`, `perl`, `awk`, and `bash 3.2+`. If anything is missing, it tells you what to install.
 
+### Optional: fuzzy dedup for mistakes
+
+The PreToolUse dedup hook blocks creation of a `mistakes/*.md` file whose root-cause is >80% similar to an existing one (via `rapidfuzz`). It requires [`uv`](https://docs.astral.sh/uv/) at runtime:
+
+```bash
+# macOS
+brew install uv
+# Linux / anywhere else
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Without `uv` the hook silently exits 0 — dedup is off, everything else still works. If you're seeing many near-duplicate mistakes accumulate, install `uv` and they'll start being blocked at write time.
+
 ## 2. Run the wizard (90 seconds)
 
 ```bash
