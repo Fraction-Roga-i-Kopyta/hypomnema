@@ -20,41 +20,52 @@ push, but a tagged release is a contract with users — re-verify by hand.
       | xargs -0 shellcheck -e SC1091 -S error` — clean exit.
 - [ ] `bash install.sh --dry-run` — exits 0, no unexpected paths.
 
-## 3. Clean-VM bootstrap (the real release gate)
+## 3. Clean-VM bootstrap (REQUIRED, not optional)
 
-CI does this automatically; still confirm by running one of these
-locally before cutting the tag.
+Three BSD vs GNU portability bugs landed in April 2026 and all three
+slipped past the author's macOS-only dev loop. CI matrix catches them
+now, but CI runs the author's machine identity. A tagged release is a
+contract with a fresh user on a fresh machine — verify it that way.
 
-### Docker (preferred — closest to a fresh user)
+- [ ] **Docker bootstrap on `ubuntu:24.04` under an unprivileged user:**
 
-```bash
-docker run --rm -it \
-  -v "$(pwd)":/repo:ro \
-  ubuntu:24.04 bash -c '
-    apt-get update && apt-get install -y --no-install-recommends \
-      bash jq sqlite3 perl ca-certificates curl git
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-    export PATH="$HOME/.local/bin:$PATH"
-    useradd -m testuser
-    su - testuser -c "
-      cp -r /repo ~/hypomnema
-      cd ~/hypomnema
-      mkdir -p ~/.claude
-      bash install.sh
-      bash hooks/test-memory-hooks.sh
-      bash uninstall.sh
-      # Confirm nothing of ours is left behind:
-      find ~/.claude -type l -name 'memory-*' -o -name 'wal-compact.sh'
-    "
-'
-```
+  ```bash
+  docker run --rm -it \
+    -v "$(pwd)":/repo:ro \
+    ubuntu:24.04 bash -c '
+      apt-get update && apt-get install -y --no-install-recommends \
+        bash jq sqlite3 perl ca-certificates curl git
+      curl -LsSf https://astral.sh/uv/install.sh | sh
+      export PATH="$HOME/.local/bin:$PATH"
+      useradd -m testuser
+      su - testuser -c "
+        cp -r /repo ~/hypomnema
+        cd ~/hypomnema
+        mkdir -p ~/.claude
+        bash install.sh
+        bash hooks/test-memory-hooks.sh
+        bash uninstall.sh
+        # Confirm nothing of ours is left behind:
+        find ~/.claude -type l -name \"memory-*\" -o -name \"wal-compact.sh\"
+      "
+  '
+  ```
 
-Expected: test suite green, final `find` produces no output.
+  Expected: `Passed: N / N`, final `find` produces no output. Anything
+  else is a release blocker.
 
-### Alternative: fresh macOS user account
+- [ ] **macOS spot-check on a second account / fresh HOME** (not your
+  normal dev machine):
 
-If you have one lying around (test VM, second Mac): same flow,
-`./install.sh && bash hooks/test-memory-hooks.sh && ./uninstall.sh`.
+  ```bash
+  CLAUDE_DIR=$(mktemp -d)/.claude mkdir -p "$CLAUDE_DIR"
+  CLAUDE_DIR="$CLAUDE_DIR" bash install.sh
+  bash hooks/test-memory-hooks.sh
+  CLAUDE_DIR="$CLAUDE_DIR" bash uninstall.sh
+  ```
+
+  This catches regressions that only show up on fresh state (symlink
+  conflicts, stale settings.json, pre-existing hook timestamps).
 
 ## 4. Version bump
 
