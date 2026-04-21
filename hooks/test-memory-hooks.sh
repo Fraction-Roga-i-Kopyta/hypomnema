@@ -7,6 +7,21 @@ PASS=0
 FAIL=0
 TESTS=()
 
+# Resolve the directory holding this test and its libs, following symlinks
+# so the suite works when invoked via ~/.claude/hooks/test-memory-hooks.sh
+# (a symlink into the repo). Older revisions hardcoded the author's
+# absolute path, which broke the suite on any other machine.
+_src="$0"
+while [ -h "$_src" ]; do
+  _link="$(readlink "$_src")"
+  case "$_link" in
+    /*) _src="$_link" ;;
+    *)  _src="$(cd "$(dirname "$_src")" && pwd)/$_link" ;;
+  esac
+done
+HOOKS_SRC_DIR="$(cd "$(dirname "$_src")" && pwd)"
+unset _src _link
+
 assert() {
   local name="$1" condition="$2"
   if eval "$condition"; then
@@ -2290,7 +2305,7 @@ EOF
 set +e
 . "$HOME/.claude/hooks/lib/evidence-extract.sh" 2>/dev/null || \
   . "$(dirname "$0")/lib/evidence-extract.sh" 2>/dev/null || \
-  . "/Users/akamash/Development/hypomnema/hooks/lib/evidence-extract.sh"
+  . "$HOOKS_SRC_DIR/lib/evidence-extract.sh"
 set -e
 EX_OUT=$(evidence_from_frontmatter "$EX_MEM/mistakes/ex-fm.md")
 
@@ -2315,7 +2330,7 @@ EOF
 set +e
 . "$HOME/.claude/hooks/lib/evidence-extract.sh" 2>/dev/null || \
   . "$(dirname "$0")/lib/evidence-extract.sh" 2>/dev/null || \
-  . "/Users/akamash/Development/hypomnema/hooks/lib/evidence-extract.sh"
+  . "$HOOKS_SRC_DIR/lib/evidence-extract.sh"
 set -e
 EX_BODY=$(evidence_from_body "$EX_MEM/mistakes/ex-body.md")
 
@@ -2358,7 +2373,7 @@ EOF
 set +e
 . "$HOME/.claude/hooks/lib/evidence-extract.sh" 2>/dev/null || \
   . "$(dirname "$0")/lib/evidence-extract.sh" 2>/dev/null || \
-  . "/Users/akamash/Development/hypomnema/hooks/lib/evidence-extract.sh"
+  . "$HOOKS_SRC_DIR/lib/evidence-extract.sh"
 set -e
 EX_SELF=$(evidence_from_body "$EX_MEM/mistakes/selfslug.md")
 
@@ -2747,7 +2762,7 @@ recurrence: 1
 S2I
 
 # shellcheck source=/dev/null
-. /Users/akamash/Development/hypomnema/hooks/lib/parse-memory.sh
+. "$HOOKS_SRC_DIR/lib/parse-memory.sh"
 
 # Primary red: victim exists outside MEMORY_DIR — without validation,
 # find_memory_file resolves the traversal and returns a path outside its
@@ -2885,7 +2900,7 @@ Body R8
 EOF
 
 # shellcheck source=/dev/null
-. /Users/akamash/Development/hypomnema/hooks/lib/parse-memory.sh
+. "$HOOKS_SRC_DIR/lib/parse-memory.sh"
 RX_MIST=$(awk "$AWK_MISTAKES" "$RX_MEM/mistakes"/*.md)
 RX_FB=$(awk "$AWK_SCORED" "$RX_MEM/feedback"/*.md)
 
@@ -2928,7 +2943,7 @@ Para2.
 R13MD
 
 # shellcheck source=/dev/null
-. /Users/akamash/Development/hypomnema/hooks/lib/parse-memory.sh
+. "$HOOKS_SRC_DIR/lib/parse-memory.sh"
 R13_BODY=$(awk "$AWK_MISTAKES" "$R13_MEM/mistakes/r13-hr.md" | awk -F'\t' '{print $12}' | tr $'\x1e' '\n')
 assert "R13 — HR '---' preserved as standalone body line" \
   'printf "%s\n" "$R13_BODY" | grep -Fxq -- "---"'
@@ -2954,7 +2969,7 @@ recurrence: 1
 ---
 R14MD
 # shellcheck source=/dev/null
-. /Users/akamash/Development/hypomnema/hooks/lib/parse-memory.sh
+. "$HOOKS_SRC_DIR/lib/parse-memory.sh"
 R14_PATH=$(MEMORY_DIR="$R14_MEM" find_memory_file "r14-nested" 2>/dev/null || true)
 assert "R14 — find_memory_file resolves slug in nested subdir" \
   '[ -n "$R14_PATH" ] && [ -f "$R14_PATH" ]'
@@ -3020,7 +3035,7 @@ assert "C5 — r=0 guarded → bucket 0" '[ "$(C5_LOG_REF 0)" = "0" ]'
 # Parity with the hook: ensure the inline awk in user-prompt-submit.sh
 # uses the same formula (not `r+1`).
 assert "C5 — hook formula matches spec comment" \
-  'grep -q "if (r < 1) { print 0; exit } v=log(r)/log(10); print int(v + 1e-9)" /Users/akamash/Development/hypomnema/hooks/user-prompt-submit.sh'
+  'grep -q "if (r < 1) { print 0; exit } v=log(r)/log(10); print int(v + 1e-9)" $HOOKS_SRC_DIR/user-prompt-submit.sh'
 
 # --- Test: C6 (minor) — parse_related accepts inline-array form ---
 # Regression for audit-2026-04-16 C6: CLAUDE.md schema example uses
@@ -3053,7 +3068,7 @@ related:
 Block related body.
 C6MD
 # shellcheck source=/dev/null
-. /Users/akamash/Development/hypomnema/hooks/lib/parse-memory.sh
+. "$HOOKS_SRC_DIR/lib/parse-memory.sh"
 C6_INLINE=$(parse_related "$C6_MEM/knowledge/c6-inline.md" | tr -s ' ')
 C6_BLOCK=$(parse_related "$C6_MEM/knowledge/c6-block.md" | tr -s ' ')
 assert "C6 — inline-array parses to non-empty output" '[ -n "$C6_INLINE" ]'
@@ -3103,9 +3118,9 @@ C7_TT_RTYPE=$(printf '%s' "$C7_TYPED" | cut -d: -f2)
 assert "C7 — typed token retains its type" '[ "$C7_TT_RTYPE" = "contradicts" ]'
 # Guard present in the actual hook source.
 assert "C7 — build-context forward scan has typeless guard" \
-  'grep -q "\[ \"\$_rtype\" = \"\$_target\" \] && _rtype=\"\"" /Users/akamash/Development/hypomnema/hooks/lib/build-context.sh'
+  'grep -q "\[ \"\$_rtype\" = \"\$_target\" \] && _rtype=\"\"" $HOOKS_SRC_DIR/lib/build-context.sh'
 assert "C7 — build-context reverse scan has typeless guard" \
-  'grep -q "\[ \"\$_rrtype\" = \"\$_rtarget\" \] && _rrtype=\"\"" /Users/akamash/Development/hypomnema/hooks/lib/build-context.sh'
+  'grep -q "\[ \"\$_rrtype\" = \"\$_rtarget\" \] && _rrtype=\"\"" $HOOKS_SRC_DIR/lib/build-context.sh'
 
 # --- Test: C8 (minor) — future-dated `created:` does not grant recency_rank=3 ---
 # Regression for audit-2026-04-16 C8: `_age_days=$(( (NOW - created) / 86400 ))`
@@ -3134,7 +3149,7 @@ assert "C8 — age 7 → rank 3" '[ "$(C8_SIM 7)" = "3" ]'
 assert "C8 — age 8 → rank 2" '[ "$(C8_SIM 8)" = "2" ]'
 # Guard present in the actual hook source.
 assert "C8 — hook source clamps negative ages" \
-  'grep -q "_age_days.*-lt 0" /Users/akamash/Development/hypomnema/hooks/user-prompt-submit.sh'
+  'grep -q "_age_days.*-lt 0" $HOOKS_SRC_DIR/user-prompt-submit.sh'
 
 # --- Test: C9 (minor) — trigger-match is NOT counted as outcome-positive ---
 # Regression for audit-2026-04-16 C9: retrieval-signal conflation inflated
@@ -3153,7 +3168,7 @@ cat > "$C9_WAL" <<'C9W'
 2026-04-15|outcome-positive|real-helper|sess-b
 C9W
 # shellcheck source=/dev/null
-. /Users/akamash/Development/hypomnema/hooks/lib/score-records.sh
+. "$HOOKS_SRC_DIR/lib/score-records.sh"
 C9_SCORES=$(compute_wal_scores "$C9_WAL" "2026-04-16")
 # Extract effectiveness-driven raw score per slug (2nd field in name:raw:strat_used).
 C9_EXPOSURE_RAW=$(printf '%s' "$C9_SCORES" | tr ';' '\n' | awk -F: '$1=="exposure-only"{print $2}')
@@ -3168,7 +3183,7 @@ C9_HELPER_CMP=$(awk -v h="$C9_HELPER_RAW" -v e="$C9_EXPOSURE_RAW" 'BEGIN{print (
 assert "C9 — outcome-positive record ranks >= trigger-only record" '[ "$C9_HELPER_CMP" = "ok" ]'
 # Guard: source no longer treats trigger-match as pos_count.
 assert "C9 — score-records.sh no longer mixes trigger-match into pos_count" \
-  '! grep -q "trigger-match.*pos_count" /Users/akamash/Development/hypomnema/hooks/lib/score-records.sh'
+  '! grep -q "trigger-match.*pos_count" $HOOKS_SRC_DIR/lib/score-records.sh'
 rm -rf "$C9_DIR"
 
 # --- Test: C10 (minor) — pinned file with malformed frontmatter is NOT archived ---
