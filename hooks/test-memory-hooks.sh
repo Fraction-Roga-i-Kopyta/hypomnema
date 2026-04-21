@@ -2915,7 +2915,7 @@ RX_MIST=$(awk "$AWK_MISTAKES" "$RX_MEM/mistakes"/*.md)
 RX_FB=$(awk "$AWK_SCORED" "$RX_MEM/feedback"/*.md)
 
 assert "R2 — tab after key: status parsed as 'active'" \
-  'printf "%s\n" "$RX_MIST" | grep -q "r2-tab.md\tactive\t"'
+  'printf "%s\n" "$RX_MIST" | awk -F$"\t" "/r2-tab/{print \$2}" | grep -qx active'
 assert "R4 — quoted value: quotes stripped from status and severity" \
   'printf "%s\n" "$RX_MIST" | awk -F$"\t" "/r4-quoted/{print \$2 \"|\" \$6}" | grep -q "^active|major$"'
 assert "R6 — block scalar: '|' replaced with placeholder, parse does not fail" \
