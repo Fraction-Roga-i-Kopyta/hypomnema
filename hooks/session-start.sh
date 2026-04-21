@@ -550,7 +550,7 @@ PROJECT_MD=""
 if [ -n "$PROJECT" ]; then
   overview="$MEMORY_DIR/projects/${PROJECT}.md"
   if [ -f "$overview" ]; then
-    body=$(sed '1,/^---$/d; 1,/^---$/d' "$overview" 2>/dev/null)
+    body=$(sed '/^---$/,/^---$/d' "$overview" 2>/dev/null)
     PROJECT_MD="
 ## Project: ${PROJECT}
 ${body}
@@ -565,7 +565,7 @@ CONTINUITY_MD=""
 if [ -n "$PROJECT" ]; then
   cont="$MEMORY_DIR/continuity/${PROJECT}.md"
   if [ -f "$cont" ]; then
-    cont_body=$(sed '1,/^---$/d; 1,/^---$/d' "$cont" 2>/dev/null | sed '/^$/d')
+    cont_body=$(sed '/^---$/,/^---$/d' "$cont" 2>/dev/null | sed '/^$/d')
     if [ -n "$(printf '%s' "$cont_body" | tr -d '[:space:]')" ]; then
       CONTINUITY_MD="
 ## Last Session

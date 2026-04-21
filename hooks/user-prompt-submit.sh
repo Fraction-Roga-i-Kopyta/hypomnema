@@ -315,7 +315,12 @@ NEW_INJECTED=""
 
 while IFS=$'\t' read -r _key _slug _file _phrase; do
   [ -z "$_slug" ] && continue
-  _body=$(sed '1,/^---$/d; 1,/^---$/d' "$_file" 2>/dev/null | sed '/^$/d')
+  # BSD sed (macOS) treats `1,/^---$/d` as "line 1 only" when line 1 matches;
+  # GNU sed (Linux) extends the range to the next match, which greedily swallows
+  # both delimiters on the first invocation and wipes the body on the second.
+  # The single range pattern below deletes the first `---`..`---` block inclusive
+  # on both implementations.
+  _body=$(sed '/^---$/,/^---$/d' "$_file" 2>/dev/null | sed '/^$/d')
   # Fallback: if body empty (mistakes often store info in frontmatter fields)
   # synthesize from root-cause + prevention
   if [ -z "$_body" ]; then

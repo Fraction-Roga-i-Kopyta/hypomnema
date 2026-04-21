@@ -206,7 +206,8 @@ ${_rprio}|${_rslug}|${_rtarget}|${_rrtype}"
       [ "$_cluster_count" -ge "$MAX_CLUSTER" ] && break
       case "$_cluster_loaded_slugs" in *" ${_slug} "*) continue ;; esac
       _cpath=$(find_memory_file "$_slug") || continue
-      _cbody=$(sed '1,/^---$/d; 1,/^---$/d' "$_cpath" 2>/dev/null | sed '/^$/d')
+      # Single range pattern: BSD/GNU sed compat — see user-prompt-submit.sh.
+      _cbody=$(sed '/^---$/,/^---$/d' "$_cpath" 2>/dev/null | sed '/^$/d')
       [ -z "$(printf '%s' "$_cbody" | tr -d '[:space:]')" ] && continue
 
       _slug_label="${_slug}"
