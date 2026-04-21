@@ -366,7 +366,7 @@ fi
 
 # --- Outcome-positive detection ---
 # Injected mistakes that were NOT repeated → positive signal
-TODAY=$(date +%Y-%m-%d)
+TODAY="${HYPOMNEMA_TODAY:-$(date +%Y-%m-%d)}"
 WAL_FILE="$MEMORY_DIR/.wal"
 if [ -f "$WAL_FILE" ] && [ -n "$SAFE_SESSION_ID" ]; then
   INJECTED_MISTAKES=$(wal_run_locked awk -F'|' -v sid="$SAFE_SESSION_ID" '

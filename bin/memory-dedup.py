@@ -48,13 +48,26 @@ def increment_recurrence(filepath: Path) -> None:
     filepath.write_text(new_text, encoding="utf-8")
 
 
+def _root_cause_from_text(text: str) -> str:
+    m = re.search(r'^root-cause:\s*["\']?(.+?)["\']?\s*$', text, re.MULTILINE)
+    if not m:
+        return ""
+    value = m.group(1).strip()
+    if value in _BLOCK_SCALAR_MARKERS:
+        return ""
+    if len(value) < _MIN_ROOT_CAUSE_LEN:
+        return ""
+    return value
+
+
 def main():
     if len(sys.argv) < 2:
         sys.exit(0)
 
     new_file = Path(sys.argv[1])
-    if not new_file.exists():
-        sys.exit(0)
+    # PreToolUse: file doesn't exist yet; content arrives via stdin.
+    # Post-write (legacy PostToolUse mode): file already on disk.
+    pretool_call = not new_file.exists()
 
     memory_dir = Path(os.environ.get("CLAUDE_MEMORY_DIR", Path.home() / ".claude" / "memory"))
     mistakes_dir = memory_dir / "mistakes"
@@ -62,7 +75,13 @@ def main():
     session_id = os.environ.get("HYPOMNEMA_SESSION_ID", "unknown")
     today = __import__("datetime").date.today().isoformat()
 
-    new_rc = extract_root_cause(new_file)
+    if pretool_call:
+        candidate_text = sys.stdin.read()
+        if not candidate_text.strip():
+            sys.exit(0)
+        new_rc = _root_cause_from_text(candidate_text)
+    else:
+        new_rc = extract_root_cause(new_file)
     if not new_rc:
         sys.exit(0)
 
@@ -92,6 +111,14 @@ def main():
     new_name = new_file.stem
     if best_file and best_score >= MERGE_THRESHOLD:
         existing_name = best_file.stem
+        if pretool_call:
+            # Block: no file to merge into yet; record the decision and
+            # signal the shell wrapper via exit 2.
+            with open(wal_file, "a") as w:
+                w.write(f"{today}|dedup-blocked|{new_name}>{existing_name}|{session_id}\n")
+            print(f"Blocked: {new_name} is similar to existing "
+                  f"{existing_name} ({best_score:.0f}%)")
+            sys.exit(2)
         increment_recurrence(best_file)
         new_file.unlink()
         with open(wal_file, "a") as w:

@@ -38,7 +38,7 @@ CAP_NOTES=${CAP_NOTES:-2}
 CAP_DECISIONS=${CAP_DECISIONS:-3}
 MAX_FILES=${MAX_FILES:-22}
 MAX_CLUSTER=${MAX_CLUSTER:-4}
-TODAY=$(date +%Y-%m-%d)
+TODAY="${HYPOMNEMA_TODAY:-$(date +%Y-%m-%d)}"
 
 # shellcheck source=lib/wal-lock.sh
 . "$(dirname "$0")/lib/wal-lock.sh" 2>/dev/null || true

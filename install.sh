@@ -102,36 +102,47 @@ if [ -d "$SCRIPT_DIR/seeds" ] && [ -z "$(ls -A "$MEMORY_DIR/seeds" 2>/dev/null)"
 fi
 
 # --- Symlink hooks ---
+# Enumerate hooks/ and bin/ so a newly added script gets linked without
+# editing install.sh. Three lifecycle hooks need a memory- prefix at the
+# destination (settings.json looks for them by that name); everything
+# else keeps its on-disk filename. Declaring the rename pairs as a plain
+# array keeps this bash 3.2-safe (no `declare -A`).
+_rename_dest() {
+  case "$1" in
+    session-start.sh)      printf 'memory-session-start.sh' ;;
+    session-stop.sh)       printf 'memory-stop.sh' ;;
+    user-prompt-submit.sh) printf 'memory-user-prompt-submit.sh' ;;
+    consolidate.sh)        printf 'memory-consolidate.sh' ;;
+    *)                     printf '%s' "$1" ;;
+  esac
+}
+
 echo "[2/4] Installing hooks (symlinks)..."
 mkdir -p "$HOOKS_DIR"
-ln -sf "$SCRIPT_DIR/hooks/session-start.sh" "$HOOKS_DIR/memory-session-start.sh"
-ln -sf "$SCRIPT_DIR/hooks/session-stop.sh" "$HOOKS_DIR/memory-stop.sh"
-ln -sf "$SCRIPT_DIR/hooks/user-prompt-submit.sh" "$HOOKS_DIR/memory-user-prompt-submit.sh"
-ln -sf "$SCRIPT_DIR/hooks/memory-index.sh" "$HOOKS_DIR/memory-index.sh"
-ln -sf "$SCRIPT_DIR/hooks/memory-outcome.sh" "$HOOKS_DIR/memory-outcome.sh"
-ln -sf "$SCRIPT_DIR/hooks/memory-dedup.sh" "$HOOKS_DIR/memory-dedup.sh"
-ln -sf "$SCRIPT_DIR/hooks/wal-compact.sh" "$HOOKS_DIR/wal-compact.sh"
-ln -sf "$SCRIPT_DIR/hooks/regen-memory-index.sh" "$HOOKS_DIR/regen-memory-index.sh"
-ln -sf "$SCRIPT_DIR/hooks/bench-memory.sh" "$HOOKS_DIR/bench-memory.sh"
-ln -sf "$SCRIPT_DIR/hooks/memory-analytics.sh" "$HOOKS_DIR/memory-analytics.sh"
-ln -sf "$SCRIPT_DIR/hooks/test-memory-hooks.sh" "$HOOKS_DIR/test-memory-hooks.sh"
+linked_hooks=0
+for src in "$SCRIPT_DIR"/hooks/*.sh; do
+  [ -f "$src" ] || continue
+  base=$(basename "$src")
+  dest=$(_rename_dest "$base")
+  ln -sf "$src" "$HOOKS_DIR/$dest"
+  linked_hooks=$((linked_hooks + 1))
+done
 # Shared library (wal-lock.sh, sourced by hooks at runtime)
 ln -sfn "$SCRIPT_DIR/hooks/lib" "$HOOKS_DIR/lib"
-echo "  Symlinked: memory-session-start.sh, memory-stop.sh, memory-user-prompt-submit.sh,"
-echo "             memory-index.sh, memory-outcome.sh, memory-dedup.sh, wal-compact.sh,"
-echo "             bench-memory.sh, memory-analytics.sh, test-memory-hooks.sh, lib/"
+echo "  Linked $linked_hooks hook script(s) + lib/ into $HOOKS_DIR"
 
 # --- Symlink utilities ---
 echo "[3/4] Installing utilities (symlinks)..."
 mkdir -p "$CLAUDE_DIR/bin"
-ln -sf "$SCRIPT_DIR/bin/consolidate.sh" "$CLAUDE_DIR/bin/memory-consolidate.sh"
-ln -sf "$SCRIPT_DIR/bin/memory-strategy-score.sh" "$CLAUDE_DIR/bin/memory-strategy-score.sh"
-ln -sf "$SCRIPT_DIR/bin/memory-self-profile.sh" "$CLAUDE_DIR/bin/memory-self-profile.sh"
-ln -sf "$SCRIPT_DIR/bin/memory-fts-sync.sh" "$CLAUDE_DIR/bin/memory-fts-sync.sh"
-ln -sf "$SCRIPT_DIR/bin/memory-fts-query.sh" "$CLAUDE_DIR/bin/memory-fts-query.sh"
-ln -sf "$SCRIPT_DIR/bin/memory-fts-shadow.sh" "$CLAUDE_DIR/bin/memory-fts-shadow.sh"
-echo "  Symlinked: memory-consolidate.sh, memory-strategy-score.sh, memory-self-profile.sh,"
-echo "             memory-fts-sync.sh, memory-fts-query.sh, memory-fts-shadow.sh"
+linked_bin=0
+for src in "$SCRIPT_DIR"/bin/*.sh "$SCRIPT_DIR"/bin/*.py; do
+  [ -f "$src" ] || continue
+  base=$(basename "$src")
+  dest=$(_rename_dest "$base")
+  ln -sf "$src" "$CLAUDE_DIR/bin/$dest"
+  linked_bin=$((linked_bin + 1))
+done
+echo "  Linked $linked_bin utility script(s) into $CLAUDE_DIR/bin"
 
 # --- Patch settings.json ---
 echo "[4/4] Patching settings.json..."

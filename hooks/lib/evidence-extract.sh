@@ -1,4 +1,5 @@
 # hooks/lib/evidence-extract.sh
+# shellcheck shell=bash
 # Evidence extraction for feedback detector (v0.7.1).
 # Two pure functions; no side effects. Source from hook scripts.
 #

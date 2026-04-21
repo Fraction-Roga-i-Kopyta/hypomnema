@@ -25,7 +25,7 @@ MEMORY_DIR="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}"
 . "$(dirname "$0")/lib/load-config.sh" 2>/dev/null || true
 load_memory_config "$MEMORY_DIR/.config.sh"
 MAX_TRIGGERED=${MAX_TRIGGERED:-4}
-TODAY=$(date +%Y-%m-%d)
+TODAY="${HYPOMNEMA_TODAY:-$(date +%Y-%m-%d)}"
 NOW_EPOCH=$(date +%s)
 
 # P4 (audit-2026-04-16): precompute today's Julian Day Number so the per-file
