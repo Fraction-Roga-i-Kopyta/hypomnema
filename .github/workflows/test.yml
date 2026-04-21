@@ -39,6 +39,18 @@ jobs:
       - name: Seed ~/.claude (install.sh refuses to run without it)
         run: mkdir -p "$HOME/.claude"
 
+      - name: Dump environment (diagnostics)
+        run: |
+          set +e
+          echo "=== bash ===";    bash --version | head -1
+          echo "=== awk ===";     awk --version 2>/dev/null | head -1 || awk -W version 2>&1 | head -1
+          echo "=== readlink ==="; readlink -f $(command -v awk) 2>/dev/null || command -v awk
+          echo "=== jq ===";      jq --version
+          echo "=== perl ===";    perl -v | grep "This is"
+          echo "=== sqlite3 ==="; sqlite3 -version
+          echo "=== locale ==="; locale | head -5
+          echo "=== uv ===";      uv --version
+
       - name: Run install.sh (dry-run first, then for real)
         run: |
           bash install.sh --dry-run
@@ -46,6 +58,36 @@ jobs:
 
       - name: Run smoke tests
         run: bash hooks/test-memory-hooks.sh
+
+      - name: Diagnose trigger failures (only if tests failed)
+        if: failure()
+        run: |
+          # Reproduce the first failing trigger test with full stderr trace.
+          # This is purely diagnostic: the block only fires when the test
+          # job above has already reported non-zero, so it cannot mask a
+          # regression.
+          TR_DIR=$(mktemp -d); TR_MEM="$TR_DIR/memory"
+          mkdir -p "$TR_MEM/mistakes" "$TR_MEM/projects"
+          echo '{}' > "$TR_MEM/projects.json"
+          cat > "$TR_MEM/mistakes/trigger-single.md" <<'EOF'
+          ---
+          type: mistake
+          status: active
+          severity: major
+          recurrence: 3
+          ref_count: 10
+          trigger: "tailwind hsl"
+          ---
+
+          Body.
+          EOF
+          HOOK="$HOME/.claude/hooks/memory-user-prompt-submit.sh"
+          echo "--- hook path: $HOOK ---"
+          ls -la "$HOOK"
+          echo "--- invoking hook with trace ---"
+          echo '{"session_id":"diag-1","prompt":"помоги с tailwind hsl"}' \
+            | CLAUDE_MEMORY_DIR="$TR_MEM" bash -x "$HOOK" 2>&1 | tail -80
+          echo "--- /trace ---"
 
   shellcheck:
     runs-on: ubuntu-latest
