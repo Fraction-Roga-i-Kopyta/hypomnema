@@ -288,27 +288,92 @@ in `decisions/`.
 
 ## Known sharp edges
 
-Architectural debt worth knowing before touching these files:
+Architectural debt worth knowing before touching these files. Items
+with `→ v0.10.2` are tracked for the next PATCH release plan
+(`docs/plans/2026-04-22-v0.10.2.md`).
+
+### Shell hooks
 
 - **`session-stop.sh` is 700 lines and mixes evidence match,
   outcome detection, rotation, and reminders.** Decomposition to
   `hooks/lib/` is partially done (`evidence-extract.sh`) but not
   finished. A split into `outcome-detection.sh`, `rotation.sh`,
-  `reminder-builder.sh` would help.
-
-- **Two scoring systems are not documented side-by-side.** A reader
-  has to find `score-records.sh` and `user-prompt-submit.sh`
-  independently to understand the contrast. This document is the
-  first place they appear together.
+  `reminder-builder.sh` would help. → v0.10.2
 
 - **Reminders (CONTINUITY / ERRORS / STRATEGIES) are hardcoded in
   Stop.** Cannot be disabled independently. Candidate for
   configuration in `.config.sh`.
 
+- **Two scoring systems are not documented side-by-side.** Until this
+  file, a reader had to find `score-records.sh` and
+  `user-prompt-submit.sh` independently to understand the contrast.
+
 - **Project slug derivation** is done in multiple places
-  (`detect-project.sh`, `regen-memory-index.sh`). v0.10.1 unified
-  the path-derivation convention (`-$(echo $PWD | tr / -)`) but
-  older paths may still assume the hardcoded form.
+  (`detect-project.sh`, `regen-memory-index.sh`). v0.10.1 unified the
+  path-derivation convention (`-$(echo $PWD | tr / -)`) but older
+  code may still assume the hardcoded form.
+
+- **`memory-index.sh` TF-IDF tokenizer is Latin-only.** The regex
+  `[^a-zA-Z\300-\377]` strips Cyrillic, CJK, Greek, and Arabic.
+  Records without a `keywords:` field whose bodies are in those
+  scripts silently stay out of the TF-IDF index. Note: the Go FTS5
+  tokenizer (`internal/fts/tokenize.go`) uses `unicode.IsLetter` and
+  handles the full Unicode Letter class correctly, so bash and Go
+  *disagree* on tokenization — a latent parity gap. → v0.10.2
+
+- **`memory-analytics.sh` thresholds and the Laplace-smoothing
+  formula are undocumented.** `eff = (pc + 1) / (pc + nc + 2)` is
+  Bayesian mean with pseudo-counts; `0.7` / `0.3` / `3` / `5` are the
+  winner / noise / min-injects thresholds. Not exposed to
+  `.config.sh`; operators can't tune analytics without editing awk.
+  → v0.10.2
+
+- **`memory-outcome.sh` inline-parses `related:` / `instance_of:`
+  instead of using `parse-memory.sh`.** 15 lines of frontmatter
+  logic duplicated. Fragile if the schema gains syntax variants.
+  → v0.10.2
+
+### Go internals
+
+- **`internal/dedup/dedup.go:119` writes `dedup-merged` WAL before
+  verifying disk operations.** `incrementRecurrence` + `os.Remove`
+  are guarded by an `if err == nil` branch, but `wal.Append` and the
+  user-facing `Merged:` message run regardless. A failed recurrence
+  bump therefore emits a WAL event and a confirmation message with
+  no disk effect. → v0.10.2
+
+- **`incrementRecurrence` is read-modify-write without a lock.**
+  Two concurrent hooks touching the same mistake file race.
+  Low-probability in practice (hooks rarely parallel on one file)
+  but formally a race.
+
+- **`internal/fts/sync.go` drift check uses `SUM(mtime) + COUNT(*)`
+  as a cheap hash.** Two files swapping mtimes produces the same
+  sum — the pathological case goes unnoticed until the next real
+  drift. Not a bug, a best-effort compromise; comment could be
+  clearer.
+
+- **`cmd/memoryctl/main.go:170` `fmt.Sscanf` ignores its error.**
+  `memoryctl fts query "foo" abc` silently runs with `limit=0` (no
+  results). UX polish, not a functional bug.
+
+- **`internal/fuzzy/fuzzy.go:159` uses insertion sort for token
+  set dedup.** O(N²) for large inputs. For root-cause strings of
+  10–30 words this is fine; if ever fed arbitrary-length content,
+  swap to `sort.Strings`. Design note, not a bug.
+
+### Installer / distribution
+
+- **`uninstall.sh` is hand-rolled while `install.sh` is
+  directory-driven.** Every new hook or binary needs a parallel
+  uninstall edit that's easy to miss. v0.10.1 caught three such
+  misses; a directory-driven uninstall refactor is in v0.10.2.
+  → v0.10.2
+
+- **`RELEASE_CHECKLIST.md` Docker bootstrap references `uv` install.**
+  v0.10.0 removed the uv dependency; the clean-VM test in the
+  checklist still says `curl -LsSf https://astral.sh/uv/install.sh`.
+  Update to install `go` instead. → v0.10.2
 
 ## Cross-references
 
