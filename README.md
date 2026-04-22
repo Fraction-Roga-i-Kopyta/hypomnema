@@ -32,7 +32,7 @@ You ←→ Claude Code ←→ ~/.claude/memory/
                             ├── rebuild TF-IDF index
                             └── structured continuity prompt
 
-         PreToolUse hook ───┤── fuzzy dedup: blocks duplicate mistakes (rapidfuzz)
+         PreToolUse hook ───┤── fuzzy dedup: blocks duplicate mistakes (via memoryctl)
                             └── exit 2 = write blocked, hint to update existing
 
          PostToolUse hook ──┤── outcome tracking (negative/new detection)
@@ -151,7 +151,7 @@ The installer (v0.8+):
 - jq
 - perl 5 (preinstalled on macOS/Linux)
 - awk (BSD or GNU)
-- uv (optional — enables fuzzy dedup via rapidfuzz in `bin/memory-dedup.py`)
+- Go 1.22+ (optional — build `memoryctl` via `make build` to enable fuzzy dedup + the FTS5 shadow pass)
 
 ## Setup
 
@@ -214,7 +214,7 @@ The hooks activate on next session start.
 
 1. Triggers on Write to `mistakes/*.md` (new files only, skips overwrites)
 2. Extracts `root-cause` from content before file is created
-3. Compares against existing mistakes using rapidfuzz trigram similarity (via `uv run`)
+3. Compares against existing mistakes using `memoryctl dedup check` (rapidfuzz-compatible token_set_ratio, implemented in Go)
 4. Similarity ≥ 80% → **blocks write** (exit 2) with hint: "update existing file instead"
 5. Similarity ≥ 50% → warns: "possible duplicate"
 6. Logs dedup events to WAL

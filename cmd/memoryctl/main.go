@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/dedup"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/fts"
 )
 
@@ -30,11 +31,17 @@ Usage:
       Bring ~/.claude/memory/index.db in sync with the markdown tree.
   memoryctl fts query <prompt> [limit]
       Free-form FTS5 search. TSV output: path<TAB>score, best-first.
+  memoryctl dedup check <file-path>
+      Fuzzy dedup for mistake files. Pretool (file absent) reads content
+      from stdin; posttool (file present) reads it from disk. Exits 2 on
+      ≥80% similarity in pretool mode, 1 on merge in posttool mode, 0
+      otherwise. Drop-in replacement for bin/memory-dedup.py.
 
 Environment:
-  CLAUDE_MEMORY_DIR  Memory root (default: ~/.claude/memory).
-  HYPOMNEMA_TODAY    Freeze "today" in YYYY-MM-DD (for tests/replay).
-  MEMORY_FTS_SHADOW_MAX  Cap shadow-miss events per pass (default 4).
+  CLAUDE_MEMORY_DIR       Memory root (default: ~/.claude/memory).
+  HYPOMNEMA_TODAY         Freeze "today" in YYYY-MM-DD (for tests/replay).
+  HYPOMNEMA_SESSION_ID    Session id stamped into WAL entries.
+  MEMORY_FTS_SHADOW_MAX   Cap shadow-miss events per pass (default 4).
 `
 
 func main() {
@@ -62,6 +69,18 @@ func main() {
 			runQuery(os.Args[3:])
 		default:
 			fmt.Fprintf(os.Stderr, "memoryctl: unknown fts subcommand %q\n", os.Args[2])
+			os.Exit(2)
+		}
+	case "dedup":
+		if len(os.Args) < 3 {
+			fmt.Fprint(os.Stderr, usage)
+			os.Exit(2)
+		}
+		switch os.Args[2] {
+		case "check":
+			runDedupCheck(os.Args[3:])
+		default:
+			fmt.Fprintf(os.Stderr, "memoryctl: unknown dedup subcommand %q\n", os.Args[2])
 			os.Exit(2)
 		}
 	default:
@@ -144,6 +163,47 @@ func runQuery(args []string) {
 	}
 	for _, h := range hits {
 		fmt.Printf("%s\t%.3f\n", h.Path, h.Score)
+	}
+}
+
+// runDedupCheck implements `memoryctl dedup check <file-path>`. The exit
+// code protocol matches bin/memory-dedup.py and the contract hooks/
+// memory-dedup.sh expects:
+//   0 — allow (default), also used for medium-similarity warning
+//   1 — posttool merge happened (legacy Python behaviour; shell wrapper
+//       treats non-zero non-2 exits as "not blocking")
+//   2 — pretool block; wrapper propagates stderr message to Claude
+func runDedupCheck(args []string) {
+	if len(args) < 1 {
+		os.Exit(0) // graceful no-op; matches Python policy
+	}
+
+	// All human-readable messages go to stderr: block messages need to
+	// surface through the shell wrapper (which captures 2>&1 and re-emits
+	// on stderr for exit 2), and candidate warnings are informational —
+	// stderr keeps stdout clean for any future scripted consumer of this
+	// subcommand.
+	opts := dedup.Options{
+		MemoryDir: memoryDir(),
+		SessionID: os.Getenv("HYPOMNEMA_SESSION_ID"),
+		Today:     os.Getenv("HYPOMNEMA_TODAY"),
+		Stdin:     os.Stdin,
+		Out:       os.Stderr,
+	}
+
+	decision, err := dedup.Run(args[0], opts)
+	if err != nil {
+		// Any internal error is a no-op per hook fail-safe contract.
+		os.Exit(0)
+	}
+
+	switch decision {
+	case dedup.Blocked:
+		os.Exit(2)
+	case dedup.Merged:
+		os.Exit(1)
+	default:
+		os.Exit(0)
 	}
 }
 
