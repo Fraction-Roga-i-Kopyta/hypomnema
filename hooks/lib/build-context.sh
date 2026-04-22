@@ -13,7 +13,7 @@
 #                                         _PRIORITY_SLUGS, INJECTED_FILES (append)
 #                                 Side:   wal_append cluster-load events
 #
-#   apply_priority_markers      — adds "[ПРИОРИТЕТ]" to headers of newer
+#   apply_priority_markers      — adds "[PRIORITY]" to headers of newer
 #                                 contradict slugs in section vars.
 #                                 Reads:  _PRIORITY_SLUGS
 #                                 Writes: MISTAKES_MD, FEEDBACK_MD, KNOWLEDGE_MD,
@@ -189,7 +189,7 @@ ${_rprio}|${_rslug}|${_rtarget}|${_rrtype}"
             _newer="$_source_slug"; _older="$_target"
           fi
           CONTRADICTS_WARNINGS="${CONTRADICTS_WARNINGS}
-> ⚠ Конфликт: \`${_older}\` contradicts \`${_newer}\` — проверь актуальность"
+> ⚠ Conflict: \`${_older}\` contradicts \`${_newer}\` — review which is current"
           _PRIORITY_SLUGS="${_PRIORITY_SLUGS}${_newer} "
           ;;
       esac
@@ -224,12 +224,12 @@ ${_rprio}|${_rslug}|${_rtarget}|${_rrtype}"
             _newer="$_source"
           fi
           if [ "$_newer" = "$_slug" ]; then
-            _slug_label="${_slug} [ПРИОРИТЕТ]"
+            _slug_label="${_slug} [PRIORITY]"
           else
             _PRIORITY_SLUGS="${_PRIORITY_SLUGS}${_newer} "
           fi
           CONTRADICTS_WARNINGS="${CONTRADICTS_WARNINGS}
-> ⚠ Конфликт: \`${_source}\` contradicts \`${_slug}\` — проверь актуальность"
+> ⚠ Conflict: \`${_source}\` contradicts \`${_slug}\` — review which is current"
         fi
       fi
 
@@ -270,12 +270,12 @@ apply_priority_markers() {
   for _ps in $_PRIORITY_SLUGS; do
     [ -z "$_ps" ] && continue
     _ps_re=$(_perl_re_escape "$_ps")
-    MISTAKES_MD=$(printf '%s' "$MISTAKES_MD"   | perl -pe "s/^(### ${_ps_re})(\\s|\$)/\$1 [ПРИОРИТЕТ]\$2/")
-    FEEDBACK_MD=$(printf '%s' "$FEEDBACK_MD"   | perl -pe "s/^(### ${_ps_re})(\\s|\$)/\$1 [ПРИОРИТЕТ]\$2/")
-    KNOWLEDGE_MD=$(printf '%s' "$KNOWLEDGE_MD" | perl -pe "s/^(### ${_ps_re})(\\s|\$)/\$1 [ПРИОРИТЕТ]\$2/")
-    STRATEGIES_MD=$(printf '%s' "$STRATEGIES_MD" | perl -pe "s/^(### ${_ps_re})(\\s|\$)/\$1 [ПРИОРИТЕТ]\$2/")
-    DECISIONS_MD=$(printf '%s' "$DECISIONS_MD" | perl -pe "s/^(### ${_ps_re})(\\s|\$)/\$1 [ПРИОРИТЕТ]\$2/")
-    NOTES_MD=$(printf '%s' "$NOTES_MD"         | perl -pe "s/^(### ${_ps_re})(\\s|\$)/\$1 [ПРИОРИТЕТ]\$2/")
+    MISTAKES_MD=$(printf '%s' "$MISTAKES_MD"   | perl -pe "s/^(### ${_ps_re})(\\s|\$)/\$1 [PRIORITY]\$2/")
+    FEEDBACK_MD=$(printf '%s' "$FEEDBACK_MD"   | perl -pe "s/^(### ${_ps_re})(\\s|\$)/\$1 [PRIORITY]\$2/")
+    KNOWLEDGE_MD=$(printf '%s' "$KNOWLEDGE_MD" | perl -pe "s/^(### ${_ps_re})(\\s|\$)/\$1 [PRIORITY]\$2/")
+    STRATEGIES_MD=$(printf '%s' "$STRATEGIES_MD" | perl -pe "s/^(### ${_ps_re})(\\s|\$)/\$1 [PRIORITY]\$2/")
+    DECISIONS_MD=$(printf '%s' "$DECISIONS_MD" | perl -pe "s/^(### ${_ps_re})(\\s|\$)/\$1 [PRIORITY]\$2/")
+    NOTES_MD=$(printf '%s' "$NOTES_MD"         | perl -pe "s/^(### ${_ps_re})(\\s|\$)/\$1 [PRIORITY]\$2/")
   done
 }
 

@@ -320,7 +320,7 @@ echo '{"session_id":"test","cwd":"/tmp"}' \
   | CLAUDE_MEMORY_DIR=/tmp/test-mem bash ~/.claude/hooks/memory-session-start.sh
 
 # UserPromptSubmit
-echo '{"session_id":"test","prompt":"помоги с X"}' \
+echo '{"session_id":"test","prompt":"help me with X"}' \
   | CLAUDE_MEMORY_DIR=/tmp/test-mem bash ~/.claude/hooks/memory-user-prompt-submit.sh
 
 # PreToolUse (dedup)

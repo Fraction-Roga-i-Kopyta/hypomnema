@@ -272,7 +272,7 @@ During SessionStart, after the main scoring pass:
 2. **Reverse scan** — non-injected files that reference an injected slug are also candidates
 3. **Cluster cap +4** — up to four additional files above `MAX_FILES`
 4. **Provenance markers** — cluster-loaded records show `(via source → type)` in output
-5. **Contradicts** — the newer record (by `referenced` date) gets `[ПРИОРИТЕТ]` header annotation; a `⚠ Конфликт` warning explains which is outdated
+5. **Contradicts** — the newer record (by `referenced` date) gets `[PRIORITY]` header annotation; a `⚠ Conflict` warning explains which is outdated
 6. **Cascade signals** — when a file with `instance_of` children is updated, the children get `[REVIEW: parent updated YYYY-MM-DD]` markers for 14 days via the outcome hook writing `cascade-review` WAL events
 
 ## Self-awareness (v0.7)
