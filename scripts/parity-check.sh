@@ -49,14 +49,16 @@ status: active
 Always test shell scripts under both BSD and GNU coreutils before release.
 EOF
 
-  # Bash run
-  CLAUDE_MEMORY_DIR="$MEM" bash "$BASH_SHADOW" "$prompt" "parity-$name" "$injected" >/dev/null 2>&1
+  # Bash run — capture stderr so diagnostic output is available on mismatch.
+  local BASH_ERR="$TMP/bash.err"
+  CLAUDE_MEMORY_DIR="$MEM" bash "$BASH_SHADOW" "$prompt" "parity-$name" "$injected" >/dev/null 2>"$BASH_ERR"
   local BASH_WAL="$TMP/bash.wal"
   sort "$MEM/.wal" > "$BASH_WAL" 2>/dev/null || true
   rm -f "$MEM/.wal" "$MEM/index.db"
 
-  # Go run on the same fixture tree
-  CLAUDE_MEMORY_DIR="$MEM" "$GO_SHADOW" fts shadow "$prompt" "parity-$name" "$injected" >/dev/null 2>&1
+  # Go run on the same fixture tree.
+  local GO_ERR="$TMP/go.err"
+  CLAUDE_MEMORY_DIR="$MEM" "$GO_SHADOW" fts shadow "$prompt" "parity-$name" "$injected" >/dev/null 2>"$GO_ERR"
   local GO_WAL="$TMP/go.wal"
   sort "$MEM/.wal" > "$GO_WAL" 2>/dev/null || true
 
@@ -64,8 +66,20 @@ EOF
     echo "  ✓ $name"
   else
     echo "  ✗ $name"
-    echo "    -- bash --";  sed 's/^/    /' "$BASH_WAL"
-    echo "    -- go --";    sed 's/^/    /' "$GO_WAL"
+    echo "    -- bash wal --";  sed 's/^/    /' "$BASH_WAL"
+    echo "    -- go wal --";    sed 's/^/    /' "$GO_WAL"
+    if [ -s "$BASH_ERR" ]; then
+      echo "    -- bash stderr --"; sed 's/^/    /' "$BASH_ERR"
+    fi
+    if [ -s "$GO_ERR" ]; then
+      echo "    -- go stderr --"; sed 's/^/    /' "$GO_ERR"
+    fi
+    # Dump fixture + env state to help diagnose env-specific failures.
+    echo "    -- env --"
+    echo "    MEM=$MEM"
+    echo "    sqlite3=$(command -v sqlite3) $(sqlite3 -version 2>/dev/null | head -1)"
+    echo "    index.db after runs:"
+    [ -f "$MEM/index.db" ] && sqlite3 "$MEM/index.db" "SELECT COUNT(*) FROM mem;" 2>&1 | sed 's/^/      rows=/' || echo "      (no index.db)"
     rm -rf "$TMP"
     return 1
   fi
