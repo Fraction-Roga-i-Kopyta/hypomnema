@@ -1,17 +1,36 @@
 #!/bin/bash
-# Batch analytics for hypomnema memory system
-# Analyzes WAL over 30 days, generates .analytics-report
-# Run: manually, or auto-triggered by session-stop when report is stale
-
+# Batch analytics for hypomnema memory system (WAL over 30 days → .analytics-report)
 set -o pipefail
-
 # LC_ALL=C: locale-stable decimal separator (audit-2026-04-16 R1).
 export LC_ALL=C
+
+# Effectiveness score = (outcome-positive + 1) / (outcome-positive + outcome-negative + 2)
+# This is Bayesian mean with Laplace pseudo-counts (+1, +2), not naive ratio —
+# it keeps records with few observations from swinging to 0% or 100% and
+# makes thresholds meaningful for small-N mistakes. Do not "simplify" to
+# positive / (positive + negative) without also adjusting the thresholds.
+#
+# Classification thresholds are tunable via environment variables. The
+# defaults are calibrated for a typical single-user corpus (~10-50 active
+# mistakes); users with much larger / smaller corpora may benefit from
+# tightening.
+#   ANALYTICS_WINNER_EFF         (default 0.7)  — effectiveness above which a
+#                                                 record is flagged "winner"
+#   ANALYTICS_NOISE_EFF          (default 0.3)  — effectiveness below which a
+#                                                 record is flagged "noise"
+#   ANALYTICS_MIN_INJECTS_WINNER (default 3)    — min injects to qualify as winner
+#   ANALYTICS_MIN_INJECTS_NOISE  (default 5)    — min injects to qualify as noise
 
 MEMORY_DIR="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}"
 WAL_FILE="$MEMORY_DIR/.wal"
 REPORT_FILE="$MEMORY_DIR/.analytics-report"
 TODAY="${HYPOMNEMA_TODAY:-$(date +%Y-%m-%d)}"
+
+# Tunable classification thresholds (see header).
+WINNER_EFF="${ANALYTICS_WINNER_EFF:-0.7}"
+NOISE_EFF="${ANALYTICS_NOISE_EFF:-0.3}"
+MIN_INJ_WINNER="${ANALYTICS_MIN_INJECTS_WINNER:-3}"
+MIN_INJ_NOISE="${ANALYTICS_MIN_INJECTS_NOISE:-5}"
 
 [ -f "$WAL_FILE" ] || exit 0
 
@@ -22,7 +41,12 @@ else
 fi
 
 # Single-pass awk: compute all analytics from WAL
-ANALYTICS=$(awk -F'|' -v cutoff="$CUTOFF" '
+ANALYTICS=$(awk -F'|' \
+  -v cutoff="$CUTOFF" \
+  -v winner_eff="$WINNER_EFF" \
+  -v noise_eff="$NOISE_EFF" \
+  -v min_inj_winner="$MIN_INJ_WINNER" \
+  -v min_inj_noise="$MIN_INJ_NOISE" '
   $1 < cutoff { next }
 
   $2 == "inject" || $2 == "inject-agg" {
@@ -71,10 +95,10 @@ ANALYTICS=$(awk -F'|' -v cutoff="$CUTOFF" '
       if (name in neg) nc = neg[name]
       eff = (pc + 1) / (pc + nc + 2)
 
-      if (eff > 0.7 && ic >= 3) {
+      if (eff > winner_eff && ic >= min_inj_winner) {
         winners[++winner_count] = sprintf("- %s (eff: %.2f, injects: %d, +%d/-%d)", name, eff, ic, pc, nc)
       }
-      if (eff < 0.3 && ic >= 5) {
+      if (eff < noise_eff && ic >= min_inj_noise) {
         noise[++noise_count] = sprintf("- %s (eff: %.2f, injects: %d, +%d/-%d)", name, eff, ic, pc, nc)
       }
       if (ic >= 5 && pc == 0 && nc == 0) {

@@ -34,25 +34,26 @@ contract with a fresh user on a fresh machine — verify it that way.
     -v "$(pwd)":/repo:ro \
     ubuntu:24.04 bash -c '
       apt-get update && apt-get install -y --no-install-recommends \
-        bash jq sqlite3 perl ca-certificates curl git
-      curl -LsSf https://astral.sh/uv/install.sh | sh
-      export PATH="$HOME/.local/bin:$PATH"
+        bash jq sqlite3 perl ca-certificates curl git golang-go make
       useradd -m testuser
       su - testuser -c "
         cp -r /repo ~/hypomnema
         cd ~/hypomnema
         mkdir -p ~/.claude
+        make build
         bash install.sh
-        bash hooks/test-memory-hooks.sh
+        PATH=\"\$HOME/.claude/bin:\$PATH\" bash hooks/test-memory-hooks.sh
         bash uninstall.sh
         # Confirm nothing of ours is left behind:
-        find ~/.claude -type l -name \"memory-*\" -o -name \"wal-compact.sh\"
+        find ~/.claude -type l \\( -name \"memory-*\" -o -name \"wal-compact.sh\" -o -name \"memoryctl\" \\)
       "
   '
   ```
 
   Expected: `Passed: N / N`, final `find` produces no output. Anything
-  else is a release blocker.
+  else is a release blocker. (`uv` was a v0.9.x dependency; v0.10.0
+  dropped Python entirely — `memoryctl` Go binary replaces it and
+  requires Go 1.22+ instead.)
 
 - [ ] **macOS spot-check on a second account / fresh HOME** (not your
   normal dev machine):

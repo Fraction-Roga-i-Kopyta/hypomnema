@@ -294,12 +294,7 @@ The output is a reminder string shown to Claude (not the user). It is advisory â
 ### 7.2 Output
 
 ```json
-{
-  "hookSpecificOutput": {
-    "hookEventName": "PreCompact",
-    "additionalContext": "Before compaction: <reminder>"
-  }
-}
+{"systemMessage": "<reminder>"}
 ```
 
 ### 7.3 Contract
@@ -307,6 +302,7 @@ The output is a reminder string shown to Claude (not the user). It is advisory â
 - Exit 0 always (cannot block compaction; observability only).
 - Stronger reminder if zero memory files were written this session (`outcome-new` events count stays at 0).
 - No WAL writes.
+- **Envelope choice:** PreCompact uses the top-level `systemMessage` channel rather than the `hookSpecificOutput.additionalContext` envelope that other hooks use. The Claude Code hook schema restricts `hookSpecificOutput.additionalContext` to PreToolUse / UserPromptSubmit / PostToolUse / SessionStart / Stop â€” PreCompact must use `systemMessage` to surface its reminder. See commit `9c99ce9` for the discovery trace.
 
 ---
 

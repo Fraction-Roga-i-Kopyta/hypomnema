@@ -10,7 +10,10 @@ coverage.out
 # Runtime artefacts from ~/.claude/memory/. Not expected to appear here,
 # but cheap insurance if a user ever version-controls their memory dir.
 .wal
+.wal.*
 .analytics-report
+.tfidf-index
+.tfidf-index.*
 index.db
 self-profile.md
 .runtime/

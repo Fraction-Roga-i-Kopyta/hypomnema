@@ -21,10 +21,13 @@ esac
 # Skip if file already exists (it's an overwrite/update, not a new duplicate)
 [ -f "$FILE_PATH" ] && exit 0
 
-# Dedup backend: memoryctl. No memoryctl → dedup disabled silently (same
-# policy the old python3+uv+rapidfuzz path had when any of those were
-# missing). Users opt in via `make build && ./install.sh`.
-command -v memoryctl >/dev/null 2>&1 || exit 0
+# Dedup backend: memoryctl. Try $PATH first; fall back to the canonical
+# install location because `~/.claude/bin` is usually not on a fresh-install
+# user's PATH by default (external review 2026-04-22 — user hit 255/258
+# until they manually added it to their shell rc). No memoryctl → dedup
+# disabled silently.
+MEMORYCTL=$(command -v memoryctl 2>/dev/null || echo "$HOME/.claude/bin/memoryctl")
+[ -x "$MEMORYCTL" ] || exit 0
 
 CONTENT=$(printf '%s\n' "$INPUT" | jq -r '.tool_input.content // empty' 2>/dev/null)
 [ -z "$CONTENT" ] && exit 0
@@ -40,7 +43,7 @@ SAFE_SID="${SAFE_SID//$'\r'/_}"
 export HYPOMNEMA_SESSION_ID="${SAFE_SID:-unknown}"
 export CLAUDE_MEMORY_DIR="$MEMORY_DIR"
 
-OUTPUT=$(printf '%s\n' "$CONTENT" | memoryctl dedup check "$FILE_PATH" 2>&1)
+OUTPUT=$(printf '%s\n' "$CONTENT" | "$MEMORYCTL" dedup check "$FILE_PATH" 2>&1)
 EXIT_CODE=$?
 
 if [ "$EXIT_CODE" -eq 2 ]; then
