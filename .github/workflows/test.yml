@@ -26,7 +26,13 @@ jobs:
       - name: Install system deps (macOS)
         if: runner.os == 'macOS'
         run: |
-          # jq + sqlite3 preinstalled on macos-latest, but confirm
+          # jq + sqlite3 preinstalled on macos-latest, but the runner image
+          # ships Android SDK platform-tools earlier in PATH than /usr/bin,
+          # and that sqlite3 is compiled WITHOUT FTS5 — which silently breaks
+          # bash fts shadow (Go is fine: it uses modernc.org/sqlite embedded).
+          # Force /usr/bin ahead of Android SDK so `sqlite3` resolves to
+          # Apple's system binary (has FTS5 since macOS 15).
+          echo "/usr/bin" >> "$GITHUB_PATH"
           command -v jq      >/dev/null
           command -v sqlite3 >/dev/null
 

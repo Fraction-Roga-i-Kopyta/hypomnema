@@ -10,6 +10,18 @@ command -v jq   >/dev/null 2>&1 || _die "jq is required (brew install jq | apt-g
 command -v perl >/dev/null 2>&1 || _die "perl is required (preinstalled on macOS/Linux; install via package manager if missing)"
 command -v awk  >/dev/null 2>&1 || _die "awk is required"
 
+# sqlite3 with FTS5: required by bin/memory-fts-{sync,query,shadow}.sh.
+# The Android SDK ships a cut-down sqlite3 without FTS5 and GitHub's macOS
+# runners put it ahead of /usr/bin — a source of silent shadow failures.
+# Check the module is available (not just the binary).
+if command -v sqlite3 >/dev/null 2>&1; then
+  if ! printf "CREATE VIRTUAL TABLE t USING fts5(x);\n" | sqlite3 :memory: >/dev/null 2>&1; then
+    _die "sqlite3 at $(command -v sqlite3) lacks FTS5 (check: 'sqlite3 :memory: \"CREATE VIRTUAL TABLE t USING fts5(x)\"'). Fix your PATH or install a build with FTS5 (macOS: /usr/bin/sqlite3; Linux: 'sudo apt-get install sqlite3')."
+  fi
+else
+  _die "sqlite3 is required (brew install sqlite | apt-get install sqlite3) — must support FTS5"
+fi
+
 if [ "${BASH_VERSINFO[0]:-0}" -lt 3 ]; then
   _die "bash 3.2+ required, got ${BASH_VERSION:-unknown}"
 fi
