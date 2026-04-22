@@ -1,5 +1,52 @@
 # Changelog
 
+## [0.10.0] - 2026-04-22
+
+Stack cleanup + first dogfood measurement tool. Drops Python from the project (bash + Go only now), promotes dedup onto `memoryctl`, and ships a synthetic replay runner so retrieval metrics can be measured without waiting N months for real sessions to accumulate.
+
+### Breaking changes
+
+- **`uv` + `rapidfuzz` + `bin/memory-dedup.py` are gone.** Fuzzy dedup now requires `memoryctl` on PATH (built via `make build`). Users who relied on `uv`-based dedup: run `make build && ./install.sh`. Users who never installed `uv`: dedup was already disabled — no action needed, the binary is still optional.
+- **Project now uses two languages (bash + Go), not three.** Removes the Python runtime dependency entirely. Build requires Go 1.22+.
+
+### Added
+
+- **`memoryctl dedup check <file>` subcommand.** Drop-in replacement for the Python version, same pretool/posttool behaviour, exit codes (0 allow, 1 merge, 2 block), and WAL event shape (`dedup-blocked`, `dedup-merged`, `dedup-candidate`). Lives alongside `fts shadow`, `fts sync`, `fts query`.
+- **`internal/fuzzy` package.** Pure-Go port of `rapidfuzz.fuzz.token_set_ratio` — `DefaultProcess`, `Ratio` (LCS-based indel similarity), `TokenSetRatio` (three-way max over intersection/diff pairings). Unit tests pin threshold decisions (block/candidate/allow) against known rapidfuzz outputs. Numerical drift tolerated up to ±10 points because rapidfuzz's default-processor path applies an internal normalisation we couldn't fully reverse-engineer; thresholded decisions are unaffected.
+- **`internal/dedup` package.** Orchestrates the pretool/posttool decision: parse frontmatter root-cause, scan `mistakes/`, compare via `fuzzy.TokenSetRatio`, emit WAL events, handle the posttool merge (increment recurrence + delete new file).
+- **`scripts/synthetic-corpus.txt`** — 48 hand-curated prompts across debugging, shell portability, Python/data, git, API, frontend, and devops domains.
+- **`scripts/replay-runner.sh`** — batch-replay the corpus through UserPromptSubmit, produce per-prompt TSV + aggregate metrics. Invokes `memoryctl fts shadow` synchronously to dodge the hook's detached race against WAL reads. Accepts `--memory DIR` for dogfood against a real memory tree or defaults to a seeded fixture.
+- **`make replay`** — one-shot measurement. Typical output on a day-one (seeds-only) memory:
+  ```
+  trigger-match hits : 1   (2.1% of prompts)
+  shadow-miss events : 160 (89.6% of prompts)
+  ```
+  Confirms the field-review hypothesis: the substring-trigger channel is effectively dead when memory files ship with empty `triggers:`/`evidence:` — the FTS5 shadow pass is doing the retrieval work.
+
+### Changed
+
+- **`hooks/memory-dedup.sh`** — simplified to a single `memoryctl dedup check` delegation with the same graceful-degradation exit-0 policy as before.
+- **QUICKSTART** — optional-dependency section rewritten for Go + `make build` instead of `uv` + `rapidfuzz`.
+- **README** — requirements list updated; architecture diagram points fuzzy-dedup at `memoryctl`.
+- **FAQ** — "why bash" answer updated: bash + Go now, Python gone.
+- **docs/hooks-contract.md** — dependency-degradation section updated for `memoryctl`.
+
+### Fixed
+
+None this release — it's a stack-consolidation + instrumentation release.
+
+### Migration
+
+```bash
+cd /path/to/hypomnema && git pull
+make build
+./install.sh
+```
+
+Done. If `make build` fails because Go isn't installed — either install Go (`brew install go` / `apt install golang`) or accept that fuzzy dedup stays off.
+
+---
+
 ## [0.9.1] - 2026-04-22
 
 Onboarding fix + pinned-semantic clarification. No code change in hooks or Go binary — strictly templates and contract docs. Backward compatible.
