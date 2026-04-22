@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/dedup"
@@ -167,7 +168,12 @@ func runQuery(args []string) {
 	}
 	limit := 10
 	if len(args) >= 2 {
-		fmt.Sscanf(args[1], "%d", &limit)
+		parsed, err := strconv.Atoi(args[1])
+		if err != nil || parsed < 1 {
+			fmt.Fprintf(os.Stderr, "memoryctl fts query: invalid limit %q (want positive integer)\n", args[1])
+			os.Exit(2)
+		}
+		limit = parsed
 	}
 
 	dbPath := filepath.Join(memoryDir(), "index.db")
