@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.9.1] - 2026-04-22
+
+Onboarding fix + pinned-semantic clarification. No code change in hooks or Go binary — strictly templates and contract docs. Backward compatible.
+
+### Added
+
+- **Working `triggers:` / `evidence:` examples in `templates/*.md`.** Field-usage review of v0.9.0 surfaced that new users copying a template got the substring-trigger channel silently disabled — the fields were absent from `mistake.md` and `knowledge.md`, and `feedback.md` had `evidence:` commented out. Without these fields populated, a memory file can only be ranked by keyword score at SessionStart; the reactive UserPromptSubmit path never fires. Templates now ship with commented-out example triggers/evidence alongside the documented shape, so copy-paste produces something one uncomment away from working.
+- **`FORMAT.md § 3.1 — what `status: pinned` guarantees.** A reviewer surfaced that `user-profile.md` (pinned knowledge) was evicted from the flex-pool when a project had 9 active domains, and asked whether that was intended. This section documents the answer explicitly: `pinned` = rotation protection, not injection-time slot reservation. The flex-pool is allocated by score regardless of status, and the trigger-priority key uses `pinned` only as one dimension among seven. If a user needs hard-guaranteed injection, the current contract does not express that; a workaround via `scope: universal` + broad `triggers:` is noted but not promised.
+
+### Contract status
+
+No wire-format or on-disk changes. The pinned clarification is documentation of already-implemented behaviour, not a change to it. Files tagged `pinned` on a v0.9.0 install behave identically under v0.9.1.
+
+### Known open work (not in this release)
+
+- Guaranteeing a slot for `pinned` files in the flex-pool (option `(a)` from session notes) remains deferred pending dogfooding data. Doing it without usage data risks breaking the exact flow the change is meant to protect.
+
+---
+
 ## [0.9.0] - 2026-04-22
 
 Infrastructure & portability release. First Go component lands (`memoryctl`, drop-in for the FTS5 shadow pass) alongside a formal on-disk contract (FORMAT.md + hooks-contract.md), matrix CI (ubuntu-latest + macos-latest), and a cleanup uninstall path. Five BSD/GNU portability bugs were caught and fixed by the bash-vs-Go parity gate the pilot installed — the headline justification for the hybrid architecture.
