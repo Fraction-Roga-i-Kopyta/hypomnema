@@ -73,9 +73,10 @@ CWD=$(printf '%s\n' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)
 find /tmp -maxdepth 1 -name ".claude-session-*" -mtime +1 -delete 2>/dev/null || true
 
 # Regenerate MEMORY.md index in background (drift fix — fresh for next session)
+# Forward CWD so the index lands in the correct auto-memory project slug.
 REGEN_SCRIPT="$(dirname "$0")/regen-memory-index.sh"
 if [ -x "$REGEN_SCRIPT" ]; then
-  CLAUDE_MEMORY_DIR="$MEMORY_DIR" bash "$REGEN_SCRIPT" 2>/dev/null &
+  CLAUDE_MEMORY_DIR="$MEMORY_DIR" CLAUDE_SESSION_CWD="$CWD" bash "$REGEN_SCRIPT" 2>/dev/null &
   disown 2>/dev/null || true
 fi
 
@@ -662,7 +663,7 @@ AGENT_CTX="$MEMORY_DIR/_agent_context.md"
   if [ -f "$USER_PROFILE" ]; then
     echo "## User"
     sed -n '/^---$/,/^---$/d; /^#/d; /^$/d; p' "$USER_PROFILE" | \
-      grep -E "^- .*(специалист|стек|stack|русский|лаконич|конкретн)" | head -3
+      grep -E "^- .*(специалист|стек|stack|русский|лаконич|конкретн|role|expertise|language|concise|english|writes in)" | head -3
     echo ""
   fi
   if [ -n "$MISTAKES_MD" ]; then

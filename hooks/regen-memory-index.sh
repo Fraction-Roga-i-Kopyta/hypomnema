@@ -1,13 +1,17 @@
 #!/bin/bash
 # Regenerate MEMORY.md index from memory/ filesystem.
-# Writes to $MEMORY_INDEX_PATH (default: ~/.claude/projects/-Users-akamash/memory/MEMORY.md).
+# Writes to $MEMORY_INDEX_PATH. Default derives the auto-memory project slug
+# from $CLAUDE_SESSION_CWD (preferred; set by session-start.sh) or $PWD,
+# following Claude Code's convention "-$PWD-with-slashes-as-dashes".
 # Descriptions pulled from frontmatter (description → root-cause → trigger), fallback to first body line.
 # Pure rebuild — any hand-curated descriptions in the existing index are lost on each run.
 
 set -o pipefail
 
 MEMORY_DIR="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}"
-INDEX_PATH="${MEMORY_INDEX_PATH:-$HOME/.claude/projects/-Users-akamash/memory/MEMORY.md}"
+_SESSION_CWD="${CLAUDE_SESSION_CWD:-$PWD}"
+_PROJECT_SLUG=$(printf '%s' "$_SESSION_CWD" | sed 's|^/||; s|/|-|g')
+INDEX_PATH="${MEMORY_INDEX_PATH:-$HOME/.claude/projects/-$_PROJECT_SLUG/memory/MEMORY.md}"
 LINK_PREFIX="${MEMORY_INDEX_LINK_PREFIX:-../../../.claude/memory}"
 
 [ -d "$MEMORY_DIR" ] || exit 0
