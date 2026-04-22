@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/dedup"
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/doctor"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/fts"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/profile"
 )
@@ -42,6 +43,11 @@ Usage:
       Regenerate ~/.claude/memory/self-profile.md from WAL + mistakes +
       strategies. Single-pass WAL aggregation; drop-in replacement for
       bin/memory-self-profile.sh.
+  memoryctl doctor [--json]
+      On-demand health check of the install: claude_dir, hook registrations
+      in settings.json, broken symlinks in hooks/ and bin/, memoryctl
+      availability, corpus counts, WAL-error events in the last 7 days,
+      derived-index freshness. Exit 0 on OK/WARN only, 1 on any FAIL.
 
 Environment:
   CLAUDE_MEMORY_DIR       Memory root (default: ~/.claude/memory).
@@ -92,6 +98,8 @@ func main() {
 		}
 	case "self-profile":
 		runSelfProfile(os.Args[2:])
+	case "doctor":
+		runDoctor(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "memoryctl: unknown command %q\n", os.Args[1])
 		os.Exit(2)
@@ -119,6 +127,42 @@ func memoryDir() string {
 	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".claude", "memory")
+}
+
+// claudeDir resolves the Claude Code state root. Defaults to ~/.claude
+// but respects $CLAUDE_HOME for parallel installs and test fixtures. Used
+// only by doctor — the hook scripts don't rely on this variable today.
+func claudeDir() string {
+	if d := os.Getenv("CLAUDE_HOME"); d != "" {
+		return d
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".claude")
+}
+
+// runDoctor runs the read-only health check and prints a summary. Exits 1
+// if any check is FAIL so CI / shell scripts can gate on `memoryctl doctor`.
+func runDoctor(args []string) {
+	jsonOut := false
+	for _, a := range args {
+		switch a {
+		case "--json":
+			jsonOut = true
+		case "-h", "--help":
+			fmt.Print(usage)
+			return
+		default:
+			fmt.Fprintf(os.Stderr, "memoryctl doctor: unknown flag %q\n", a)
+			os.Exit(2)
+		}
+	}
+	report := doctor.Run(claudeDir(), memoryDir())
+	if jsonOut {
+		report.PrintJSON(os.Stdout)
+	} else {
+		report.Print(os.Stdout)
+	}
+	os.Exit(report.ExitCode())
 }
 
 // runShadow is the primary pilot subcommand — byte-for-byte equivalent output
