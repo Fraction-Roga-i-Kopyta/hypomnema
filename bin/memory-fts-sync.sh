@@ -13,6 +13,18 @@ DB="$MEM/index.db"
 
 mkdir -p "$(dirname "$DB")"
 
+# BSD vs GNU stat divergence: `-f %m` is macOS, `-c %Y` is Linux. Without
+# this probe the sync silently emitted zero disk-side mtimes on Linux,
+# leaving the FTS index at zero rows and every query empty. Batching via
+# `find -exec stat {} +` stays intact — we just swap the format flags.
+if stat -f %m /dev/null >/dev/null 2>&1; then
+  STAT_MTIME='-f %m'
+  STAT_NM='-f %N|%m'
+else
+  STAT_MTIME='-c %Y'
+  STAT_NM='-c %n|%Y'
+fi
+
 # Idempotent schema
 sqlite3 "$DB" <<'SQL' >/dev/null
 CREATE VIRTUAL TABLE IF NOT EXISTS mem USING fts5(
@@ -26,7 +38,8 @@ SQL
 # --- Stage 1: drift check (cheap) ---
 # SUM(mtime) shifts for any add/remove/modify. COUNT guards the rare
 # case where two files swap mtimes and the sum is preserved.
-disk_sum=$(find "$MEM" -name '*.md' -type f -exec stat -f '%m' {} + 2>/dev/null | awk '{s+=$1} END{print s+0}')
+# shellcheck disable=SC2086  # STAT_MTIME must split into two tokens
+disk_sum=$(find "$MEM" -name '*.md' -type f -exec stat $STAT_MTIME {} + 2>/dev/null | awk '{s+=$1} END{print s+0}')
 disk_count=$(find "$MEM" -name '*.md' -type f 2>/dev/null | wc -l | tr -d ' ')
 
 read -r idx_sum idx_count <<<"$(sqlite3 -separator ' ' "$DB" \
@@ -41,7 +54,8 @@ DISK_LIST=$(mktemp)
 trap 'rm -f "$DISK_LIST"' EXIT
 
 # pipe delimiter: path collisions with '|' are impossible under ~/.claude/memory
-find "$MEM" -name '*.md' -type f -exec stat -f '%N|%m' {} + > "$DISK_LIST"
+# shellcheck disable=SC2086
+find "$MEM" -name '*.md' -type f -exec stat $STAT_NM {} + > "$DISK_LIST"
 
 sqlite3 "$DB" <<SQL
 .output /dev/null
