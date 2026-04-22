@@ -33,8 +33,12 @@ if [ "${SAVED:-0}" -eq 0 ]; then
 Если задача решена с первого подхода — запиши подход в strategies/ (trigger, steps, outcome)."
 fi
 
+# PreCompact does not support hookSpecificOutput.additionalContext (schema
+# allows it only for PreToolUse/UserPromptSubmit/PostToolUse/SessionStart/Stop).
+# Use top-level `systemMessage` instead — surfaces the reminder to the user
+# before compaction runs.
 cat <<EOF
-{"hookSpecificOutput":{"hookEventName":"PreCompact","additionalContext":$(printf '%s\n' "$MSG" | jq -Rs .)}}
+{"systemMessage":$(printf '%s\n' "$MSG" | jq -Rs .)}
 EOF
 
 exit 0
