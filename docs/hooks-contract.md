@@ -60,7 +60,7 @@ A hook that has no context to contribute MUST either print an empty-context enve
 |---|---|---|
 | `CLAUDE_MEMORY_DIR` | Override the memory root. Used in tests and multi-memory setups. | `$HOME/.claude/memory` |
 | `HYPOMNEMA_TODAY` | Override "today" (YYYY-MM-DD) in any date-sensitive logic. Used in tests to freeze WAL fixture age. | `$(date +%Y-%m-%d)` |
-| `HYPOMNEMA_SESSION_ID` | Session identifier passed to subprocesses (notably `bin/memory-dedup.py`). Mirrors the `session_id` field from stdin. | `unknown` |
+| `HYPOMNEMA_SESSION_ID` | Session identifier passed to subprocesses (notably `memoryctl dedup check`). Mirrors the `session_id` field from stdin. | `unknown` |
 | `LC_ALL` | Forced to `C` by hooks that call `awk`/`perl` with float printf — keeps decimal separator as `.` across locales. | (inherited) |
 
 Implementations MAY add new environment variables. They MUST NOT re-purpose the variables listed above with new semantics.
@@ -195,13 +195,13 @@ Claude Code forwards stderr to the user when the hook exits with code 2.
 
 ### 4.3 Contract
 
-- Exit **2** if similarity ≥ 80 % on `root-cause` field (via `rapidfuzz.token_set_ratio`). Also writes `dedup-blocked|new>existing|session` to WAL.
-- Exit **0** in all other cases (including: path not under `mistakes/`, file already exists, `uv` unavailable, `rapidfuzz` unavailable, empty content, empty root-cause, no similar file found). Optional `dedup-candidate` WAL entry for medium-similarity warnings.
-- Hook MUST handle both pretool (file not yet on disk) and posttool (file exists) invocations — see `bin/memory-dedup.py` for the split.
+- Exit **2** if similarity ≥ 80 % on `root-cause` field (rapidfuzz-compatible `token_set_ratio`, implemented in `internal/fuzzy`). Also writes `dedup-blocked|new>existing|session` to WAL.
+- Exit **0** in all other cases (including: path not under `mistakes/`, file already exists, `memoryctl` unavailable, empty content, empty root-cause, no similar file found). Optional `dedup-candidate` WAL entry for medium-similarity warnings.
+- Hook MUST handle both pretool (file not yet on disk) and posttool (file exists) invocations — see `internal/dedup/dedup.go` for the split.
 
 ### 4.4 Dependency degradation
 
-If `uv` is not on `PATH`, the hook exits 0 silently. This is the documented optional-dependency path — see `docs/QUICKSTART.md` §1. Never silently-fail MUST here: the user must have made an explicit choice to skip dedup (by not installing `uv`).
+If `memoryctl` is not on `PATH`, the hook exits 0 silently. This is the documented optional-dependency path — see `docs/QUICKSTART.md` §1. Users opt in by running `make build` and re-running `./install.sh`. Never silently-fail MUST here: the user must have made an explicit choice to skip dedup (by not building the Go binary).
 
 ---
 

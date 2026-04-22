@@ -2,7 +2,7 @@
 # PreToolUse hook — fuzzy dedup for mistakes (blocks duplicate creation)
 # Matcher: Write
 # Exit 2 = block write (high similarity duplicate found)
-# Requires: uv + python3 (graceful: exit 0 if unavailable)
+# Requires: memoryctl on PATH (graceful: exit 0 if unavailable)
 
 set -o pipefail
 
@@ -21,37 +21,32 @@ esac
 # Skip if file already exists (it's an overwrite/update, not a new duplicate)
 [ -f "$FILE_PATH" ] && exit 0
 
-# Check dependencies (uv handles rapidfuzz automatically)
-command -v uv >/dev/null 2>&1 || exit 0
+# Dedup backend: memoryctl. No memoryctl → dedup disabled silently (same
+# policy the old python3+uv+rapidfuzz path had when any of those were
+# missing). Users opt in via `make build && ./install.sh`.
+command -v memoryctl >/dev/null 2>&1 || exit 0
 
-# Extract content from tool_input
 CONTENT=$(printf '%s\n' "$INPUT" | jq -r '.tool_input.content // empty' 2>/dev/null)
 [ -z "$CONTENT" ] && exit 0
 
 SESSION_ID=$(printf '%s\n' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
-# R17: session_id propagates into the WAL via `memory-dedup.py`. If it
-# contains `|` or a newline, downstream awk -F'|' splitters see extra
-# fields or spurious records. Mirror the sanitization used in
-# session-start.sh / memory-outcome.sh. (audit-2026-04-16 R17)
+# R17: session_id propagates into the WAL via memoryctl. If it contains
+# `|` or a newline, downstream awk -F'|' splitters see extra fields or
+# spurious records. Mirror the sanitization used in session-start.sh /
+# memory-outcome.sh. (audit-2026-04-16 R17)
 SAFE_SID="${SESSION_ID//|/_}"
 SAFE_SID="${SAFE_SID//$'\n'/_}"
 SAFE_SID="${SAFE_SID//$'\r'/_}"
 export HYPOMNEMA_SESSION_ID="${SAFE_SID:-unknown}"
 export CLAUDE_MEMORY_DIR="$MEMORY_DIR"
 
-DEDUP_SCRIPT="$HOME/.claude/bin/memory-dedup.py"
-[ -f "$DEDUP_SCRIPT" ] || exit 0
-
-# Pass content via stdin, file_path as argument
-OUTPUT=$(printf '%s\n' "$CONTENT" | uv run --with rapidfuzz python3 "$DEDUP_SCRIPT" "$FILE_PATH" 2>&1)
+OUTPUT=$(printf '%s\n' "$CONTENT" | memoryctl dedup check "$FILE_PATH" 2>&1)
 EXIT_CODE=$?
 
-if [ $EXIT_CODE -eq 2 ]; then
-  # Block: high-similarity duplicate — stderr message propagates to Claude
+if [ "$EXIT_CODE" -eq 2 ]; then
   echo "$OUTPUT" >&2
   exit 2
 fi
 
-# Warn: medium similarity — stdout hint to Claude context
 [ -n "$OUTPUT" ] && echo "$OUTPUT"
 exit 0

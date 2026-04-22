@@ -14,16 +14,24 @@ The installer checks for `jq`, `perl`, `awk`, and `bash 3.2+`. If anything is mi
 
 ### Optional: fuzzy dedup for mistakes
 
-The PreToolUse dedup hook blocks creation of a `mistakes/*.md` file whose root-cause is >80% similar to an existing one (via `rapidfuzz`). It requires [`uv`](https://docs.astral.sh/uv/) at runtime:
+The PreToolUse dedup hook blocks creation of a `mistakes/*.md` file whose root-cause is >80% similar to an existing one. It's implemented in the Go binary `memoryctl`. To enable it:
 
 ```bash
-# macOS
-brew install uv
-# Linux / anywhere else
-curl -LsSf https://astral.sh/uv/install.sh | sh
+# macOS: Go already installed via Homebrew, or
+brew install go
+
+# Linux
+sudo apt-get install golang   # or: asdf install golang ...
 ```
 
-Without `uv` the hook silently exits 0 — dedup is off, everything else still works. If you're seeing many near-duplicate mistakes accumulate, install `uv` and they'll start being blocked at write time.
+Then build and reinstall:
+
+```bash
+make build       # produces ./bin/memoryctl (static, CGO_ENABLED=0)
+./install.sh     # symlinks it into ~/.claude/bin/memoryctl
+```
+
+Without `memoryctl` the hook silently exits 0 — dedup is off, everything else still works. If you're seeing many near-duplicate mistakes accumulate, build `memoryctl` and they'll start being blocked at write time.
 
 ## 2. Run the wizard (90 seconds)
 

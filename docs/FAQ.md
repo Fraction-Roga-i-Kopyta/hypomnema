@@ -87,7 +87,7 @@ Use `narrow` for very specific, easily-mismatched advice. Use `universal` for cr
 
 ## Why is hypomnema bash and not Python / Node?
 
-Zero install friction. Bash + jq + awk + perl are on every macOS and Linux out of the box. The one Python file (`bin/memory-dedup.py`) is optional — falls back to bash if python3 is missing.
+Zero install friction. Bash + jq + awk + perl are on every macOS and Linux out of the box. The hot paths (SessionStart injection, UserPromptSubmit trigger match, Stop hook outcome detection) are pure shell, so install.sh is three seconds of `ln -sf`. Fuzzy dedup and the FTS5 shadow pass are optional opt-ins via a Go binary (`make build`); without it, those features disable silently and the rest of the system works unchanged.
 
 ## How do I write memory in Cyrillic / Chinese / Greek?
 
