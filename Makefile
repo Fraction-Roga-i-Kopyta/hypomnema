@@ -13,7 +13,7 @@ GO_FILES := $(shell find . -name '*.go' -not -path './vendor/*')
 # compilable. modernc.org/sqlite is pure Go, so this works.
 GO_BUILD := CGO_ENABLED=0 go build -trimpath -ldflags="-s -w"
 
-.PHONY: all build test test-go test-hooks parity install clean help
+.PHONY: all build test test-go test-hooks parity replay install clean help
 
 all: build test
 
@@ -37,6 +37,13 @@ test-hooks:
 parity: build
 	@bash scripts/parity-check.sh
 
+# Batch-replay a corpus of synthetic prompts through UserPromptSubmit and
+# report aggregate retrieval metrics (trigger-match, shadow-miss). Use
+# this to measure retrieval quality against a hand-crafted prompt spread
+# instead of waiting for real sessions to accumulate.
+replay: build
+	@bash scripts/replay-runner.sh
+
 install: build
 	@mkdir -p $${HOME}/.claude/bin
 	ln -sf "$(abspath $(MEMORYCTL))" $${HOME}/.claude/bin/memoryctl
@@ -53,5 +60,6 @@ help:
 	@echo "  test-go     — just the Go test suite"
 	@echo "  test-hooks  — just the bash hooks smoke test"
 	@echo "  parity      — bash vs Go shadow pass comparison"
+	@echo "  replay      — synthetic corpus replay, retrieval metrics"
 	@echo "  install     — symlink bin/memoryctl into ~/.claude/bin/"
-	@echo "  clean       — remove bin/"
+	@echo "  clean       — remove bin/memoryctl"
