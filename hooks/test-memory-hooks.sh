@@ -3329,6 +3329,15 @@ echo "Passed: $PASS / $((PASS + FAIL))"
 [ "$FAIL" -eq 0 ] && echo "ALL TESTS PASSED" || echo "FAILURES: $FAIL"
 
 # Cleanup
-rm -rf "$TEST_DIR"
+# Drain any backgrounded FTS shadow children before removing fixtures.
+# user-prompt-submit.sh fires memory-fts-shadow.sh via `&` + disown — on
+# slow Linux CI this still writes to $TEST_DIR/index.db-{wal,shm} when
+# rm -rf starts the recursive traversal, and Linux rm reports "Directory
+# not empty". macOS doesn't race in practice. Short bounded wait.
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  pgrep -f "memory-fts-shadow\.sh" >/dev/null 2>&1 || break
+  sleep 0.2
+done
+rm -rf "$TEST_DIR" 2>/dev/null || { sleep 0.5; rm -rf "$TEST_DIR" 2>/dev/null || true; }
 
 exit $FAIL
