@@ -910,14 +910,14 @@ PC_CTX=$(printf '%s' "$PC_OUT" | jq -r '.systemMessage // ""')
 assert "PreCompact — contains reminder" 'printf "%s" "$PC_CTX" | grep -q "Context compression"'
 
 # Test: stronger message when nothing saved
-assert "PreCompact — nothing-saved warning" 'printf "%s" "$PC_CTX" | grep -q "ничего не записано"'
+assert "PreCompact — nothing-saved warning" 'printf "%s" "$PC_CTX" | grep -q "Nothing was saved"'
 
 # Test: no nothing-saved warning when files were created after marker
 sleep 1
 touch "$PC_MEM/test-insight.md"
 PC_OUT2=$(echo '{"session_id":"'"$PC_SID"'","cwd":"/tmp"}' | CLAUDE_MEMORY_DIR="$PC_MEM" bash "$PC_HOOK" 2>/dev/null)
 PC_CTX2=$(printf '%s' "$PC_OUT2" | jq -r '.systemMessage // ""')
-assert "PreCompact — no nothing-saved when files exist" '! printf "%s" "$PC_CTX2" | grep -q "ничего не записано"'
+assert "PreCompact — no nothing-saved when files exist" '! printf "%s" "$PC_CTX2" | grep -q "Nothing was saved"'
 
 rm -f "$PC_MARKER" "$PC_MEM/test-insight.md"
 rm -rf "$PC_DIR"

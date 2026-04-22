@@ -339,13 +339,13 @@ if [ "${CONT_STALE:-0}" = "1" ] && [ -n "$PROJECT" ]; then
   cont_branch=$(git -C "$CWD" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
   cont_commit=$(git -C "$CWD" log -1 --oneline 2>/dev/null || echo "no commits")
   REMINDER="${REMINDER}${REMINDER:+
-}[CONTINUITY] Заполни continuity/${PROJECT}.md:
+}[CONTINUITY] Fill continuity/${PROJECT}.md:
 
-Задача: ___
-Статус: ___
-Следующий шаг: ___
+Task: ___
+Status: ___
+Next step: ___
 
-Контекст: ветка \`${cont_branch}\`, последний коммит: \"${cont_commit}\""
+Context: branch \`${cont_branch}\`, last commit: \"${cont_commit}\""
 fi
 
 if [ -n "$ERROR_SUMMARY" ]; then
@@ -359,8 +359,8 @@ if [ -n "$ERROR_SUMMARY" ]; then
   done <<< "$ERROR_SUMMARY"
   if [ -n "$ERROR_LINES" ]; then
     REMINDER="${REMINDER}${REMINDER:+
-}[ERRORS] Обнаружены ошибки в этой сессии:${ERROR_LINES}
-Запиши в mistakes/ если это повторяющийся паттерн."
+}[ERRORS] Errors detected this session:${ERROR_LINES}
+Record in mistakes/ if this is a recurring pattern."
   fi
 fi
 
@@ -568,7 +568,7 @@ fi
 # Strategies reminder: long clean session → suggest recording approach
 if [ "${METRIC_ERROR_COUNT:-0}" -eq 0 ] && [ "${ELAPSED:-0}" -gt 600 ]; then
   REMINDER="${REMINDER}${REMINDER:+
-}[STRATEGIES] Сессия чистая (0 ошибок, ${ELAPSED}с). Если задача решена с первого подхода — запиши в strategies/:
+}[STRATEGIES] Clean session (0 errors, ${ELAPSED}s). If the task was solved first try — record in strategies/:
 trigger, steps (3-5), outcome."
 fi
 
