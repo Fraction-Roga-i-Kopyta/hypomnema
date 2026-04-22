@@ -46,6 +46,24 @@ You ←→ Claude Code ←→ ~/.claude/memory/
                             └── against prompt text, inject matched records (cap 4)
 ```
 
+## Architecture at a glance
+
+Five Claude Code hook events, one script each:
+
+| Event | Script | Purpose |
+|---|---|---|
+| `SessionStart` | `hooks/session-start.sh` | Scan, score, inject top-N into context |
+| `UserPromptSubmit` | `hooks/user-prompt-submit.sh` | Substring trigger + parallel FTS5 shadow |
+| `PreToolUse:Write` | `hooks/memory-dedup.sh` | Fuzzy dedup via `memoryctl` |
+| `Stop` | `hooks/session-stop.sh` | Evidence match, outcome detection, rotation |
+| `PreCompact` | `hooks/memory-precompact.sh` | Warning before context compression |
+
+Two scoring pipelines: **SessionStart** uses a composite recall-oriented score (keyword × 3 + WAL spaced-repetition + TF-IDF − noise penalty); **UserPromptSubmit** uses a deterministic precision-oriented priority key. They solve different problems and must not be conflated.
+
+Heavy logic lives in 8 pure-function libraries under `hooks/lib/` (≈1k lines total). Hot paths — FTS5 BM25 retrieval, fuzzy dedup, single-pass WAL aggregation — are additionally implemented in Go under `internal/` and exposed via the optional `memoryctl` binary; bash fallbacks exist for everything except dedup, with byte-for-byte parity enforced by `scripts/parity-check.sh`.
+
+Full architectural map with end-to-end data flow, scoring formulas, library purposes, WAL event taxonomy, and invariants: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
+
 ## What gets remembered
 
 | Type | What | Injected at start | Limit |
