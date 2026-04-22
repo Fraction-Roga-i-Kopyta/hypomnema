@@ -1,5 +1,74 @@
 # Changelog
 
+## [0.9.0] - 2026-04-22
+
+Infrastructure & portability release. First Go component lands (`memoryctl`, drop-in for the FTS5 shadow pass) alongside a formal on-disk contract (FORMAT.md + hooks-contract.md), matrix CI (ubuntu-latest + macos-latest), and a cleanup uninstall path. Five BSD/GNU portability bugs were caught and fixed by the bash-vs-Go parity gate the pilot installed — the headline justification for the hybrid architecture.
+
+### Added
+
+- **`bin/memoryctl` (Go binary, opt-in).** First Go component in a planned hybrid architecture. Subcommands:
+  - `memoryctl fts shadow` — byte-for-byte drop-in for `bin/memory-fts-shadow.sh`, used by UserPromptSubmit. Pure-Go SQLite driver (`modernc.org/sqlite`, CGO_ENABLED=0) means zero cross-compile pain and trigram FTS5 always available regardless of the system `sqlite3`.
+  - `memoryctl fts sync` / `fts query` — standalone equivalents of the bash sync + query scripts.
+  - Install picks it up automatically if `make build` produced the binary; otherwise bash scripts remain authoritative. No user-visible behaviour change.
+- **`docs/FORMAT.md` (v1.0 contract).** Single source of truth for on-disk shape: directory layout, frontmatter schema (universal + per-type), WAL grammar (19 defined event types), derivative indices, parsing tolerances, backward-compat rules. Any implementation claiming format compatibility obeys this document.
+- **`docs/hooks-contract.md` (v1.0 contract).** Companion document: stdin/stdout JSON shape for every hook (`SessionStart`, `Stop`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PreCompact`), exit-code semantics, environment variables (`CLAUDE_MEMORY_DIR`, `HYPOMNEMA_TODAY`, `HYPOMNEMA_SESSION_ID`), fail-safe rules.
+- **`uninstall.sh`.** Surgical reverse of `install.sh` — removes only our symlinks, strips only our entries from `settings.json` (preserves foreign hooks), keeps `~/.claude/memory/` by default. `--purge-memory --yes` for complete removal.
+- **`RELEASE_CHECKLIST.md`.** Manual gate before `git tag`. Section 3 (clean-VM bootstrap) is REQUIRED, not optional — lesson from the five portability bugs that shipped from a macOS-only dev loop.
+- **`.github/workflows/test.yml`.** Matrix CI (`ubuntu-latest` + `macos-latest`) runs install → full bash test suite → Go unit tests → `make parity` (bash vs Go shadow diff on identical fixtures). Separate `shellcheck -S error` job across all shell scripts.
+- **`HYPOMNEMA_TODAY` env override** in 6 production hooks (`session-start`, `user-prompt-submit`, `session-stop`, `memory-outcome`, `memory-analytics`, `memory-error-detect`). Tests freeze "today" so fixtures with hardcoded WAL dates don't drift out of the 30-day scoring window over time.
+- **`install.sh` preflight: sqlite3 FTS5 probe.** Detects sqlite3 binaries that lack the FTS5 module (Android SDK's cut-down version is the common culprit on macOS runners) and fails fast with the path to the offending binary and how to fix PATH.
+- **`install.sh` directory enumeration.** Replaces 18 hand-rolled `ln -sf` lines with two loops over `hooks/*.sh` and `bin/*.{sh,py}`. New files get picked up automatically — the "added a hook, forgot to update install.sh" class of bug is eliminated at the source. Adds three previously-missing symlinks: `memory-error-detect.sh`, `memory-precompact.sh`, `memory-dedup.py`.
+- **QUICKSTART / TROUBLESHOOTING / README** expanded: optional `uv`/`rapidfuzz` dependency documented, `precision_class: ambient` cross-referenced in TROUBLESHOOTING, upgrade + uninstall snippets in README.
+
+### Fixed
+
+- **`bin/memory-dedup.py` PreToolUse path** (P0 from external review). The script had `if not new_file.exists(): sys.exit(0)` at the top, which short-circuited every PreToolUse invocation before reading stdin. Split `main()` by `pretool_call = not new_file.exists()`; pretool path reads candidate content from stdin, parses root-cause, blocks on ≥80% similarity with a `dedup-blocked` WAL event and exit 2 (what the shell wrapper had always expected). Three previously-failing tests now pass end-to-end.
+- **Hard-coded `/Users/akamash/Development/hypomnema/` paths in test suite (14 sites).** Replaced with a `HOOKS_SRC_DIR` header that follows symlinks, so the suite works under any `$HOME`.
+- **BSD vs GNU `sed 1,/pat/`** (4 sites). GNU extends the range to the next match when line 1 matches, wiping everything between both frontmatter delimiters. Replaced with the single-range form `/^---$/,/^---$/d` — works identically on both.
+- **BSD vs GNU `grep "\\t"`** (R2 test assert). BSD grep interprets `\t` as TAB in the pattern; GNU grep treats it literally. Replaced with the `awk -F$"\t"` idiom already used by sibling asserts.
+- **BSD vs GNU `stat -f` / `stat -c`** (`bin/memory-fts-sync.sh`). `-f` is BSD-only; on Linux the sync silently produced empty mtimes and left the FTS index at zero rows. Added the one-shot probe pattern from `hooks/lib/stat-helpers.sh`.
+- **`LC_ALL=en_US.UTF-8`** in `bin/memory-fts-query.sh`. Not guaranteed to be generated on Linux runners; replaced with the portable `C.UTF-8`.
+- **`install.sh` exit code on `--skip-base`.** The trailing `[ "$DISCOVER" -eq 1 ] && fn` pattern returned rc=1 under `set -e` when flags were 0. Converted to explicit `if/then`.
+- **`memory-analytics.sh` never symlinked.** Called by `session-stop.sh` (guarded, silently no-oped) and by the test suite (died with exit 127). Added to the installer's symlink enumeration.
+- **`bin/memory-fts-shadow.sh` `set -uo pipefail` placement.** Sat below a 20-line header comment; the `shell-safety` test probe (`head -10 | grep pipefail`) flagged it as missing. Moved under the shebang.
+- **WAL float truncation in `hooks/session-start.sh:451`** (Spaced repetition + Bayesian test flakes). `printf "%d"` truncated the float WAL component to 0 when `raw < 1`, losing hash-order ties in sort. Scaled by 100 before int cast; preserves component proportions, keeps downstream bash `-gt 0` / `-eq 0` tests integer-compatible.
+- **`hooks/lib/{evidence-extract,wal-lock}.sh`** — added `# shellcheck shell=bash` directive (were missing shebangs → SC2148 errors under `-S error`).
+- **`bin/memory-fts-{sync,query}.sh`** — respect `CLAUDE_MEMORY_DIR` per FORMAT.md §1.4 (they hardcoded `$HOME/.claude/memory` and broke fixture-based tests).
+
+### Changed
+
+- **Directory enumeration in `install.sh`** already described above — mentioned again here because the rename-preservation table (`session-start.sh` → `memory-session-start.sh`, `consolidate.sh` → `memory-consolidate.sh`, …) moved from hardcoded lines into a single `_rename_dest` case. bash 3.2-safe (no `declare -A`).
+- **`hooks/test-memory-hooks.sh`** — now executable bit set (`chmod +x`). Same for `hooks/bench-memory.sh`.
+- **`.gitignore`** — `bin/memoryctl` + runtime artefacts (`.wal`, `.analytics-report`, `index.db`, `self-profile.md`, `.runtime/`, `.cache/`).
+
+### Breaking changes
+
+None. All additions are opt-in or documented-equivalent-to-existing-behaviour. Format v1 is what the bash implementation was already producing; documenting it as a contract is non-breaking for readers.
+
+### Contributor workflow
+
+- `make build` → compiles `bin/memoryctl`.
+- `make test` → runs bash + Go suites.
+- `make parity` → diffs bash and Go shadow on fixtures; acceptance gate for the hybrid architecture.
+- `./uninstall.sh` → reverse of install; safe to run any time.
+
+---
+
+## [0.8.2] - 2026-04-20
+
+FTS5 recall shadow (signal-only; no behavioural change). Retrospective CHANGELOG entry — the commit shipped 2026-04-20 but the entry was not written at the time.
+
+### Added
+
+- **`bin/memory-fts-shadow.sh`.** A parallel pass invoked (detached, fail-safe) from `hooks/user-prompt-submit.sh`. Runs FTS5/BM25 over memory body content for every prompt and writes `shadow-miss|<slug>|<session>` WAL events for files the substring-trigger pipeline did *not* inject. Signal is diagnostic, not prescriptive — it feeds trigger-tuning ("this file shadow-hits repeatedly but never triggers directly → its `triggers:` are too narrow"). Does not alter injection.
+- **`bin/memory-fts-sync.sh` + `bin/memory-fts-query.sh`.** Supporting infrastructure: idempotent FTS5 index at `~/.claude/memory/index.db`, lazy-sync on every query (two-stage drift check), trigram tokenizer for Cyrillic + Latin.
+
+### Note
+
+The `shadow-miss` WAL event type was defined retroactively in `docs/FORMAT.md` §5.1 under the 0.9.0 contract.
+
+---
+
 ## [0.8.1] - 2026-04-20
 
 Metric hygiene release. Five days of v0.8 dogfooding surfaced two measurement defects and a WAL noise problem. Fixes are small and surgical — one optional frontmatter field, no new hooks. Backward compatible.
