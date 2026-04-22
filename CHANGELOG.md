@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.10.2] - 2026-04-22
+
+Follow-up to v0.10.1, bundling external review #2 findings (pass over v0.9.0→v0.10.1, 43 commits) with phase C internal review + misc cleanup. No schema or behavioural changes beyond the pinned-slot injection fix; all other items are bug fixes, doc accuracy, safety-net hardening.
+
+### Fixed
+
+- **PreCompact hook wire contract.** `docs/hooks-contract.md §7.2` documented the `hookSpecificOutput.additionalContext` envelope, but the hook has been emitting `systemMessage` since `9c99ce9`. §7.2 updated, §7.3 explains the rationale (Claude Code schema restricts `hookSpecificOutput.additionalContext` to PreToolUse/UserPromptSubmit/PostToolUse/SessionStart/Stop — PreCompact must use `systemMessage`).
+- **`memoryctl` PATH resolution on fresh installs.** `hooks/memory-dedup.sh`, `bin/memory-fts-sync.sh`, `bin/memory-self-profile.sh` now try `$PATH` first, then fall back to `$HOME/.claude/bin/memoryctl`. External reviewer hit 255/258 silent dedup test failures until they added `~/.claude/bin` to their shell rc.
+- **`hooks/memory-error-detect.sh` Russian output.** Last user-facing Russian string in the hook layer; missed by the v0.10.1 i18n pass because its cyrillic char count was below the audit threshold.
+- **`hooks/session-start.sh` pinned-slot eviction.** Pinned files now bypass per-type caps, the total scored budget, and the zero-score throttle in `collect_scored`. `CLAUDE.md` already exempted pinned files from rotation; this extends "pinned == permanent" to injection-time. External review reproducer: `user-profile` (pinned, generic-domain) was evicted from `fly-next` CWD by 9 active project domains.
+- **`uninstall.sh` hand-rolled symlink list replaced with directory-driven walk.** Removes any symlink under `$HOOKS_DIR` / `$BIN_DIR` whose target points into the hypomnema repo. Eliminates the "new hook added, forgot to update uninstall" class of bug that produced three missing symlinks in v0.10.1.
+- **`internal/dedup/dedup.go` WAL ordering.** Posttool merge path now returns `Allow` if `incrementRecurrence` fails, instead of emitting a `dedup-merged` WAL entry for a merge that didn't happen.
+- **`scripts/replay-runner.sh` locale leak.** Added `export LC_ALL=C` so `awk %f` renders `10.4%` on every locale, not `10,4%` on ru/uk/de/... Brings the runner into parity with `memory-analytics.sh` and `session-stop.sh`.
+- **`README.md` test count and stack description.** Was `200/200/144/200` in four places, actual is 258. Stack updated from "bash + jq" to the full list (bash, jq, perl, awk, sqlite3-FTS5, optional Go). `make replay` surfaced in Testing section (flagged as hidden in review Part 4).
+- **`docs/maintenance/RELEASE_CHECKLIST.md` Docker test.** Replaced `curl -LsSf https://astral.sh/uv/install.sh | sh` (uv dropped in v0.10.0) with `golang-go` + `make`; test run now exports `~/.claude/bin` onto `PATH`.
+
+### Added
+
+- **`hooks/memory-analytics.sh` tunable thresholds.** Four new env vars (`ANALYTICS_WINNER_EFF`, `ANALYTICS_NOISE_EFF`, `ANALYTICS_MIN_INJECTS_WINNER`, `ANALYTICS_MIN_INJECTS_NOISE`) let operators tune winner/noise classification without editing the awk block. Laplace-smoothing formula documented inline so future maintainers don't "simplify" it to naive `pos/(pos+neg)` without adjusting thresholds.
+- **`internal/dedup` unit tests** (11 cases, coverage 0% → 85.8%). Covers pretool allow/block/candidate bands, posttool merge + the v0.10.2 ordering fix, missing-root-cause, block-scalar markers, empty mistakes dir, graceful degradation.
+
+### Refactored
+
+- **`hooks/memory-outcome.sh` cascade detection** now uses `parse_related` from `lib/parse-memory.sh` instead of a duplicate inline awk parser. Handles inline and block-form `related:` consistently with cluster expansion in SessionStart.
+
+### Chore
+
+- `.gitignore` covers `.tfidf-index*` and `.wal.*` backup patterns alongside existing runtime artefacts.
+- Executable bits on `hooks/test-memory-hooks.sh`, `hooks/bench-memory.sh`, `scripts/replay-runner.sh`, `scripts/parity-check.sh` (flagged in external review Part 4).
+
+### Deferred to v0.10.3+
+
+- **`hooks/memory-index.sh` TF-IDF Latin-only tokenizer** — `gsub(/[^a-zA-Z\300-\377]/, ...)` truncates Cyrillic / CJK / Greek. Go FTS5 tokenizer already uses `unicode.IsLetter`; bash and Go diverge on this rule. Port to Go under a new parity case is the proposed fix, sized out of this PATCH scope.
+- **`bench-memory.sh` CI integration** (`make bench` target with wall-clock thresholds).
+- **Go test coverage for `internal/fts` (8%) and `cmd/memoryctl` (0%).** `internal/fts` is mostly SQLite plumbing that parity-check exercises end-to-end; `cmd/memoryctl` warrants a help/dispatch smoke test.
+
 ## [0.10.1] - 2026-04-22
 
 Distribution-readiness patch. No behavioural changes; makes v0.10.0 work out-of-box for users who are not the author. No schema or WAL format changes. Users on v0.10.0 upgrade by pulling `main` or `git checkout v0.10.1`.
