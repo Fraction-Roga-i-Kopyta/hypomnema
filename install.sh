@@ -164,6 +164,40 @@ if [ -x "$SCRIPT_DIR/bin/memoryctl" ]; then
   echo "  Linked memoryctl (Go) into $CLAUDE_DIR/bin"
 fi
 
+# --- Sweep stale symlinks left by earlier versions ---
+# ln -sf only overwrites links whose destination name still exists in the
+# repo. When a past release removed a file (v0.10.0 dropped all
+# memory-*.py Python entry points, for instance), its ~/.claude/bin and
+# ~/.claude/hooks symlinks keep pointing at a path inside $SCRIPT_DIR
+# that no longer resolves. Directory-driven sweep: for every symlink in
+# our two install dirs, if its target points into $SCRIPT_DIR and the
+# target doesn't exist, drop the symlink. User-owned symlinks pointing
+# elsewhere are untouched. Mirrors uninstall.sh's `_remove_our_symlinks`
+# predicate, restricted to broken targets so a fresh install is a no-op.
+_sweep_stale_links() {
+  local dir="$1" swept=0 path target
+  [ -d "$dir" ] || { echo 0; return; }
+  while IFS= read -r path; do
+    [ -L "$path" ] || continue
+    target=$(readlink "$path" 2>/dev/null) || continue
+    case "$target" in
+      "$SCRIPT_DIR"/*) ;;
+      *) continue ;;
+    esac
+    # target inside our repo AND doesn't exist => legacy leftover.
+    [ -e "$target" ] && continue
+    _run rm "$path"
+    swept=$((swept + 1))
+  done < <(find "$dir" -mindepth 1 -maxdepth 1 2>/dev/null)
+  echo "$swept"
+}
+stale_hooks=$(_sweep_stale_links "$HOOKS_DIR")
+stale_bin=$(_sweep_stale_links "$CLAUDE_DIR/bin")
+stale_total=$((stale_hooks + stale_bin))
+if [ "$stale_total" -gt 0 ]; then
+  echo "  Swept $stale_total stale symlink(s) left by previous versions"
+fi
+
 # --- Patch settings.json ---
 echo "[4/4] Patching settings.json..."
 if [ ! -f "$SETTINGS" ]; then
