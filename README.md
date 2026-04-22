@@ -10,6 +10,34 @@ Claude Code starts every session from zero. Hypomnema fixes that.
 
 258 hook smoke tests + Go unit tests across `internal/{fuzzy,profile,wal,fts}` (~70–90% coverage on data-critical packages). Hook time ~0.3 sec.
 
+## What it looks like
+
+When you open a new Claude Code session in a project, hypomnema injects a `# Memory Context` block before the conversation starts:
+
+```markdown
+# Memory Context
+
+**Active domains:** backend python fastapi
+
+## Active Mistakes
+
+### sqlalchemy-metadata-reserved-name [major, x1]
+Root cause: `metadata_` mapped to column "metadata" collides with `Base.metadata`
+Prevention: Check SQLAlchemy reserved attribute names before mapping
+
+## Feedback
+
+### code-approach
+Parameterized queries only. No hardcoded secrets. No debug logging in committed code.
+
+## Strategies
+
+### verification-before-done
+Don't claim "done" before running a minimum verification set.
+```
+
+That's it. Claude reads it as part of its context — no RAG query, no vector database, just a markdown block prepended by the hook. When Claude hits a new bug worth remembering, it writes a markdown file to `~/.claude/memory/mistakes/` and the next session injects it automatically.
+
 ## The problem
 
 Every Claude Code session is stateless. Your AI assistant doesn't remember that it made the same debugging mistake five times, doesn't know the database migration it broke last week, doesn't recall the strategy that worked for async race conditions. You repeat yourself. It repeats its mistakes.
@@ -596,6 +624,35 @@ The format (YAML frontmatter + markdown) is a stable contract. Any future engine
 **Why cluster activation?** Related memories don't just sit in separate files — a mistake is often an instance of a general rule, a strategy reinforces a feedback note. At injection time, the cluster pass pulls in the graph neighborhood of each primary record, up to +4 files, with provenance markers showing *why* each was included. This surfaces context that keyword-only scoring would miss.
 
 **Why prompt triggers?** CWD/git scoring catches the general shape of a task (*"frontend files changed, css domain"*). But the user's first sentence often names the exact symptom (*"tailwind hsl"*, *"410 gone"*). Triggers close that gap — a file declares its own activation phrase, and the UserPromptSubmit hook matches it directly against what the user just typed.
+
+## FAQ
+
+**Does it work with Cursor / Aider / Windsurf / any other Claude Code alternative?**
+No. Hypomnema hooks into the Claude Code hook events (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `Stop`, `PreCompact`). Other tools don't expose the same hooks, and the memory layer is designed around the exact envelope shapes Claude Code emits (see `docs/hooks-contract.md`). Port is possible but not trivial.
+
+**How is this different from mem0 / letta / MemGPT?**
+They target LLM applications generally and assume a runtime with embeddings, vector stores, and LLM-driven summarisation. Hypomnema is Claude-Code-specific, offline by design, with deterministic retrieval (substring triggers + keyword scoring + FTS5 BM25 shadow). No network calls, no hidden costs, no embeddings. If you want adaptive semantic memory across heterogeneous LLM apps, those tools are correct. If you want a Claude Code session to not forget your project's BSD/GNU sed gotcha for the fifth time, hypomnema.
+
+**Isn't `.config.sh` a prompt-injection vector?**
+Yes — that's why `hooks/lib/load-config.sh` is a *safe parser*, not `source`. The file is writable by any process with memory-dir access, including Claude via its Write tool. If hooks `source`d it, a malicious or mistaken Claude could write `rm -rf $HOME` there and have it execute at the next session start. The safe parser only honours integer assignments on a whitelist and rejects everything else. Memory content files are never executed.
+
+**How much overhead does the hook add to each session?**
+~0.3 sec on a 40-file memory tree at SessionStart, measured on the author's M-series MacBook. UserPromptSubmit is sub-50ms (substring-match only, FTS5 shadow runs detached). Stop is ~200ms (evidence match + rotation). PreToolUse dedup is a single `memoryctl` subprocess (~20ms). The 5-second hook timeout is never approached.
+
+**Does it degrade Claude's answers?**
+The injected context makes Claude aware of mistakes it has already been told about. Whether that *improves* or *degrades* answers depends on whether your memory is curated — a noisy memory full of irrelevant rules dilutes the context. The `self-profile.md` report tracks precision per rule (`trigger-useful` vs `trigger-silent`) so you can identify and remove noise. Measurable precision on a real dogfood corpus: 66% (first month).
+
+**What happens if Claude writes memory files that aren't valid?**
+The hook tolerates malformed frontmatter silently — the file just doesn't participate in scoring or cluster expansion. Pre-write fuzzy dedup (PreToolUse) blocks duplicates at 80%+ similarity to an existing mistake. Post-write dedup merges 80%+ duplicates and bumps the existing `recurrence` counter. Files older than their per-type stale threshold flip to `status: stale`; older still, they move to `archive/`. Pinned files are exempt from rotation.
+
+**Does it work across multiple projects?**
+Yes. `~/.claude/memory/projects.json` maps each CWD to a project slug; `SessionStart` reads the current directory and filters memories by project. `project: global` records inject everywhere; project-specific records only inject in their own tree. Domain detection (from `projects-domains.json`) further narrows the domain filter.
+
+**Can I version-control my memory?**
+Yes — `~/.claude/memory/` is plain markdown + YAML. `git init` inside it, commit the `*.md` files, ignore the runtime artefacts (the shipped `.gitignore` template lists them). Nothing in hypomnema requires the memory dir to be non-tracked.
+
+**Is this going to get `systemd`-level complicated?**
+Design constraints in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) are explicit: no network, no embeddings, no external dependencies beyond the shell baseline, bash/Go parity contract, append-only WAL, agent-writes/hooks-don't-write invariant. If a change violates one of those, it gets pushed back or moved to a fork.
 
 ## License
 
