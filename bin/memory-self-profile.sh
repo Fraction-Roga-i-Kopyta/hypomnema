@@ -190,7 +190,7 @@ source: derived from .wal + mistakes/ + strategies/
 
 # Self-Profile
 
-**Не вручную.** Этот файл генерируется из WAL-метрик. Не редактировать.
+**Do not edit manually.** This file is generated from WAL metrics.
 
 ## Meta-signals
 | signal | count |
@@ -210,18 +210,18 @@ source: derived from .wal + mistakes/ + strategies/
 | outcome-new (fresh mistakes recorded — learning rate) | ${outcome_new_count} |
 
 ## Strengths (top strategies by success_count)
-${strengths:-_нет данных_}
+${strengths:-_no data_}
 
 ## Weaknesses (top mistakes by recurrence)
-${weaknesses:-_нет данных_}
+${weaknesses:-_no data_}
 
-🔴 = scope:universal (системная склонность, не проектная)
+🔴 = scope:universal (systemic tendency, not project-specific)
 
 ## Calibration (error-prone domains)
-${calibration:-_мало данных для калибровки_}
+${calibration:-_not enough data for calibration_}
 
 ---
-_Чем больше данных в WAL, тем точнее профиль. Триггеры для обновления: клиновая сессия, outcome-positive/negative, strategy-used._
+_Accuracy improves with WAL volume. Refreshed on: clean-session, outcome-positive/negative, strategy-used._
 EOF
 
 exit 0

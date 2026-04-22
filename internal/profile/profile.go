@@ -8,7 +8,7 @@
 //
 // Contract: produces memoryDir/self-profile.md exactly as the bash script
 // would. Same markdown structure, same ordering, same "n/a" fallback when
-// trigger_total is zero, same Russian body strings.
+// trigger_total is zero, same English body strings.
 package profile
 
 import (
@@ -470,7 +470,7 @@ func renderProfile(ts string, sig *walSignals, weak []weakness, strong []strengt
 	fmt.Fprintf(&b, "---\n\n")
 
 	fmt.Fprintf(&b, "# Self-Profile\n\n")
-	fmt.Fprintf(&b, "**Не вручную.** Этот файл генерируется из WAL-метрик. Не редактировать.\n\n")
+	fmt.Fprintf(&b, "**Do not edit manually.** This file is generated from WAL metrics.\n\n")
 
 	fmt.Fprintf(&b, "## Meta-signals\n")
 	fmt.Fprintf(&b, "| signal | count |\n")
@@ -491,7 +491,7 @@ func renderProfile(ts string, sig *walSignals, weak []weakness, strong []strengt
 
 	fmt.Fprintf(&b, "\n## Strengths (top strategies by success_count)\n")
 	if len(strong) == 0 {
-		fmt.Fprintf(&b, "_нет данных_\n")
+		fmt.Fprintf(&b, "_no data_\n")
 	} else {
 		for _, s := range strong {
 			fmt.Fprintf(&b, "- `%s` (success: %d)\n", s.slug, s.successCount)
@@ -500,7 +500,7 @@ func renderProfile(ts string, sig *walSignals, weak []weakness, strong []strengt
 
 	fmt.Fprintf(&b, "\n## Weaknesses (top mistakes by recurrence)\n")
 	if len(weak) == 0 {
-		fmt.Fprintf(&b, "_нет данных_\n")
+		fmt.Fprintf(&b, "_no data_\n")
 	} else {
 		for _, w := range weak {
 			marker := ""
@@ -511,11 +511,11 @@ func renderProfile(ts string, sig *walSignals, weak []weakness, strong []strengt
 		}
 	}
 
-	fmt.Fprintf(&b, "\n🔴 = scope:universal (системная склонность, не проектная)\n")
+	fmt.Fprintf(&b, "\n🔴 = scope:universal (systemic tendency, not project-specific)\n")
 
 	fmt.Fprintf(&b, "\n## Calibration (error-prone domains)\n")
 	if len(calib) == 0 {
-		fmt.Fprintf(&b, "_мало данных для калибровки_\n")
+		fmt.Fprintf(&b, "_not enough data for calibration_\n")
 	} else {
 		for _, c := range calib {
 			fmt.Fprintf(&b, "- `%s`: %s err/session avg (n=%d)\n", c.domain, formatRate(c.rate), c.sessions)
@@ -523,7 +523,7 @@ func renderProfile(ts string, sig *walSignals, weak []weakness, strong []strengt
 	}
 
 	fmt.Fprintf(&b, "\n---\n")
-	fmt.Fprintf(&b, "_Чем больше данных в WAL, тем точнее профиль. Триггеры для обновления: клиновая сессия, outcome-positive/negative, strategy-used._\n")
+	fmt.Fprintf(&b, "_Accuracy improves with WAL volume. Refreshed on: clean-session, outcome-positive/negative, strategy-used._\n")
 
 	return b.String()
 }

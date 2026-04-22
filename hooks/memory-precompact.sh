@@ -26,11 +26,11 @@ if [ -f "$MARKER" ]; then
     2>/dev/null | wc -l | tr -d ' ')
 fi
 
-MSG="⚠ Context compression. Если есть незаписанные инсайты, ошибки или решения — запиши в memory/ сейчас."
+MSG="⚠ Context compression. If you have unrecorded insights, mistakes, or decisions — save them to memory/ now."
 if [ "${SAVED:-0}" -eq 0 ]; then
   MSG="${MSG}
-В этой сессии ничего не записано в memory/. Проверь: были ли ошибки, решения, паттерны или стратегии, которые стоит сохранить?
-Если задача решена с первого подхода — запиши подход в strategies/ (trigger, steps, outcome)."
+Nothing was saved to memory/ this session. Consider: any errors, decisions, patterns, or strategies worth persisting?
+If the task was solved first try — record the approach in strategies/ (trigger, steps, outcome)."
 fi
 
 # PreCompact does not support hookSpecificOutput.additionalContext (schema

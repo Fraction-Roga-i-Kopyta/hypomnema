@@ -116,8 +116,8 @@ func TestGenerateEmptyCorpus(t *testing.T) {
 	got := string(out)
 	mustContain(t, got, "| total sessions (logged) | 0 |")
 	mustContain(t, got, "| **measurable precision** (useful + applied) / (useful + silent) | **n/a%** |")
-	mustContain(t, got, "_нет данных_") // strengths/weaknesses placeholder
-	mustContain(t, got, "_мало данных для калибровки_")
+	mustContain(t, got, "_no data_") // strengths/weaknesses placeholder
+	mustContain(t, got, "_not enough data for calibration_")
 }
 
 // --- fixtures ------------------------------------------------------------
