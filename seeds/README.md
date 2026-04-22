@@ -28,6 +28,7 @@ This lets seeds serve as a reference without polluting actual memory.
 
 | File | Domain | Who it applies to |
 |---|---|---|
+| `wrong-root-cause-diagnosis.md` | general | everyone — Claude's top universal debugging mistake |
 | `shell-escape-special-chars.md` | shell | everyone |
 | `datetime-naive-timezone.md` | data, code | analysts, developers |
 | `file-path-spaces-unquoted.md` | shell | everyone |
