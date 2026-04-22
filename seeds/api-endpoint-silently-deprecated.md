@@ -7,8 +7,8 @@ domains: [api]
 keywords: [api, deprecated, endpoint, silent, 200, 204, status, atlassian, side-effect]
 severity: major
 recurrence: 0
-root-cause: "Вендоры (Atlassian, Google, Stripe) часто отключают endpoint, оставляя возврат 200/204 из соображений совместимости — но действие не выполняется; внешний код видит 'успех' и не алертит"
-prevention: "После любого write-запроса к стороннему API делать read-проверку результата. Регулярно сверять используемые endpoints с changelog/deprecation-страницей вендора"
+root-cause: "Vendors (Atlassian, Google, Stripe) often disable an endpoint while keeping 200/204 responses for backwards compatibility — the action no longer happens but the client code sees 'success' and never alerts"
+prevention: "After any write request to a third-party API, do a read-check that the change actually happened. Regularly reconcile the endpoints you use against the vendor's changelog / deprecation page"
 decay_rate: never
 ref_count: 0
 triggers:
@@ -17,38 +17,38 @@ triggers:
 scope: domain
 ---
 
-# API: endpoint молча deprecated
+# API: endpoint silently deprecated
 
-## Симптом
-Скрипт удаления пользователей возвращает 204 No Content на каждый вызов. Через неделю выясняется: ни один пользователь не удалён. Логи показывают чистые "успехи".
+## Symptom
+The user-deletion script returns 204 No Content on every call. A week later you discover: not a single user was actually deleted. The logs show clean "successes".
 
-Реальные кейсы:
-- Atlassian Cloud `DELETE /rest/api/3/user` — возвращает 204, но пользователь остаётся в org
-- Google Sheets API v3 — продолжал отвечать после deprecation, но изменения не применялись
-- Stripe API без version header — старое поведение для совместимости, новые поля игнорируются
+Real cases:
+- Atlassian Cloud `DELETE /rest/api/3/user` — returns 204, but the user is still in the org.
+- Google Sheets API v3 — kept responding after deprecation, but changes weren't applied.
+- Stripe API without a version header — old behaviour for compatibility; new fields get ignored.
 
-## Почему
-Вендоры боятся ломать клиентов:
-- HTTP 4xx/5xx → клиент алертит → жалоба в support
-- HTTP 2xx без side-effect → "тихая деградация", клиент не замечает месяцами
+## Why
+Vendors are afraid of breaking clients:
+- HTTP 4xx/5xx → client alerts → support ticket.
+- HTTP 2xx without side effect → "silent degradation", client doesn't notice for months.
 
-Это **сознательная стратегия** для уменьшения нагрузки на support, особенно у крупных вендоров.
+This is a **deliberate strategy** to reduce support load, especially at larger vendors.
 
 ## Fix
 
-**Read-after-write проверка:**
+**Read-after-write verification:**
 ```python
 def delete_user(user_id):
     resp = requests.delete(f"{API}/users/{user_id}")
     assert resp.status_code in (200, 204), f"unexpected status: {resp.status_code}"
 
-    # КРИТИЧНО: проверить, что действие реально произошло
+    # CRITICAL: confirm the action actually took effect
     check = requests.get(f"{API}/users/{user_id}")
     if check.status_code != 404:
         raise Exception(f"User {user_id} still exists after delete (status {check.status_code})")
 ```
 
-**Версионирование явно:**
+**Explicit versioning:**
 ```python
 headers = {
     "Stripe-Version": "2024-11-20",
@@ -57,20 +57,20 @@ headers = {
 }
 ```
 
-**Мониторинг deprecation headers:**
+**Watch for deprecation headers:**
 ```python
 if "Sunset" in resp.headers or "Deprecation" in resp.headers:
     log.warning(f"endpoint deprecated: {resp.headers}")
 ```
 
-## Профилактика
-- Подписаться на changelog вендора (RSS/email) для используемых API
-- Регулярно (раз в квартал) сверять список endpoints в коде с deprecation-страницей
-- В CI добавить smoke-тест: write → read → assert effect
-- Для критичных операций — проверять не только status, но и body/state
+## Prevention
+- Subscribe to the vendor's changelog (RSS/email) for every API you depend on.
+- Once a quarter, reconcile your code's endpoint list with the vendor's deprecation page.
+- In CI, add a smoke test: write → read → assert effect.
+- For critical operations, check not just status but the resulting body/state.
 
-## Что особенно подвержено
-- Lifecycle endpoints (delete user/org/project)
-- Permission/role изменения
-- Webhook регистрация
-- Любые async-операции (queue submission "успешна", но job не запустился)
+## Especially at risk
+- Lifecycle endpoints (delete user/org/project).
+- Permission / role changes.
+- Webhook registration.
+- Any async operation (queue submission "succeeds", but the job never runs).
