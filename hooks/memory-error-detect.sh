@@ -87,10 +87,10 @@ if [ -d "$MEMORY_DIR/mistakes" ]; then
   if [ -z "$SIMILAR_FILE" ]; then
     SIMILAR_FILE=$(grep -rli "$PAT" "$MEMORY_DIR/mistakes/"*.md 2>/dev/null | head -1)
   fi
-  [ -n "$SIMILAR_FILE" ] && SIMILAR=" → см. mistakes/$(basename "$SIMILAR_FILE" .md)"
+  [ -n "$SIMILAR_FILE" ] && SIMILAR=" → see mistakes/$(basename "$SIMILAR_FILE" .md)"
 fi
 
 # Output hint to Claude context
-printf '⚠ Паттерн: %s — %s%s\n' "$PAT" "$HINT" "$SIMILAR"
+printf '⚠ Pattern: %s — %s%s\n' "$PAT" "$HINT" "$SIMILAR"
 
 exit 0
