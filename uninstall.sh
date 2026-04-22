@@ -80,6 +80,8 @@ HOOK_LINKS=(
   memory-outcome.sh
   memory-dedup.sh
   memory-analytics.sh
+  memory-error-detect.sh
+  memory-precompact.sh
   wal-compact.sh
   regen-memory-index.sh
   bench-memory.sh
@@ -106,6 +108,7 @@ BIN_LINKS=(
   memory-fts-sync.sh
   memory-fts-query.sh
   memory-fts-shadow.sh
+  memoryctl
 )
 
 echo "[2/3] Removing utility symlinks from $BIN_DIR..."
