@@ -1,0 +1,65 @@
+# Synthetic prompt corpus for hypomnema dogfood replay.
+# One prompt per line. Blank lines and '#'-prefixed lines are ignored.
+# Domains labelled in trailing bracket are for humans — runner ignores them.
+
+# --- Debugging / root-cause (~10) ---
+why is this test flaky on CI but passing locally
+the function returns the wrong value for edge cases
+help me figure out why this migration is failing
+my integration test hangs at the assertion
+docker container exits immediately after starting
+the websocket disconnects after 60 seconds silently
+this async function never resolves when called from the handler
+let me understand why the nightly job silently skips half the rows
+this bash script exit 0 even when sed failed inside the pipeline
+deploy succeeds in staging but breaks in prod the next morning
+
+# --- Shell / portability (~8) ---
+the sed 1,/^---$/d idiom eats too much on linux
+grep -P is not portable — how do I express a tab in the pattern
+stat -f does not work on my ubuntu box
+how do I quote a path with spaces in a loop
+my find -exec stat output disappears under set -e
+bash script works on macOS but fails under ubuntu-latest CI
+how to escape $2b$ inside a double-quoted bash string
+sqlite3 says no such module fts5 on the runner
+
+# --- Python / data (~8) ---
+pandas read_csv throws UnicodeDecodeError on cyrillic input
+datetime.now() comparison fails with "can't compare offset-naive"
+pytest fixture runs before I want it to
+how to avoid mutable default argument bug
+poetry resolve is stuck on a transitive dependency
+rapidfuzz.token_set_ratio returns different values with default_process
+asyncio timeout not being cancelled properly
+my pydantic validator doesn't fire on nested models
+
+# --- Git / VCS (~6) ---
+how do I remove a committed .env from history
+rebase conflict on a file I never touched
+git push rejected non-fast-forward after squash
+safe way to amend a pushed commit
+force-with-lease vs force push difference
+why does git log --all not show the branch I just created
+
+# --- API / integrations (~6) ---
+atlassian jira rest endpoint returns 204 but no effect
+webhook signature verification is failing for stripe
+google sheets api quota errors under bursty writes
+my axios request sees cors preflight failing on prod
+openai rate limiting on parallel calls
+slack api post_message silently truncates long blocks
+
+# --- Frontend / CSS (~5) ---
+css grid layout broken on Safari iOS
+tailwind hsl channel vars render as invalid color
+z-index stacking context keeps surprising me
+why does my button shift by 1px only on chrome
+input type=date inconsistent between firefox and safari
+
+# --- DevOps / infra (~5) ---
+kubernetes pod keeps restarting with OOMKilled
+my cronjob runs twice sometimes
+nginx location block order trips me up
+aws sdk v3 credential provider chain confusing
+terraform apply hangs on a remote state lock
