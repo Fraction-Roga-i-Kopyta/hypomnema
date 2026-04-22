@@ -163,6 +163,74 @@ func TestRun_CorpusWithFilesReportsCounts(t *testing.T) {
 	}
 }
 
+func TestOpenQuanta_AllClosedIsOK(t *testing.T) {
+	claude, mem := newFixture(t)
+	today := time.Now().Format("2006-01-02")
+	// 3 sessions: each with an inject + a closing event.
+	lines := []string{
+		today + "|inject|slug-a|s1",
+		today + "|trigger-useful|slug-a|s1",
+		today + "|inject|slug-b|s2",
+		today + "|trigger-silent|slug-b|s2",
+		today + "|inject|slug-c|s3",
+		today + "|clean-session|_global_|s3",
+	}
+	mustWriteWAL(t, mem, lines)
+	r := Run(claude, mem)
+	c := mustFindCheck(t, r, "open_quanta_last_30d", OK)
+	if !strings.Contains(c.Detail, "0/3") {
+		t.Errorf("expected 0/3 open, got %q", c.Detail)
+	}
+}
+
+func TestOpenQuanta_MajorityOpenWarns(t *testing.T) {
+	claude, mem := newFixture(t)
+	today := time.Now().Format("2006-01-02")
+	// 4 sessions: only one has a closing event → 75% open.
+	lines := []string{
+		today + "|inject|slug-a|s1",
+		today + "|trigger-useful|slug-a|s1",
+		// Three sessions with injects only.
+		today + "|inject|slug-b|s2",
+		today + "|inject|slug-c|s3",
+		today + "|inject|slug-d|s4",
+	}
+	mustWriteWAL(t, mem, lines)
+	r := Run(claude, mem)
+	c := mustFindCheck(t, r, "open_quanta_last_30d", WARN)
+	if !strings.Contains(c.Detail, "3/4") {
+		t.Errorf("expected 3/4 open, got %q", c.Detail)
+	}
+	if !strings.Contains(c.Detail, "measurement-bias.md") {
+		t.Errorf("WARN detail should point the operator at the doc, got %q", c.Detail)
+	}
+}
+
+func TestOpenQuanta_ExcludesOldEntriesOutsideWindow(t *testing.T) {
+	claude, mem := newFixture(t)
+	old := time.Now().AddDate(0, 0, -60).Format("2006-01-02")
+	lines := []string{
+		// Old inject without closing — MUST be excluded from the 30d window.
+		old + "|inject|slug-old|s-old",
+	}
+	mustWriteWAL(t, mem, lines)
+	r := Run(claude, mem)
+	// Empty-window path returns OK with a clear message; no WARN.
+	c := mustFindCheck(t, r, "open_quanta_last_30d", OK)
+	if !strings.Contains(c.Detail, "no inject-carrying sessions") {
+		t.Errorf("expected empty-window message, got %q", c.Detail)
+	}
+}
+
+// mustWriteWAL is a tiny fixture helper so test cases stay readable.
+func mustWriteWAL(t *testing.T, mem string, lines []string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(mem, ".wal"),
+		[]byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestReport_PrintJSONRoundtrips(t *testing.T) {
 	claude, mem := newFixture(t)
 	r := Run(claude, mem)

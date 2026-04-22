@@ -125,6 +125,7 @@ func Run(claudeDir, memoryDir string) Report {
 		checkMemoryctl(claudeDir),
 		checkCorpus(memoryDir),
 		checkWALErrors(filepath.Join(memoryDir, ".wal"), now),
+		checkOpenQuanta(filepath.Join(memoryDir, ".wal"), now),
 		checkIndices(memoryDir, now),
 	)
 	return r
@@ -478,4 +479,92 @@ func checkIndices(memoryDir string, now time.Time) Check {
 		}
 	}
 	return Check{Name: "derived_indices", Status: status, Detail: detail}
+}
+
+// closingEvents are the WAL event types that signal "Stop hook reached a
+// classification pass for this session_id" — i.e. the behavioural quantum
+// closed in the TFS sense (inject → some posterior). See
+// docs/notes/measurement-bias.md for why session-metrics is intentionally
+// excluded (it doesn't carry session_id in column 4, a FORMAT.md §5.2
+// violation).
+var closingEvents = map[string]bool{
+	"trigger-useful":   true,
+	"trigger-silent":   true,
+	"outcome-positive": true,
+	"outcome-negative": true,
+	"clean-session":    true,
+}
+
+// openQuantaWindowDays bounds the window checkOpenQuanta examines. Older
+// entries are excluded because they may predate the v0.7.1 evidence-match
+// rollout, when trigger-useful/silent literally could not fire. 30 days
+// matches the SessionStart recency horizon already used for scoring.
+const openQuantaWindowDays = 30
+
+// openQuantaWarnThreshold flips the check to WARN when at least this
+// fraction of recent inject-carrying sessions never got a closing event.
+// 0.5 — half the quanta open is loud enough to be worth a line in the
+// report; anything below stays OK.
+const openQuantaWarnThreshold = 0.5
+
+func checkOpenQuanta(walPath string, now time.Time) Check {
+	name := "open_quanta_last_30d"
+	f, err := os.Open(walPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return Check{Name: name, Status: OK, Detail: "no .wal yet (fresh install)"}
+		}
+		return Check{Name: name, Status: WARN, Detail: err.Error()}
+	}
+	defer f.Close()
+	cutoff := now.AddDate(0, 0, -openQuantaWindowDays).Format("2006-01-02")
+	injectSess := map[string]int{} // session_id → inject count
+	closedSess := map[string]bool{}
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for sc.Scan() {
+		line := sc.Text()
+		parts := strings.SplitN(line, "|", 4)
+		if len(parts) < 4 {
+			continue
+		}
+		if parts[0] < cutoff {
+			continue
+		}
+		event, sess := parts[1], parts[3]
+		if event == "inject" {
+			injectSess[sess]++
+			continue
+		}
+		if closingEvents[event] {
+			closedSess[sess] = true
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return Check{Name: name, Status: WARN, Detail: "scan error: " + err.Error()}
+	}
+	total := len(injectSess)
+	if total == 0 {
+		return Check{
+			Name:   name,
+			Status: OK,
+			Detail: fmt.Sprintf("no inject-carrying sessions in last %dd", openQuantaWindowDays),
+		}
+	}
+	open, lostInjects := 0, 0
+	for s, n := range injectSess {
+		if !closedSess[s] {
+			open++
+			lostInjects += n
+		}
+	}
+	ratio := float64(open) / float64(total)
+	detail := fmt.Sprintf("%d/%d sessions without closing signal (%.0f%%); %d injects unclassified in last %dd",
+		open, total, ratio*100, lostInjects, openQuantaWindowDays)
+	status := OK
+	if ratio >= openQuantaWarnThreshold {
+		status = WARN
+		detail += " — skews Bayesian `eff`; see docs/notes/measurement-bias.md"
+	}
+	return Check{Name: name, Status: status, Detail: detail}
 }
