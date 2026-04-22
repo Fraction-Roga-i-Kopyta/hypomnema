@@ -167,37 +167,65 @@ fi
 # --- Patch settings.json ---
 echo "[4/4] Patching settings.json..."
 if [ ! -f "$SETTINGS" ]; then
-  echo '{}' > "$SETTINGS"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] would create $SETTINGS with empty object"
+  else
+    echo '{}' > "$SETTINGS"
+  fi
 fi
 
 # Backup
-cp "$SETTINGS" "${SETTINGS}.backup-hypomnema"
-
-# Add hooks if not present
-HAS_SESSION_START=$(jq '.hooks.SessionStart // empty' "$SETTINGS" 2>/dev/null)
-HAS_STOP=$(jq '.hooks.Stop // empty' "$SETTINGS" 2>/dev/null)
-HAS_USER_PROMPT_SUBMIT=$(jq '.hooks.UserPromptSubmit // empty' "$SETTINGS" 2>/dev/null)
-
-if [ -z "$HAS_SESSION_START" ]; then
-  jq '.hooks.SessionStart = [{"hooks": [{"type": "command", "command": "~/.claude/hooks/memory-session-start.sh", "timeout": 15}]}]' "$SETTINGS" > "${SETTINGS}.tmp" && mv "${SETTINGS}.tmp" "$SETTINGS"
-  echo "  Added SessionStart hook"
-else
-  echo "  SessionStart hook already exists — skipping (add manually if needed)"
+if [ -f "$SETTINGS" ]; then
+  _run cp "$SETTINGS" "${SETTINGS}.backup-hypomnema"
 fi
 
-if [ -z "$HAS_STOP" ]; then
-  jq '.hooks.Stop = [{"hooks": [{"type": "command", "command": "~/.claude/hooks/memory-stop.sh", "timeout": 10}]}]' "$SETTINGS" > "${SETTINGS}.tmp" && mv "${SETTINGS}.tmp" "$SETTINGS"
-  echo "  Added Stop hook"
-else
-  echo "  Stop hook already exists — skipping (add manually if needed)"
-fi
+# Register one hypomnema hook entry. Idempotent by command string: if any
+# entry under .hooks.<event> already invokes the same command, we skip.
+# This lets users keep their own unrelated entries under the same event
+# (PreToolUse, PostToolUse) alongside ours without being overwritten —
+# the earlier "if key exists skip everything" logic was wrong for events
+# where users routinely have their own hooks.
+#
+# Args: event matcher command timeout label
+#   matcher="" for events that don't take one (SessionStart / Stop /
+#   UserPromptSubmit / PreCompact). PreToolUse / PostToolUse require it.
+register_hook() {
+  local event="$1" matcher="$2" command="$3" timeout="$4" label="$5"
+  if [ ! -f "$SETTINGS" ]; then
+    [ "$DRY_RUN" -eq 1 ] && echo "[dry-run] would register $label" && return 0
+    return 0
+  fi
+  if jq -e --arg ev "$event" --arg cmd "$command" \
+      '(.hooks[$ev] // []) | any(.hooks[]? | .command == $cmd)' \
+      "$SETTINGS" >/dev/null 2>&1; then
+    echo "  $label already registered — skipping"
+    return 0
+  fi
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] would register $label under .hooks.$event"
+    return 0
+  fi
+  local entry
+  if [ -n "$matcher" ]; then
+    entry=$(jq -n --arg m "$matcher" --arg cmd "$command" --argjson to "$timeout" \
+      '{matcher: $m, hooks: [{type: "command", command: $cmd, timeout: $to}]}')
+  else
+    entry=$(jq -n --arg cmd "$command" --argjson to "$timeout" \
+      '{hooks: [{type: "command", command: $cmd, timeout: $to}]}')
+  fi
+  jq --arg ev "$event" --argjson entry "$entry" \
+     '.hooks[$ev] = ((.hooks[$ev] // []) + [$entry])' \
+     "$SETTINGS" > "${SETTINGS}.tmp" && mv "${SETTINGS}.tmp" "$SETTINGS"
+  echo "  Added $label"
+}
 
-if [ -z "$HAS_USER_PROMPT_SUBMIT" ]; then
-  jq '.hooks.UserPromptSubmit = [{"hooks": [{"type": "command", "command": "~/.claude/hooks/memory-user-prompt-submit.sh", "timeout": 10}]}]' "$SETTINGS" > "${SETTINGS}.tmp" && mv "${SETTINGS}.tmp" "$SETTINGS"
-  echo "  Added UserPromptSubmit hook (v0.5 context triggers)"
-else
-  echo "  UserPromptSubmit hook already exists — skipping (add manually if needed)"
-fi
+register_hook SessionStart     ""           "~/.claude/hooks/memory-session-start.sh"      15 "SessionStart hook"
+register_hook Stop             ""           "~/.claude/hooks/memory-stop.sh"               10 "Stop hook"
+register_hook UserPromptSubmit ""           "~/.claude/hooks/memory-user-prompt-submit.sh" 10 "UserPromptSubmit hook (v0.5 context triggers)"
+register_hook PreToolUse       "Write"      "~/.claude/hooks/memory-dedup.sh"              10 "PreToolUse hook (fuzzy dedup for mistakes/*.md)"
+register_hook PostToolUse      "Write|Edit" "~/.claude/hooks/memory-outcome.sh"            10 "PostToolUse hook (outcome-new + cascade signals)"
+register_hook PostToolUse      "Bash"       "~/.claude/hooks/memory-error-detect.sh"       10 "PostToolUse hook (Bash error-pattern detect)"
+register_hook PreCompact       ""           "~/.claude/hooks/memory-precompact.sh"          5 "PreCompact hook (checkpoint reminder)"
 
 # --- Create projects.json if missing ---
 if [ ! -f "$MEMORY_DIR/projects.json" ]; then
