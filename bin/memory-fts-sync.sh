@@ -8,6 +8,19 @@
 
 set -euo pipefail
 
+# Delegate to the Go implementation when available. `memoryctl fts sync` is
+# byte-for-byte equivalent to this script's output (same FTS5 schema, same
+# mtime drift check, same reconciliation semantics — verified by `make
+# parity`). It's faster on cold cache (no per-file `stat` fork overhead,
+# no sqlite3 CLI process spawn, embedded SQLite) and dodges the five BSD/GNU
+# portability bugs v0.9.0 surfaced: Go reads mtime via os.Stat, indexes via
+# embedded modernc.org/sqlite with FTS5 always present.
+#
+# Pure-bash installs (no `make build`) fall through to the shell path below.
+if command -v memoryctl >/dev/null 2>&1; then
+  exec memoryctl fts sync
+fi
+
 MEM="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}"
 DB="$MEM/index.db"
 

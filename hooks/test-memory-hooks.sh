@@ -3305,6 +3305,21 @@ assert "v0.8.1 — rotation-summary NOT written when no activity" \
   '! grep -q "|rotation-summary|" "$RS_MEM/.wal"'
 rm -rf "$RS_DIR"
 
+# --- Test: v0.9.0 — fts-sync bash fallback works when memoryctl absent ---
+# The sync script delegates to `memoryctl fts sync` when the Go binary is
+# on PATH, and falls through to the pure-bash implementation otherwise.
+# Exercise the bash path explicitly by stripping memoryctl from PATH —
+# this keeps pure-shell installs (no `make build`) covered in CI.
+FALLBACK_DIR=$(mktemp -d)
+FALLBACK_MEM="$FALLBACK_DIR/memory"
+mkdir -p "$FALLBACK_MEM/mistakes"
+printf -- '---\ntype: mistake\nstatus: active\n---\nBody\n' > "$FALLBACK_MEM/mistakes/x.md"
+PATH="/usr/bin:/bin" CLAUDE_MEMORY_DIR="$FALLBACK_MEM" \
+  bash "$HOOKS_SRC_DIR/../bin/memory-fts-sync.sh" >/dev/null 2>&1 || true
+FALLBACK_COUNT=$(sqlite3 "$FALLBACK_MEM/index.db" "SELECT COUNT(*) FROM mem" 2>/dev/null || echo 0)
+assert "v0.9.0 — fts-sync bash fallback indexes files without memoryctl" '[ "$FALLBACK_COUNT" = "1" ]'
+rm -rf "$FALLBACK_DIR"
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="
