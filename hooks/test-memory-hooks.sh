@@ -1680,7 +1680,7 @@ assert "Cluster — superseded file NOT loaded" '! printf "%s" "$CL_CTX" | grep 
 
 # Contradicts assertions
 assert "Cluster contradicts — warning appears" 'printf "%s" "$CL_CTX" | grep -iq "конфликт\|contradicts"'
-assert "Cluster contradicts — priority marker" 'printf "%s" "$CL_CTX" | grep -q "\[ПРИОРИТЕТ\]"'
+assert "Cluster contradicts — priority marker" 'printf "%s" "$CL_CTX" | grep -q "\[PRIORITY\]"'
 
 rm -rf /tmp/cluster-test
 

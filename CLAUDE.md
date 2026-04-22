@@ -240,7 +240,7 @@ What this means for you as an agent:
 
 ## Reading what was injected
 
-Look at the start of your context for `# Memory Context` and `## Active Mistakes` / `## Feedback` / etc. sections. Files marked `[ПРИОРИТЕТ]` are flagged as contradicting another active record — read both before acting.
+Look at the start of your context for `# Memory Context` and `## Active Mistakes` / `## Feedback` / etc. sections. Files marked `[PRIORITY]` are flagged as contradicting another active record — read both before acting.
 
 ## Subagent context
 

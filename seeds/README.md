@@ -5,33 +5,33 @@ purpose: seed-examples
 
 # Memory Seeds
 
-Эта папка — **примеры формата**, не настоящие mistakes. Они показывают новому пользователю Hypomnema, как выглядит запись в памяти и какие поля имеют смысл заполнять.
+This directory holds **format examples**, not real mistakes. They exist so a new Hypomnema user can see what a memory entry looks like and which fields are worth populating.
 
-## Что с ними делать
+## What to do with them
 
-**Вариант A — изучить и забыть.** Прочитай 2-3 файла, чтобы понять структуру. Дальше пиши свои mistakes по аналогии — Claude сам предложит формат после первого "запиши это в память".
+**Option A — read and forget.** Skim two or three files to get the shape. Then write your own mistakes by analogy — Claude will propose the format on its own after the first "record this in memory".
 
-**Вариант B — скопировать в `mistakes/`.** Если ты сталкивался с подобным багом — перенеси файл в `~/.claude/memory/mistakes/`, убери `seed: true`, обнови `created` и `triggers` под свой случай.
+**Option B — copy into `mistakes/`.** If you've actually hit one of these bugs, move the file into `~/.claude/memory/mistakes/`, drop the `seed: true` field, and update `created` and `triggers` to match your situation.
 
-**Вариант C — удалить папку.** Если seeds мешают (срабатывают триггеры, засоряют scoring) — `rm -rf ~/.claude/memory/seeds/`. Никаких зависимостей от них нет.
+**Option C — delete the directory.** If the seeds are in the way (firing triggers, polluting scoring), run `rm -rf ~/.claude/memory/seeds/`. Nothing else depends on them.
 
-## Почему `seed: true` важен
+## Why `seed: true` matters
 
-Поле `seed: true` во frontmatter говорит scoring-системе **не считать эти файлы за реальный опыт**:
-- Не учитываются в bootstrap-счётчике (5 mistakes для выхода из bootstrap-режима — только пользовательские)
-- Деприоритезируются в SessionStart injection
-- Триггеры всё равно срабатывают в UserPromptSubmit, но с пониженным весом
+The `seed: true` frontmatter field tells the scoring system **not to count these files as real experience**:
+- Excluded from the bootstrap counter (5 user mistakes are needed to leave bootstrap mode — seeds don't count).
+- Deprioritised in SessionStart injection.
+- UserPromptSubmit triggers still fire on them, but with reduced weight.
 
-Это позволяет seed-ам быть полезной справкой без зашумления реальной памяти.
+This lets seeds serve as a reference without polluting actual memory.
 
-## Что внутри
+## What's here
 
-| Файл | Домен | Универсальность |
-|------|-------|-----------------|
-| `shell-escape-special-chars.md` | shell | Все |
-| `datetime-naive-timezone.md` | data, code | Аналитики, разработчики |
-| `file-path-spaces-unquoted.md` | shell | Все |
-| `encoding-utf8-vs-cp1251.md` | data | Данные, тексты |
-| `git-committed-secrets-history.md` | git | Разработчики |
-| `source-url-rot-no-local-copy.md` | research | Исследователи, писатели |
-| `api-endpoint-silently-deprecated.md` | api | Разработчики |
+| File | Domain | Who it applies to |
+|---|---|---|
+| `shell-escape-special-chars.md` | shell | everyone |
+| `datetime-naive-timezone.md` | data, code | analysts, developers |
+| `file-path-spaces-unquoted.md` | shell | everyone |
+| `encoding-utf8-vs-cp1251.md` | data | data work, text processing |
+| `git-committed-secrets-history.md` | git | developers |
+| `source-url-rot-no-local-copy.md` | research | researchers, writers |
+| `api-endpoint-silently-deprecated.md` | api | developers |
