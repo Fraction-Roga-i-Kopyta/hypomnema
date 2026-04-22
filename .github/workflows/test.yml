@@ -59,6 +59,15 @@ jobs:
           bash install.sh --dry-run
           bash install.sh
 
+      - name: Add ~/.claude/bin to PATH
+        # install.sh symlinks memoryctl into ~/.claude/bin, but Claude Code
+        # adds that dir to PATH at runtime — CI doesn't. Without this step,
+        # `command -v memoryctl` returns empty in the test hooks and every
+        # dedup assertion silently exits 0, which used to be the "missing
+        # uv, disable dedup" fallback but now means "dedup disabled → tests
+        # expecting exit 2 on a duplicate fail".
+        run: echo "$HOME/.claude/bin" >> "$GITHUB_PATH"
+
       - name: Run bash smoke tests
         run: bash hooks/test-memory-hooks.sh
 
