@@ -8,13 +8,27 @@
 
 set -o pipefail
 
+# LC_ALL=C: locale-stable decimal separator — awk printf "%.2f" must emit
+# "3.00" not "3,00" regardless of user locale. See audit-2026-04-16 R1.
+export LC_ALL=C
+
+# Delegate to the Go implementation when available. `memoryctl self-profile`
+# is byte-for-byte equivalent (verified by scripts/parity-check.sh). It's
+# one WAL pass instead of ~10 awk invocations — significant savings once
+# the WAL grows past a few thousand lines.
+if command -v memoryctl >/dev/null 2>&1; then
+  exec memoryctl self-profile
+fi
+
 MEMORY_DIR="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}"
 WAL_FILE="$MEMORY_DIR/.wal"
 OUT="$MEMORY_DIR/self-profile.md"
 
 [ -f "$WAL_FILE" ] || exit 0
 
-TS=$(date '+%Y-%m-%d %H:%M')
+# HYPOMNEMA_NOW overrides the "generated:" stamp for parity tests; same
+# contract as HYPOMNEMA_TODAY in the dedup path.
+TS="${HYPOMNEMA_NOW:-$(date '+%Y-%m-%d %H:%M')}"
 
 # --- Weaknesses: top mistakes by recurrence, scope=universal highlighted ---
 weaknesses=""

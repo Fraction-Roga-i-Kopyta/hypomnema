@@ -17,6 +17,7 @@ import (
 
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/dedup"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/fts"
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/profile"
 )
 
 const usage = `memoryctl — hypomnema memory CLI
@@ -36,10 +37,15 @@ Usage:
       from stdin; posttool (file present) reads it from disk. Exits 2 on
       ≥80% similarity in pretool mode, 1 on merge in posttool mode, 0
       otherwise. Drop-in replacement for bin/memory-dedup.py.
+  memoryctl self-profile
+      Regenerate ~/.claude/memory/self-profile.md from WAL + mistakes +
+      strategies. Single-pass WAL aggregation; drop-in replacement for
+      bin/memory-self-profile.sh.
 
 Environment:
   CLAUDE_MEMORY_DIR       Memory root (default: ~/.claude/memory).
   HYPOMNEMA_TODAY         Freeze "today" in YYYY-MM-DD (for tests/replay).
+  HYPOMNEMA_NOW           Freeze self-profile "generated:" stamp (YYYY-MM-DD HH:MM).
   HYPOMNEMA_SESSION_ID    Session id stamped into WAL entries.
   MEMORY_FTS_SHADOW_MAX   Cap shadow-miss events per pass (default 4).
 `
@@ -83,9 +89,24 @@ func main() {
 			fmt.Fprintf(os.Stderr, "memoryctl: unknown dedup subcommand %q\n", os.Args[2])
 			os.Exit(2)
 		}
+	case "self-profile":
+		runSelfProfile(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "memoryctl: unknown command %q\n", os.Args[1])
 		os.Exit(2)
+	}
+}
+
+// runSelfProfile regenerates memoryDir/self-profile.md. Fail-safe: any
+// error is silent so session-stop's backgrounded invocation can't leak
+// noise into the user's terminal — matches the bash script's `|| true`
+// posture.
+func runSelfProfile(_ []string) {
+	if err := profile.Generate(memoryDir()); err != nil {
+		// Non-zero exit would get swallowed by session-stop's `2>/dev/null &`
+		// anyway; still, propagate for tests that call the binary directly.
+		fmt.Fprintf(os.Stderr, "memoryctl self-profile: %v\n", err)
+		os.Exit(1)
 	}
 }
 
