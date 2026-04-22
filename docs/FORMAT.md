@@ -66,7 +66,7 @@ Every memory file is a Markdown document beginning with a YAML frontmatter block
 | `type` | yes | enum | One of `mistake \| strategy \| feedback \| knowledge \| decision \| note \| project \| continuity`. |
 | `project` | yes | string | Either `global` or a project slug matching an entry in `projects.json`. |
 | `created` | yes | YYYY-MM-DD | Immutable. Used for recency ranking in UserPromptSubmit. |
-| `status` | yes | enum | One of `active \| pinned \| stale \| archived`. |
+| `status` | yes | enum | One of `active \| pinned \| stale \| archived`. `pinned` protects from rotation/archival — see § 3.1 for what it does NOT guarantee. |
 | `description` | no | string | One-line summary. Shown in MEMORY.md index. |
 | `keywords` | no | list | Tokens used in keyword-match scoring. Inline `[a, b]` or block `- a\n- b`. |
 | `domains` | no | list | Same form as `keywords`. Filters files by project domain. |
@@ -75,6 +75,22 @@ Every memory file is a Markdown document beginning with a YAML frontmatter block
 | `ref_count` | auto | integer | Incremented on every injection. Start at 0. |
 
 **Field ordering** is not semantically significant. Implementations SHOULD preserve order on round-trip but MUST accept any order on read.
+
+### 3.1 `status: pinned` — what it guarantees
+
+`pinned` is narrow by design. It guarantees:
+
+- The file is **never rotated** (`active → stale → archived`) by the lifecycle hook, regardless of age or `decay_rate`.
+- `mistake` files with `recurrence: 0` still inject when pinned (default would skip them).
+- A file with malformed frontmatter is preserved (the fallback archival path skips pinned files explicitly).
+
+It does NOT guarantee:
+
+- A reserved slot in SessionStart's injection output. A pinned knowledge file competing against many higher-scored candidates can still lose its slot to keyword-match winners or WAL-score winners. The flex-pool (12 / 10 / 8 slots depending on keyword signal strength) is allocated by score, not by status.
+- A reserved slot in UserPromptSubmit's trigger-matched output. The priority key is `project_rank → status → severity → recency → log₁₀(ref_count) → recurrence → ref_count`; `pinned` outranks `active` but a pinned file with zero keyword match and a low priority key can still be ordered below a project-matched triggered file.
+- Immunity to WAL aggregation. `inject` events on pinned files are compacted into `inject-agg` like any other.
+
+If you need a file that is guaranteed to surface on every SessionStart regardless of the current domain / keyword mix, the current contract does not express that. The workaround is to set `scope: universal` (for mistakes) and add broad `triggers:` that the user's typical prompts will match — but neither is a hard guarantee.
 
 **`auto` fields** are managed by hooks. Users and external writers MAY leave them unset; implementations MUST preserve them if present and update them on inject events. New templates SHOULD ship with `ref_count: 0` so the auto-increment pass finds the key.
 
