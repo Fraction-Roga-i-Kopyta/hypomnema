@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.10.3] - 2026-04-23
+
+Audit-pass release. Bundles findings from two external audits conducted on v0.10.2 (a paired technical + release-readiness review in `hypomnema-v10.2-comprehensive-audit.md`, and a Theory of Functional Systems review in `hypomnema-tfs-audit.md`), a CI failure that surfaced a gap in hook-child draining, and one legacy-symlink cleanup the doctor subcommand exposed on the author's own install. Cut-line document: `docs/plans/2026-04-23-v0.10.3.md`.
+
+### Fixed
+
+- **`install.sh` missing hook registrations** (audit CRITICAL). Fresh installs had PreToolUse, both PostToolUse entries, and PreCompact symlinked into `~/.claude/hooks/` but never activated in `settings.json` — dedup, outcome/cascade signals, Bash error-detect, and PreCompact reminders were silently off. Registration rewritten to match by command string inside the hooks array, so hypomnema coexists with users' own unrelated hooks instead of being skipped when the event key is already present.
+- **`internal/dedup.Run` posttool merge race** (audit HIGH). `incrementRecurrence` + `os.Remove` now run under the WAL lock (`wal.Acquire`) — closes the lost-update window between concurrent `memoryctl dedup check` and PostToolUse:Write invocations merging into the same existing mistake. `TestPosttool_ConcurrentMergesIncrementSerially` pins it (20/20 FAIL without the lock, 50/50 PASS with).
+- **`hooks/test-memory-hooks.sh` Linux CI race** — `rm -rf` of test fixtures raced backgrounded hook children still writing into them. The v0.10.2 drain waited only for `memory-fts-shadow.sh`; added `regen-memory-index`, `memory-index`, `memory-analytics`, `memory-strategy-score`, `memory-self-profile`, `wal-compact` via a shared `safe_cleanup` helper applied to all 77 `rm -rf` call sites.
+- **`cmd/memoryctl/main.go` fts query limit** — `fmt.Sscanf` silently swallowed parse errors; now `strconv.Atoi` + explicit error for non-integer or ≤0 input (exit 2 with stderr message). ARCHITECTURE.md flag cleared.
+- **`install.sh` stale legacy symlinks.** Post-link sweep: for each symlink in `~/.claude/hooks` and `~/.claude/bin`, if its target is inside the repo but no longer exists, drop it. User-owned symlinks pointing elsewhere are untouched; fresh installs sweep 0. Verified on the author's install — swept `memory-dedup.py` left over from the v0.10.0 Python-drop.
+
+### Added
+
+- **`memoryctl doctor` subcommand.** On-demand read-only health check: claude_dir, memory_dir, settings.json hook registrations (9 checks, including open-quanta ratio for last 30 days — see TFS below). Text or `--json` output. Exit 0 on OK/WARN, 1 on FAIL. First run on the author's install surfaced the stale `memory-dedup.py` symlink and 13 `evidence-empty` events. 9 unit tests.
+- **`internal/tfidf` package + `memoryctl tfidf rebuild`.** Go port of `hooks/memory-index.sh` with a `unicode.IsLetter` / `unicode.IsDigit` tokenizer, replacing the byte-class `[^a-zA-Z\300-\377]` awk regex that corrupted Cyrillic / CJK / Greek / Arabic bodies. Output TSV schema identical on Latin corpora (verified by the new `make parity` case `tfidf latin-only-fixture`). Atomic tmp+rename. 13 unit tests. Bash fallback stays — pure-shell installs keep the Latin-only limitation as a documented trade-off.
+- **Forward-compat gate on `format_version > 1`** in UserPromptSubmit. Files declaring future schema versions are logged (`format-unsupported|<slug>:N|<session>` — packed to preserve FORMAT.md §5.2 four-column invariant) once per day per slug and skipped. New event documented in FORMAT.md §5.1. 4 new asserts (258 → 262).
+- **Open-quanta check in `memoryctl doctor`** (`open_quanta_last_30d`). Reads `.wal`, correlates inject events with trigger-useful / trigger-silent / outcome-* / clean-session on the same session_id. WARN at ≥50%. Surfaces the Bayesian `eff` measurement bias documented in `docs/notes/measurement-bias.md` — on the author's corpus, 93% of inject-carrying sessions in the last 30 days have no closing signal.
+- **`LICENSE` file** (MIT) with real copyright. README had claimed MIT since v0.1 but the file was missing; GitHub auto-detection now returns `mit`.
+- **README comparison section** against CLAUDE.md, Anthropic Skills, mem0, ChatGPT/Cursor memory, Obsidian+MCP. Hero line rewritten utilitarian-first; Greek epigraph moved to an HR-separated epilog.
+- **`docs/MIGRATION.md` backfill** for v0.8→v0.9, v0.9→v0.10 (the Python-drop breaking change with explicit `rm -f ~/.claude/bin/memory-dedup.py` cleanup command for users upgrading without the v0.10.2+ sweep), and a summary block for the v0.10 patch band.
+- **`docs/notes/measurement-bias.md`** — TFS Phase 6 finding documented: three known causes of open quanta (`MIN_SESSION_SECONDS=120`, missing `transcript_path`, hard exits), current mitigations (Laplace smoothing, `MIN_INJECTS_WINNER=5`), four proposed fixes in effort order. Also documents the side finding that `session-metrics` writes column 4 = metrics-pairs instead of session_id, violating FORMAT.md §5.2.
+- **`docs/plans/2026-04-23-v0.10.3.md`** — cut-line document. Enumerates each commit with its audit source and parks the deferred items with "why not now" notes.
+
+### Deferred to v0.10.4+
+
+Re-scoped from the v0.10.2 list plus new items from this release's work:
+
+- **Retroactive silent classification in `wal-compact.sh`** (new; from TFS audit). Sessions older than 24 h with inject events but no closing signal would get `trigger-silent` emitted retroactively, restoring the Bayesian denominator. Blocked on design: event tagging without violating the 4-column WAL invariant, interaction with analytics' rolling window.
+- **`session-metrics` wire-format fix** (new; found during TFS audit analysis). Column 4 should be session_id, not metrics-pairs. Requires format v1 → v2 major bump — breaking change, strategic decision.
+- **Secrets detector on PreToolUse** (audit MEDIUM security). Blocked on false-positive calibration for regex-only detection.
+- **`bench-memory.sh` CI integration** (carried from v0.10.2 plan). Blocked on percentile-vs-baseline threshold design.
+- **Go coverage gaps** — `internal/fts` (8.3%), `cmd/memoryctl` (0%). Mechanical; blocked on shape decision for CLI-level tests.
+- **`session-start.sh` / `session-stop.sh` decomposition** (audit MEDIUM/LOW). Pure refactor, deferred until a specific bug or feature forces the touch.
+
+### Meta
+
+- Two external audits landed on `main@d154b41` within 24 h of each other; their convergence on `install.sh missing hook registrations` (Agent A CRITICAL for code, Agent B for UX) supported the decision to front-load it as the highest-priority fix of the release.
+- The TFS audit was applied not to produce prescriptions but to surface latent patterns in the system's loops. Its highest-leverage finding — open quanta — is now measurable by any operator via `memoryctl doctor` and documented for future work on the Bayesian denominator.
+
 ## [0.10.2] - 2026-04-22
 
 Follow-up to v0.10.1, bundling external review #2 findings (pass over v0.9.0→v0.10.1, 43 commits) with phase C internal review + misc cleanup. No schema or behavioural changes beyond the pinned-slot injection fix; all other items are bug fixes, doc accuracy, safety-net hardening.
