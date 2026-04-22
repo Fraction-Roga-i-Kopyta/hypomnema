@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.10.1] - 2026-04-22
+
+Distribution-readiness patch. No behavioural changes; makes v0.10.0 work out-of-box for users who are not the author. No schema or WAL format changes. Users on v0.10.0 upgrade by pulling `main` or `git checkout v0.10.1`.
+
+### Fixed
+
+- **`hooks/regen-memory-index.sh` hardcoded project slug.** Default `INDEX_PATH` contained the author's username (`-Users-akamash`) — the auto-memory index silently landed in a directory with that name inside every other user's `$HOME`. Now derives the slug from `$CLAUDE_SESSION_CWD` (forwarded by `session-start.sh`) using Claude Code's own `-<PWD-with-slashes-as-dashes>` convention.
+- **User-facing strings translated to English.** Self-profile boilerplate (`bin/memory-self-profile.sh`, `internal/profile/profile.go`), PreCompact warnings (`hooks/memory-precompact.sh`), and session-stop reminders (`hooks/session-stop.sh` — CONTINUITY/ERRORS/STRATEGIES checkpoints) switched from Russian to English. Russian stopwords (evidence tokenizer) and Russian negations (trigger detector) were already bilingual and left untouched. The `profile.go` ↔ `bin/memory-self-profile.sh` byte-for-byte parity contract verified by `scripts/parity-check.sh` preserved — translations applied identically to both.
+- **`hooks/session-start.sh` user-profile grep pattern** now matches English role/expertise markers (`role`, `expertise`, `language`, `concise`, `english`, `writes in`) alongside the Russian originals.
+
+### Added
+
+- **`seeds/wrong-root-cause-diagnosis.md`** — universal debugging mistake (EN evidence, `scope: universal`) now ships as a seed. Previously author-only in personal memory. Measured in author's dogfood corpus as the highest-leverage rule (recurrence 6, 231 inject events over 18 sessions).
+- **`docs/CONFIGURATION.md`** — documents the three parameter layers: runtime `.config.sh`, decay thresholds in `session-stop.sh`, ADR review-triggers as prose in `decisions/`.
+- **`templates/decision.md`** — hypomnema-native ADR template (What / Why / Trade-off accepted / When to revisit). The `decision` memory type had been declared in CLAUDE.md since early versions but no skeleton was shipped.
+
+### Deferred to future releases
+
+- **v0.11 — decisions autoreflection.** Structured `review-triggers:` frontmatter + `memoryctl decisions review` subcommand + `self-profile.md` "Decisions under pressure" section. Plan in `docs/plans/2026-04-22-v0.11-decisions-autoreflection.md`.
+- **v0.12 — evidence learn.** Bootstraps personal evidence phrases from session JSONL transcripts, turning cold-start from a 30-session problem into a one-command operation. Plan in `docs/plans/2026-04-22-v0.12-evidence-learn.md`.
+
 ## [0.10.0] - 2026-04-22
 
 Stack cleanup + first dogfood measurement tool. Drops Python from the project (bash + Go only now), promotes dedup onto `memoryctl`, and ships a synthetic replay runner so retrieval metrics can be measured without waiting N months for real sessions to accumulate.

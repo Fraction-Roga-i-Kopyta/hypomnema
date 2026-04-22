@@ -34,7 +34,7 @@ Draft messages for the three most plausible channels. Internal doc — not user-
 >
 > Ranking is composite: keyword-match × 3, plus log₁₀(ref_count), plus a Bayesian effectiveness term over trigger-useful/silent events, plus a spaced-repetition decay over the last 30 days.
 >
-> It's ~5k lines of bash + ~1.5k lines of Go. Go is opt-in (`make build`) for the heavy paths: FTS5 shadow retrieval, fuzzy dedup, index sync. Without it, the bash fallbacks still cover everything except dedup. Contract between implementations is pinned in docs/FORMAT.md and docs/hooks-contract.md.
+> It's ~5k lines of bash (hooks + libs) + ~2k lines of Go (non-test). Go is opt-in (`make build`) for the heavy paths: FTS5 shadow retrieval, fuzzy dedup, self-profile aggregation, index sync. Without it, bash fallbacks cover everything except dedup (dedup is Go-only as of v0.10.0). Contract between implementations is pinned in docs/FORMAT.md and docs/hooks-contract.md, with byte-for-byte parity enforced by scripts/parity-check.sh.
 >
 > A handful of BSD vs GNU portability bugs (sed range semantics, grep escape handling, stat format flags, sqlite3 FTS5 module PATH contamination) got caught during a bash-vs-Go parity test in CI — a nice side effect of the hybrid approach.
 >
@@ -61,7 +61,7 @@ Draft messages for the three most plausible channels. Internal doc — not user-
 > - **Substring triggers** — "sed issue" matches a mistake file with `triggers: ["sed portability"]`. Negations (`не/без/already/skip`) work.
 > - **FTS5 shadow** — even if you never set triggers, a background BM25 pass notices "you asked about X, and there's a note about X that didn't surface — here it is, tune it".
 > - **Spaced repetition** — files that get cited over multiple sessions rise; files that surface but never help decay.
-> - **Fuzzy dedup** — before writing a new mistake, compare against existing ones via rapidfuzz-compatible token_set_ratio; duplicate → merge.
+> - **Fuzzy dedup** — before writing a new mistake, compare against existing ones via `token_set_ratio` (rapidfuzz semantics, pure-Go port); duplicate → merge.
 >
 > Install is `git clone && ./install.sh`. Fully reversible with `./uninstall.sh`.
 >
