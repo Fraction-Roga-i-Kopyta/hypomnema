@@ -20,7 +20,11 @@ BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
 # Replace every non-alnum char with space (works for Cyrillic under UTF-8 locale),
 # split into tokens, OR-join without phrase-quoting so trigram substring match fires.
 # Case-folding is handled by FTS5 trigram tokenizer itself (Cyrillic included).
-FTS_QUERY=$(LC_ALL=en_US.UTF-8 printf '%s' "$QUERY" | awk '
+# LC_ALL=C.UTF-8 instead of en_US.UTF-8: en_US.UTF-8 is not guaranteed to be
+# generated on Linux runners and Docker images, and its absence silently
+# degrades awk's [:alnum:] class matching for Cyrillic — the exact signal this
+# tokenizer is meant to preserve. C.UTF-8 is the portable UTF-8 locale.
+FTS_QUERY=$(LC_ALL=C.UTF-8 printf '%s' "$QUERY" | awk '
   BEGIN { n = 0 }
   {
     gsub(/[^[:alnum:]_]/, " ")
