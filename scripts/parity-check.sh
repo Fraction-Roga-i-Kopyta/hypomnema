@@ -92,4 +92,110 @@ _run_case "cyrillic-query"          "помоги с портативность�
 _run_case "dedup-injected-skipped"  "portability test"                  "sed-bsd-gnu"
 _run_case "empty-prompt"            ""                                  ""
 
+# --- self-profile parity -------------------------------------------------
+# Verifies bin/memory-self-profile.sh and `memoryctl self-profile` produce
+# byte-for-byte identical self-profile.md against the same fixture. Forces
+# PATH to exclude ~/.claude/bin so the bash script does NOT delegate to the
+# Go binary — otherwise we'd be comparing Go against itself.
+
+_run_profile_case() {
+  local name="$1"
+
+  local TMP MEM
+  TMP=$(mktemp -d)
+  MEM="$TMP/memory"
+  mkdir -p "$MEM"/{mistakes,strategies}
+
+  cat > "$MEM/.wal" <<'WAL'
+2026-04-01|session-metrics|backend,testing|error_count:3,tool_calls:20,duration:120s
+2026-04-02|session-metrics|backend|error_count:0,tool_calls:10,duration:60s
+2026-04-02|clean-session|unknown|sess1
+2026-04-03|session-metrics|frontend|error_count:1,tool_calls:5,duration:30s
+2026-04-04|outcome-positive|foo-mistake|sess2
+2026-04-04|trigger-silent|foo-mistake|sess2
+2026-04-04|outcome-negative|bar-mistake|sess3
+2026-04-05|trigger-useful|bar-mistake|sess4
+2026-04-06|strategy-used|unknown|sess5
+2026-04-06|strategy-gap|unknown|sess6
+2026-04-07|trigger-useful|ambient-rule|sess7
+2026-04-07|trigger-silent|noise-rule|sess7
+2026-04-08|evidence-empty|bar-mistake|sess8
+2026-04-08|evidence-empty|baz-mistake|sess9
+2026-04-09|outcome-new|new-mistake|sess10
+WAL
+
+  # Filename stem = slug — matches the WAL event for ambient-rule so both
+  # bash and Go correctly classify its trigger-useful/trigger-silent hits
+  # as ambient activations (not as measurable precision denominator).
+  cat > "$MEM/ambient-rule.md" <<'AMB'
+---
+type: feedback
+status: active
+precision_class: ambient
+---
+body
+AMB
+  cat > "$MEM/mistakes/bar-mistake.md" <<'M1'
+---
+type: mistake
+recurrence: 5
+scope: universal
+severity: major
+---
+body
+M1
+  cat > "$MEM/mistakes/foo-mistake.md" <<'M2'
+---
+type: mistake
+recurrence: 2
+scope: domain
+severity: minor
+---
+body
+M2
+  cat > "$MEM/strategies/s1.md" <<'S1'
+---
+type: strategy
+success_count: 4
+---
+body
+S1
+  cat > "$MEM/strategies/s2.md" <<'S2'
+---
+type: strategy
+success_count: 1
+---
+body
+S2
+
+  # bash run: strip the memoryctl install dir from PATH so the script's
+  # `exec memoryctl self-profile` delegation does NOT fire — we want the
+  # shell path, not Go-against-itself.
+  local PATH_NO_MEMCTL
+  PATH_NO_MEMCTL=$(printf '%s' "$PATH" | tr ':' '\n' | grep -v 'claude/bin' | tr '\n' ':')
+  PATH="$PATH_NO_MEMCTL" HYPOMNEMA_NOW="2026-04-22 12:34" \
+    CLAUDE_MEMORY_DIR="$MEM" bash "$REPO/bin/memory-self-profile.sh"
+  local BASH_OUT="$TMP/bash.md"
+  mv "$MEM/self-profile.md" "$BASH_OUT"
+
+  # Go run on the same fixture.
+  HYPOMNEMA_NOW="2026-04-22 12:34" CLAUDE_MEMORY_DIR="$MEM" \
+    "$GO_SHADOW" self-profile
+  local GO_OUT="$TMP/go.md"
+  mv "$MEM/self-profile.md" "$GO_OUT"
+
+  if diff -q "$BASH_OUT" "$GO_OUT" >/dev/null; then
+    echo "  ✓ $name"
+  else
+    echo "  ✗ $name"
+    diff -u "$BASH_OUT" "$GO_OUT" | sed 's/^/    /'
+    rm -rf "$TMP"
+    return 1
+  fi
+  rm -rf "$TMP"
+}
+
+echo "=== parity: bash vs Go self-profile ==="
+_run_profile_case "fixture-mixed-events"
+
 echo "=== all parity cases passed ==="
