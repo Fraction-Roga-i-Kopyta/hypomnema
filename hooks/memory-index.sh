@@ -5,6 +5,22 @@
 
 set -o pipefail
 
+# Delegate to the Go implementation when available. `memoryctl tfidf rebuild`
+# uses a unicode.IsLetter / unicode.IsDigit tokenizer, which matches this
+# script's output on Latin-only corpora but correctly tokenises Cyrillic /
+# CJK / Greek / Arabic bodies that the awk path below drops as mostly-empty.
+# Same .tfidf-index schema (TSV: term\tslug:score\t...), same MinIDF gate,
+# same atomic tmp+rename — no behavioural divergence on the Latin subset.
+#
+# Pure-bash installs (no `make build`) fall through to the awk path; those
+# users get the original Latin-only behaviour as a documented limitation.
+# Try $PATH first, then the canonical install location (same reason as
+# bin/memory-fts-sync.sh — fresh-install PATH may not include ~/.claude/bin).
+MEMORYCTL=$(command -v memoryctl 2>/dev/null || echo "$HOME/.claude/bin/memoryctl")
+if [ -x "$MEMORYCTL" ]; then
+  exec "$MEMORYCTL" tfidf rebuild
+fi
+
 # LC_ALL=C keeps awk printf "%.4f" output using '.' as decimal separator.
 # Non-C numeric locales produce commas that downstream parsers coerce to int,
 # silently corrupting every TF-IDF score (audit-2026-04-16 R1).
