@@ -1,14 +1,8 @@
 # Hypomnema
 
-> ὑπόμνημα — ancient Greek personal notebooks for self-reflection.
-> Marcus Aurelius, Seneca, and Epictetus kept them.
-> Not memory itself, but the practice that sustains it.
+**File-based long-term memory for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — markdown, YAML, shell hooks. No cloud, no database, no embeddings.** Claude Code starts every session from zero; hypomnema fixes that.
 
-Persistent memory system for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). File-based, offline, no databases, no embeddings, no cloud — just markdown files, YAML frontmatter, and shell hooks. Runtime deps: bash, jq, perl, awk, sqlite3 with FTS5 module; optional Go 1.22+ for the `memoryctl` binary that replaces the slow paths.
-
-Claude Code starts every session from zero. Hypomnema fixes that.
-
-258 hook smoke tests + Go unit tests across `internal/{fuzzy,profile,wal,fts}` (~70–90% coverage on data-critical packages). Hook time ~0.3 sec.
+Runtime deps: bash, jq, perl, awk, sqlite3 with FTS5. Optional Go 1.22+ for the `memoryctl` binary that replaces the slow paths. 262 bash hook smoke tests + Go unit tests across `internal/{fuzzy,profile,wal,fts,dedup,doctor}` at ~70–90% coverage on data-critical packages. SessionStart hook ~0.3 s on a 100-file corpus.
 
 ## What it looks like
 
@@ -73,6 +67,18 @@ You ←→ Claude Code ←→ ~/.claude/memory/
          UserPromptSubmit ──┤── v0.5 context triggers: match `triggers:` frontmatter
                             └── against prompt text, inject matched records (cap 4)
 ```
+
+## How hypomnema compares
+
+| | What it does | Hypomnema's position |
+|---|---|---|
+| **`CLAUDE.md` files** (Anthropic native) | Static context injected verbatim, in-repo or `~/.claude/CLAUDE.md` | Dynamic: scoring, decay, prompt-reactive triggers, WAL feedback loop. Layers *on top of* CLAUDE.md rather than replacing it. |
+| **Anthropic Skills** | Named skill bundles loaded on demand | Skills are user- or Claude-invoked with known intent; hypomnema injects unprompted based on current project, prior outcomes, and substring/FTS triggers. The two are complementary, not overlapping. |
+| **`mem0`** (Python, hosted or self-host) | Vector-embedding memory with a REST API and cross-vendor SDKs | No embeddings, no service to run, no DB to back up — `~/.claude/memory/*.md` is the store. Trade-off: semantic recall beyond substring/FTS is weaker, and there's no multi-language client. If you want a managed service for many AI products, mem0 is the right tool. |
+| **ChatGPT / Cursor memory** | Vendor-managed, opaque, cloud-stored | Local files you can `cat`/`grep`/`git diff`/`rm`. Trade-off: zero-config only works inside Claude Code; porting the hook glue to another IDE is real work (the markdown data itself is portable). |
+| **Obsidian vault + MCP** | Markdown store read through a Model Context Protocol bridge | Hypomnema is wired into 5 Claude Code lifecycle hooks (dedup on write, outcome detection on stop, compaction reminder, etc.) — not just retrieval. Obsidian wins on GUI and plugin ecosystem; hypomnema wins on integration depth. |
+
+Sweet spot: daily-driver Claude Code users who want visible, editable, diffable memory and are comfortable reading markdown. Not a fit for teams that need a shared central memory, or for users working across many AI tools at once.
 
 ## Architecture at a glance
 
@@ -656,4 +662,10 @@ Design constraints in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) are explicit:
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).
+
+---
+
+> ὑπόμνημα — ancient Greek personal notebooks for self-reflection.
+> Marcus Aurelius, Seneca, and Epictetus kept them.
+> Not memory itself, but the practice that sustains it.
