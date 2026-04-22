@@ -15,6 +15,9 @@ triggers:
   - "encoding cp1251"
   - "cyrillic csv"
   - "unicodedecodeerror"
+  - "cyrillic input"
+  - "read_csv"
+  - "utf-8 decode"
 scope: domain
 ---
 

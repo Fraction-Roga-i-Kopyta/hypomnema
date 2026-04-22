@@ -14,6 +14,11 @@ ref_count: 0
 triggers:
   - "path spaces"
   - "unquoted path"
+  - "path with spaces"
+  - "quote a path"
+  - "quote path"
+  - "word splitting"
+  - "spaces in path"
 scope: domain
 ---
 

@@ -14,6 +14,12 @@ ref_count: 0
 triggers:
   - "git secret leak"
   - "committed env file"
+  - "committed .env"
+  - ".env from history"
+  - "remove from history"
+  - "remove from git history"
+  - "bfg"
+  - "git-filter-repo"
 scope: domain
 ---
 
