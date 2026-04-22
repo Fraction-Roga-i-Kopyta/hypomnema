@@ -223,6 +223,7 @@ date|event|target|session
 **Schema / health:**
 
 - `schema-error` — a memory file failed to parse. `target` = slug.
+- `format-unsupported` — a memory file declared `format_version: N` with `N > 1`; the file is skipped and not surfaced to Claude. `target` = `slug:N`. De-duplicated per slug per day by the emitting hook.
 - `evidence-missing` — a feedback file's listed `evidence:` file is absent. `target` = phrase-hash.
 - `evidence-empty` — a feedback file's body yielded zero content tokens. `target` = slug.
 - `error-detect` — PostToolUse detected a stderr/stdout error pattern. `target` = `tool:category`.

@@ -103,12 +103,26 @@ mkdir -p "$RUNTIME_DIR" 2>/dev/null || true
 extract_meta() {
   local file="$1"
   awk '
-    BEGIN { fm_count = 0; printed = 0; status = ""; severity = ""; recurrence = 0; ref_count = 0; project = ""; created = ""; trig_single = ""; in_trigs = 0 }
+    BEGIN { fm_count = 0; printed = 0; status = ""; severity = ""; recurrence = 0; ref_count = 0; project = ""; created = ""; trig_single = ""; in_trigs = 0; fmt_ver = 1 }
     # R5: strip CRLF — mirror parse-memory.sh so Windows-authored files do
     # not report SCHEMA_ERROR universally. (audit-2026-04-16 R5)
     { gsub(/\r/, "") }
-    /^---$/ { fm_count++; if (fm_count >= 2) { print_out(); printed = 1; exit } next }
+    /^---$/ {
+      fm_count++
+      if (fm_count >= 2) {
+        # v0.10.3: forward-compat check. A file declaring a future format
+        # is returned as a distinct marker so the caller can log it to
+        # WAL (format-unsupported) and skip injection — mirroring the
+        # SCHEMA_ERROR path. Implementations are required (docs/FORMAT.md
+        # §1) to refuse unknown major versions rather than guess at
+        # semantics.
+        if (fmt_ver > 1) { printf "FORMAT_UNSUPPORTED|%d", fmt_ver; printed = 1; exit }
+        print_out(); printed = 1; exit
+      }
+      next
+    }
     fm_count != 1 { next }
+    /^format_version:/ { val = $0; sub(/^format_version: */, "", val); gsub(/["'"'"']/, "", val); fmt_ver = val + 0; next }
     /^status:/        { val = $0; sub(/^status: */, "", val); gsub(/["'"'"']/, "", val); status = val; next }
     /^severity:/      { val = $0; sub(/^severity: */, "", val); gsub(/["'"'"']/, "", val); severity = val; next }
     /^recurrence:/    { val = $0; sub(/^recurrence: */, "", val); recurrence = val + 0; next }
@@ -222,6 +236,23 @@ for _dir in mistakes feedback strategies knowledge notes seeds; do
       fi
       continue
     fi
+
+    # v0.10.3: forward-compat gate. Files declaring format_version > 1
+    # are logged once per day and skipped — we cannot safely score a
+    # record whose field semantics might have changed. docs/FORMAT.md §1
+    # requires this behaviour; extract_meta returns "FORMAT_UNSUPPORTED|N".
+    # Target packs slug and detected version as "slug:N" so the WAL stays
+    # four-column (docs/FORMAT.md §5.2 invariant).
+    case "$_meta" in
+      FORMAT_UNSUPPORTED\|*)
+        _fv="${_meta#FORMAT_UNSUPPORTED|}"
+        if ! grep -q "^${TODAY}|format-unsupported|${_slug}:" "$WAL_FILE" 2>/dev/null; then
+          printf '%s|format-unsupported|%s:%s|%s\n' "$TODAY" "$_slug" "$_fv" "$SAFE_SESSION_ID" |
+            wal_run_locked bash -c 'cat >> "$1"' _ "$WAL_FILE" 2>/dev/null || true
+        fi
+        continue
+        ;;
+    esac
 
     # P2: one IFS read replaces 7 printf|cut subshells (~20ms -> ~0.3ms per
     # file). Uses \x1e (RS) as field separator — non-whitespace so

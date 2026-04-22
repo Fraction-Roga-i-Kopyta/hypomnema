@@ -2267,6 +2267,60 @@ assert "Schema — de-duplicated within same day" \
 
 safe_cleanup "$SCH_DIR"
 
+# --- Test 21b: format_version > 1 logs format-unsupported + skips ---
+FV_DIR=$(mktemp -d); FV_MEM="$FV_DIR/memory"
+mkdir -p "$FV_MEM/mistakes"
+# Future-format file with a matching trigger phrase. A passing run MUST
+# refuse to inject (cannot guess new semantics) AND log the event.
+cat > "$FV_MEM/mistakes/future-fmt.md" << 'EOF'
+---
+type: mistake
+format_version: 2
+status: active
+trigger: "future-fmt-trigger-phrase"
+severity: major
+recurrence: 3
+root-cause: "X"
+prevention: "Y"
+---
+Body that MUST NOT land in additionalContext.
+EOF
+
+FV_OUT=$(echo '{"session_id":"fv-test","prompt":"please hit future-fmt-trigger-phrase now"}' | \
+  CLAUDE_MEMORY_DIR="$FV_MEM" bash "$TR_HOOK" 2>/dev/null)
+
+assert "format_version 2 — WAL records format-unsupported with detected version" \
+  'grep -q "format-unsupported|future-fmt:2|fv-test" "$FV_MEM/.wal"'
+assert "format_version 2 — file is NOT surfaced in additionalContext despite trigger" \
+  '! printf "%s" "$FV_OUT" | grep -q "future-fmt-trigger-phrase\|MUST NOT land"'
+
+# De-dup within same day
+echo '{"session_id":"fv-test2","prompt":"future-fmt-trigger-phrase"}' | \
+  CLAUDE_MEMORY_DIR="$FV_MEM" bash "$TR_HOOK" 2>/dev/null >/dev/null
+assert "format_version — format-unsupported de-duplicated within same day" \
+  '[ "$(grep -c "format-unsupported|future-fmt:" "$FV_MEM/.wal")" -eq 1 ]'
+
+# Regression guard: format_version: 1 (explicit) must not trigger the gate.
+cat > "$FV_MEM/mistakes/current-fmt.md" << 'EOF'
+---
+type: mistake
+format_version: 1
+status: active
+trigger: "current-fmt-trigger-phrase"
+severity: major
+recurrence: 2
+root-cause: "X"
+prevention: "Y"
+---
+Body should land.
+EOF
+FV1_OUT=$(echo '{"session_id":"fv1-test","prompt":"current-fmt-trigger-phrase"}' | \
+  CLAUDE_MEMORY_DIR="$FV_MEM" bash "$TR_HOOK" 2>/dev/null)
+assert "format_version 1 — explicit value still injects normally" \
+  'printf "%s" "$FV1_OUT" | grep -q "current-fmt-trigger-phrase"'
+
+safe_cleanup "$FV_DIR"
+
 # --- Test 22: health-check — schema-error surfaces in SessionStart output ---
 HC_DIR=$(mktemp -d); HC_MEM="$HC_DIR/memory"
 mkdir -p "$HC_MEM/mistakes" "$HC_MEM/projects"
