@@ -198,4 +198,78 @@ S2
 echo "=== parity: bash vs Go self-profile ==="
 _run_profile_case "fixture-mixed-events"
 
+# --- tfidf parity --------------------------------------------------------
+# Verifies hooks/memory-index.sh (awk path) and `memoryctl tfidf rebuild`
+# produce the same .tfidf-index on a Latin-only fixture. Cyrillic / CJK
+# bodies are intentionally OUT of scope — the bash tokenizer drops them,
+# that's the whole reason the Go port exists. The awk path delegates to
+# memoryctl when it's on PATH, so force the shell path by stripping the
+# install dir (same trick as the self-profile case).
+#
+# Per-line posting order is undefined in bash (directory-read order is
+# filesystem-dependent), so normalise by expanding each "term\tp1\tp2..."
+# row into "term\tp1", "term\tp2" ... pairs before sort+diff.
+
+_run_tfidf_case() {
+  local name="$1"
+
+  local TMP MEM
+  TMP=$(mktemp -d)
+  MEM="$TMP/memory"
+  mkdir -p "$MEM"/{mistakes,feedback,knowledge,strategies,notes}
+
+  # Three Latin-only docs with overlapping tokens → some idf > 0.1, so
+  # the emitted index isn't empty. Keywords absent so the TF-IDF path
+  # actually processes them (has_kw skip otherwise).
+  cat > "$MEM/mistakes/a.md" <<'EOF'
+---
+type: mistake
+---
+connection timeout when querying external api under heavy load events
+EOF
+  cat > "$MEM/mistakes/b.md" <<'EOF'
+---
+type: mistake
+---
+database connection pool exhausted during peak traffic events
+EOF
+  cat > "$MEM/mistakes/c.md" <<'EOF'
+---
+type: mistake
+---
+mocked tests passed but production deployment failed
+EOF
+
+  # Normaliser: expand each TSV row into (term, posting) pairs, sort.
+  _normalize_tfidf() {
+    awk -F'\t' '{ for (i=2; i<=NF; i++) print $1 "\t" $i }' "$1" | sort
+  }
+
+  # Bash path — force by stripping ~/.claude/bin from PATH.
+  local PATH_NO_MEMCTL
+  PATH_NO_MEMCTL=$(printf '%s' "$PATH" | tr ':' '\n' | grep -v 'claude/bin' | tr '\n' ':')
+  PATH="$PATH_NO_MEMCTL" CLAUDE_MEMORY_DIR="$MEM" bash "$REPO/hooks/memory-index.sh"
+  local BASH_OUT="$TMP/bash.idx"
+  _normalize_tfidf "$MEM/.tfidf-index" > "$BASH_OUT"
+  rm -f "$MEM/.tfidf-index"
+
+  # Go path.
+  CLAUDE_MEMORY_DIR="$MEM" "$GO_SHADOW" tfidf rebuild
+  local GO_OUT="$TMP/go.idx"
+  _normalize_tfidf "$MEM/.tfidf-index" > "$GO_OUT"
+
+  if diff -q "$BASH_OUT" "$GO_OUT" >/dev/null; then
+    echo "  ✓ $name"
+  else
+    echo "  ✗ $name"
+    diff -u "$BASH_OUT" "$GO_OUT" | sed 's/^/    /'
+    rm -rf "$TMP"
+    return 1
+  fi
+  rm -rf "$TMP"
+}
+
+echo "=== parity: bash vs Go tfidf (Latin-only) ==="
+_run_tfidf_case "latin-only-fixture"
+
 echo "=== all parity cases passed ==="

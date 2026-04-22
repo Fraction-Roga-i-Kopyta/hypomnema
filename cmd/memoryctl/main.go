@@ -20,6 +20,7 @@ import (
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/doctor"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/fts"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/profile"
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/tfidf"
 )
 
 const usage = `memoryctl — hypomnema memory CLI
@@ -48,6 +49,11 @@ Usage:
       in settings.json, broken symlinks in hooks/ and bin/, memoryctl
       availability, corpus counts, WAL-error events in the last 7 days,
       derived-index freshness. Exit 0 on OK/WARN only, 1 on any FAIL.
+  memoryctl tfidf rebuild
+      Unicode-aware rebuild of ~/.claude/memory/.tfidf-index. Replaces
+      hooks/memory-index.sh's Latin-only awk tokenizer with
+      unicode.IsLetter, so Cyrillic / CJK / Greek / Arabic bodies
+      contribute real tokens. Writes atomically via tmp+rename.
 
 Environment:
   CLAUDE_MEMORY_DIR       Memory root (default: ~/.claude/memory).
@@ -100,6 +106,18 @@ func main() {
 		runSelfProfile(os.Args[2:])
 	case "doctor":
 		runDoctor(os.Args[2:])
+	case "tfidf":
+		if len(os.Args) < 3 {
+			fmt.Fprint(os.Stderr, usage)
+			os.Exit(2)
+		}
+		switch os.Args[2] {
+		case "rebuild":
+			runTfidfRebuild(os.Args[3:])
+		default:
+			fmt.Fprintf(os.Stderr, "memoryctl: unknown tfidf subcommand %q\n", os.Args[2])
+			os.Exit(2)
+		}
 	default:
 		fmt.Fprintf(os.Stderr, "memoryctl: unknown command %q\n", os.Args[1])
 		os.Exit(2)
@@ -138,6 +156,16 @@ func claudeDir() string {
 	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".claude")
+}
+
+// runTfidfRebuild regenerates the TF-IDF index. Fail-safe: printed to
+// stderr and non-zero exit on error, but the calling bash hook treats
+// any non-zero as "fall back to the awk path" rather than aborting.
+func runTfidfRebuild(_ []string) {
+	if err := tfidf.Rebuild(memoryDir()); err != nil {
+		fmt.Fprintf(os.Stderr, "memoryctl tfidf rebuild: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 // runDoctor runs the read-only health check and prints a summary. Exits 1
