@@ -5,6 +5,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
+	"sync"
 	"strings"
 	"testing"
 )
@@ -263,6 +266,72 @@ func TestPosttool_MissingRootCauseAllows(t *testing.T) {
 	}
 	if wal != "" {
 		t.Errorf("expected no WAL events, got: %s", wal)
+	}
+}
+
+// TestPosttool_ConcurrentMergesIncrementSerially verifies two concurrent
+// posttool merges into the same existing mistake file both land their
+// recurrence bumps. Without the WAL lock around the read-modify-write in
+// Run(), both goroutines read N, both write N+1, losing one increment
+// (classic lost-update race). With the lock, the second bump observes
+// N+1 and writes N+2.
+//
+// Scenario: two different new-files both score ≥ MergeThreshold against
+// one existing file, so both enter the merge branch concurrently.
+func TestPosttool_ConcurrentMergesIncrementSerially(t *testing.T) {
+	mem := setupMemoryDir(t)
+	rootCause := "background worker leaks goroutines on hot reload with stale config"
+	existingPath := writeMistake(t, mem, "worker-goroutine-leak", rootCause, 1)
+
+	// Place the two new files OUTSIDE mistakes/ so scanMistakes only sees
+	// the existing file and cannot pick one new file as another's best
+	// match. Both new files carry the same root-cause as existing so both
+	// score 100% and enter the posttool merge branch.
+	outside := filepath.Join(mem, "outside")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeNewFile := func(name string) string {
+		p := filepath.Join(outside, name+".md")
+		body := "---\ntype: mistake\nstatus: active\nroot-cause: \"" + rootCause + "\"\nrecurrence: 0\n---\n\nBody.\n"
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	newA := writeNewFile("new-worker-leak-a")
+	newB := writeNewFile("new-worker-leak-b")
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	runOne := func(target string) {
+		defer wg.Done()
+		var out bytes.Buffer
+		_, _ = Run(target, Options{
+			MemoryDir: mem,
+			SessionID: "race-test",
+			Today:     "2026-04-23",
+			Out:       &out,
+		})
+	}
+	go runOne(newA)
+	go runOne(newB)
+	wg.Wait()
+
+	data, err := os.ReadFile(existingPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^recurrence:\s*(\d+)`).FindStringSubmatch(string(data))
+	if m == nil {
+		t.Fatalf("recurrence line missing; file:\n%s", data)
+	}
+	got, _ := strconv.Atoi(m[1])
+	// Started at 1; two merges must land serially ⇒ 3. A lost-update
+	// race produces 2.
+	if got != 3 {
+		t.Errorf("expected recurrence=3 after two concurrent merges, got %d (lost-update race? file:\n%s)",
+			got, data)
 	}
 }
 

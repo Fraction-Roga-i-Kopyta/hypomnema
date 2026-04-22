@@ -119,10 +119,21 @@ func Run(targetPath string, opts Options) (Decision, error) {
 		// message if the on-disk mutation actually succeeded; otherwise a
 		// failed recurrence bump produces a "merged" WAL entry for a
 		// non-event. Allow falls through with the new file still on disk.
+		//
+		// Serialize the read-modify-write on the existing mistake file under
+		// the WAL lock: two concurrent Run()s (e.g. `memoryctl dedup` in a
+		// shell alongside an agent's PostToolUse) merging into the same
+		// existing file can each read recurrence=N and each write N+1 —
+		// losing one increment. Matching `wal.Append`'s permissive policy,
+		// a lock-acquire timeout falls through to an unlocked attempt
+		// rather than dropping the merge entirely.
+		lock, _ := wal.Acquire(opts.MemoryDir, wal.DefaultLockConfig)
 		if err := incrementRecurrence(bestFile); err != nil {
+			lock.Release()
 			return Allow, nil
 		}
 		_ = os.Remove(targetPath)
+		lock.Release()
 		line := fmt.Sprintf("%s|dedup-merged|%s>%s|%s",
 			opts.Today, newName, existingName, opts.SessionID)
 		key := fmt.Sprintf("dedup-merged|%s>%s|%s",
