@@ -7,8 +7,8 @@ domains: [git, security]
 keywords: [git, secrets, env, history, leak, gitignore, bfg]
 severity: critical
 recurrence: 0
-root-cause: "Удаление файла из current commit не убирает его из истории — закоммиченный .env остаётся доступным через git log/show навсегда; если репо публичный, секрет уже скомпрометирован"
-prevention: "1) Добавлять .env в .gitignore ДО первого коммита. 2) Использовать pre-commit хуки (gitleaks, trufflehog). 3) При утечке — немедленно ротировать ключ, потом чистить историю через git-filter-repo"
+root-cause: "Removing a file from the current commit does not remove it from history — a committed .env stays reachable via git log/show forever. If the repo is public, the secret is already compromised"
+prevention: "1) Add .env to .gitignore BEFORE the first commit. 2) Use pre-commit hooks (gitleaks, trufflehog). 3) On leak — rotate the key immediately, then rewrite history with git-filter-repo"
 decay_rate: never
 ref_count: 0
 triggers:
@@ -17,29 +17,29 @@ triggers:
 scope: domain
 ---
 
-# Git: закоммиченные секреты в истории
+# Git: secrets committed to history
 
-## Симптом
-Заметил `.env` в коммите. Удалил файл, закоммитил `git rm .env`. Кажется, что проблема решена — но:
+## Symptom
+You spot `.env` in a commit. You delete the file and commit `git rm .env`. Looks solved — but:
 ```bash
 git log --all --full-history -- .env
-# показывает старые коммиты с содержимым
+# shows old commits with the content
 git show <old-commit>:.env
-# выводит API ключ
+# prints the API key
 ```
 
-## Почему
-Git хранит **полную историю**. Удаление файла из current state не трогает blob-объекты в `.git/objects`. Если репо запушен на GitHub/GitLab — секрет уже:
-- В истории
-- В клонах других разработчиков
-- В кешах CI
-- Возможно проиндексирован GitHub-search или scrape-ботами
+## Why
+Git stores **the full history**. Removing a file from the current state doesn't touch the blob objects in `.git/objects`. If the repo is pushed to GitHub/GitLab, the secret already lives:
+- In history.
+- In clones on other developers' machines.
+- In CI caches.
+- Possibly in search engines or scraper databases.
 
 ## Fix
 
-**Шаг 1 — НЕМЕДЛЕННО ротировать ключ.** Чистка истории не отменяет утечку. Считай скомпрометированным.
+**Step 1 — rotate the key IMMEDIATELY.** History cleanup does not undo the leak. Treat the key as compromised.
 
-**Шаг 2 — добавить в .gitignore:**
+**Step 2 — add to .gitignore:**
 ```bash
 echo ".env" >> .gitignore
 echo ".env.local" >> .gitignore
@@ -47,22 +47,22 @@ git rm --cached .env
 git commit -m "remove .env from tracking"
 ```
 
-**Шаг 3 — почистить историю** (если репо приватный или утечка свежая):
+**Step 3 — rewrite history** (if the repo is private or the leak is fresh):
 ```bash
-# git-filter-repo (рекомендуется, не filter-branch)
+# git-filter-repo (preferred; do NOT use filter-branch)
 brew install git-filter-repo
 git filter-repo --invert-paths --path .env
-git push --force origin main   # ВНИМАНИЕ: ломает чужие клоны
+git push --force origin main   # WARNING: breaks other clones
 ```
 
-## Профилактика
-- **pre-commit хук** с `gitleaks` или `trufflehog` — блокирует коммит при детекте секретов
-- **GitHub Secret Scanning** — включить в settings репозитория, шлёт алерт при пуше известных форматов ключей
-- **direnv + .envrc** — секреты в локальном файле, не трекается, автоматически загружается при cd
+## Prevention
+- **Pre-commit hook** with `gitleaks` or `trufflehog` — blocks the commit when a known secret pattern is detected.
+- **GitHub Secret Scanning** — enable in repo settings; alerts on push when a known key format appears.
+- **direnv + .envrc** — secrets stay in a local file, never tracked, loaded automatically on `cd`.
 
-## Что ВСЕГДА требует ротации
-- AWS keys (`AKIA...`)
-- GitHub tokens (`ghp_...`, `gho_...`)
-- Stripe keys (`sk_live_...`)
-- Database connection strings с паролем
-- JWT signing secrets
+## Always require rotation
+- AWS keys (`AKIA...`).
+- GitHub tokens (`ghp_...`, `gho_...`).
+- Stripe keys (`sk_live_...`).
+- Database connection strings containing a password.
+- JWT signing secrets.

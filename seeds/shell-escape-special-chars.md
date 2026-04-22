@@ -7,8 +7,8 @@ domains: [shell]
 keywords: [bash, shell, escape, dollar, exclamation, quote, password]
 severity: minor
 recurrence: 0
-root-cause: "Спецсимволы ($, !, обратные кавычки, $!) интерпретируются shell внутри двойных кавычек до того, как строка попадёт в команду"
-prevention: "Использовать одинарные кавычки для строк со спецсимволами; для bcrypt/паролей — heredoc с EOF без интерполяции"
+root-cause: "Special characters ($, !, backticks, $()) get interpreted inside double quotes before the string reaches the command"
+prevention: "Use single quotes for strings containing special characters; for bcrypt hashes or passwords, use a heredoc with a quoted EOF delimiter to suppress interpolation"
 decay_rate: never
 ref_count: 0
 triggers:
@@ -17,35 +17,35 @@ triggers:
 scope: domain
 ---
 
-# Shell escape: спецсимволы в кавычках
+# Shell escape: special characters inside quotes
 
-## Симптом
-Команда падает с непонятной ошибкой или выполняется с искажённой строкой:
+## Symptom
+The command fails with a cryptic error, or runs with a mangled string:
 ```bash
-echo "P@ssw0rd$abc!"   # → P@ssw0rd!  (переменная $abc пустая, ! может вызвать history expansion)
+echo "P@ssw0rd$abc!"   # → P@ssw0rd!   ($abc is empty, ! can trigger history expansion)
 ```
 
-## Почему
-Двойные кавычки в bash **интерпретируют**:
-- `$VAR` — подстановка переменной
-- `$(...)` и `` `...` `` — выполнение команды
-- `\n`, `\t` и т.д. в некоторых контекстах
-- `!` — history expansion в интерактивной shell
+## Why
+Double quotes in bash **do** interpret:
+- `$VAR` — variable expansion.
+- `$(...)` and `` `...` `` — command substitution.
+- `\n`, `\t`, etc. in some contexts.
+- `!` — history expansion in interactive shells.
 
 ## Fix
-Одинарные кавычки **не интерпретируют ничего**:
+Single quotes interpret nothing:
 ```bash
 echo 'P@ssw0rd$abc!'   # → P@ssw0rd$abc!
 ```
 
-Для длинных строк/паролей — heredoc с одинарным `EOF`:
+For long strings or passwords, use a heredoc with a quoted delimiter:
 ```bash
 cat <<'EOF' > /tmp/secret
 P@ssw0rd$abc!`anything`
 EOF
 ```
 
-## Когда это критично
-- Bcrypt-хеши (`$2b$12$...` — `$12` интерпретируется как переменная)
-- Пароли при `curl -u user:pass`
-- JSON-payloads с `$` (jq queries, MongoDB syntax)
+## When it really matters
+- Bcrypt hashes (`$2b$12$...` — `$12` gets interpreted as a variable).
+- `curl -u user:pass` credentials.
+- JSON payloads with `$` (jq queries, MongoDB operators).

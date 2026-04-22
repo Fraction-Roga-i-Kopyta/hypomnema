@@ -4,40 +4,41 @@ seed: true
 created: 2026-04-13
 status: active
 domains: [data]
-keywords: [encoding, utf8, cp1251, windows-1251, csv, excel, кириллица]
+keywords: [encoding, utf8, cp1251, windows-1251, csv, excel, cyrillic]
 severity: minor
 recurrence: 0
-root-cause: "Excel на Windows сохраняет CSV в cp1251 (Windows-1251), pandas и большинство современных тулов читают как utf-8 — кириллица превращается в мусор или UnicodeDecodeError"
-prevention: "При чтении кириллических CSV из Excel — pd.read_csv(file, encoding='cp1251'); при сохранении — to_csv(..., encoding='utf-8-sig') чтобы Excel корректно открыл"
+root-cause: "Excel on Windows saves CSV in cp1251 (Windows-1251) for Cyrillic locales. pandas and most modern tools read as utf-8 by default — non-Latin text either decodes as garbage or raises UnicodeDecodeError"
+prevention: "When reading Cyrillic CSV from Excel, pass encoding='cp1251'. When writing for Excel, use to_csv(..., encoding='utf-8-sig') so Excel detects the BOM and opens it correctly"
 decay_rate: never
 ref_count: 0
 triggers:
   - "encoding cp1251"
-  - "кириллица csv"
+  - "cyrillic csv"
+  - "unicodedecodeerror"
 scope: domain
 ---
 
-# Encoding: UTF-8 vs CP1251 в CSV
+# Encoding: UTF-8 vs CP1251 in CSV
 
-## Симптом
+## Symptom
 ```python
 df = pd.read_csv("data.csv")
 # UnicodeDecodeError: 'utf-8' codec can't decode byte 0xcf in position 0
 ```
 
-Или хуже — читается без ошибок, но кириллица превращается в `Ðåñ°ðð°ð¼` или `?????`.
+Or worse — no error, but Cyrillic text turns into `Ðåñ°ðð°ð¼` or `?????`.
 
-## Почему
-- Excel на Windows по умолчанию сохраняет CSV в **cp1251** (Windows-1251) для русской локали
-- macOS-Excel может использовать **MacRoman** или **utf-8** в зависимости от версии
-- Современные инструменты (pandas, awk, jq) ожидают **utf-8** по умолчанию
+## Why
+- Excel on Windows defaults to **cp1251** (Windows-1251) for CSV in Russian locales.
+- Excel on macOS might use **MacRoman** or **utf-8** depending on version.
+- Modern tools (pandas, awk, jq) expect **utf-8** by default.
 
 ## Fix
 
-**При чтении** — указать encoding:
+**On read** — specify the encoding:
 ```python
 df = pd.read_csv("data.csv", encoding="cp1251")
-# Или попробовать варианты:
+# Or try a set of common variants:
 for enc in ["utf-8", "cp1251", "utf-8-sig", "latin-1"]:
     try:
         df = pd.read_csv("data.csv", encoding=enc)
@@ -46,18 +47,18 @@ for enc in ["utf-8", "cp1251", "utf-8-sig", "latin-1"]:
         continue
 ```
 
-**При сохранении для Excel** — utf-8 with BOM:
+**On write for Excel** — utf-8 with BOM:
 ```python
 df.to_csv("out.csv", encoding="utf-8-sig", index=False)
-# utf-8-sig добавляет BOM (\ufeff), Excel по нему опознаёт кодировку
+# utf-8-sig prepends ﻿; Excel detects it and picks the right codec
 ```
 
-**Командная строка** — `iconv`:
+**Command line** — `iconv`:
 ```bash
 iconv -f cp1251 -t utf-8 input.csv > output.csv
 ```
 
-## Где ловится
-- Аналитики, получающие выгрузки от бухгалтерии/отдела продаж
-- Импорт legacy-данных из 1С, БОСС-Кадровик, других русских ERP
-- Парсинг публичных датасетов (часто Росстат, ФНС в cp1251)
+## Where it shows up
+- Analysts receiving exports from accounting / sales.
+- Importing legacy data from ERPs on Windows (1C, BOSS-Kadrovik, and similar).
+- Parsing public datasets that ship cp1251 (some government agencies).
