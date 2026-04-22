@@ -14,6 +14,12 @@ ref_count: 0
 triggers:
   - "datetime timezone"
   - "naive datetime"
+  - "offset-naive"
+  - "offset-aware"
+  - "datetime.now()"
+  - "can't compare offset"
+  - "tz-aware"
+  - "tz-naive"
 scope: domain
 ---
 

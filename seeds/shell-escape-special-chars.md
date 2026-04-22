@@ -14,6 +14,12 @@ ref_count: 0
 triggers:
   - "shell escape"
   - "bash dollar sign"
+  - "$2b$"
+  - "bcrypt"
+  - "double-quoted bash"
+  - "escape in bash"
+  - "history expansion"
+  - "special characters inside"
 scope: domain
 ---
 

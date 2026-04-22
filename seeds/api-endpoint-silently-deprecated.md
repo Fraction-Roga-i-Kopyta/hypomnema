@@ -14,6 +14,10 @@ ref_count: 0
 triggers:
   - "api deprecated"
   - "endpoint 200 not working"
+  - "endpoint returns 204"
+  - "endpoint returns 200 but"
+  - "but no effect"
+  - "api silent failure"
 scope: domain
 ---
 
