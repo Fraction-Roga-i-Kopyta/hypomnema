@@ -17,8 +17,11 @@ set -euo pipefail
 # embedded modernc.org/sqlite with FTS5 always present.
 #
 # Pure-bash installs (no `make build`) fall through to the shell path below.
-if command -v memoryctl >/dev/null 2>&1; then
-  exec memoryctl fts sync
+# Try $PATH first; fall back to the canonical install location because
+# `~/.claude/bin` is usually not on a fresh-install user's PATH by default.
+MEMORYCTL=$(command -v memoryctl 2>/dev/null || echo "$HOME/.claude/bin/memoryctl")
+if [ -x "$MEMORYCTL" ]; then
+  exec "$MEMORYCTL" fts sync
 fi
 
 MEM="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}"

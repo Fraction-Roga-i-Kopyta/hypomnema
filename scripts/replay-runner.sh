@@ -16,6 +16,10 @@
 # measurement, not pass/fail.
 set -eo pipefail
 
+# LC_ALL=C: locale-stable decimal separator in awk %f output. Without this
+# non-C locales (ru_RU, de_DE etc.) render "10,4%" instead of "10.4%".
+export LC_ALL=C
+
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 CORPUS="$REPO/scripts/synthetic-corpus.txt"
 MEM_DIR=""

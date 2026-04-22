@@ -10,6 +10,8 @@ WAL_FILE="$MEMORY_DIR/.wal"
 
 # shellcheck source=lib/wal-lock.sh
 . "$(dirname "$0")/lib/wal-lock.sh" 2>/dev/null || true
+# shellcheck source=lib/parse-memory.sh
+. "$(dirname "$0")/lib/parse-memory.sh" 2>/dev/null || true
 
 INPUT=$(cat)
 FILE_PATH=$(printf '%s\n' "$INPUT" | jq -r '.tool_input.file_path // empty' 2>/dev/null)
@@ -49,30 +51,26 @@ case "$FILE_PATH" in
 esac
 
 # --- Cascade detection (v0.4) ---
-# When a file is updated, check if other files have instance_of pointing to it
+# When a file is updated, check if other files have `instance_of` pointing to
+# it. Uses `parse_related` from lib/parse-memory.sh so block-form and inline-
+# form `related:` entries are handled identically — same behaviour as cluster
+# expansion in SessionStart.
 for dir in mistakes feedback strategies knowledge notes decisions; do
   [ -d "$MEMORY_DIR/$dir" ] || continue
   find "$MEMORY_DIR/$dir" -name "*.md" -type f 2>/dev/null | while IFS= read -r candidate; do
     [ "$candidate" = "$FILE_PATH" ] && continue
-    # Quick grep: skip files without instance_of
+    # Quick grep: skip files without instance_of — avoids parse_related overhead
     grep -q "instance_of" "$candidate" 2>/dev/null || continue
-    # Parse related field for instance_of links to this file
-    awk -v target="$FILENAME" '
-      /^---$/ { fm++; if (fm >= 2) exit; next }
-      fm == 1 && /^related:/ { in_rel = 1; next }
-      fm == 1 && in_rel && /^  - / {
-        line = $0; sub(/^  - /, "", line)
-        # Parse "target-name: instance_of"
-        split(line, parts, ": ")
-        if (parts[1] == target && parts[2] == "instance_of") { found = 1; exit }
-        next
-      }
-      fm == 1 && in_rel && !/^  - / { in_rel = 0 }
-      END { exit !found }
-    ' "$candidate" 2>/dev/null && {
-      child_slug=$(basename "$candidate" .md)
-      wal_append "$TODAY|cascade-review|$child_slug|parent:$FILENAME" "cascade-review|$child_slug|parent:$FILENAME"
-    }
+    # parse_related outputs space-separated `slug:type` tokens
+    related_tokens=$(parse_related "$candidate" 2>/dev/null)
+    [ -z "$related_tokens" ] && continue
+    for token in $related_tokens; do
+      if [ "$token" = "${FILENAME}:instance_of" ]; then
+        child_slug=$(basename "$candidate" .md)
+        wal_append "$TODAY|cascade-review|$child_slug|parent:$FILENAME" "cascade-review|$child_slug|parent:$FILENAME"
+        break
+      fi
+    done
   done
 done
 

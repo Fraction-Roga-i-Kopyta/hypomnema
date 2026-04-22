@@ -4,11 +4,11 @@
 > Marcus Aurelius, Seneca, and Epictetus kept them.
 > Not memory itself, but the practice that sustains it.
 
-Persistent memory system for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Zero dependencies beyond bash and jq. No databases, no embeddings, no cloud — just markdown files, YAML frontmatter, and shell hooks.
+Persistent memory system for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). File-based, offline, no databases, no embeddings, no cloud — just markdown files, YAML frontmatter, and shell hooks. Runtime deps: bash, jq, perl, awk, sqlite3 with FTS5 module; optional Go 1.22+ for the `memoryctl` binary that replaces the slow paths.
 
 Claude Code starts every session from zero. Hypomnema fixes that.
 
-200 smoke tests, 25 benchmarks, hook time ~0.3 sec.
+258 hook smoke tests + Go unit tests across `internal/{fuzzy,profile,wal,fts}` (~70–90% coverage on data-critical packages). Hook time ~0.3 sec.
 
 ## The problem
 
@@ -482,7 +482,7 @@ hooks/
 ├── wal-compact.sh
 ├── regen-memory-index.sh
 ├── bench-memory.sh            # perf benchmarks
-├── test-memory-hooks.sh       # 200 smoke tests
+├── test-memory-hooks.sh       # 258 smoke tests
 └── lib/                       # v0.8 — shared sourced helpers
     ├── wal-lock.sh            # mkdir-based WAL locking
     ├── stat-helpers.sh        # portable _stat_mtime/_stat_size
@@ -540,12 +540,16 @@ Negative outcomes reduce the record's WAL score over time. Records that repeated
 ## Testing
 
 ```bash
-# 144 smoke tests (injection, domain filtering, WAL, TF-IDF, outcome, error detection, dedup,
-#                 decisions, precompact, cold start, cluster activation, cascade signals, prompt triggers)
+# 258 smoke tests (injection, domain filtering, WAL, TF-IDF, outcome, error detection, dedup,
+#                  decisions, precompact, cold start, cluster activation, cascade signals, prompt triggers)
 bash hooks/test-memory-hooks.sh
 
 # 25 benchmark scenarios (precision, domain, priority, edge cases, v0.3 ref_count)
 bash hooks/bench-memory.sh
+
+# Measure retrieval on the synthetic corpus (or your real memory dir)
+make replay                                   # seeds-only baseline
+scripts/replay-runner.sh --memory ~/.claude/memory   # real dogfood
 ```
 
 ## Consolidation
@@ -568,7 +572,7 @@ Merging is manual — ask Claude to consolidate them.
 |-------|-----------|-------|
 | 40 | ~0.3 sec | Current tested scale |
 | 100 | ~0.5 sec | Estimated, within 5 sec timeout |
-| 200 | ~1 sec | Consider index.tsv cache |
+| 200 | ~1 sec | Consider `memoryctl` Go binary for hot paths |
 | 500+ | — | Consider compiled CLI replacement |
 
 The format (YAML frontmatter + markdown) is a stable contract. Any future engine (Python, Go, Rust) reads the same files. Migration = replacing the hook script, not the data.

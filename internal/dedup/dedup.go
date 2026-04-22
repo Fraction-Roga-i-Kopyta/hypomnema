@@ -115,10 +115,14 @@ func Run(targetPath string, opts Options) (Decision, error) {
 				newName, existingName, bestScore)
 			return Blocked, nil
 		}
-		// posttool — merge path
-		if err := incrementRecurrence(bestFile); err == nil {
-			_ = os.Remove(targetPath)
+		// posttool — merge path. Only emit the WAL event and user-facing
+		// message if the on-disk mutation actually succeeded; otherwise a
+		// failed recurrence bump produces a "merged" WAL entry for a
+		// non-event. Allow falls through with the new file still on disk.
+		if err := incrementRecurrence(bestFile); err != nil {
+			return Allow, nil
 		}
+		_ = os.Remove(targetPath)
 		line := fmt.Sprintf("%s|dedup-merged|%s>%s|%s",
 			opts.Today, newName, existingName, opts.SessionID)
 		key := fmt.Sprintf("dedup-merged|%s>%s|%s",
