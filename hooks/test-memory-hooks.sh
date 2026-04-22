@@ -905,8 +905,8 @@ PC_SID="pc-test-$$"
 PC_MARKER="/tmp/.claude-session-${PC_SID}"
 touch "$PC_MARKER"
 PC_OUT=$(echo '{"session_id":"'"$PC_SID"'","cwd":"/tmp"}' | CLAUDE_MEMORY_DIR="$PC_MEM" bash "$PC_HOOK" 2>/dev/null)
-assert "PreCompact — valid JSON" 'printf "%s" "$PC_OUT" | jq -e ".hookSpecificOutput" >/dev/null 2>&1'
-PC_CTX=$(printf '%s' "$PC_OUT" | jq -r '.hookSpecificOutput.additionalContext // ""')
+assert "PreCompact — valid JSON" 'printf "%s" "$PC_OUT" | jq -e ".systemMessage" >/dev/null 2>&1'
+PC_CTX=$(printf '%s' "$PC_OUT" | jq -r '.systemMessage // ""')
 assert "PreCompact — contains reminder" 'printf "%s" "$PC_CTX" | grep -q "Context compression"'
 
 # Test: stronger message when nothing saved
@@ -916,7 +916,7 @@ assert "PreCompact — nothing-saved warning" 'printf "%s" "$PC_CTX" | grep -q "
 sleep 1
 touch "$PC_MEM/test-insight.md"
 PC_OUT2=$(echo '{"session_id":"'"$PC_SID"'","cwd":"/tmp"}' | CLAUDE_MEMORY_DIR="$PC_MEM" bash "$PC_HOOK" 2>/dev/null)
-PC_CTX2=$(printf '%s' "$PC_OUT2" | jq -r '.hookSpecificOutput.additionalContext // ""')
+PC_CTX2=$(printf '%s' "$PC_OUT2" | jq -r '.systemMessage // ""')
 assert "PreCompact — no nothing-saved when files exist" '! printf "%s" "$PC_CTX2" | grep -q "ничего не записано"'
 
 rm -f "$PC_MARKER" "$PC_MEM/test-insight.md"
