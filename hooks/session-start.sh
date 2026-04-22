@@ -486,13 +486,23 @@ collect_scored() {
       continue # wrong project
     fi
 
-    [ $type_count -ge $cap ] && continue
-    [ $_SCORED_USED -ge $MAX_SCORED_TOTAL ] && continue
+    # Quota caps and zero-score throttle apply only to non-pinned records.
+    # CLAUDE.md spec: pinned files are exempt from rotation; extended here to
+    # injection-time eviction — a pinned file claims its slot even when domain
+    # pressure would otherwise push it out. External field review 2026-04-22
+    # showed `user-profile` (pinned, generic-domain) being evicted from
+    # project-CWD injection when 9 active project domains outscored it.
+    # Counters (type_count / _SCORED_USED) still increment so the remaining
+    # budget stays aware of the space pinned records occupy.
+    if [ "$status" != "pinned" ]; then
+      [ $type_count -ge $cap ] && continue
+      [ $_SCORED_USED -ge $MAX_SCORED_TOTAL ] && continue
 
-    # Zero-score throttle: limit unscored records when keyword signal exists
-    if [ "$has_scored" -eq 1 ] && [ "${kscore:-0}" -eq 0 ]; then
-      [ $zero_count -ge $max_zero ] && continue
-      zero_count=$((zero_count + 1))
+      # Zero-score throttle: limit unscored records when keyword signal exists
+      if [ "$has_scored" -eq 1 ] && [ "${kscore:-0}" -eq 0 ]; then
+        [ $zero_count -ge $max_zero ] && continue
+        zero_count=$((zero_count + 1))
+      fi
     fi
 
     body=$(printf '%s' "$body" | tr $'\x1e' '\n')

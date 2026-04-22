@@ -67,59 +67,40 @@ echo ""
 # --- Refuse if ~/.claude does not exist ---
 [ -d "$CLAUDE_DIR" ] || { echo "Nothing to uninstall: $CLAUDE_DIR does not exist."; exit 0; }
 
-# --- Remove hook symlinks ---
-# Everything install.sh creates under $HOOKS_DIR. Delete only if the path
-# is a symlink (our creation); leave regular files alone — a user may
-# have replaced one of our symlinks with their own script, and nuking it
-# would be destructive.
-HOOK_LINKS=(
-  memory-session-start.sh
-  memory-stop.sh
-  memory-user-prompt-submit.sh
-  memory-index.sh
-  memory-outcome.sh
-  memory-dedup.sh
-  memory-analytics.sh
-  memory-error-detect.sh
-  memory-precompact.sh
-  wal-compact.sh
-  regen-memory-index.sh
-  bench-memory.sh
-  test-memory-hooks.sh
-  lib
-)
+# SCRIPT_DIR is this uninstaller's directory — the hypomnema repo root. Used
+# to identify symlinks that point into our tree (vs. a user's own scripts
+# that happen to live in the same install dirs).
+SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+
+# --- Directory-driven symlink removal ---
+# Enumerate everything under the target directory and remove any symlink
+# whose target points into $SCRIPT_DIR (our repo). Leaves regular files and
+# third-party symlinks untouched. Replaces the hand-rolled HOOK_LINKS /
+# BIN_LINKS arrays that fell out of sync with install.sh's own directory-
+# driven enumeration — v0.10.1 had three symlinks uninstall didn't know
+# about (memory-error-detect.sh, memory-precompact.sh, memoryctl).
+_remove_our_symlinks() {
+  local dir="$1" removed=0 path target
+  [ -d "$dir" ] || { echo 0; return; }
+  while IFS= read -r path; do
+    [ -L "$path" ] || continue
+    target=$(readlink "$path" 2>/dev/null) || continue
+    case "$target" in
+      "$SCRIPT_DIR"/*)
+        _run rm "$path"
+        removed=$((removed + 1))
+        ;;
+    esac
+  done < <(find "$dir" -mindepth 1 -maxdepth 1 2>/dev/null)
+  echo "$removed"
+}
 
 echo "[1/3] Removing hook symlinks from $HOOKS_DIR..."
-removed_hooks=0
-for name in "${HOOK_LINKS[@]}"; do
-  path="$HOOKS_DIR/$name"
-  if [ -L "$path" ]; then
-    _run rm "$path"
-    removed_hooks=$((removed_hooks + 1))
-  fi
-done
+removed_hooks=$(_remove_our_symlinks "$HOOKS_DIR")
 echo "  Removed $removed_hooks hook symlink(s)."
 
-# --- Remove utility symlinks from ~/.claude/bin ---
-BIN_LINKS=(
-  memory-consolidate.sh
-  memory-strategy-score.sh
-  memory-self-profile.sh
-  memory-fts-sync.sh
-  memory-fts-query.sh
-  memory-fts-shadow.sh
-  memoryctl
-)
-
 echo "[2/3] Removing utility symlinks from $BIN_DIR..."
-removed_bin=0
-for name in "${BIN_LINKS[@]}"; do
-  path="$BIN_DIR/$name"
-  if [ -L "$path" ]; then
-    _run rm "$path"
-    removed_bin=$((removed_bin + 1))
-  fi
-done
+removed_bin=$(_remove_our_symlinks "$BIN_DIR")
 echo "  Removed $removed_bin utility symlink(s)."
 
 # --- Strip our hooks from settings.json ---
