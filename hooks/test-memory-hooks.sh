@@ -33,6 +33,22 @@ assert() {
   fi
 }
 
+# Production hooks fire several children with `&` + disown (fts-shadow,
+# regen-memory-index, memory-index, memory-analytics, strategy-score,
+# self-profile, wal-compact). On slow Linux CI they can still be writing
+# into a test fixture when the following `rm -rf` walks it — `rm` aborts
+# with "Directory not empty" and `set -e` kills the suite. Drain them by
+# pattern with a bounded wait, then rm with a single short retry.
+_HOOK_CHILD_PATTERN='memory-fts-shadow\.sh|regen-memory-index\.sh|memory-index\.sh|memory-analytics\.sh|memory-strategy-score\.sh|memory-self-profile\.sh|wal-compact\.sh'
+safe_cleanup() {
+  local i
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+    pgrep -f "$_HOOK_CHILD_PATTERN" >/dev/null 2>&1 || break
+    sleep 0.2
+  done
+  rm -rf "$@" 2>/dev/null || { sleep 0.3; rm -rf "$@" 2>/dev/null || true; }
+}
+
 # --- Setup test fixtures ---
 TEST_DIR=$(mktemp -d)
 FIXTURE="$TEST_DIR/memory"
@@ -242,7 +258,7 @@ EMPTY_EXIT=0
 EMPTY_OUT=$(echo '{"session_id":"t2","cwd":"/tmp"}' | CLAUDE_MEMORY_DIR="$EMPTY_DIR" bash "$HOOK" 2>/dev/null) || EMPTY_EXIT=$?
 assert "Empty memory dir — no crash" '[ $EMPTY_EXIT -eq 0 ]'
 assert "Empty memory dir — valid output" '[ -z "$EMPTY_OUT" ] || printf "%s" "$EMPTY_OUT" | jq empty 2>/dev/null'
-rm -rf "$EMPTY_DIR"
+safe_cleanup "$EMPTY_DIR"
 
 # Test 13: No project match
 NO_PROJ_OUT=$(echo '{"session_id":"t3","cwd":"/Users/nobody/random"}' | CLAUDE_MEMORY_DIR="$FIXTURE" bash "$HOOK" 2>/dev/null)
@@ -290,7 +306,7 @@ assert "TF-IDF index created" '[ -f "$TFIDF_MEM/.tfidf-index" ]'
 assert "TF-IDF index has entries" '[ -s "$TFIDF_MEM/.tfidf-index" ]'
 assert "TF-IDF skips files with keywords" '! grep -q "has-kw" "$TFIDF_MEM/.tfidf-index"'
 assert "TF-IDF includes files without keywords" 'grep -q "no-kw" "$TFIDF_MEM/.tfidf-index"'
-rm -rf "$TFIDF_DIR"
+safe_cleanup "$TFIDF_DIR"
 
 # Test: outcome hook — negative detection
 OUTCOME_DIR=$(mktemp -d)
@@ -313,7 +329,7 @@ assert "Outcome hook — outcome-new deduped within session" '[ "$OUTCOME_NEW_CO
 echo '{"session_id":"outcome-test-session","tool_name":"Write","tool_input":{"file_path":"'"$OUTCOME_MEM"'/feedback/test.md","content":"test"}}' | CLAUDE_MEMORY_DIR="$OUTCOME_MEM" bash "$HOME/.claude/hooks/memory-outcome.sh" 2>/dev/null
 OUTCOME_LINES=$(wc -l < "$OUTCOME_MEM/.wal")
 assert "Outcome hook — non-mistake no outcome entry" '[ "$OUTCOME_LINES" -eq 3 ]'
-rm -rf "$OUTCOME_DIR"
+safe_cleanup "$OUTCOME_DIR"
 
 # Test: cascade detection — instance_of child detected when parent updated
 CASC_DIR=$(mktemp -d)
@@ -393,7 +409,7 @@ echo '{"session_id":"casc-session","tool_name":"Write","tool_input":{"file_path"
 CASC_LINES_AFTER=$(wc -l < "$CASC_MEM/.wal")
 assert "Cascade — no cascade for file without children" '[ "$CASC_LINES_BEFORE" -eq "$CASC_LINES_AFTER" ]'
 
-rm -rf "$CASC_DIR"
+safe_cleanup "$CASC_DIR"
 
 # Test: spaced repetition — spread across days scores higher than burst
 SR_DIR=$(mktemp -d)
@@ -444,7 +460,7 @@ SR_CTX=$(printf '%s' "$SR_OUT" | jq -r '.hookSpecificOutput.additionalContext')
 SR_POS_SPREAD=$(printf '%s\n' "$SR_CTX" | grep -n "spread-file" | head -1 | cut -d: -f1)
 SR_POS_BURST=$(printf '%s\n' "$SR_CTX" | grep -n "burst-file" | head -1 | cut -d: -f1)
 assert "Spaced repetition — spread before burst" '[ -n "$SR_POS_SPREAD" ] && [ -n "$SR_POS_BURST" ] && [ "$SR_POS_SPREAD" -lt "$SR_POS_BURST" ]'
-rm -rf "$SR_DIR"
+safe_cleanup "$SR_DIR"
 
 # Test: transcript error detection
 ERR_DIR=$(mktemp -d)
@@ -467,7 +483,7 @@ STOP_CTX=$(printf '%s' "$STOP_OUT" | jq -r '.hookSpecificOutput.additionalContex
 assert "Error detection — npm error found" 'printf "%s" "$STOP_CTX" | grep -q "npm"'
 assert "Error detection — grep excluded" '! printf "%s" "$STOP_CTX" | grep -q "grep foo"'
 assert "Error detection — WAL entry" 'grep -q "error-detected" "$ERR_MEM/.wal" 2>/dev/null'
-rm -rf "$ERR_DIR" "$MARKER_ERR"
+safe_cleanup "$ERR_DIR" "$MARKER_ERR"
 
 # Test: dedup wrapper — syntax and graceful fallback
 assert "Dedup wrapper syntax valid" 'bash -n "$HOME/.claude/hooks/memory-dedup.sh" 2>/dev/null'
@@ -502,7 +518,7 @@ if python3 -c "import rapidfuzz" 2>/dev/null; then
   assert "Dedup — WAL entry" 'grep -q "dedup-merged" "$DEDUP_MEM/.wal" 2>/dev/null'
   assert "Dedup — recurrence incremented" 'grep -q "recurrence: 2" "$DEDUP_MEM/mistakes/existing.md"'
 fi
-rm -rf "$DEDUP_DIR"
+safe_cleanup "$DEDUP_DIR"
 
 # --- CRLF handling ---
 CRLF_DIR=$(mktemp -d)
@@ -516,7 +532,7 @@ printf -- "---\r\ntype: mistake\r\nstatus: active\r\nproject: global\r\nrecurren
 CRLF_OUT=$(echo '{"session_id":"crlf-test","cwd":"/test/crlf"}' | CLAUDE_MEMORY_DIR="$CRLF_MEM" bash "$HOME/.claude/hooks/memory-session-start.sh" 2>/dev/null)
 assert "CRLF — file injected" 'echo "$CRLF_OUT" | grep -q "crlf-test"'
 assert "CRLF — body preserved" 'echo "$CRLF_OUT" | grep -q "CRLF body line"'
-rm -rf "$CRLF_DIR"
+safe_cleanup "$CRLF_DIR"
 
 # --- WAL pipe in session_id ---
 WAL_PIPE_DIR=$(mktemp -d)
@@ -535,7 +551,7 @@ echo '{"session_id":"sess|with|pipes","cwd":"/tmp"}' | CLAUDE_MEMORY_DIR="$WAL_P
 WAL_LAST=$(tail -1 "$WAL_PIPE_MEM/.wal" 2>/dev/null)
 assert "WAL — pipe in session_id sanitized" 'echo "$WAL_LAST" | grep -q "sess_with_pipes"'
 assert "WAL — exactly 4 fields" '[ "$(echo "$WAL_LAST" | awk -F"|" "{print NF}")" -eq 4 ]'
-rm -rf "$WAL_PIPE_DIR"
+safe_cleanup "$WAL_PIPE_DIR"
 
 # Test: injected date preserved (not overwritten)
 INJECT_DIR=$(mktemp -d)
@@ -562,7 +578,7 @@ INJECTED_DATE=$(awk '/^---$/{n++} n==1 && /^injected:/{sub(/^injected: */,""); p
 assert "Injected date preserved" '[ "$INJECTED_DATE" = "2026-01-15" ]'
 REFERENCED_DATE=$(awk '/^---$/{n++} n==1 && /^referenced:/{sub(/^referenced: */,""); print; exit}' "$INJECT_MEM/feedback/preserve-test.md")
 assert "Referenced date updated" '[ "$REFERENCED_DATE" = "'"$(date +%Y-%m-%d)"'" ]'
-rm -rf "$INJECT_DIR"
+safe_cleanup "$INJECT_DIR"
 
 # Test: TF-IDF auto-rebuild when index missing
 TFIDF_AUTO_DIR=$(mktemp -d)
@@ -587,7 +603,7 @@ EOF
 echo '{"session_id":"tfidf-auto","cwd":"/tmp"}' | CLAUDE_MEMORY_DIR="$TFIDF_AUTO_MEM" bash "$HOOK" >/dev/null 2>&1
 sleep 1  # async build needs a moment
 assert "TF-IDF auto-rebuild on missing index" '[ -f "$TFIDF_AUTO_MEM/.tfidf-index" ]'
-rm -rf "$TFIDF_AUTO_DIR"
+safe_cleanup "$TFIDF_AUTO_DIR"
 
 # Test: git state with special chars doesn't break continuity
 PERL_DIR=$(mktemp -d)
@@ -624,7 +640,7 @@ PERL_EXIT=0
 echo '{"session_id":"perl-test","cwd":"/tmp/perl-test"}' | CLAUDE_MEMORY_DIR="$PERL_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null || PERL_EXIT=$?
 assert "Special chars in git — no crash" '[ $PERL_EXIT -eq 0 ]'
 assert "Continuity file intact" '[ -f "$PERL_MEM/continuity/perl-proj.md" ]'
-rm -rf "$PERL_DIR" /tmp/perl-test "$PERL_MARKER"
+safe_cleanup "$PERL_DIR" /tmp/perl-test "$PERL_MARKER"
 
 # Test: notes injected by keyword match
 NOTES_DIR=$(mktemp -d)
@@ -651,7 +667,7 @@ mkdir -p /tmp/docker-project
 NOTES_OUT=$(echo '{"session_id":"notes-test","cwd":"/tmp/docker-project"}' | CLAUDE_MEMORY_DIR="$NOTES_MEM" bash "$HOOK" 2>/dev/null)
 NOTES_CTX=$(printf '%s' "$NOTES_OUT" | jq -r '.hookSpecificOutput.additionalContext // ""')
 assert "Notes injected by keyword" 'printf "%s" "$NOTES_CTX" | grep -q "docker-tips"'
-rm -rf "$NOTES_DIR" /tmp/docker-project
+safe_cleanup "$NOTES_DIR" /tmp/docker-project
 
 # Test: WAL compaction preserves spread data
 WALC_DIR=$(mktemp -d)
@@ -676,7 +692,7 @@ WAL_AFTER=$(wc -l < "$WALC_MEM/.wal")
 assert "WAL compaction — reduced size" '[ "$WAL_AFTER" -lt "$WAL_BEFORE" ]'
 assert "WAL compaction — has aggregates" 'grep -q "inject-agg" "$WALC_MEM/.wal"'
 assert "WAL compaction — preserved recent raw" 'grep -q "|inject|" "$WALC_MEM/.wal"'
-rm -rf "$WALC_DIR"
+safe_cleanup "$WALC_DIR"
 
 # Test: lifecycle rotation runs even without session marker
 LC_DIR=$(mktemp -d)
@@ -697,7 +713,7 @@ LC_EXIT=0
 echo '{"session_id":"no-marker-test"}' | CLAUDE_MEMORY_DIR="$LC_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null || LC_EXIT=$?
 LC_STATUS=$(awk '/^---$/{n++} n==1 && /^status:/{sub(/^status: */,""); print; exit}' "$LC_MEM/feedback/old-stale.md" 2>/dev/null)
 assert "Lifecycle rotation without marker — file marked stale" '[ "$LC_STATUS" = "stale" ]'
-rm -rf "$LC_DIR"
+safe_cleanup "$LC_DIR"
 
 # Test: days_between accuracy (Julian Day based, BSD awk compatible)
 DAYS_TEST=$(echo "" | awk '
@@ -721,7 +737,7 @@ printf '# No frontmatter here\nJust a note.\n' > "$NOFM_MEM/notes/no-fm.md"
 touch -t $(date -v-100d +%Y%m%d0000 2>/dev/null || date -d "100 days ago" +%Y%m%d0000) "$NOFM_MEM/notes/no-fm.md"
 echo '{"session_id":"nofm-test"}' | CLAUDE_MEMORY_DIR="$NOFM_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null
 assert "Frontmatter-less file archived" '[ ! -f "$NOFM_MEM/notes/no-fm.md" ] && [ -f "$NOFM_MEM/archive/notes/no-fm.md" ]'
-rm -rf "$NOFM_DIR"
+safe_cleanup "$NOFM_DIR"
 
 # Test: session_id with slashes — marker created
 SLASH_MARKER="/tmp/.claude-session-v10-45569_10022"
@@ -732,7 +748,7 @@ mkdir -p "$SLASH_MEM"
 echo '{"session_id":"v10-45569/10022","cwd":"/tmp"}' | CLAUDE_MEMORY_DIR="$SLASH_MEM" bash "$HOOK" >/dev/null 2>&1
 assert "Session ID with slashes — marker created" '[ -f "$SLASH_MARKER" ]'
 rm -f "$SLASH_MARKER" 2>/dev/null
-rm -rf "$SLASH_DIR"
+safe_cleanup "$SLASH_DIR"
 
 # Test: notes not starved by other scored types
 STARVE_DIR=$(mktemp -d)
@@ -785,7 +801,7 @@ mkdir -p /tmp/docker-starve
 STARVE_OUT=$(echo '{"session_id":"starve-test","cwd":"/tmp/docker-starve"}' | CLAUDE_MEMORY_DIR="$STARVE_MEM" bash "$HOOK" 2>/dev/null)
 STARVE_CTX=$(printf '%s' "$STARVE_OUT" | jq -r '.hookSpecificOutput.additionalContext // ""')
 assert "Notes not starved by budget" 'printf "%s" "$STARVE_CTX" | grep -q "docker-note"'
-rm -rf "$STARVE_DIR" /tmp/docker-starve
+safe_cleanup "$STARVE_DIR" /tmp/docker-starve
 
 # Test: outcome hook — no false positive on substring match
 OUT_FP_DIR=$(mktemp -d)
@@ -795,7 +811,7 @@ printf '2026-04-10|inject|test-other-bug|sess-100\n' > "$OUT_FP_MEM/.wal"
 echo '{"session_id":"sess-10","tool_name":"Write","tool_input":{"file_path":"'"$OUT_FP_MEM"'/mistakes/test.md","content":"x"}}' | CLAUDE_MEMORY_DIR="$OUT_FP_MEM" bash "$HOME/.claude/hooks/memory-outcome.sh" 2>/dev/null
 assert "Outcome — no false positive on substring" 'grep -q "outcome-new.*test" "$OUT_FP_MEM/.wal"'
 assert "Outcome — no false negative detection" '! grep -q "outcome-negative" "$OUT_FP_MEM/.wal"'
-rm -rf "$OUT_FP_DIR"
+safe_cleanup "$OUT_FP_DIR"
 
 # --- Error detection hook tests ---
 DETECT_HOOK="$HOME/.claude/hooks/memory-error-detect.sh"
@@ -846,7 +862,7 @@ assert "Error detect — cross-ref existing mistake" 'echo "$ED_OUT6" | grep -q 
 ED_OUT7=$(echo '{"session_id":"ed-sess-7","tool_name":"Write","tool_input":{"file_path":"/tmp/x"},"tool_response":{"stdout":"DeprecationWarning","stderr":""}}' | CLAUDE_MEMORY_DIR="$ED_MEM" bash "$DETECT_HOOK" 2>/dev/null)
 assert "Error detect — non-Bash tool ignored" '[ -z "$ED_OUT7" ]'
 
-rm -rf "$ED_DIR"
+safe_cleanup "$ED_DIR"
 
 fi
 # --- End error detection tests ---
@@ -889,7 +905,7 @@ DEC_CTX=$(printf '%s' "$DEC_OUT" | jq -r '.hookSpecificOutput.additionalContext 
 assert "Decision — section present" 'printf "%s" "$DEC_CTX" | grep -q "## Decisions"'
 assert "Decision — project-scoped injected" 'printf "%s" "$DEC_CTX" | grep -q "fastapi-over-django"'
 assert "Decision — global injected" 'printf "%s" "$DEC_CTX" | grep -q "postgres-over-mysql"'
-rm -rf "$DEC_DIR" /tmp/dec-proj
+safe_cleanup "$DEC_DIR" /tmp/dec-proj
 
 # --- End decision tests ---
 
@@ -920,7 +936,7 @@ PC_CTX2=$(printf '%s' "$PC_OUT2" | jq -r '.systemMessage // ""')
 assert "PreCompact — no nothing-saved when files exist" '! printf "%s" "$PC_CTX2" | grep -q "Nothing was saved"'
 
 rm -f "$PC_MARKER" "$PC_MEM/test-insight.md"
-rm -rf "$PC_DIR"
+safe_cleanup "$PC_DIR"
 
 fi
 # --- End PreCompact tests ---
@@ -971,7 +987,7 @@ assert "Cold start — domain keyword matches api-patterns" 'printf "%s" "$CS_CT
 # css-tricks might still appear (global, no domain filter blocks it) but api-patterns should be first/present
 assert "Cold start — context not empty" '[ -n "$CS_CTX" ]'
 
-rm -rf "$CS_DIR" /tmp/cold-start-proj
+safe_cleanup "$CS_DIR" /tmp/cold-start-proj
 
 # --- End cold start tests ---
 
@@ -1027,7 +1043,7 @@ assert "Dedup — skips overwrite of existing file" '[ $? -eq 0 ]'
 # Test: WAL logged on block
 assert "Dedup — WAL has dedup-blocked entry" 'grep -q "dedup-blocked" "$DD_MEM/.wal" 2>/dev/null'
 
-rm -rf "$DD_DIR"
+safe_cleanup "$DD_DIR"
 
 fi
 fi
@@ -1061,7 +1077,7 @@ cat > "$OP_DIR/transcript.jsonl" << 'OPEOF'
 OPEOF
 echo '{"session_id":"op-test-session","cwd":"/tmp","transcript_path":"'"$OP_DIR"'/transcript.jsonl"}' | CLAUDE_MEMORY_DIR="$OP_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null
 assert "Outcome-positive — written to WAL" 'grep -q "outcome-positive|css-var-bug" "$OP_MEM/.wal"'
-rm -rf "$OP_DIR" "$OP_MARKER"
+safe_cleanup "$OP_DIR" "$OP_MARKER"
 
 # Test: outcome-positive — skipped when outcome-negative exists
 ON_DIR=$(mktemp -d)
@@ -1091,7 +1107,7 @@ cat > "$ON_DIR/transcript.jsonl" << 'ONEOF'
 ONEOF
 echo '{"session_id":"on-test-session","cwd":"/tmp","transcript_path":"'"$ON_DIR"'/transcript.jsonl"}' | CLAUDE_MEMORY_DIR="$ON_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null
 assert "Outcome-positive — not written when negative exists" '! grep -q "outcome-positive|repeated-bug" "$ON_MEM/.wal"'
-rm -rf "$ON_DIR" "$ON_MARKER"
+safe_cleanup "$ON_DIR" "$ON_MARKER"
 
 # Test: session-metrics written to WAL
 SM_DIR=$(mktemp -d)
@@ -1115,7 +1131,7 @@ assert "Session metrics — written to WAL" 'grep -q "session-metrics" "$SM_MEM/
 assert "Session metrics — has error_count" 'grep "session-metrics" "$SM_MEM/.wal" | grep -q "error_count:1"'
 assert "Session metrics — has tool_calls" 'grep "session-metrics" "$SM_MEM/.wal" | grep -q "tool_calls:3"'
 assert "Session metrics — not clean (has errors)" '! grep -q "clean-session" "$SM_MEM/.wal"'
-rm -rf "$SM_DIR" "$SM_MARKER"
+safe_cleanup "$SM_DIR" "$SM_MARKER"
 
 # Test: clean-session when 0 errors
 CS_DIR=$(mktemp -d)
@@ -1132,7 +1148,7 @@ cat > "$CS_DIR/transcript.jsonl" << 'CSEOF'
 CSEOF
 echo '{"session_id":"cs-test-session","cwd":"/tmp","transcript_path":"'"$CS_DIR"'/transcript.jsonl"}' | CLAUDE_MEMORY_DIR="$CS_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null
 assert "Clean session — written to WAL" 'grep -q "clean-session" "$CS_MEM/.wal"'
-rm -rf "$CS_DIR" "$CS_MARKER"
+safe_cleanup "$CS_DIR" "$CS_MARKER"
 
 # Test: WAL compaction preserves outcome and metrics events
 WALC2_DIR=$(mktemp -d)
@@ -1163,7 +1179,7 @@ assert "Compact v2 — clean-session preserved" 'grep -q "clean-session" "$WALC2
 assert "Compact v2 — strategy-used preserved" 'grep -q "strategy-used" "$WALC2_MEM/.wal"'
 assert "Compact v2 — inject aggregated" 'grep -q "inject-agg" "$WALC2_MEM/.wal"'
 assert "Compact v2 — session-metrics aggregated" 'grep -q "metrics-agg" "$WALC2_MEM/.wal"'
-rm -rf "$WALC2_DIR"
+safe_cleanup "$WALC2_DIR"
 
 # Test: Bayesian effectiveness — positive outcomes boost score
 BAYES_DIR=$(mktemp -d)
@@ -1213,7 +1229,7 @@ BAYES_POS_GOOD=$(printf '%s\n' "$BAYES_CTX" | grep -n "proven-good" | head -1 | 
 BAYES_POS_BAD=$(printf '%s\n' "$BAYES_CTX" | grep -n "proven-bad" | head -1 | cut -d: -f1)
 assert "Bayesian — proven-good appears" '[ -n "$BAYES_POS_GOOD" ]'
 assert "Bayesian — proven-good before proven-bad" '[ -n "$BAYES_POS_GOOD" ] && [ -n "$BAYES_POS_BAD" ] && [ "$BAYES_POS_GOOD" -lt "$BAYES_POS_BAD" ]'
-rm -rf "$BAYES_DIR"
+safe_cleanup "$BAYES_DIR"
 
 # Test: strategy-used bonus — used strategy ranks higher
 SBONUS_DIR=$(mktemp -d)
@@ -1260,7 +1276,7 @@ SBONUS_POS_USED=$(printf '%s\n' "$SBONUS_CTX" | grep -n "used-strat" | head -1 |
 SBONUS_POS_UNUSED=$(printf '%s\n' "$SBONUS_CTX" | grep -n "unused-strat" | head -1 | cut -d: -f1)
 assert "Strategy bonus — used-strat appears" '[ -n "$SBONUS_POS_USED" ]'
 assert "Strategy bonus — used before unused" '[ -n "$SBONUS_POS_USED" ] && [ -n "$SBONUS_POS_UNUSED" ] && [ "$SBONUS_POS_USED" -lt "$SBONUS_POS_UNUSED" ]'
-rm -rf "$SBONUS_DIR"
+safe_cleanup "$SBONUS_DIR"
 
 # Test: strategy-used — clean session + injected strategy
 SU_DIR=$(mktemp -d)
@@ -1287,7 +1303,7 @@ cat > "$SU_DIR/transcript.jsonl" << 'SUEOF'
 SUEOF
 echo '{"session_id":"su-test-session","cwd":"/tmp","transcript_path":"'"$SU_DIR"'/transcript.jsonl"}' | CLAUDE_MEMORY_DIR="$SU_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null
 assert "Strategy-used — written to WAL" 'grep -q "strategy-used|debug-strat" "$SU_MEM/.wal"'
-rm -rf "$SU_DIR" "$SU_MARKER"
+safe_cleanup "$SU_DIR" "$SU_MARKER"
 
 # Test: strategy-gap — clean session, no strategies injected
 SG_DIR=$(mktemp -d)
@@ -1305,7 +1321,7 @@ cat > "$SG_DIR/transcript.jsonl" << 'SGEOF'
 SGEOF
 echo '{"session_id":"sg-test-session","cwd":"/tmp","transcript_path":"'"$SG_DIR"'/transcript.jsonl"}' | CLAUDE_MEMORY_DIR="$SG_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null
 assert "Strategy-gap — written to WAL" 'grep -q "strategy-gap" "$SG_MEM/.wal"'
-rm -rf "$SG_DIR" "$SG_MARKER"
+safe_cleanup "$SG_DIR" "$SG_MARKER"
 
 # Test: strategies reminder on long clean session
 SR2_DIR=$(mktemp -d)
@@ -1327,7 +1343,7 @@ SR2EOF
 SR2_OUT=$(echo '{"session_id":"sr2-test-session","cwd":"/tmp","transcript_path":"'"$SR2_DIR"'/transcript.jsonl"}' | CLAUDE_MEMORY_DIR="$SR2_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null)
 SR2_CTX=$(printf '%s' "$SR2_OUT" | jq -r '.hookSpecificOutput.additionalContext // ""' 2>/dev/null)
 assert "Strategies reminder — shown on long clean session" 'printf "%s" "$SR2_CTX" | grep -qi "strateg"'
-rm -rf "$SR2_DIR" "$SR2_MARKER"
+safe_cleanup "$SR2_DIR" "$SR2_MARKER"
 
 # Test: memory-analytics.sh generates report
 AN_DIR=$(mktemp -d)
@@ -1372,7 +1388,7 @@ assert "Analytics — has winners" 'grep -q "winner-file" "$AN_MEM/.analytics-re
 assert "Analytics — has noise" 'grep -q "noise-file" "$AN_MEM/.analytics-report"'
 assert "Analytics — has clean_ratio" 'grep -q "clean_ratio" "$AN_MEM/.analytics-report"'
 assert "Analytics — has strategy gaps" 'grep -qi "backend" "$AN_MEM/.analytics-report"'
-rm -rf "$AN_DIR"
+safe_cleanup "$AN_DIR"
 
 # Test: noise penalty — records in .analytics-report noise list get demoted
 NP_DIR=$(mktemp -d)
@@ -1424,7 +1440,7 @@ NP_POS_GOOD=$(printf '%s\n' "$NP_CTX" | grep -n "good-fb" | head -1 | cut -d: -f
 NP_POS_NOISY=$(printf '%s\n' "$NP_CTX" | grep -n "noisy-fb" | head -1 | cut -d: -f1)
 assert "Noise penalty — good-fb appears" '[ -n "$NP_POS_GOOD" ]'
 assert "Noise penalty — good before noisy" '[ -n "$NP_POS_GOOD" ] && [ -n "$NP_POS_NOISY" ] && [ "$NP_POS_GOOD" -lt "$NP_POS_NOISY" ]'
-rm -rf "$NP_DIR"
+safe_cleanup "$NP_DIR"
 
 # Test: analytics trigger — stale report triggers rebuild
 AT_DIR=$(mktemp -d)
@@ -1458,7 +1474,7 @@ fi
 now_at=$(date +%s)
 ar_age=$(( now_at - ar_mtime ))
 assert "Analytics trigger — report is fresh" '[ "$ar_age" -lt 5 ]'
-rm -rf "$AT_DIR" "$AT_MARKER"
+safe_cleanup "$AT_DIR" "$AT_MARKER"
 
 # --- Full pipeline integration test ---
 # Test: full pipeline — session-start injects, session-stop writes outcomes
@@ -1508,7 +1524,7 @@ assert "Full pipeline — outcome-positive written" 'grep -q "outcome-positive|t
 assert "Full pipeline — strategy-used written" 'grep -q "strategy-used|test-strat" "$FULL_MEM/.wal"'
 assert "Full pipeline — clean-session written" 'grep -q "clean-session" "$FULL_MEM/.wal"'
 assert "Full pipeline — session-metrics written" 'grep -q "session-metrics" "$FULL_MEM/.wal"'
-rm -rf "$FULL_DIR" "$FULL_MARKER"
+safe_cleanup "$FULL_DIR" "$FULL_MARKER"
 
 # --- Cluster activation tests (v0.4 "Wiki") ---
 
@@ -1682,7 +1698,7 @@ assert "Cluster — superseded file NOT loaded" '! printf "%s" "$CL_CTX" | grep 
 assert "Cluster contradicts — warning appears" 'printf "%s" "$CL_CTX" | grep -iq "конфликт\|contradicts"'
 assert "Cluster contradicts — priority marker" 'printf "%s" "$CL_CTX" | grep -q "\[PRIORITY\]"'
 
-rm -rf /tmp/cluster-test
+safe_cleanup /tmp/cluster-test
 
 # --- Cluster cap test (max +4 files) ---
 CAP_DIR=$(mktemp -d)
@@ -1747,7 +1763,7 @@ echo '{"session_id":"cap-test","cwd":"/tmp/cap-test"}' | CLAUDE_MEMORY_DIR="$CAP
 CAP_CLUSTER_COUNT=$(grep -c "cluster-load" "$CAP_MEM/.wal" 2>/dev/null || echo 0)
 assert "Cluster cap — max 4 files loaded by cluster" '[ "$CAP_CLUSTER_COUNT" -le 4 ]'
 
-rm -rf "$CAP_DIR" /tmp/cap-test
+safe_cleanup "$CAP_DIR" /tmp/cap-test
 
 # --- Cascade review display test ---
 CASCADE_DIR=$(mktemp -d)
@@ -1788,10 +1804,10 @@ CASCADE_OUT=$(echo '{"session_id":"cascade-test","cwd":"/tmp/cascade-test"}' | C
 CASCADE_CTX=$(printf '%s' "$CASCADE_OUT" | jq -r '.hookSpecificOutput.additionalContext // ""')
 assert "Cascade display — REVIEW marker appears" 'printf "%s" "$CASCADE_CTX" | grep -q "REVIEW.*some-parent.*updated"'
 
-rm -rf "$CASCADE_DIR" /tmp/cascade-test
+safe_cleanup "$CASCADE_DIR" /tmp/cascade-test
 
 # Cleanup cluster test dirs
-rm -rf "$CL_DIR"
+safe_cleanup "$CL_DIR"
 
 # --- End cluster activation tests ---
 
@@ -2196,7 +2212,7 @@ assert "Feedback e2e — evidence match → trigger-useful" \
 assert "Feedback e2e — no evidence match → trigger-silent" \
   'grep -q "|trigger-silent|unused-rule|fb-e2e" "$FB_MEM/.wal"'
 
-rm -rf "$FB_DIR" "$FB_MARKER"
+safe_cleanup "$FB_DIR" "$FB_MARKER"
 
 # --- Test 20f: feedback loop end-to-end — body-mining fallback ---
 FB_DIR=$(mktemp -d); FB_MEM="$FB_DIR/memory"
@@ -2225,7 +2241,7 @@ printf '{"session_id":"fb-body","transcript_path":"%s/transcript.jsonl"}' "$FB_D
 assert "Feedback e2e — body-mining ≥2 tokens → trigger-useful" \
   'grep -q "|trigger-useful|bodyonly-rule|fb-body" "$FB_MEM/.wal"'
 
-rm -rf "$FB_DIR" "$FB_MARKER"
+safe_cleanup "$FB_DIR" "$FB_MARKER"
 
 # --- Test 21: schema-error logged for broken frontmatter ---
 SCH_DIR=$(mktemp -d); SCH_MEM="$SCH_DIR/memory"
@@ -2249,7 +2265,7 @@ echo '{"session_id":"sch-test2","prompt":"another"}' | \
 assert "Schema — de-duplicated within same day" \
   '[ "$(grep -c "schema-error|missing-close" "$SCH_MEM/.wal")" -eq 1 ]'
 
-rm -rf "$SCH_DIR"
+safe_cleanup "$SCH_DIR"
 
 # --- Test 22: health-check — schema-error surfaces in SessionStart output ---
 HC_DIR=$(mktemp -d); HC_MEM="$HC_DIR/memory"
@@ -2278,7 +2294,7 @@ assert "Health — schema-error count surfaced in SessionStart" \
 assert "Health — names of broken files surfaced" \
   'printf "%s" "$HC_CTX" | grep -q "broken-one\|broken-two"'
 
-rm -rf "$HC_DIR"
+safe_cleanup "$HC_DIR"
 
 # --- Test 10: session-start writes dedup list ---
 SS_HOOK="$(dirname "$0")/session-start.sh"
@@ -2291,10 +2307,10 @@ SS_OUT=$(echo '{"session_id":"ss-dedup-test","cwd":"/tmp/trtest-ss-proj"}' | \
   CLAUDE_MEMORY_DIR="$TR_MEM" bash "$SS_HOOK" 2>/dev/null)
 assert "Trigger — session-start writes dedup list" '[ -f "$TR_MEM/.runtime/injected-ss-dedup-test.list" ]'
 rm -f "$TR_MEM/.runtime/injected-ss-dedup-test.list"
-rm -rf /tmp/trtest-ss-proj
+safe_cleanup /tmp/trtest-ss-proj
 
 # Cleanup trigger test dir
-rm -rf "$TR_DIR"
+safe_cleanup "$TR_DIR"
 
 # --- End prompt triggers tests ---
 
@@ -2322,7 +2338,7 @@ EX_OUT=$(evidence_from_frontmatter "$EX_MEM/mistakes/ex-fm.md")
 assert "evidence_from_frontmatter — extracts YAML array entries" \
   'printf "%s" "$EX_OUT" | grep -qF "parameterized query" && printf "%s" "$EX_OUT" | grep -qF "timezone-aware datetime"'
 
-rm -rf "$EX_DIR"
+safe_cleanup "$EX_DIR"
 
 # --- Test 20b: evidence_from_body extracts content tokens, excludes stop-words + frontmatter ---
 EX_DIR=$(mktemp -d); EX_MEM="$EX_DIR/memory"
@@ -2368,7 +2384,7 @@ assert "evidence_from_body — excludes stop-word 'never'" \
 assert "evidence_from_body — excludes stop-word 'always'" \
   '! printf "%s\n" "$EX_BODY" | grep -qx "always"'
 
-rm -rf "$EX_DIR"
+safe_cleanup "$EX_DIR"
 
 # --- Test 20c: evidence_from_body filters slug name ---
 EX_DIR=$(mktemp -d); EX_MEM="$EX_DIR/memory"
@@ -2392,7 +2408,7 @@ assert "evidence_from_body — slug name filtered from tokens" \
 assert "evidence_from_body — other content words still present" \
   'printf "%s\n" "$EX_SELF" | grep -qx "parameterized"'
 
-rm -rf "$EX_DIR"
+safe_cleanup "$EX_DIR"
 
 # --- Test 20d: evidence_from_body truncates at 10 KB ---
 EX_DIR=$(mktemp -d); EX_MEM="$EX_DIR/memory"
@@ -2411,7 +2427,7 @@ assert "evidence_from_body — 'uniquestart' present (within 10 KB)" \
 assert "evidence_from_body — 'uniqueend' absent (beyond 10 KB)" \
   '! printf "%s\n" "$EX_HUGE" | grep -qx "uniqueend"'
 
-rm -rf "$EX_DIR"
+safe_cleanup "$EX_DIR"
 
 # --- Test 20e: evidence-missing WAL event when memory file absent ---
 FB_DIR=$(mktemp -d); FB_MEM="$FB_DIR/memory"
@@ -2436,7 +2452,7 @@ assert "Feedback — evidence-missing event when file absent" \
 assert "Feedback — trigger-silent also written for missing file" \
   'grep -q "|trigger-silent|ghost-file|fb-miss" "$FB_MEM/.wal"'
 
-rm -rf "$FB_DIR" "$FB_MARKER"
+safe_cleanup "$FB_DIR" "$FB_MARKER"
 
 # --- Test 20f: evidence-empty WAL event when memory has no extractable evidence ---
 FB_DIR=$(mktemp -d); FB_MEM="$FB_DIR/memory"
@@ -2468,7 +2484,7 @@ assert "Feedback — evidence-empty event when body has no content tokens" \
 assert "Feedback — trigger-silent also written for empty evidence" \
   'grep -q "|trigger-silent|noevid|fb-empty" "$FB_MEM/.wal"'
 
-rm -rf "$FB_DIR" "$FB_MARKER"
+safe_cleanup "$FB_DIR" "$FB_MARKER"
 
 # --- Test 20g: case-insensitive evidence match ---
 FB_DIR=$(mktemp -d); FB_MEM="$FB_DIR/memory"
@@ -2499,7 +2515,7 @@ printf '{"session_id":"fb-case","transcript_path":"%s/transcript.jsonl"}' "$FB_D
 assert "Feedback — case-insensitive match works" \
   'grep -q "|trigger-useful|case-rule|fb-case" "$FB_MEM/.wal"'
 
-rm -rf "$FB_DIR" "$FB_MARKER"
+safe_cleanup "$FB_DIR" "$FB_MARKER"
 
 # --- Test 21: perl regex injection in section markers (v0.8) ---
 # Two injected files cross-referencing via related: contradicts. The newer slug
@@ -2557,7 +2573,7 @@ assert "perl-injection — target body survives perl pass" \
 assert "perl-injection — source body still present" \
   'printf "%s" "$T21_CTX" | grep -q "Normal source body"'
 
-rm -rf "$T21_DIR" "$T21_STDERR"
+safe_cleanup "$T21_DIR" "$T21_STDERR"
 
 # --- Test 22: WAL feedback-loop read is locked (v0.8) ---
 # session-stop.sh awk-reads $WAL_FILE for inject/trigger-match events;
@@ -2643,7 +2659,7 @@ assert "ascii-body — regression: 'hypotheses' present" \
 assert "ascii-body — regression: 'cascade' present" \
   'printf "%s\n" "$T24C_OUT" | grep -q "cascade"'
 
-rm -rf "$T24_DIR"
+safe_cleanup "$T24_DIR"
 
 # --- Test 25: concurrent session-start does not corrupt WAL or dedup (v0.8) ---
 T25_DIR=$(mktemp -d); T25_MEM="$T25_DIR/memory"
@@ -2682,7 +2698,7 @@ assert "concurrent — WAL has no malformed lines" \
 assert "concurrent — dedup lists for both sessions present" \
   '[ -f "$T25_MEM/.runtime/injected-sa.list" ] && [ -f "$T25_MEM/.runtime/injected-sb.list" ]'
 
-rm -rf "$T25_DIR" "$T25_OUT_A" "$T25_OUT_B" "$T25_ERR_A" "$T25_ERR_B"
+safe_cleanup "$T25_DIR" "$T25_OUT_A" "$T25_OUT_B" "$T25_ERR_A" "$T25_ERR_B"
 
 # --- Test: S1 (CWE-78) — .config.sh must NOT be sourced as shell code ---
 # Regression for audit-2026-04-16 S1: an LLM with Write access to
@@ -2704,7 +2720,7 @@ recurrence: 1
 S1MD
 echo '{"session_id":"s1ss","cwd":"/tmp"}' | CLAUDE_MEMORY_DIR="$S1_DIR1" bash "$HOOK" >/dev/null 2>&1 || true
 assert "S1 — session-start: .config.sh shell code NOT executed" '[ ! -f "$S1_CANARY1" ]'
-rm -rf "$S1_DIR1"
+safe_cleanup "$S1_DIR1"
 
 # session-stop
 S1_DIR2=$(mktemp -d); mkdir -p "$S1_DIR2"
@@ -2712,7 +2728,7 @@ S1_CANARY2="$S1_DIR2/PWNED"
 printf "touch '%s'\n" "$S1_CANARY2" > "$S1_DIR2/.config.sh"
 echo '{"session_id":"s1stop","cwd":"/tmp","transcript_path":"/dev/null"}' | CLAUDE_MEMORY_DIR="$S1_DIR2" bash "$HOME/.claude/hooks/memory-stop.sh" >/dev/null 2>&1 || true
 assert "S1 — session-stop: .config.sh shell code NOT executed" '[ ! -f "$S1_CANARY2" ]'
-rm -rf "$S1_DIR2"
+safe_cleanup "$S1_DIR2"
 
 # user-prompt-submit
 S1_DIR3=$(mktemp -d); mkdir -p "$S1_DIR3"
@@ -2720,7 +2736,7 @@ S1_CANARY3="$S1_DIR3/PWNED"
 printf "touch '%s'\n" "$S1_CANARY3" > "$S1_DIR3/.config.sh"
 echo '{"session_id":"s1ups","cwd":"/tmp","prompt":"hi"}' | CLAUDE_MEMORY_DIR="$S1_DIR3" bash "$HOME/.claude/hooks/memory-user-prompt-submit.sh" >/dev/null 2>&1 || true
 assert "S1 — user-prompt-submit: .config.sh shell code NOT executed" '[ ! -f "$S1_CANARY3" ]'
-rm -rf "$S1_DIR3"
+safe_cleanup "$S1_DIR3"
 
 # --- Test: R1 (critical) — locale-dependent awk printf must not corrupt tfidf-index ---
 # Regression for audit-2026-04-16 R1: BSD awk printf "%.4f" honours LC_NUMERIC.
@@ -2747,7 +2763,7 @@ beta gamma other stuff filler tokens around
 R1MD
 LC_ALL=ru_RU.UTF-8 CLAUDE_MEMORY_DIR="$R1_MEM" bash "$HOME/.claude/hooks/memory-index.sh" >/dev/null 2>&1 || true
 assert "R1 — tfidf-index uses locale-stable decimal separator" '[ -f "$R1_MEM/.tfidf-index" ] && ! grep -qE ":[0-9]+,[0-9]+" "$R1_MEM/.tfidf-index"'
-rm -rf "$R1_DIR"
+safe_cleanup "$R1_DIR"
 
 # --- Test: S2 (major, CWE-22) — find_memory_file must reject traversal slugs ---
 # Regression for audit-2026-04-16 S2: a malicious `related:` slug like
@@ -2793,7 +2809,7 @@ assert "S2 — find_memory_file rejects '/' in slug (resolvable target present)"
 S2_OUT_OK=$(MEMORY_DIR="$S2_MEM" find_memory_file "innocent" 2>/dev/null || true)
 assert "S2 — find_memory_file still accepts clean slug" '[ -n "$S2_OUT_OK" ] && [ -f "$S2_OUT_OK" ]'
 
-rm -rf "$S2_DIR"
+safe_cleanup "$S2_DIR"
 
 # --- Test: S3 (major, CWE-94) — WAL parent with '/' must not DoS context ---
 S3_DIR=$(mktemp -d)
@@ -2814,7 +2830,7 @@ echo "$(date +%Y-%m-%d)|cascade-review|leaf-s3|parent:foo/bar/baz" > "$S3_MEM/.w
 S3_OUT=$(echo '{"session_id":"s3cascade","cwd":"/tmp"}' | CLAUDE_MEMORY_DIR="$S3_MEM" bash "$HOOK" 2>/dev/null)
 S3_CTX=$(printf '%s' "$S3_OUT" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null)
 assert "S3 — cascade parent with / does not wipe CONTEXT" 'printf "%s" "$S3_CTX" | grep -q "leaf-s3"'
-rm -rf "$S3_DIR"
+safe_cleanup "$S3_DIR"
 
 # --- Test: S4 (major, CWE-116) — structural prompt markers in body must be neutralized ---
 S4_DIR=$(mktemp -d)
@@ -2835,7 +2851,7 @@ S4_CTX=$(printf '%s' "$S4_OUT" | jq -r '.hookSpecificOutput.additionalContext //
 # The raw closing tag must be absent (escaped, entity-encoded, or otherwise neutralized)
 assert "S4 — </system-reminder> marker neutralized in injected context" '! printf "%s" "$S4_CTX" | grep -q "</system-reminder>"'
 assert "S4 — <system> wrapper marker neutralized in injected context"  '! printf "%s" "$S4_CTX" | grep -qE "<system>[^<]*</system>"'
-rm -rf "$S4_DIR"
+safe_cleanup "$S4_DIR"
 
 # --- Test: R2/R4/R6/R7/R8 — parser robustness cluster ---
 # Regression for audit-2026-04-16 parser findings: tabs after YAML key,
@@ -2927,7 +2943,7 @@ assert "R7 — block-style keywords: both list items present" \
 assert "R8 — UTF-8 BOM file: frontmatter parsed as active/major" \
   'printf "%s\n" "$RX_MIST" | awk -F$"\t" "/r8-bom/{print \$2 \"|\" \$6}" | grep -q "^active|major$"'
 
-rm -rf "$RX_DIR"
+safe_cleanup "$RX_DIR"
 
 # --- Test: R13 (minor) — horizontal rule '---' in body preserved as standalone line ---
 # Regression for audit-2026-04-16 R13: a `---` line after the frontmatter was
@@ -2959,7 +2975,7 @@ assert "R13 — HR '---' preserved as standalone body line" \
   'printf "%s\n" "$R13_BODY" | grep -Fxq -- "---"'
 assert "R13 — paragraphs NOT collapsed across HR" \
   '! printf "%s\n" "$R13_BODY" | grep -Fq -- "Para1.---Para2."'
-rm -rf "$R13_DIR"
+safe_cleanup "$R13_DIR"
 
 # --- Test: R14 (minor) — find_memory_file resolves slugs in nested subdirs ---
 # Regression for audit-2026-04-16 R14: session-start collects mistakes
@@ -2988,7 +3004,7 @@ R14_RC_SLASH=0
 R14_OUT_SLASH=$(MEMORY_DIR="$R14_MEM" find_memory_file "deep/r14-nested" 2>/dev/null) || R14_RC_SLASH=$?
 assert "R14 — slug with '/' still rejected (S2 regression guard)" \
   '[ "$R14_RC_SLASH" -ne 0 ] && [ -z "$R14_OUT_SLASH" ]'
-rm -rf "$R14_DIR"
+safe_cleanup "$R14_DIR"
 
 # --- Test: R15 (minor) — symlinked memory files are included in scan ---
 # Regression for audit-2026-04-16 R15: `find -type f` silently skips
@@ -3024,7 +3040,7 @@ assert "R15 — symlinked mistake file injected" \
   'printf "%s" "$R15_CTX" | grep -q "linked"'
 assert "R15 — broken symlink does not crash hook" \
   '[ -n "$R15_OUT" ] && printf "%s" "$R15_OUT" | jq empty 2>/dev/null'
-rm -rf "$R15_DIR"
+safe_cleanup "$R15_DIR"
 
 # --- Test: C5 (minor) — log10 ref_count bucket boundaries match inline spec ---
 # Regression for audit-2026-04-16 C5: the earlier implementation used
@@ -3102,7 +3118,7 @@ assert "C6 — inline-array preserves type suffix (foo:contradicts)" \
   'printf "%s" "$C6_TYPED" | grep -q "foo:contradicts"'
 assert "C6 — inline-array preserves type suffix (bar:reinforces)" \
   'printf "%s" "$C6_TYPED" | grep -q "bar:reinforces"'
-rm -rf "$C6_DIR"
+safe_cleanup "$C6_DIR"
 
 # --- Test: C7 (minor) — typeless related entry does not leak slug into _rtype ---
 # Regression for audit-2026-04-16 C7: forward/reverse cluster scans used
@@ -3194,7 +3210,7 @@ assert "C9 — outcome-positive record ranks >= trigger-only record" '[ "$C9_HEL
 # Guard: source no longer treats trigger-match as pos_count.
 assert "C9 — score-records.sh no longer mixes trigger-match into pos_count" \
   '! grep -q "trigger-match.*pos_count" $HOOKS_SRC_DIR/lib/score-records.sh'
-rm -rf "$C9_DIR"
+safe_cleanup "$C9_DIR"
 
 # --- Test: C10 (minor) — pinned file with malformed frontmatter is NOT archived ---
 # Regression for audit-2026-04-16 C10: CLAUDE.md guarantees pinned files never
@@ -3239,7 +3255,7 @@ assert "C10 — raw pinned note (no frontmatter) preserved" \
   '[ -f "$C10_MEM/notes/c10-raw-pinned.md" ] && [ ! -f "$C10_MEM/archive/notes/c10-raw-pinned.md" ]'
 assert "C10 — regular unparseable note still archived (fallback still active)" \
   '[ ! -f "$C10_MEM/notes/c10-regular-nofm.md" ] && [ -f "$C10_MEM/archive/notes/c10-regular-nofm.md" ]'
-rm -rf "$C10_DIR"
+safe_cleanup "$C10_DIR"
 
 # --- Test 26: self-profile excludes precision_class:ambient files from denominator (v0.8.1) ---
 PC_DIR=$(mktemp -d); PC_MEM="$PC_DIR/memory"
@@ -3282,7 +3298,7 @@ assert "v0.8.1 — self-profile reports ambient activations separately" \
   'grep -qE "ambient activations[^|]*\| 1 \|" "$PC_OUT"'
 assert "v0.8.1 — measurable precision excludes ambient from denominator" \
   'grep -q "measurable precision.*100%" "$PC_OUT"'
-rm -rf "$PC_DIR"
+safe_cleanup "$PC_DIR"
 
 # --- Test 27: rotation-summary WAL event suppressed on idle runs (v0.8.1) ---
 RS_DIR=$(mktemp -d); RS_MEM="$RS_DIR/memory"
@@ -3303,7 +3319,7 @@ CLAUDE_MEMORY_DIR="$RS_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/nul
 
 assert "v0.8.1 — rotation-summary NOT written when no activity" \
   '! grep -q "|rotation-summary|" "$RS_MEM/.wal"'
-rm -rf "$RS_DIR"
+safe_cleanup "$RS_DIR"
 
 # --- Test: v0.9.0 — fts-sync bash fallback works when memoryctl absent ---
 # The sync script delegates to `memoryctl fts sync` when the Go binary is
@@ -3318,7 +3334,7 @@ PATH="/usr/bin:/bin" CLAUDE_MEMORY_DIR="$FALLBACK_MEM" \
   bash "$HOOKS_SRC_DIR/../bin/memory-fts-sync.sh" >/dev/null 2>&1 || true
 FALLBACK_COUNT=$(sqlite3 "$FALLBACK_MEM/index.db" "SELECT COUNT(*) FROM mem" 2>/dev/null || echo 0)
 assert "v0.9.0 — fts-sync bash fallback indexes files without memoryctl" '[ "$FALLBACK_COUNT" = "1" ]'
-rm -rf "$FALLBACK_DIR"
+safe_cleanup "$FALLBACK_DIR"
 
 # --- Results ---
 echo ""
@@ -3328,16 +3344,10 @@ echo ""
 echo "Passed: $PASS / $((PASS + FAIL))"
 [ "$FAIL" -eq 0 ] && echo "ALL TESTS PASSED" || echo "FAILURES: $FAIL"
 
-# Cleanup
-# Drain any backgrounded FTS shadow children before removing fixtures.
-# user-prompt-submit.sh fires memory-fts-shadow.sh via `&` + disown — on
-# slow Linux CI this still writes to $TEST_DIR/index.db-{wal,shm} when
-# rm -rf starts the recursive traversal, and Linux rm reports "Directory
-# not empty". macOS doesn't race in practice. Short bounded wait.
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-  pgrep -f "memory-fts-shadow\.sh" >/dev/null 2>&1 || break
-  sleep 0.2
-done
-rm -rf "$TEST_DIR" 2>/dev/null || { sleep 0.5; rm -rf "$TEST_DIR" 2>/dev/null || true; }
+# Cleanup — safe_cleanup drains backgrounded hook children (fts-shadow,
+# regen-memory-index, memory-index, memory-analytics, strategy-score,
+# self-profile, wal-compact) before rm so Linux CI doesn't race with
+# children still writing into the fixture.
+safe_cleanup "$TEST_DIR"
 
 exit $FAIL
