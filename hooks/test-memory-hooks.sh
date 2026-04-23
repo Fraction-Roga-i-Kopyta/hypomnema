@@ -39,7 +39,7 @@ assert() {
 # into a test fixture when the following `rm -rf` walks it — `rm` aborts
 # with "Directory not empty" and `set -e` kills the suite. Drain them by
 # pattern with a bounded wait, then rm with a single short retry.
-_HOOK_CHILD_PATTERN='memory-fts-shadow\.sh|regen-memory-index\.sh|memory-index\.sh|memory-analytics\.sh|memory-strategy-score\.sh|memory-self-profile\.sh|wal-compact\.sh'
+_HOOK_CHILD_PATTERN='memory-fts-shadow\.sh|regen-memory-index\.sh|memory-index\.sh|memory-analytics\.sh|memory-strategy-score\.sh|memory-self-profile\.sh|wal-compact\.sh|wal-retro-silent\.sh'
 safe_cleanup() {
   local i
   for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
@@ -3389,6 +3389,45 @@ PATH="/usr/bin:/bin" CLAUDE_MEMORY_DIR="$FALLBACK_MEM" \
 FALLBACK_COUNT=$(sqlite3 "$FALLBACK_MEM/index.db" "SELECT COUNT(*) FROM mem" 2>/dev/null || echo 0)
 assert "v0.9.0 — fts-sync bash fallback indexes files without memoryctl" '[ "$FALLBACK_COUNT" = "1" ]'
 safe_cleanup "$FALLBACK_DIR"
+
+# --- Test: v0.13 — wal-retro-silent emits trigger-silent-retro for orphan injects ---
+RETRO_DIR=$(mktemp -d); RETRO_MEM="$RETRO_DIR/memory"
+mkdir -p "$RETRO_MEM"
+# Three sessions worth of events:
+#   s-orphan: inject 3 days ago, no closing event    → should produce retro
+#   s-closed: inject 3 days ago + trigger-useful     → no retro (already closed)
+#   s-fresh:  inject today, no closing event         → no retro yet (age < 24h)
+if [[ "$OSTYPE" == darwin* ]]; then
+  RETRO_OLD=$(date -v-3d +%Y-%m-%d)
+else
+  RETRO_OLD=$(date -d "3 days ago" +%Y-%m-%d)
+fi
+RETRO_TODAY=$(date +%Y-%m-%d)
+cat > "$RETRO_MEM/.wal" << EOF
+$RETRO_OLD|inject|rule-one|s-orphan
+$RETRO_OLD|inject|rule-two|s-orphan
+$RETRO_OLD|inject|rule-one|s-closed
+$RETRO_OLD|trigger-useful|rule-one|s-closed
+$RETRO_TODAY|inject|rule-one|s-fresh
+EOF
+CLAUDE_MEMORY_DIR="$RETRO_MEM" bash "$HOOKS_SRC_DIR/wal-retro-silent.sh" 2>/dev/null
+
+assert "v0.13 — retro emitted for orphan session rule-one" \
+  'grep -q "trigger-silent-retro|rule-one|s-orphan" "$RETRO_MEM/.wal"'
+assert "v0.13 — retro emitted for orphan session rule-two" \
+  'grep -q "trigger-silent-retro|rule-two|s-orphan" "$RETRO_MEM/.wal"'
+assert "v0.13 — retro NOT emitted for already-closed session" \
+  '! grep -q "trigger-silent-retro|rule-one|s-closed" "$RETRO_MEM/.wal"'
+assert "v0.13 — retro NOT emitted for session younger than cutoff" \
+  '! grep -q "trigger-silent-retro|rule-one|s-fresh" "$RETRO_MEM/.wal"'
+
+# Idempotency — re-run must NOT duplicate.
+BEFORE_RETRO=$(wc -l < "$RETRO_MEM/.wal" | tr -d ' ')
+CLAUDE_MEMORY_DIR="$RETRO_MEM" bash "$HOOKS_SRC_DIR/wal-retro-silent.sh" 2>/dev/null
+AFTER_RETRO=$(wc -l < "$RETRO_MEM/.wal" | tr -d ' ')
+assert "v0.13 — retro is idempotent on re-run" '[ "$BEFORE_RETRO" = "$AFTER_RETRO" ]'
+
+safe_cleanup "$RETRO_DIR"
 
 # --- Results ---
 echo ""

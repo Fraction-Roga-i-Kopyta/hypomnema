@@ -184,6 +184,7 @@ date|event|target|session
 - `trigger-match` — UserPromptSubmit matched a substring trigger. `target` = slug.
 - `trigger-useful` — Stop hook detected a citation of an injected file. `target` = slug.
 - `trigger-silent` — Stop hook completed without a citation. `target` = slug.
+- `trigger-silent-retro` — retroactive classification: session aged past 24 h without any Stop-hook event, so the inject is posthumously marked silent by `hooks/wal-retro-silent.sh`. `target` = slug. Date column is the retro-emission date, not the original inject date. Restores the Bayesian `eff` denominator for crashed / under-120 s / transcript-less sessions.
 - `shadow-miss` — FTS5 shadow pass surfaced a file the primary pipeline missed. `target` = slug. Diagnostic-only; MUST NOT affect injection.
 
 **Outcomes:**
