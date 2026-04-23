@@ -143,6 +143,14 @@ func runSelfProfile(_ []string) {
 		fmt.Fprintf(os.Stderr, "memoryctl self-profile: %v\n", err)
 		os.Exit(1)
 	}
+	// v0.11: append "Decisions under pressure" section when any ADR
+	// review-trigger fires. No-op on installs without ~/.claude/memory/
+	// decisions/, preserving byte-for-byte parity with the bash script
+	// on fixtures that don't carry personal ADRs.
+	if err := profile.AppendDecisionsPressure(memoryDir()); err != nil {
+		fmt.Fprintf(os.Stderr, "memoryctl self-profile (decisions append): %v\n", err)
+		// Non-fatal — Generate already wrote the core profile.
+	}
 }
 
 // memoryDir resolves the memory root from $CLAUDE_MEMORY_DIR, falling back to
