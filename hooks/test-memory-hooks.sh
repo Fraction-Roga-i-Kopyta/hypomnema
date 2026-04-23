@@ -3429,6 +3429,50 @@ assert "v0.13 — retro is idempotent on re-run" '[ "$BEFORE_RETRO" = "$AFTER_RE
 
 safe_cleanup "$RETRO_DIR"
 
+# --- Test: v0.13 — memory-secrets-detect blocks plaintext secrets ---
+SEC_HOOK="$HOOKS_SRC_DIR/memory-secrets-detect.sh"
+SEC_DIR=$(mktemp -d); SEC_MEM="$SEC_DIR/memory"
+mkdir -p "$SEC_MEM/mistakes"
+
+# 1. Plaintext secret in memory path → exit 2 (block).
+SEC_JSON=$(jq -n --arg fp "$SEC_MEM/mistakes/x.md" \
+  --arg c "api_key: sk_live_abcd1234efgh5678" \
+  '{tool_input: {file_path: $fp, content: $c}}')
+SEC_EXIT=0
+printf '%s' "$SEC_JSON" | CLAUDE_MEMORY_DIR="$SEC_MEM" bash "$SEC_HOOK" >/dev/null 2>&1 || SEC_EXIT=$?
+assert "v0.13 — secrets detect blocks api_key in memory write (exit 2)" '[ "$SEC_EXIT" -eq 2 ]'
+
+# 2. Same secret inside fenced code block → exit 0 (documentation example).
+SEC_FENCED_JSON=$(jq -n --arg fp "$SEC_MEM/mistakes/x.md" \
+  --arg c $'Example of what NOT to do:\n```\napi_key: sk_live_abcd1234efgh5678\n```\n' \
+  '{tool_input: {file_path: $fp, content: $c}}')
+SEC_EXIT=0
+printf '%s' "$SEC_FENCED_JSON" | CLAUDE_MEMORY_DIR="$SEC_MEM" bash "$SEC_HOOK" >/dev/null 2>&1 || SEC_EXIT=$?
+assert "v0.13 — secrets detect allows secrets inside fenced code block" '[ "$SEC_EXIT" -eq 0 ]'
+
+# 3. Same secret outside memory root → exit 0 (not our concern).
+SEC_OUTSIDE_JSON=$(jq -n --arg fp "/tmp/outside.md" \
+  --arg c "api_key: sk_live_abcd1234efgh5678" \
+  '{tool_input: {file_path: $fp, content: $c}}')
+SEC_EXIT=0
+printf '%s' "$SEC_OUTSIDE_JSON" | CLAUDE_MEMORY_DIR="$SEC_MEM" bash "$SEC_HOOK" >/dev/null 2>&1 || SEC_EXIT=$?
+assert "v0.13 — secrets detect ignores paths outside memory root" '[ "$SEC_EXIT" -eq 0 ]'
+
+# 4. HYPOMNEMA_ALLOW_SECRETS=1 bypass.
+SEC_EXIT=0
+printf '%s' "$SEC_JSON" | HYPOMNEMA_ALLOW_SECRETS=1 CLAUDE_MEMORY_DIR="$SEC_MEM" bash "$SEC_HOOK" >/dev/null 2>&1 || SEC_EXIT=$?
+assert "v0.13 — HYPOMNEMA_ALLOW_SECRETS=1 bypasses the gate" '[ "$SEC_EXIT" -eq 0 ]'
+
+# 5. Short value (placeholder "password: xxx") below length floor → allowed.
+SEC_PLACEHOLDER_JSON=$(jq -n --arg fp "$SEC_MEM/mistakes/x.md" \
+  --arg c "password: xxx" \
+  '{tool_input: {file_path: $fp, content: $c}}')
+SEC_EXIT=0
+printf '%s' "$SEC_PLACEHOLDER_JSON" | CLAUDE_MEMORY_DIR="$SEC_MEM" bash "$SEC_HOOK" >/dev/null 2>&1 || SEC_EXIT=$?
+assert "v0.13 — secrets detect tolerates short placeholder values" '[ "$SEC_EXIT" -eq 0 ]'
+
+safe_cleanup "$SEC_DIR"
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="

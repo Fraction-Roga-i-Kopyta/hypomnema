@@ -257,6 +257,7 @@ register_hook SessionStart     ""           "~/.claude/hooks/memory-session-star
 register_hook Stop             ""           "~/.claude/hooks/memory-stop.sh"               10 "Stop hook"
 register_hook UserPromptSubmit ""           "~/.claude/hooks/memory-user-prompt-submit.sh" 10 "UserPromptSubmit hook (v0.5 context triggers)"
 register_hook PreToolUse       "Write"      "~/.claude/hooks/memory-dedup.sh"              10 "PreToolUse hook (fuzzy dedup for mistakes/*.md)"
+register_hook PreToolUse       "Write|Edit" "~/.claude/hooks/memory-secrets-detect.sh"     5  "PreToolUse hook (block plaintext secrets in memory writes)"
 register_hook PostToolUse      "Write|Edit" "~/.claude/hooks/memory-outcome.sh"            10 "PostToolUse hook (outcome-new + cascade signals)"
 register_hook PostToolUse      "Bash"       "~/.claude/hooks/memory-error-detect.sh"       10 "PostToolUse hook (Bash error-pattern detect)"
 register_hook PreCompact       ""           "~/.claude/hooks/memory-precompact.sh"          5 "PreCompact hook (checkpoint reminder)"
