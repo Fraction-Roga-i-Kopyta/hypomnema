@@ -491,11 +491,12 @@ func checkIndices(memoryDir string, now time.Time) Check {
 // excluded (it doesn't carry session_id in column 4, a FORMAT.md §5.2
 // violation).
 var closingEvents = map[string]bool{
-	"trigger-useful":   true,
-	"trigger-silent":   true,
-	"outcome-positive": true,
-	"outcome-negative": true,
-	"clean-session":    true,
+	"trigger-useful":       true,
+	"trigger-silent":       true,
+	"trigger-silent-retro": true, // v0.13+ retroactive classification
+	"outcome-positive":     true,
+	"outcome-negative":     true,
+	"clean-session":        true,
 }
 
 // openQuantaWindowDays bounds the window checkOpenQuanta examines. Older

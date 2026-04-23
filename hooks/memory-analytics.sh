@@ -85,6 +85,11 @@ ANALYTICS=$(awk -F'|' \
   $2 == "shadow-miss"        { shadow_miss[$3]++ }
   $2 == "trigger-useful"     { trig_useful[$3]++ }
   $2 == "trigger-silent"     { trig_silent[$3]++ }
+  # v0.13: retroactive silent classification for sessions that never
+  # reached Stop (crash / <120s / no transcript). Counted separately
+  # so trends stay traceable: a slug going from 20% silent to 70%
+  # silent-retro is a different signal than going to 70% silent.
+  $2 == "trigger-silent-retro" { trig_silent_retro[$3]++ }
   $2 == "schema-error"       { schema_err++ }
   $2 == "format-unsupported" { format_un++ }
   $2 == "evidence-missing"   { evi_missing++ }
@@ -171,10 +176,12 @@ ANALYTICS=$(awk -F'|' \
     tu_count = 0
     for (name in trig_silent) tu_seen[name] = 1
     for (name in trig_useful) tu_seen[name] = 1
+    for (name in trig_silent_retro) tu_seen[name] = 1
     for (name in tu_seen) {
       u = (name in trig_useful) ? trig_useful[name] : 0
       s = (name in trig_silent) ? trig_silent[name] : 0
-      tu_entries[++tu_count] = sprintf("%06d\t%s\t%d\t%d", s, name, u, s)
+      r = (name in trig_silent_retro) ? trig_silent_retro[name] : 0
+      tu_entries[++tu_count] = sprintf("%06d\t%s\t%d\t%d\t%d", s + r, name, u, s, r)
     }
     if (tu_count > 0) {
       insertion_sort(tu_entries, tu_count)
@@ -182,7 +189,11 @@ ANALYTICS=$(awk -F'|' \
       printed = 0
       for (i = tu_count; i >= 1 && printed < 10; i--) {
         split(tu_entries[i], f, "\t")
-        printf "- %s: useful=%d silent=%d\n", f[2], f[3] + 0, f[4] + 0
+        if (f[5] + 0 > 0) {
+          printf "- %s: useful=%d silent=%d silent-retro=%d\n", f[2], f[3] + 0, f[4] + 0, f[5] + 0
+        } else {
+          printf "- %s: useful=%d silent=%d\n", f[2], f[3] + 0, f[4] + 0
+        }
         printed++
       }
     }

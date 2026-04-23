@@ -330,6 +330,18 @@ if [ -x "$PROFILE_SCRIPT" ]; then
   disown 2>/dev/null || true
 fi
 
+# Retroactive silent classification — emits trigger-silent-retro for
+# inject events whose session never closed. Must run BEFORE
+# compaction because compaction turns `inject` into `inject-agg` and
+# loses session_id. Same lock as wal-compact; self-checks cutoff.
+if [ -f "$WAL_FILE" ]; then
+  RETRO_SCRIPT="$(dirname "$0")/wal-retro-silent.sh"
+  if [ -x "$RETRO_SCRIPT" ]; then
+    CLAUDE_MEMORY_DIR="$MEMORY_DIR" bash "$RETRO_SCRIPT" 2>/dev/null &
+    disown 2>/dev/null || true
+  fi
+fi
+
 # WAL compaction — ensure WAL doesn't grow unbounded between sessions.
 # wal-compact.sh self-checks threshold (>1200 lines) and acquires lock.
 if [ -f "$WAL_FILE" ]; then
