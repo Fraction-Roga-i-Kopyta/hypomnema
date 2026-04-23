@@ -163,6 +163,50 @@ func TestRun_CorpusWithFilesReportsCounts(t *testing.T) {
 	}
 }
 
+func TestDecisionsPressure_NoDirectoryIsOK(t *testing.T) {
+	claude, mem := newFixture(t)
+	r := Run(claude, mem)
+	c := mustFindCheck(t, r, "decisions_review", OK)
+	if !strings.Contains(c.Detail, "no personal decisions") {
+		t.Errorf("detail should mention missing dir, got %q", c.Detail)
+	}
+}
+
+func TestDecisionsPressure_CleanADRsAreOK(t *testing.T) {
+	claude, mem := newFixture(t)
+	if err := os.MkdirAll(filepath.Join(mem, "decisions"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// ADR with future calendar → all ok.
+	body := "---\ntype: decision\nstatus: active\nreview-triggers:\n  - after: \"2099-01-01\"\n---\nBody.\n"
+	if err := os.WriteFile(filepath.Join(mem, "decisions", "future.md"),
+		[]byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := Run(claude, mem)
+	c := mustFindCheck(t, r, "decisions_review", OK)
+	if !strings.Contains(c.Detail, "no pressure") {
+		t.Errorf("detail should confirm no pressure, got %q", c.Detail)
+	}
+}
+
+func TestDecisionsPressure_OverdueWarns(t *testing.T) {
+	claude, mem := newFixture(t)
+	if err := os.MkdirAll(filepath.Join(mem, "decisions"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "---\ntype: decision\nstatus: active\nreview-triggers:\n  - after: \"2020-01-01\"\n---\nBody.\n"
+	if err := os.WriteFile(filepath.Join(mem, "decisions", "overdue-one.md"),
+		[]byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := Run(claude, mem)
+	c := mustFindCheck(t, r, "decisions_review", WARN)
+	if !strings.Contains(c.Detail, "overdue-one") {
+		t.Errorf("detail should name the overdue slug, got %q", c.Detail)
+	}
+}
+
 func TestOpenQuanta_AllClosedIsOK(t *testing.T) {
 	claude, mem := newFixture(t)
 	today := time.Now().Format("2006-01-02")

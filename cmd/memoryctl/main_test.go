@@ -294,3 +294,137 @@ func TestDoctor_UnknownFlagFails(t *testing.T) {
 		t.Errorf("stderr should mention unknown flag, got %q", stderr)
 	}
 }
+
+// --- decisions subcommand ---
+
+func TestDecisions_UnknownSubcommand(t *testing.T) {
+	_, stderr, code := run(t, nil, "decisions", "bogus")
+	if code != 2 {
+		t.Errorf("expected exit 2, got %d", code)
+	}
+	if !strings.Contains(stderr, "unknown decisions subcommand") {
+		t.Errorf("stderr should identify unknown decisions subcommand, got %q", stderr)
+	}
+}
+
+// writeADR seeds a decisions/*.md with given frontmatter lines
+// (review-triggers: included inline).
+func writeADR(t *testing.T, dir, slug, frontmatter string) {
+	t.Helper()
+	body := "---\ntype: decision\nstatus: active\n" + frontmatter + "---\nBody.\n"
+	p := filepath.Join(dir, slug+".md")
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDecisions_ReviewAllOK(t *testing.T) {
+	adrDir := t.TempDir()
+	mem := t.TempDir()
+	// Two ADRs: one calendar in the future, one without triggers.
+	writeADR(t, adrDir, "future-calendar", "review-triggers:\n  - after: \"2099-01-01\"\n")
+	writeADR(t, adrDir, "no-triggers", "")
+
+	env := map[string]string{
+		"HYPOMNEMA_TODAY":   "2026-04-23",
+		"CLAUDE_MEMORY_DIR": mem,
+	}
+	stdout, _, code := run(t, env, "decisions", "review", "--dir", adrDir)
+	if code != 0 {
+		t.Errorf("expected exit 0, got %d\n%s", code, stdout)
+	}
+	if !strings.Contains(stdout, "[ok] future-calendar") {
+		t.Errorf("stdout missing future-calendar ok line:\n%s", stdout)
+	}
+}
+
+func TestDecisions_ReviewPressureExitsOne(t *testing.T) {
+	adrDir := t.TempDir()
+	mem := t.TempDir()
+	// Self-profile with low precision — triggers our fixture ADR.
+	profile := "## Metrics\n- measurable precision: 30% (3/10)\n"
+	if err := os.WriteFile(filepath.Join(mem, "self-profile.md"),
+		[]byte(profile), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeADR(t, adrDir, "under-pressure",
+		"review-triggers:\n  - metric: measurable_precision\n    operator: \"<\"\n    threshold: 0.40\n    source: self-profile\n")
+
+	env := map[string]string{
+		"HYPOMNEMA_TODAY":   "2026-04-23",
+		"CLAUDE_MEMORY_DIR": mem,
+	}
+	stdout, _, code := run(t, env, "decisions", "review", "--dir", adrDir)
+	if code != 1 {
+		t.Errorf("expected exit 1 on pressure, got %d\n%s", code, stdout)
+	}
+	if !strings.Contains(stdout, "[pressure] under-pressure") {
+		t.Errorf("stdout missing pressure line:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "0.30") || !strings.Contains(stdout, "0.40") {
+		t.Errorf("pressure message should show value + threshold, got:\n%s", stdout)
+	}
+}
+
+func TestDecisions_ReviewOverdueExitsOne(t *testing.T) {
+	adrDir := t.TempDir()
+	mem := t.TempDir()
+	writeADR(t, adrDir, "overdue-cal",
+		"review-triggers:\n  - after: \"2020-01-01\"\n")
+
+	env := map[string]string{
+		"HYPOMNEMA_TODAY":   "2026-04-23",
+		"CLAUDE_MEMORY_DIR": mem,
+	}
+	stdout, _, code := run(t, env, "decisions", "review", "--dir", adrDir)
+	if code != 1 {
+		t.Errorf("expected exit 1 on overdue, got %d", code)
+	}
+	if !strings.Contains(stdout, "[overdue] overdue-cal") {
+		t.Errorf("stdout missing overdue line:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "passed") {
+		t.Errorf("overdue message should say 'passed', got:\n%s", stdout)
+	}
+}
+
+func TestDecisions_ReviewJSONOutputValid(t *testing.T) {
+	adrDir := t.TempDir()
+	mem := t.TempDir()
+	writeADR(t, adrDir, "calendar-future",
+		"review-triggers:\n  - after: \"2099-01-01\"\n")
+
+	env := map[string]string{
+		"HYPOMNEMA_TODAY":   "2026-04-23",
+		"CLAUDE_MEMORY_DIR": mem,
+	}
+	stdout, _, code := run(t, env, "decisions", "review", "--dir", adrDir, "--json")
+	if code != 0 {
+		t.Errorf("expected exit 0, got %d", code)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(stdout), &decoded); err != nil {
+		t.Fatalf("--json output not valid JSON: %v\n%s", err, stdout)
+	}
+	if _, ok := decoded["results"]; !ok {
+		t.Errorf("JSON missing 'results' key")
+	}
+}
+
+func TestDecisions_ReviewUnknownFlagFails(t *testing.T) {
+	_, stderr, code := run(t, nil, "decisions", "review", "--bogus")
+	if code != 2 {
+		t.Errorf("unknown flag: expected exit 2, got %d", code)
+	}
+	if !strings.Contains(stderr, "unknown flag") {
+		t.Errorf("stderr should mention unknown flag, got %q", stderr)
+	}
+}
+
+func TestDecisions_ReviewMissingDirFails(t *testing.T) {
+	_, _, code := run(t, nil, "decisions", "review",
+		"--dir", "/nonexistent/decisions-path")
+	if code != 2 {
+		t.Errorf("missing dir: expected exit 2, got %d", code)
+	}
+}

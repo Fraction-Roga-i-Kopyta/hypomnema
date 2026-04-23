@@ -7,6 +7,8 @@ description: Every hook exits 0 on internal failure; only PreToolUse/dedup may r
 keywords: [hooks, fail-safe, contract, exit-code]
 domains: [architecture, integration]
 related: [two-scoring-pipelines]
+review-triggers:
+  - after: "2027-04-22"
 ---
 
 ## What

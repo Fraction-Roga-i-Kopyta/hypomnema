@@ -7,6 +7,12 @@ description: FTS5 + BM25 runs alongside substring triggers as a fire-and-forget 
 keywords: [fts5, recall, shadow, sqlite, observability]
 domains: [architecture, retrieval]
 related: [substring-triggers-with-negation]
+review-triggers:
+  - metric: shadow_miss_ratio
+    operator: ">"
+    threshold: 0.30
+    source: wal
+  - after: "2027-04-20"
 ---
 
 ## What

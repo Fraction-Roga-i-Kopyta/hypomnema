@@ -6,6 +6,12 @@ status: active
 description: Rules that shape behaviour silently (tone, language, security baselines) carry `precision_class: ambient` and are excluded from the measurable-precision denominator.
 keywords: [precision, ambient, silent-applied, metric]
 domains: [retrieval, observability]
+review-triggers:
+  - metric: measurable_precision
+    operator: "<"
+    threshold: 0.40
+    source: self-profile
+  - after: "2027-04-20"
 ---
 
 ## What

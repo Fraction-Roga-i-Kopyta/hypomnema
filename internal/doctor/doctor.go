@@ -20,6 +20,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/decisions"
 )
 
 // Status is the three-level health grade for each check.
@@ -126,6 +128,7 @@ func Run(claudeDir, memoryDir string) Report {
 		checkCorpus(memoryDir),
 		checkWALErrors(filepath.Join(memoryDir, ".wal"), now),
 		checkOpenQuanta(filepath.Join(memoryDir, ".wal"), now),
+		checkDecisionsPressure(memoryDir, now),
 		checkIndices(memoryDir, now),
 	)
 	return r
@@ -567,4 +570,78 @@ func checkOpenQuanta(walPath string, now time.Time) Check {
 		detail += " — skews Bayesian `eff`; see docs/notes/measurement-bias.md"
 	}
 	return Check{Name: name, Status: status, Detail: detail}
+}
+
+// checkDecisionsPressure evaluates ADR review-triggers in
+// ~/.claude/memory/decisions/ (personal ADRs — project-level ADRs in
+// docs/decisions/ are outside this check's scope) against the current
+// snapshot, and WARNs if any trigger fires. Not FAIL — a pressured
+// decision is an advisory to the operator, not a broken install.
+func checkDecisionsPressure(memoryDir string, now time.Time) Check {
+	name := "decisions_review"
+	dir := filepath.Join(memoryDir, "decisions")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return Check{Name: name, Status: OK, Detail: "no personal decisions/ directory"}
+		}
+		return Check{Name: name, Status: WARN, Detail: err.Error()}
+	}
+
+	snap, err := decisions.BuildSnapshot(memoryDir, now)
+	if err != nil {
+		return Check{Name: name, Status: WARN, Detail: "snapshot: " + err.Error()}
+	}
+
+	fired := 0
+	parseErrs := 0
+	adrCount := 0
+	var examples []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") || e.Name() == "README.md" {
+			continue
+		}
+		adrCount++
+		_, triggers, err := decisions.ReadADR(filepath.Join(dir, e.Name()))
+		if err != nil {
+			parseErrs++
+			continue
+		}
+		if len(triggers) == 0 {
+			continue
+		}
+		slug := strings.TrimSuffix(e.Name(), ".md")
+		for _, r := range decisions.Evaluate(triggers, slug, snap) {
+			if r.Status == decisions.StatusPressure || r.Status == decisions.StatusOverdue {
+				fired++
+				if len(examples) < 3 {
+					examples = append(examples, slug)
+				}
+			}
+		}
+	}
+
+	if adrCount == 0 {
+		return Check{Name: name, Status: OK, Detail: "0 personal ADRs"}
+	}
+	if parseErrs > 0 {
+		return Check{
+			Name:   name,
+			Status: WARN,
+			Detail: fmt.Sprintf("%d ADR(s) have malformed review-triggers (`memoryctl decisions review` shows details)", parseErrs),
+		}
+	}
+	if fired == 0 {
+		return Check{
+			Name:   name,
+			Status: OK,
+			Detail: fmt.Sprintf("%d ADR(s), no pressure", adrCount),
+		}
+	}
+	return Check{
+		Name:   name,
+		Status: WARN,
+		Detail: fmt.Sprintf("%d trigger(s) fired across %d ADR(s): %s; run `memoryctl decisions review` for detail",
+			fired, adrCount, strings.Join(examples, ", ")),
+	}
 }
