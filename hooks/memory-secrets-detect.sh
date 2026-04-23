@@ -1,0 +1,83 @@
+#!/bin/bash
+# memory-secrets-detect.sh — block memory writes that embed plaintext
+# secrets. Runs as a PreToolUse:Write|Edit hook; only scans writes
+# whose target lives under ~/.claude/memory/ (the user is
+# intentionally authoring memory there) and only blocks when a
+# secret-looking token appears OUTSIDE a fenced code block.
+set -o pipefail
+export LC_ALL=C
+
+# Reads the PreToolUse JSON envelope on stdin:
+#   { "tool_name": "Write"|"Edit", "tool_input": { "file_path": "...", "content": "..." } }
+# Exits 2 (block) on a hit, 0 otherwise. Escape hatch:
+#   HYPOMNEMA_ALLOW_SECRETS=1  — single-invocation override.
+
+INPUT=$(cat)
+
+MEMORY_DIR="${CLAUDE_MEMORY_DIR:-$HOME/.claude/memory}"
+
+# Bypass: operator has deliberately approved this write.
+if [ "${HYPOMNEMA_ALLOW_SECRETS:-0}" = "1" ]; then
+  exit 0
+fi
+
+FILE_PATH=$(printf '%s' "$INPUT" | jq -r '.tool_input.file_path // empty' 2>/dev/null)
+[ -z "$FILE_PATH" ] && exit 0
+
+# Only scan memory-root writes. Everything else is out of scope —
+# user may be editing code that legitimately contains literal
+# API-key tokens (secrets-rotation scripts, test fixtures, …).
+case "$FILE_PATH" in
+  "$MEMORY_DIR"/*|"$MEMORY_DIR"/.*) ;;
+  *) exit 0 ;;
+esac
+
+CONTENT=$(printf '%s' "$INPUT" | jq -r '.tool_input.content // empty' 2>/dev/null)
+[ -z "$CONTENT" ] && exit 0
+
+# Scan the content. Strategy: strip fenced code blocks and inline
+# code spans before regex-matching so documentation-style examples
+# (`api_key: XXX`) don't trip the gate.
+#
+# Then look for patterns that strongly suggest a real credential:
+#
+#   - `api_key`, `api-key`, `apikey`
+#   - `secret`, `password`, `token`
+#   - `aws_access_key`, `aws_secret_key` (and variants)
+#
+# followed by `:` or `=` and a non-whitespace value of length ≥ 8.
+# Length floor filters out empty placeholders ("password: xxx").
+#
+# perl is used rather than awk because BSD awk lacks \b word-boundary
+# support; the repo already depends on perl (install.sh preflight).
+SCAN=$(printf '%s' "$CONTENT" | perl -e '
+  my $in_fence = 0;
+  my $n = 0;
+  while (my $line = <STDIN>) {
+    $n++;
+    if ($line =~ /^```/) { $in_fence = !$in_fence; next; }
+    next if $in_fence;
+    $line =~ s/`[^`]*`//g;
+    if ($line =~ /\b(api[_-]?key|apikey|aws[_-]?(?:access|secret)[_-]?key|secret|password|token)\s*[:=]\s*[^\s"'"'"'`]{8,}/i) {
+      my $match = $&;
+      print "$n: $match\n";
+    }
+  }
+')
+
+if [ -z "$SCAN" ]; then
+  exit 0
+fi
+
+# Report on stderr so Claude Code surfaces the message to the user.
+# Point at the offending line(s) + the escape hatch.
+{
+  echo "Blocked: $FILE_PATH would write a plaintext secret-looking token."
+  echo "Matches (line : fragment):"
+  printf '%s\n' "$SCAN" | sed 's/^/  /'
+  echo ""
+  echo "If this is intentional (e.g. a seed file documenting what NOT to do),"
+  echo "set HYPOMNEMA_ALLOW_SECRETS=1 for this single tool invocation and retry."
+} >&2
+
+exit 2
