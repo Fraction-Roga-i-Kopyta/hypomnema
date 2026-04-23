@@ -135,6 +135,46 @@ level ADRs if run from a repo root) → `$CLAUDE_MEMORY_DIR/decisions/`
 Unknown metrics route the trigger to `skipped` — the review run
 continues rather than failing on a newer schema.
 
+## 4. Evidence learning (v0.12+)
+
+Memory files can ship a hand-authored `evidence:` block of phrases
+the Stop-hook feedback-loop uses to classify an injection as
+`trigger-useful` vs `trigger-silent`. Hand-authoring these phrases is
+the cold-start bottleneck for every new install — you don't know
+what voice your own Claude actually uses until it has run for weeks.
+
+`memoryctl evidence learn --target <slug>` bootstraps the
+`evidence:` block by mining phrases from your real
+`~/.claude/projects/*/*.jsonl` session transcripts. It reads the WAL
+to find sessions where the target rule fired `trigger-silent`,
+extracts 2/3-gram phrases from bullet-list / enumeration regions of
+the assistant text, ranks by silent-session coverage, filters out
+phrases that are also common in the non-silent noise baseline, and
+presents a ranked list through an interactive approval REPL.
+Accepted phrases append to the target file's `evidence:` block;
+pattern-rejected phrases persist in
+`~/.claude/memory/.runtime/evidence-rejections/<slug>.list` so
+subsequent runs skip them.
+
+```
+$ memoryctl evidence learn --target wrong-root-cause-diagnosis --dry-run
+Scanning 30 sessions (7 silent, 23 noise baseline)
+Target: wrong-root-cause-diagnosis
+
+Candidates (ranked by silent-session coverage):
+  [5 silent / 0 noise]  "варианты"
+  [4 silent / 1 noise]  "три гипотезы"
+  ...
+```
+
+Flags: `--sessions N` (default 30), `--dry-run` (skip REPL,
+print-only), `--yes` (accept every candidate non-interactively;
+useful only when you trust the ranking and want to batch).
+
+`memoryctl` has no access to prompt transcripts unless they already
+exist on disk. No network call; no model inference; all extraction is
+deterministic n-gram + filter.
+
 ## Why three layers, not one
 
 The three layers exist for different audiences:

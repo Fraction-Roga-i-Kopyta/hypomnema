@@ -1,5 +1,83 @@
 # Changelog
 
+## [0.12.0] - 2026-04-23
+
+Evidence learn — bootstrap the `evidence:` phrase block on any
+memory rule by mining real session transcripts. Closes the cold-
+start gap where every new rule ships silent until the author
+hand-authors enough phrases to match Claude's actual voice.
+
+### Added
+
+- **`memoryctl evidence learn --target SLUG`** — interactive REPL
+  that reads recent session JSONLs under
+  `~/.claude/projects/*/*.jsonl`, finds sessions where the target
+  fired `trigger-silent` / `evidence-empty` in the WAL, extracts
+  2/3-gram candidate phrases from enumeration-style regions of the
+  assistant text, filters against the noise baseline (sessions
+  where the rule was useful or not injected), and presents a
+  ranked list for y/n/p/q approval. Accepted phrases append to
+  the target's `evidence:` frontmatter block; pattern rejections
+  persist per-slug in
+  `~/.claude/memory/.runtime/evidence-rejections/<slug>.list`.
+- Flags: `--sessions N` (default 30), `--dry-run` (print-only),
+  `--yes` (batch accept).
+- **`internal/jsonl`** — streaming reader for Claude Code
+  transcripts. Extracts `message.content[].type == "text"` blocks
+  from `type == "assistant"` records, skips `thinking` entries,
+  ignores non-assistant records. 4 MB line cap covers real
+  sessions with large tool output.
+- **`internal/evidence`** — deterministic phrase miner. N-gram
+  extraction narrowed to enumeration regions (2+ consecutive
+  bullet / numbered / keyword-header lines); fallback to whole
+  text when no enumeration detected. Filters: `MinSilentSessions=2`
+  absolute floor, `MinSilentCoverage=0.20`, `MaxNoiseCoverage=0.10`,
+  `MinRuneLen=5`, numeric-only rejection (drops commit hashes and
+  "0 0 0" noise). Writer appends atomically via tmp+rename, dedups
+  against the existing block case-insensitively, handles embedded
+  quotes.
+
+### Coverage
+
+- 12 tests across `internal/jsonl` and `internal/evidence`: assistant-
+  text extraction (no thinking / no user prompts leaked), malformed
+  JSONL resilience, Cyrillic phrase mining, code-fence / blockquote
+  stripping, frontmatter append (existing block / missing block /
+  case-insensitive dedup / no-frontmatter error / embedded-quote
+  escape), rejection-list round-trip.
+- 6 subprocess tests in `cmd/memoryctl` covering unknown subcommand,
+  missing `--target`, invalid `--sessions` value, unknown flag,
+  missing target file, no-transcripts exit path.
+
+### Changed
+
+- **`docs/CONFIGURATION.md §4 Evidence learning`** new section
+  documenting the subcommand, flags, and deterministic-offline
+  guarantees (no network, no model inference).
+
+### Non-goals in this release
+
+- No automatic mining in the Stop hook — evidence authoring is
+  trust-critical, plan explicitly gates it behind interactive
+  approval.
+- No LLM in the extraction pipeline — all n-gram + filter is
+  stdlib-only.
+- No cross-user phrase aggregation — personal voice doesn't transfer
+  between users.
+- No phrase translation — Russian prompts produce Russian phrases;
+  the tool doesn't propose English equivalents.
+
+### Measured on author corpus
+
+A dry-run on 99 most-recent sessions surfaces real candidate phrases
+scoped to bullet-list regions. Interactive approval is the human
+judgment layer that separates authorial voice from project-specific
+code discussion that happens to live in enumeration blocks.
+
+### Deferred to v0.13+
+
+Unchanged from v0.11 deferred list — v0.12 shipped its full scope.
+
 ## [0.11.0] - 2026-04-23
 
 Decisions autoreflection — ADRs grow structured `review-triggers:`
