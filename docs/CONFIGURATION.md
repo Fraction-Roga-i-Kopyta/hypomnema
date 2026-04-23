@@ -80,14 +80,16 @@ them and compares to `self-profile.md` and WAL metrics by hand.
 
 Examples of triggers currently live in:
 
-- `decisions/bash-go-gradual-port.md` — calendar-based (3 months after v1.0)
-- `decisions/fts5-shadow-retrieval.md` — metric-based (shadow-miss vs outcome-negative correlation)
-- `decisions/substring-triggers-with-negation.md` — metric-based (measurable precision)
+- [`docs/decisions/bash-go-gradual-port.md`](decisions/bash-go-gradual-port.md) — pure-bash install becoming untenable, or a parity divergence that can't be scoped to a fixture subset.
+- [`docs/decisions/fts5-shadow-retrieval.md`](decisions/fts5-shadow-retrieval.md) — metric-based (user needs an FTS-surfaced record that can't be expressed as a trigger phrase).
+- [`docs/decisions/substring-triggers-with-negation.md`](decisions/substring-triggers-with-negation.md) — metric-based (trigger-match persistently below ~10% on a well-populated corpus, or high shadow-miss on slugs with non-empty triggers).
+
+See [`docs/decisions/README.md`](decisions/README.md) for the full index.
 
 To audit current triggers:
 
 ```bash
-grep -A3 "## When to revisit" ~/.claude/memory/decisions/*.md
+grep -A3 "## When to revisit" docs/decisions/*.md
 ```
 
 Automated evaluation — structured `review-triggers:` in frontmatter
