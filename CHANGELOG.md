@@ -1,5 +1,87 @@
 # Changelog
 
+## [0.11.0] - 2026-04-23
+
+Decisions autoreflection — ADRs grow structured `review-triggers:`
+that the system evaluates against the current metric snapshot on
+demand. Prose-only ADRs keep working unchanged; the new surface is
+purely additive.
+
+### Added
+
+- **`review-triggers:` frontmatter field on ADRs.** Two shapes —
+  metric trigger (`metric` + `operator` + `threshold` + `source`)
+  or calendar trigger (`after: YYYY-MM-DD`). Multiple triggers per
+  ADR allowed. Supported metrics: `measurable_precision` and
+  `recurrence_top_mistake` (self-profile), `shadow_miss_ratio`
+  (WAL rolling 14-day window), `ref_count` (the ADR's own
+  frontmatter).
+- **`memoryctl decisions review [--dir PATH] [--json]`** — evaluator
+  that reads every ADR in the selected directory and reports one
+  line per trigger: `[ok|pressure|overdue|skipped] slug — detail`.
+  Exit 1 if any trigger fires. Directory precedence:
+  `--dir` override → `./docs/decisions/` (project-level) →
+  `$CLAUDE_MEMORY_DIR/decisions/` (personal). `--json` for scripts.
+- **`memoryctl self-profile` appends `## Decisions under pressure`**
+  section when any ADR trigger fires. No-op on installs without a
+  personal `decisions/` directory, preserving byte-for-byte parity
+  on the fixture that doesn't carry one.
+- **`memoryctl doctor` adds `decisions_review` check** — scans
+  `$CLAUDE_MEMORY_DIR/decisions/`, WARNs with count + example slugs
+  when triggers fire or ADR frontmatter is malformed.
+- **`internal/decisions` package** — pure evaluator (17 unit tests),
+  strict parser with shape validation (unknown operator, mixed
+  metric/calendar fields rejected), snapshot builder with
+  configurable `now`. All stdlib-only; no external YAML dependency.
+- **8 existing ADRs in `docs/decisions/`** backfilled with
+  `review-triggers:`. Two carry structured metric triggers
+  (`fts5-shadow-retrieval` fires on `shadow_miss_ratio > 0.30`,
+  `substring-triggers-with-negation` on `> 0.60`,
+  `precision-class-ambient` on `measurable_precision < 0.40`). All
+  eight get a one-year calendar trigger so prose-only decisions
+  still surface for periodic review.
+
+### Changed
+
+- **`docs/CONFIGURATION.md §3 ADR review-triggers`** rewritten —
+  removes the "planned but not yet implemented" note, documents
+  the actual shape, metric table, and directory precedence.
+- **`CLAUDE.md` frontmatter schema** gains a `decision` block
+  introducing `review-triggers:` with forward links to the CLI.
+- **OK-case message formatting** in `decisions review` — was
+  "metric = value op threshold" (readable as if fired), now
+  "metric = value (trigger: op threshold)" so the condition is
+  clearly the threshold spec, not the observation.
+
+### Non-goals for this release
+
+- No automatic action on `pressure` / `overdue` — review is
+  advisory. Author decides whether to revisit.
+- No LLM in the evaluation loop — deterministic metric comparison
+  only, matching the plan's non-goals.
+- Bash `bin/memory-self-profile.sh` doesn't yet append the
+  pressure section (parity preserved on the fixture; real installs
+  with Go get the feature, shell-only installs get it when the
+  bash path grows the same logic — out of scope here).
+
+### Coverage
+
+- 17 tests `internal/decisions/` — every operator, both trigger
+  shapes, parser validation, snapshot regex parsing, shadow-miss
+  window exclusion, graceful absent-file handling.
+- 7 subprocess tests `cmd/memoryctl/` — unknown subcommand, all-OK,
+  pressure → exit 1, overdue → exit 1, JSON output parses, unknown
+  flag, missing dir.
+- 3 integration tests `internal/doctor/` + 3 in `internal/profile/`
+  for the new check and append paths.
+
+### Deferred to v0.12+
+
+No items added to the deferred list — v0.11 shipped its full scope.
+Carried over from v0.10.5: retroactive silent classification,
+session-metrics wire-format fix, secrets detector, bench-memory CI,
+further session-*.sh decomposition.
+
 ## [0.10.5] - 2026-04-23
 
 Pure-refactor release preparing the hook layer for v0.11 and v0.12
