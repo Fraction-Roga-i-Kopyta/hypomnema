@@ -93,6 +93,17 @@ precision_class: ambient   # optional (v0.8.1+) — excludes file from precision
 related: [other-slug-1, other-slug-2]   # optional cluster links
 ```
 
+**decision** (v0.11+ optional):
+```yaml
+review-triggers:
+  - metric: measurable_precision       # metric: + operator: + threshold: + source:
+    operator: "<"                      # or `after: YYYY-MM-DD` for calendar
+    threshold: 0.40
+    source: self-profile               # self-profile | wal | file
+```
+
+`review-triggers:` is the structured counterpart to an ADR's `## When to revisit` prose. `memoryctl decisions review` evaluates every trigger against the current `self-profile.md` + WAL snapshot and reports `pressure` / `overdue` when a condition fires. `memoryctl self-profile` appends a `## Decisions under pressure` section; `memoryctl doctor` surfaces a one-line summary. Prose-only ADRs (no `review-triggers:`) continue to work as advisory documentation.
+
 ## Writing protocol
 
 ### When to write a `mistake`

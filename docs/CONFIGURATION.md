@@ -92,9 +92,48 @@ To audit current triggers:
 grep -A3 "## When to revisit" docs/decisions/*.md
 ```
 
-Automated evaluation — structured `review-triggers:` in frontmatter
-plus a `memoryctl decisions review` subcommand — is planned but not yet
-implemented. See `docs/plans/2026-04-22-v0.11-decisions-autoreflection.md`.
+### Automated evaluation (v0.11+)
+
+Each ADR may also declare structured `review-triggers:` in its
+frontmatter. Two shapes:
+
+```yaml
+review-triggers:
+  - metric: measurable_precision   # self-profile | wal | file
+    operator: "<"                  # <, <=, >, >=, ==, !=
+    threshold: 0.40
+    source: self-profile
+  - after: "2027-04-22"            # calendar trigger
+```
+
+`memoryctl decisions review` evaluates them against the current
+`self-profile.md` + WAL snapshot and prints one line per trigger:
+
+```
+$ memoryctl decisions review
+[pressure] fts5-shadow-retrieval — shadow_miss_ratio = 0.34 > 0.30
+[overdue]  bash-go-gradual-port — after 2027-04-22 passed (14 days ago)
+[ok]       substring-triggers-with-negation — shadow_miss_ratio = 0.21 (trigger: > 0.60)
+```
+
+Exit code 0 if every trigger is `ok`, 1 if any `pressure` / `overdue`.
+`memoryctl self-profile` appends a `## Decisions under pressure`
+section when triggers fire. `memoryctl doctor` surfaces a single-line
+summary.
+
+Directory precedence: `--dir <path>` → `./docs/decisions/` (project-
+level ADRs if run from a repo root) → `$CLAUDE_MEMORY_DIR/decisions/`
+(personal ADRs). Supported metrics:
+
+| Metric | Source |
+|---|---|
+| `measurable_precision` | `self-profile.md` |
+| `recurrence_top_mistake` | `self-profile.md` |
+| `shadow_miss_ratio` | `.wal` (rolling 14-day window) |
+| `ref_count` | the ADR file's own frontmatter (`source: file`) |
+
+Unknown metrics route the trigger to `skipped` — the review run
+continues rather than failing on a newer schema.
 
 ## Why three layers, not one
 
