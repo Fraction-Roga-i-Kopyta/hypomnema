@@ -54,6 +54,12 @@ Usage:
       hooks/memory-index.sh's Latin-only awk tokenizer with
       unicode.IsLetter, so Cyrillic / CJK / Greek / Arabic bodies
       contribute real tokens. Writes atomically via tmp+rename.
+  memoryctl decisions review [--dir PATH] [--json]
+      Evaluate review-triggers: in ADR frontmatter against the current
+      self-profile.md + WAL snapshot. Prints one line per trigger —
+      [ok|pressure|overdue|skipped] slug — message. Exit 1 if any
+      pressure/overdue. ADR source defaults to ./docs/decisions/ when
+      present, else ~/.claude/memory/decisions/.
 
 Environment:
   CLAUDE_MEMORY_DIR       Memory root (default: ~/.claude/memory).
@@ -118,6 +124,8 @@ func main() {
 			fmt.Fprintf(os.Stderr, "memoryctl: unknown tfidf subcommand %q\n", os.Args[2])
 			os.Exit(2)
 		}
+	case "decisions":
+		runDecisions(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "memoryctl: unknown command %q\n", os.Args[1])
 		os.Exit(2)

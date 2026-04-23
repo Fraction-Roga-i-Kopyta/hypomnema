@@ -7,6 +7,12 @@ description: Reactive injection uses case-insensitive substring match on `trigge
 keywords: [triggers, substring, negation, matching]
 domains: [retrieval]
 related: [fts5-shadow-retrieval, two-scoring-pipelines]
+review-triggers:
+  - metric: shadow_miss_ratio
+    operator: ">"
+    threshold: 0.60
+    source: wal
+  - after: "2027-04-12"
 ---
 
 ## What

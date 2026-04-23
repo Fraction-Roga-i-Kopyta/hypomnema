@@ -6,6 +6,8 @@ status: active
 description: SessionStart uses a composite score optimised for recall; UserPromptSubmit uses a lexicographic priority key optimised for determinism.
 keywords: [scoring, recall, precision, ranking]
 domains: [architecture, retrieval]
+review-triggers:
+  - after: "2027-04-15"
 ---
 
 ## What

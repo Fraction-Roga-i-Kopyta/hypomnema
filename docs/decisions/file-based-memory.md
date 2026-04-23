@@ -6,6 +6,8 @@ status: active
 description: On-disk markdown + YAML frontmatter is the single source of truth for memory content; no database, no embeddings, no cloud.
 keywords: [storage, format, markdown, yaml, offline]
 domains: [architecture]
+review-triggers:
+  - after: "2027-04-10"
 ---
 
 ## What

@@ -6,6 +6,8 @@ status: active
 description: WAL lines are exactly four pipe-delimited columns — date|event|target|session — immutable within format v1.
 keywords: [wal, format, invariant, awk]
 domains: [architecture, storage]
+review-triggers:
+  - after: "2027-04-22"
 ---
 
 ## What

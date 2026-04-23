@@ -7,6 +7,8 @@ description: Bash is the reference implementation; Go hot paths are opt-in and g
 keywords: [bash, go, parity, hybrid]
 domains: [architecture, build]
 related: [file-based-memory]
+review-triggers:
+  - after: "2027-04-22"
 ---
 
 ## What

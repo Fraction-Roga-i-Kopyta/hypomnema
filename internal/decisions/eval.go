@@ -59,15 +59,26 @@ func evaluateMetric(t Trigger, slug string, snap Snapshot) Result {
 	}
 
 	fired := compare(value, t.Operator, t.Threshold)
-	status := StatusOK
 	if fired {
-		status = StatusPressure
+		return Result{
+			Slug:    slug,
+			Trigger: t,
+			Status:  StatusPressure,
+			Message: fmt.Sprintf("%s = %s %s %s",
+				t.Metric,
+				formatMetric(value),
+				t.Operator,
+				formatMetric(t.Threshold)),
+		}
 	}
+	// OK case — don't render the condition as if it fired. Show the
+	// observed value + threshold so the operator can tell how close
+	// the metric is to its trigger.
 	return Result{
 		Slug:    slug,
 		Trigger: t,
-		Status:  status,
-		Message: fmt.Sprintf("%s = %s %s %s",
+		Status:  StatusOK,
+		Message: fmt.Sprintf("%s = %s (trigger: %s %s)",
 			t.Metric,
 			formatMetric(value),
 			t.Operator,
