@@ -51,12 +51,21 @@ CREATE VIRTUAL TABLE IF NOT EXISTS mem USING fts5(
 );
 SQL
 
+# Auto-generated derivative views that live at memory root MUST NOT enter
+# the FTS index: they're periodic snapshots of the state the index is
+# supposed to help rank, and indexing them closes a strange-loop (shadow
+# pass surfaces "0% precision" in self-profile → Claude treats it as
+# knowledge → writes regen'd memory → self-profile re-indexed). Excluded
+# via -not -name rather than subdir filtering because install layouts can
+# vary and `find` is the authoritative enumeration for FTS.
+_EXCLUDES=(-not -name 'self-profile.md' -not -name '_agent_context.md' -not -name 'MEMORY.md')
+
 # --- Stage 1: drift check (cheap) ---
 # SUM(mtime) shifts for any add/remove/modify. COUNT guards the rare
 # case where two files swap mtimes and the sum is preserved.
 # shellcheck disable=SC2086  # STAT_MTIME must split into two tokens
-disk_sum=$(find "$MEM" -name '*.md' -type f -exec stat $STAT_MTIME {} + 2>/dev/null | awk '{s+=$1} END{print s+0}')
-disk_count=$(find "$MEM" -name '*.md' -type f 2>/dev/null | wc -l | tr -d ' ')
+disk_sum=$(find "$MEM" -name '*.md' -type f "${_EXCLUDES[@]}" -exec stat $STAT_MTIME {} + 2>/dev/null | awk '{s+=$1} END{print s+0}')
+disk_count=$(find "$MEM" -name '*.md' -type f "${_EXCLUDES[@]}" 2>/dev/null | wc -l | tr -d ' ')
 
 read -r idx_sum idx_count <<<"$(sqlite3 -separator ' ' "$DB" \
   "SELECT IFNULL(SUM(CAST(mtime AS INTEGER)),0), COUNT(*) FROM mem;")"
@@ -71,7 +80,7 @@ trap 'rm -f "$DISK_LIST"' EXIT
 
 # pipe delimiter: path collisions with '|' are impossible under ~/.claude/memory
 # shellcheck disable=SC2086
-find "$MEM" -name '*.md' -type f -exec stat $STAT_NM {} + > "$DISK_LIST"
+find "$MEM" -name '*.md' -type f "${_EXCLUDES[@]}" -exec stat $STAT_NM {} + > "$DISK_LIST"
 
 sqlite3 "$DB" <<SQL
 .output /dev/null

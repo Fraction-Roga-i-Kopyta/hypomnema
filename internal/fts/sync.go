@@ -38,6 +38,15 @@ func (ix *Index) Sync(ctx context.Context, memoryDir string) error {
 		if !strings.HasSuffix(p, ".md") {
 			return nil
 		}
+		// Auto-generated derivative views that live at memory root MUST
+		// NOT enter the FTS index. Indexing them closes a strange-loop:
+		// shadow surfaces "0% precision" from self-profile, Claude treats
+		// it as knowledge, writes regen'd memory, self-profile re-indexed.
+		// Filter by basename rather than path prefix because the memory
+		// root location is caller-controlled via $CLAUDE_MEMORY_DIR.
+		if isDerivativeView(filepath.Base(p)) {
+			return nil
+		}
 		info, err := d.Info()
 		if err != nil {
 			return nil
@@ -148,4 +157,15 @@ func (ix *Index) Sync(ctx context.Context, memoryDir string) error {
 	}
 
 	return tx.Commit()
+}
+
+// isDerivativeView returns true for auto-generated markdown files that
+// hypomnema writes at memory root and that must not enter the FTS index.
+// Keep this list in sync with bin/memory-fts-sync.sh's `_EXCLUDES` array.
+func isDerivativeView(base string) bool {
+	switch base {
+	case "self-profile.md", "_agent_context.md", "MEMORY.md":
+		return true
+	}
+	return false
 }

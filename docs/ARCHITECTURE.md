@@ -232,6 +232,20 @@ Invariants:
   lines.
 - **Pipe-delimited, 4 fields.** `YYYY-MM-DD|event-type|slug-or-data|session-id`.
   Session id sanitised (`|` → `_`) to prevent field-count corruption.
+- **WAL is a decision/measurement log, not an event store.** Slugs are
+  recorded; memory file bodies are not. Restoring memory state requires
+  the markdown files themselves — WAL alone is insufficient. Downstream
+  consumers (`memory-analytics.sh`, `memory-self-profile.sh`,
+  `score-records.sh`) treat the log as a projection source, not a
+  canonical replica of `~/.claude/memory/`.
+- **Auto-generated derivative views are never indexed.** The FTS sync
+  (both bash and Go) excludes `self-profile.md`, `_agent_context.md`,
+  `MEMORY.md` by basename. Indexing them would close a strange-loop —
+  shadow recall surfaces "0% precision" from self-profile as retrievable
+  knowledge, Claude treats it as injected advice, writes regen'd memory,
+  and self-profile is re-indexed on next Stop. The list lives in
+  `internal/fts/sync.go` (`isDerivativeView`) and `bin/memory-fts-sync.sh`
+  (`_EXCLUDES`); parity test `TestIsDerivativeView` pins it.
 
 Event format is not versioned. Schema changes require a coordinated
 cutover documented in `docs/MIGRATION.md`.
@@ -335,27 +349,11 @@ with `→ v0.10.2` are tracked for the next PATCH release plan
 
 ### Go internals
 
-- **`internal/dedup/dedup.go:119` writes `dedup-merged` WAL before
-  verifying disk operations.** `incrementRecurrence` + `os.Remove`
-  are guarded by an `if err == nil` branch, but `wal.Append` and the
-  user-facing `Merged:` message run regardless. A failed recurrence
-  bump therefore emits a WAL event and a confirmation message with
-  no disk effect. → v0.10.2
-
-- **`incrementRecurrence` is read-modify-write without a lock.**
-  Two concurrent hooks touching the same mistake file race.
-  Low-probability in practice (hooks rarely parallel on one file)
-  but formally a race.
-
 - **`internal/fts/sync.go` drift check uses `SUM(mtime) + COUNT(*)`
   as a cheap hash.** Two files swapping mtimes produces the same
   sum — the pathological case goes unnoticed until the next real
   drift. Not a bug, a best-effort compromise; comment could be
   clearer.
-
-- **`cmd/memoryctl/main.go:170` `fmt.Sscanf` ignores its error.**
-  `memoryctl fts query "foo" abc` silently runs with `limit=0` (no
-  results). UX polish, not a functional bug.
 
 - **`internal/fuzzy/fuzzy.go:159` uses insertion sort for token
   set dedup.** O(N²) for large inputs. For root-cause strings of
