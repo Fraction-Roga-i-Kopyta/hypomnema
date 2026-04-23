@@ -86,6 +86,28 @@ git push origin vX.Y.Z
 Do NOT push before step 3 is green on a clean VM — pulled tags are a
 pain to retract once other clones have fetched them.
 
+### 5.1 Create the GitHub Release entry
+
+`git push --tags` puts the tag in the repo but does **not** create an
+entry on the GitHub Releases page — that's a separate object. Users
+landing on `/releases` will still see the previous version as "Latest"
+until the entry is created explicitly.
+
+```bash
+# Extract the version section from CHANGELOG.md into a temp file
+awk '/^## \[X\.Y\.Z\]/{flag=1;next}/^## \[/{flag=0}flag' CHANGELOG.md > /tmp/notes.md
+
+# Create the Release (marks this tag as "Latest")
+gh release create vX.Y.Z \
+  --title "vX.Y.Z — <one-line summary>" \
+  --notes-file /tmp/notes.md \
+  --latest
+
+rm /tmp/notes.md
+```
+
+Verify: `gh release list` shows the new tag at the top with `Latest`.
+
 ## 6. Post-release smoke
 
 - [ ] Trigger CI on `main` at the tag (GitHub Actions) — both
