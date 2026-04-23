@@ -52,6 +52,10 @@ TODAY="${HYPOMNEMA_TODAY:-$(date +%Y-%m-%d)}"
 . "$(dirname "$0")/lib/score-records.sh" 2>/dev/null || true
 # shellcheck source=lib/build-context.sh
 . "$(dirname "$0")/lib/build-context.sh" 2>/dev/null || true
+# shellcheck source=lib/detect-domains.sh
+. "$(dirname "$0")/lib/detect-domains.sh" 2>/dev/null || true
+# shellcheck source=lib/health-check.sh
+. "$(dirname "$0")/lib/health-check.sh" 2>/dev/null || true
 
 # Escape a string for safe interpolation inside a perl regex pattern.
 # Used wherever user-supplied slugs/names land in `perl -pe "s/.../"` patterns.
@@ -90,85 +94,7 @@ PROJECT=$(detect_project "$CWD")
 SAFE_MARKER_ID="${SESSION_ID//\//_}"
 touch "/tmp/.claude-session-${SAFE_MARKER_ID}" 2>/dev/null || true
 
-# --- Detect domains ---
-
-detect_domains() {
-  local cwd="$1" project="$2"
-  local _domains=""  # space-separated, deduped
-
-  _add() {
-    local d="$1"
-    [ -z "$d" ] && return
-    case " $_domains " in *" $d "*) return ;; esac
-    _domains="${_domains:+$_domains }$d"
-  }
-
-  # 1. Project → default domains mapping (from projects-domains.json)
-  local DOMAINS_JSON="$MEMORY_DIR/projects-domains.json"
-  if [ -n "$project" ] && [ -f "$DOMAINS_JSON" ]; then
-    local proj_domains
-    proj_domains=$(jq -r --arg p "$project" '.[$p] // [] | .[]' "$DOMAINS_JSON" 2>/dev/null)
-    while IFS= read -r d; do
-      [ -n "$d" ] && _add "$d"
-    done <<< "$proj_domains"
-  fi
-
-  # 2. CWD path heuristics
-  local cwd_lower
-  cwd_lower=$(printf '%s' "$cwd" | tr '[:upper:]' '[:lower:]')
-  case "$cwd_lower" in
-    *jira*|*scriptrunner*) _add "jira"; _add "groovy" ;;
-    *infra*|*terraform*|*ansible*) _add "infra"; _add "devops" ;;
-    *frontend*|*webapp*|*ui/*) _add "frontend" ;;
-    *backend*|*api/*|*server/*) _add "backend" ;;
-    *docs*|*documentation*) _add "docs" ;;
-  esac
-
-  # 3. Git diff — recent file extensions (last 3 commits)
-  if [ -d "$cwd/.git" ] || git -C "$cwd" rev-parse --git-dir >/dev/null 2>&1; then
-    local diff_files
-    diff_files=$(git -C "$cwd" diff --name-only HEAD~3 HEAD 2>/dev/null || \
-                 git -C "$cwd" diff --name-only HEAD 2>/dev/null || \
-                 git -C "$cwd" diff --cached --name-only 2>/dev/null || true)
-
-    if [ -n "$diff_files" ]; then
-      local ext_domains
-      ext_domains=$(printf '%s\n' "$diff_files" | awk -F. '
-        NF > 1 {
-          ext = tolower($NF)
-          if (ext == "css" || ext == "scss" || ext == "sass" || ext == "less") print "css"
-          else if (ext == "tsx" || ext == "jsx" || ext == "vue" || ext == "svelte") print "frontend"
-          else if (ext == "ts" || ext == "js") print "frontend"
-          else if (ext == "py" || ext == "rb" || ext == "go" || ext == "rs" || ext == "java" || ext == "kt") print "backend"
-          else if (ext == "groovy" || ext == "gvy") { print "groovy"; print "jira" }
-          else if (ext == "sql" || ext == "prisma") print "db"
-          else if (ext == "tf" || ext == "hcl" || ext == "yaml" || ext == "yml") print "infra"
-          else if (ext == "dockerfile") print "devops"
-          else if (ext == "md" || ext == "rst" || ext == "adoc") print "docs"
-        }
-        /^[Dd]ockerfile/ { print "devops" }
-      ' | sort -u)
-
-      while IFS= read -r d; do
-        [ -n "$d" ] && _add "$d"
-      done <<< "$ext_domains"
-    fi
-  fi
-
-  # 4. Fallback: ls CWD for signature files (no git needed)
-  if [ -z "$_domains" ]; then
-    { [ -f "$cwd/Dockerfile" ] || [ -f "$cwd/docker-compose.yml" ]; } && _add "devops"
-    [ -f "$cwd/package.json" ] && _add "frontend"
-    { [ -f "$cwd/requirements.txt" ] || [ -f "$cwd/pyproject.toml" ]; } && _add "backend"
-    { [ -f "$cwd/Makefile" ] || [ -f "$cwd/Taskfile.yml" ]; } && _add "infra"
-    { [ -d "$cwd/migrations" ] || [ -d "$cwd/alembic" ]; } && _add "db"
-    ls "$cwd"/*.groovy >/dev/null 2>&1 && _add "groovy"
-    find "$cwd/src" -maxdepth 3 \( -name "*.css" -o -name "*.scss" \) 2>/dev/null | head -1 | grep -q . && _add "css"
-  fi
-
-  printf '%s' "$_domains"
-}
-
+# Detect domains — body lives in lib/detect-domains.sh.
 DOMAINS=$(detect_domains "$CWD" "$PROJECT")
 
 # --- Extract keywords for content-aware matching ---
@@ -722,40 +648,9 @@ AGENT_CTX="$MEMORY_DIR/_agent_context.md"
   echo "Full context: \`~/.claude/memory/\`"
 } > "$AGENT_CTX" 2>/dev/null || true
 
-# Health check: detect silent failures.
-HEALTH_WARNING=""
-
-# 1. Broken symlinks / missing companion scripts (C3 risk: hooks are symlinks
-#    to dev folder; a rename would make hooks fail silently).
-_hook_dir="$(dirname "$0")"
-_broken=""
-for _req in "$_hook_dir/lib/wal-lock.sh" "$_hook_dir/wal-compact.sh" "$_hook_dir/regen-memory-index.sh"; do
-  [ -f "$_req" ] || _broken="${_broken}${_broken:+, }$(basename "$_req")"
-done
-if [ -n "$_broken" ]; then
-  HEALTH_WARNING="⚠ Memory hooks broken — missing: $_broken. Likely cause: symlink target moved. Re-run hypomnema/install.sh."
-fi
-
-# 2. UserPromptSubmit hook silent-fail signal: 50+ injects but 0 trigger-match.
-# NOTE: grep -c outputs "0" with exit 1 when no matches, so || fallback would duplicate the count.
-# $(...) strips trailing newline; numeric comparison works directly.
-if [ -z "$HEALTH_WARNING" ] && [ -f "$WAL_FILE" ]; then
-  _wal_tail=$(tail -200 "$WAL_FILE" 2>/dev/null)
-  _inj=$(printf '%s\n' "$_wal_tail" | grep -c '|inject|')
-  _trig=$(printf '%s\n' "$_wal_tail" | grep -c '|trigger-match|')
-  if [ "${_inj:-0}" -gt 50 ] && [ "${_trig:-0}" -eq 0 ]; then
-    HEALTH_WARNING="⚠ Memory health: 0 trigger-match events in last 200 WAL entries (${_inj} injects). UserPromptSubmit hook may be silently failing — check settings.json timeout and ~/.claude/hooks/lib/wal-lock.sh presence."
-  fi
-fi
-
-# 3. Schema errors accumulated — surface to user.
-if [ -z "$HEALTH_WARNING" ] && [ -f "$WAL_FILE" ]; then
-  _schema_errs=$(tail -200 "$WAL_FILE" 2>/dev/null | grep -c '|schema-error|')
-  if [ "${_schema_errs:-0}" -gt 0 ]; then
-    _err_slugs=$(tail -200 "$WAL_FILE" 2>/dev/null | awk -F'|' '$2=="schema-error"{print $3}' | sort -u | head -5 | tr '\n' ' ')
-    HEALTH_WARNING="⚠ Memory schema: ${_schema_errs} malformed frontmatter entries recently (${_err_slugs}). Fix closing --- in these files."
-  fi
-fi
+# Health check — body lives in lib/health-check.sh. Surfaces silent
+# failures (broken symlinks, dead UPS, schema-error buildup).
+HEALTH_WARNING=$(compute_health_warning "$(dirname "$0")" 2>/dev/null)
 
 # Nothing to inject AND no health warnings → silent exit.
 if [ "$_EARLY_EMPTY_CONTEXT" = "1" ] && [ -z "$HEALTH_WARNING" ]; then
