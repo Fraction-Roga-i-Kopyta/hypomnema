@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.10.4] - 2026-04-23
+
+Observability + integrity follow-up. Closes a strange-loop in the FTS index, surfaces previously-dropped WAL signal in the analytics report, unblocks the substring-trigger channel on fresh installs by opening two templates, and backfills the `docs/decisions/` directory that prior releases kept referencing but never shipped.
+
+### Fixed
+
+- **FTS index excluded auto-generated derivative views.** Before this patch `~/.claude/memory/index.db` contained `self-profile.md`, `_agent_context.md`, and `MEMORY.md` — three files that are periodic snapshots of the state the index is supposed to help rank. A future active-injection path (shadow becoming an injection source, or SessionStart scanning the root) would have closed the loop: Claude reads "0% precision" from self-profile as knowledge → writes regenerated memory → self-profile re-indexed. Both `bin/memory-fts-sync.sh` and `internal/fts/sync.go` now filter by basename; invariant recorded in `docs/ARCHITECTURE.md`. New `internal/fts/sync_test.go` pins the exclusion list and the behavioural contract; `internal/fts` line coverage rises from 8.3% (flagged in the v0.10.3 deferred list) to 45.3%.
+- **`docs/ARCHITECTURE.md` stale "sharp edges" removed.** Three entries documented as `→ v0.10.2` were in fact addressed — `incrementRecurrence` WAL ordering (v0.10.2), `incrementRecurrence` race (v0.10.3), `fmt.Sscanf` silent error (v0.10.3). Document was lagging behind code; cleaned up.
+
+### Added
+
+- **`memory-analytics.sh` reads three more WAL event classes.** Hooks emit ~27 distinct event types; the pre-v0.10.4 analytics consumed 8. Three new sections in `.analytics-report`, each emitted only when its source counters are non-zero:
+  - **`## Recall gaps`** — top-10 slugs the FTS5 shadow surfaced that the substring-trigger pipeline missed. Direct feedstock for `triggers:` expansion.
+  - **`## Trigger usefulness`** — top-10 by silent count with useful/silent breakdown per slug. Surfaces ambient-but-not-marked rules (high silent, zero useful) and evidence-mismatched rules.
+  - **`## Schema & format health (last 30d)`** — aggregate counts of `schema-error`, `format-unsupported`, `evidence-missing`, `evidence-empty`. Trend view to complement `memoryctl doctor`'s binary WARN. Portable insertion-sort helper keeps the path BSD-awk-safe (no `asort`).
+- **`docs/decisions/` directory with 8 architecture decision records.** The `decisions/` memory type has existed since v0.1 and `templates/decision.md` since v0.10.1, but the actual decisions that shape this repo lived in the author's `~/.claude/memory/decisions/` — invisible to any reader who isn't the author. Files added: `file-based-memory`, `wal-four-column-invariant`, `silent-fail-policy`, `two-scoring-pipelines`, `bash-go-gradual-port`, `fts5-shadow-retrieval`, `substring-triggers-with-negation`, `precision-class-ambient`. `docs/decisions/README.md` indexes them; `docs/CONFIGURATION.md §3` now links to the real files instead of dangling placeholders.
+- **`templates/mistake.md` and `templates/knowledge.md` ship with live `triggers:` field.** `feedback.md` and `strategy.md` already had open fields; the two most-used templates had them as commented-out examples only. A naïve copy-paste produced a record with the substring-trigger channel silently disabled — the exact first-use trap documented in the v0.9.1 CHANGELOG post-mortem. Placeholders are formal enough that they cannot substring-match realistic prompts — users must edit them before the record fires.
+
+### Deferred to v0.10.5+
+
+Unchanged from v0.10.3's deferred list minus items addressed in this release:
+
+- **Retroactive silent classification in `wal-compact.sh`** — sessions older than 24 h with inject events but no closing signal would get `trigger-silent` emitted retroactively. Blocked on design (event tagging without violating the 4-column invariant).
+- **`session-metrics` wire-format fix** — column 4 should be session_id, not metrics-pairs. Requires a format v1 → v2 major bump.
+- **Secrets detector on PreToolUse** — blocked on false-positive calibration.
+- **`bench-memory.sh` CI integration** — blocked on percentile-vs-baseline threshold design.
+- **`cmd/memoryctl/` Go coverage** — still 0%; blocked on CLI-test-shape decision.
+- **`session-start.sh` / `session-stop.sh` decomposition** — pure refactor, deferred until a bug or feature forces the touch.
+
 ## [0.10.3] - 2026-04-23
 
 Audit-pass release. Bundles findings from two external audits conducted on v0.10.2 (a paired technical + release-readiness review in `hypomnema-v10.2-comprehensive-audit.md`, and a Theory of Functional Systems review in `hypomnema-tfs-audit.md`), a CI failure that surfaced a gap in hook-child draining, and one legacy-symlink cleanup the doctor subcommand exposed on the author's own install. Cut-line document: `docs/plans/2026-04-23-v0.10.3.md`.
