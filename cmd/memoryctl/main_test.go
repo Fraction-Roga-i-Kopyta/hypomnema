@@ -428,3 +428,91 @@ func TestDecisions_ReviewMissingDirFails(t *testing.T) {
 		t.Errorf("missing dir: expected exit 2, got %d", code)
 	}
 }
+
+// --- evidence subcommand ---
+
+func TestEvidence_UnknownSubcommand(t *testing.T) {
+	_, stderr, code := run(t, nil, "evidence", "bogus")
+	if code != 2 {
+		t.Errorf("expected exit 2, got %d", code)
+	}
+	if !strings.Contains(stderr, "unknown evidence subcommand") {
+		t.Errorf("stderr should name the problem, got %q", stderr)
+	}
+}
+
+func TestEvidence_LearnWithoutTargetFails(t *testing.T) {
+	_, stderr, code := run(t, nil, "evidence", "learn")
+	if code != 2 {
+		t.Errorf("expected exit 2, got %d", code)
+	}
+	if !strings.Contains(stderr, "--target") {
+		t.Errorf("stderr should flag missing --target, got %q", stderr)
+	}
+}
+
+func TestEvidence_LearnInvalidSessionsFlag(t *testing.T) {
+	_, stderr, code := run(t, nil, "evidence", "learn",
+		"--target", "some-slug", "--sessions", "abc")
+	if code != 2 {
+		t.Errorf("expected exit 2 on non-integer --sessions, got %d", code)
+	}
+	if !strings.Contains(stderr, "--sessions") {
+		t.Errorf("stderr should name the flag, got %q", stderr)
+	}
+}
+
+func TestEvidence_LearnUnknownFlag(t *testing.T) {
+	_, stderr, code := run(t, nil, "evidence", "learn", "--bogus")
+	if code != 2 {
+		t.Errorf("expected exit 2, got %d", code)
+	}
+	if !strings.Contains(stderr, "unknown flag") {
+		t.Errorf("stderr should mention unknown flag, got %q", stderr)
+	}
+}
+
+func TestEvidence_LearnMissingTargetFile(t *testing.T) {
+	mem := t.TempDir()
+	// Seed the dir structure but not the file.
+	for _, sub := range []string{"mistakes", "feedback", "knowledge", "strategies"} {
+		_ = os.MkdirAll(filepath.Join(mem, sub), 0o755)
+	}
+	env := map[string]string{"CLAUDE_MEMORY_DIR": mem}
+	_, stderr, code := run(t, env, "evidence", "learn", "--target", "nonexistent-slug")
+	if code != 2 {
+		t.Errorf("missing target file: expected exit 2, got %d", code)
+	}
+	if !strings.Contains(stderr, "not found") {
+		t.Errorf("stderr should say 'not found', got %q", stderr)
+	}
+}
+
+// End-to-end dry-run smoke: target file exists, transcripts absent,
+// should exit 1 (no transcripts) — exercises the happy-path
+// dispatch without requiring a fixture JSONL tree.
+func TestEvidence_LearnNoTranscriptsExitsOne(t *testing.T) {
+	mem := t.TempDir()
+	fakeHome := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(fakeHome, ".claude", "projects"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(mem, "mistakes"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mem, "mistakes", "test-rule.md"),
+		[]byte("---\ntype: mistake\nstatus: active\n---\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{
+		"CLAUDE_MEMORY_DIR": mem,
+		"HOME":              fakeHome,
+	}
+	_, stderr, code := run(t, env, "evidence", "learn", "--target", "test-rule", "--dry-run")
+	if code != 1 {
+		t.Errorf("no-transcripts: expected exit 1, got %d\nstderr=%s", code, stderr)
+	}
+	if !strings.Contains(stderr, "no session transcripts") {
+		t.Errorf("stderr should explain, got %q", stderr)
+	}
+}

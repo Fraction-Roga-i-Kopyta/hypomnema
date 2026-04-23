@@ -60,6 +60,15 @@ Usage:
       [ok|pressure|overdue|skipped] slug — message. Exit 1 if any
       pressure/overdue. ADR source defaults to ./docs/decisions/ when
       present, else ~/.claude/memory/decisions/.
+  memoryctl evidence learn --target SLUG [--sessions N] [--dry-run] [--yes]
+      Mine candidate evidence: phrases from recent Claude Code session
+      transcripts (~/.claude/projects/*/*.jsonl). Uses trigger-silent
+      WAL events to identify silent sessions for the target rule, then
+      extracts 2/3-gram phrases that appear in ≥20% of silent sessions
+      but ≤10% of the noise baseline. Interactive approval REPL;
+      accepted phrases append to the rule's evidence: frontmatter
+      block. Rejected-pattern phrases persist in
+      ~/.claude/memory/.runtime/evidence-rejections/<slug>.list.
 
 Environment:
   CLAUDE_MEMORY_DIR       Memory root (default: ~/.claude/memory).
@@ -126,6 +135,8 @@ func main() {
 		}
 	case "decisions":
 		runDecisions(os.Args[2:])
+	case "evidence":
+		runEvidence(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "memoryctl: unknown command %q\n", os.Args[1])
 		os.Exit(2)
