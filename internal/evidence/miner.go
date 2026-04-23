@@ -40,6 +40,10 @@ type Config struct {
 	MinRuneLen int
 	// TopN — how many ranked candidates to return. Default 15.
 	TopN int
+	// MinSilentSessions — absolute floor on silent-session count.
+	// Without this, small N (e.g. 1 silent session out of 30) makes
+	// every phrase pass the 20% coverage bar trivially. Default 2.
+	MinSilentSessions int
 }
 
 // applyDefaults mutates a zero-valued Config into the documented
@@ -56,6 +60,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.TopN == 0 {
 		c.TopN = 15
+	}
+	if c.MinSilentSessions == 0 {
+		c.MinSilentSessions = 2
 	}
 }
 
@@ -115,6 +122,14 @@ func Mine(silent, noise []string, existing []string, cfg Config) []Candidate {
 		if _, seen := existingSet[phrase]; seen {
 			continue
 		}
+		if sc < cfg.MinSilentSessions {
+			continue
+		}
+		if isNumericOnly(phrase) {
+			// "0 0 0", "1 2 3" — commit hash fragments, line
+			// numbers, scores. Never authorial voice.
+			continue
+		}
 		cov := float64(sc) / float64(nSilent)
 		if cov < cfg.MinSilentCoverage {
 			continue
@@ -166,27 +181,42 @@ func Mine(silent, noise []string, existing []string, cfg Config) []Candidate {
 var (
 	reCodeFence   = regexp.MustCompile("(?s)```[^`]*```")
 	reQuotedBlock = regexp.MustCompile(`(?m)^>\s.*$`)
+	// Enumeration-line markers at start of line after trim: "(N) ",
+	// "N. ", "N) ", "- ", "* ", or a leading bold header with a
+	// keyword ("Варианты:", "Options:", "Possible causes:", etc.).
+	reEnumMarker    = regexp.MustCompile(`^(\(\d+\)|\d+[\.\)]|[-*+])\s`)
+	reEnumKeywords  = regexp.MustCompile(`(?i)^(?:\*\*)?(варианты|опции|причины|гипотезы|версии|options|causes|candidates|hypotheses|approaches|reasons)[:：]`)
 )
 
 // extractPhrases canonicalises text and returns the set of 2-gram and
-// 3-gram phrases present. Canonicalisation mirrors session-stop.sh:
-// strip code fences, strip blockquote lines, lowercase, split on
-// non-alnum boundaries.
+// 3-gram phrases present in *enumeration regions*. An enumeration
+// region is a run of ≥2 consecutive lines matching a bullet / number
+// / keyword-header pattern, plus the header immediately preceding
+// such a run when present.
+//
+// Why only enumeration regions: for rules like
+// `wrong-root-cause-diagnosis` the authorial voice shows up when the
+// assistant lists hypotheses — not in arbitrary prose or code
+// discussion. Narrowing extraction to enumeration-style content is
+// the difference between mining "варианты:" (good) and "syncengine
+// apply swift" (code-discussion noise).
+//
+// Fallback: if no enumeration region is detected in the whole text,
+// scan the whole thing. This preserves recall for narrower rules
+// (e.g. language preferences) where phrases aren't list-bound.
 func extractPhrases(text string, minRuneLen int) map[string]struct{} {
-	// Strip code fences — they're likely to carry function names
-	// and deterministic output that isn't authorial voice.
 	text = reCodeFence.ReplaceAllString(text, " ")
-	// Strip blockquote lines — typically echo user prompts.
 	text = reQuotedBlock.ReplaceAllString(text, " ")
 
-	lower := strings.ToLower(text)
-
-	// Tokenise on non-letter/non-digit boundaries. Unicode-aware so
-	// Cyrillic/CJK/Greek participate.
+	enumText := extractEnumRegions(text)
+	source := enumText
+	if source == "" {
+		source = text
+	}
+	lower := strings.ToLower(source)
 	tokens := tokenise(lower)
 
 	out := map[string]struct{}{}
-	// 2-grams and 3-grams.
 	for n := 2; n <= 3; n++ {
 		for i := 0; i+n <= len(tokens); i++ {
 			phrase := strings.Join(tokens[i:i+n], " ")
@@ -197,6 +227,86 @@ func extractPhrases(text string, minRuneLen int) map[string]struct{} {
 		}
 	}
 	return out
+}
+
+// extractEnumRegions returns only the text lines that form part of
+// an enumeration block (2+ consecutive marker lines). Optionally
+// includes a preceding keyword header ("Варианты:", "Options:").
+// Returns empty string if no block was detected.
+func extractEnumRegions(text string) string {
+	lines := strings.Split(text, "\n")
+	markerAt := make([]bool, len(lines))
+	headerAt := make([]bool, len(lines))
+	for i, line := range lines {
+		t := strings.TrimLeft(line, " \t")
+		if reEnumMarker.MatchString(t) {
+			markerAt[i] = true
+		} else if reEnumKeywords.MatchString(t) {
+			headerAt[i] = true
+		}
+	}
+
+	var picked strings.Builder
+	for i := 0; i < len(lines); i++ {
+		if !markerAt[i] {
+			continue
+		}
+		// Require at least one more marker line within the next
+		// few rows (1 blank tolerated).
+		foundPair := false
+		for j := i + 1; j < len(lines) && j <= i+3; j++ {
+			if markerAt[j] {
+				foundPair = true
+				break
+			}
+			if strings.TrimSpace(lines[j]) != "" && !markerAt[j] {
+				break
+			}
+		}
+		if !foundPair {
+			continue
+		}
+		// Backfill: if the line immediately above is a header
+		// keyword, include it.
+		if i > 0 && headerAt[i-1] {
+			picked.WriteString(lines[i-1])
+			picked.WriteByte('\n')
+			headerAt[i-1] = false // don't double-include
+		}
+		// Extend while markers or blanks-between-markers continue.
+		j := i
+		for j < len(lines) {
+			if markerAt[j] {
+				picked.WriteString(lines[j])
+				picked.WriteByte('\n')
+				j++
+				continue
+			}
+			if strings.TrimSpace(lines[j]) == "" && j+1 < len(lines) && markerAt[j+1] {
+				j++
+				continue
+			}
+			break
+		}
+		i = j
+	}
+	return picked.String()
+}
+
+// isNumericOnly reports whether every token in the phrase is a
+// pure digit/alnum-hash-looking run with no letters. Filters out
+// commit fragments ("27f07f9"), line-count trios ("0 0 0"), and
+// similar machine noise that accidentally survives the generic
+// extraction.
+func isNumericOnly(phrase string) bool {
+	hasLetter := false
+	for _, r := range phrase {
+		if unicode.IsLetter(r) {
+			hasLetter = true
+			break
+		}
+	}
+	return !hasLetter
 }
 
 // tokenise splits text on non-alnum boundaries, preserving unicode
