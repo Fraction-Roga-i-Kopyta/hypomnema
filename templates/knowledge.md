@@ -6,9 +6,9 @@ status: active
 ref_count: 0
 domains: [general]
 keywords: [kw1, kw2]             # tokens for SessionStart keyword-match scoring
-# triggers:                      # UNCOMMENT for substring-triggered injection on matching prompts.
-#   - "phrase user would type to ask about this topic"
-#   - "another phrasing"
+triggers:                        # phrases a user would type to ask about this topic.
+  - "replace this placeholder with a real user phrase"   # substring-matched, case-insensitive
+  - "delete examples you do not need — keep at least one real phrase"
 # related: [other-slug, third:reinforces]   # UNCOMMENT to cluster-link. `:type` annotates the relationship.
 ---
 

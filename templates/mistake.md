@@ -10,9 +10,9 @@ root-cause: "One-line description of what went wrong."
 prevention: "One-line description of how to avoid next time."
 domains: [general]         # project domains this mistake applies to
 keywords: [kw1, kw2]       # tokens used for SessionStart keyword-match scoring
-# triggers:                # UNCOMMENT for substring-triggered injection on matching prompts.
-#   - "phrase the user would type when this is relevant"
-#   - "another phrasing"
+triggers:                  # phrases the user would type when this mistake is relevant.
+  - "replace this placeholder with a real user phrase"   # substring-matched, case-insensitive
+  - "delete examples you do not need — keep at least one real phrase"
 # scope: narrow            # UNCOMMENT to restrict injection to explicit keyword match only
 ---
 
