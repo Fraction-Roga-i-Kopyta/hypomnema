@@ -75,6 +75,21 @@ ANALYTICS=$(awk -F'|' \
     for (i = 1; i <= n; i++) gap_domains[doms[i]]++
   }
 
+  # Recall + classification signals (previously unread by analytics).
+  # Motivation: hooks emit ~27 distinct WAL event types but pre-v0.10.4
+  # analytics read only 8, dropping >50% of observable signal. These
+  # three classes are the highest-leverage additions — they tell the
+  # operator which files FTS surfaces that substring triggers miss,
+  # which files get cited vs go silent, and whether parse/evidence
+  # breakage is accumulating.
+  $2 == "shadow-miss"        { shadow_miss[$3]++ }
+  $2 == "trigger-useful"     { trig_useful[$3]++ }
+  $2 == "trigger-silent"     { trig_silent[$3]++ }
+  $2 == "schema-error"       { schema_err++ }
+  $2 == "format-unsupported" { format_un++ }
+  $2 == "evidence-missing"   { evi_missing++ }
+  $2 == "evidence-empty"     { evi_empty++ }
+
   END {
     printf "date: %s\n", cutoff
     if (total_sessions > 0) {
@@ -129,6 +144,70 @@ ANALYTICS=$(awk -F'|' \
     if (unproven_count > 0) {
       printf "\n## Unproven\n"
       for (i = 1; i <= unproven_count; i++) print unproven[i]
+    }
+
+    # Recall gaps: files FTS5 shadow surfaced but substring triggers
+    # never matched. Candidates for `triggers:` field expansion. Top 10.
+    # `%06d`-prefixed keys sort lexicographically in numeric order; the
+    # manual insertion-sort below stays BSD-awk-safe (no asort).
+    sm_count = 0
+    for (name in shadow_miss) {
+      sm_entries[++sm_count] = sprintf("%06d\t%s", shadow_miss[name], name)
+    }
+    if (sm_count > 0) {
+      insertion_sort(sm_entries, sm_count)
+      printf "\n## Recall gaps\n"
+      printed = 0
+      for (i = sm_count; i >= 1 && printed < 10; i--) {
+        split(sm_entries[i], f, "\t")
+        printf "- %s: %d shadow-miss hits\n", f[2], f[1] + 0
+        printed++
+      }
+    }
+
+    # Trigger usefulness: per-slug breakdown of useful/silent events.
+    # High silent + zero useful ⇒ rule lacks evidence phrases or is
+    # ambient without precision_class mark. Top 10 by silent count.
+    tu_count = 0
+    for (name in trig_silent) tu_seen[name] = 1
+    for (name in trig_useful) tu_seen[name] = 1
+    for (name in tu_seen) {
+      u = (name in trig_useful) ? trig_useful[name] : 0
+      s = (name in trig_silent) ? trig_silent[name] : 0
+      tu_entries[++tu_count] = sprintf("%06d\t%s\t%d\t%d", s, name, u, s)
+    }
+    if (tu_count > 0) {
+      insertion_sort(tu_entries, tu_count)
+      printf "\n## Trigger usefulness\n"
+      printed = 0
+      for (i = tu_count; i >= 1 && printed < 10; i--) {
+        split(tu_entries[i], f, "\t")
+        printf "- %s: useful=%d silent=%d\n", f[2], f[3] + 0, f[4] + 0
+        printed++
+      }
+    }
+
+    # Schema & format health: if parsing is failing somewhere, the
+    # operator needs to see counts, not just `memoryctl doctor` binary
+    # WARN. Emits only when something is non-zero so a healthy install
+    # gets a clean report.
+    if (schema_err + format_un + evi_missing + evi_empty > 0) {
+      printf "\n## Schema & format health (last 30d)\n"
+      if (schema_err > 0)  printf "- schema-error: %d\n", schema_err
+      if (format_un > 0)   printf "- format-unsupported: %d\n", format_un
+      if (evi_missing > 0) printf "- evidence-missing: %d\n", evi_missing
+      if (evi_empty > 0)   printf "- evidence-empty: %d\n", evi_empty
+    }
+  }
+
+  # Ascending insertion sort by string comparison — callers expecting
+  # numeric order format their keys with `%06d` so lexicographic and
+  # numeric orderings coincide. Stays portable (no gawk `asort`).
+  function insertion_sort(arr, n,   i, j, tmp) {
+    for (i = 2; i <= n; i++) {
+      tmp = arr[i]; j = i
+      while (j > 1 && arr[j-1] > tmp) { arr[j] = arr[j-1]; j-- }
+      arr[j] = tmp
     }
   }
 ' "$WAL_FILE" 2>/dev/null)
