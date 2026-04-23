@@ -1,5 +1,98 @@
 # Changelog
 
+## [0.13.0] - 2026-04-23
+
+Measurement-bias fix + write-path safety + public-release
+preparation. The three things an external reader would notice in
+the first hour of use, landed together.
+
+### Added
+
+- **`hooks/wal-retro-silent.sh`** — retroactive `trigger-silent-retro`
+  classification. Walks the WAL each Stop hook; raw `inject` events
+  whose session never wrote a closing event AND are older than 24 h
+  get one `trigger-silent-retro|<slug>|<session>` emitted per inject.
+  Runs before `wal-compact.sh` in the Stop-hook background fan-out
+  (compaction replaces raw `inject` with `inject-agg` and loses
+  session_id). Idempotent. Same lock as wal-compact. Author corpus
+  measured 93% open quanta pre-retro, 1% after. 39 of the remaining
+  injects are sessions younger than 24 h, not truly lost.
+- **`hooks/memory-secrets-detect.sh`** — PreToolUse:Write|Edit gate
+  that blocks memory-file writes containing plaintext secret-looking
+  tokens (api_key, apikey, secret, password, token, aws access/secret
+  key variants; value ≥ 8 chars; outside fenced code blocks). Scope
+  limited to paths under `$CLAUDE_MEMORY_DIR/`. Escape hatch
+  `HYPOMNEMA_ALLOW_SECRETS=1` for one-off legitimate cases.
+  install.sh now registers 8 hypomnema commands (up from 7).
+- **`CONTRIBUTING.md`** — "issues open, PRs by invitation" framing,
+  local-test commands, invariants a PR must not cross, commit-style
+  conventions. Points at ADRs and roadmap.
+- **`SECURITY.md`** — vulnerability-report channel
+  (oleksiy.ohmush@boosta.co), threat-model scope (no network
+  surface; in-scope = LLM-authored content escalating beyond
+  markdown-inert), enumerated known-not-vulnerabilities (exit-0
+  fail-safe, LLM-authored memory, session_ids are UUIDs).
+- `trigger-silent-retro` registered in `docs/FORMAT.md §5.1`.
+
+### Changed
+
+- **`internal/doctor` open_quanta check** counts
+  `trigger-silent-retro` as a closing event. Running the check on a
+  WAL that's been through one Stop-hook pass since v0.13 shows
+  dramatically reduced open-quanta ratios.
+- **`memory-analytics.sh § Trigger usefulness`** surfaces a
+  `silent-retro=N` column per slug when any retros exist. Keeps the
+  natural-silent signal distinct from the posthumous one — a rule
+  going from silent=10 to silent-retro=30 is a different problem
+  than going to silent=30.
+- **`test-memory-hooks.sh safe_cleanup drain pattern`** adds
+  `wal-retro-silent.sh` to the backgrounded-children list.
+
+### Repository
+
+- **Repo is now public.** Project infrastructure (LICENSE from
+  v0.10.3, description + 9 topics from the same release,
+  CONTRIBUTING + SECURITY from this release) is complete enough
+  that a clone+install from a stranger's fresh HOME produces a
+  working system on the first try.
+- Show HN / r/ClaudeAI post drafted from
+  `docs/maintenance/DISTRIBUTION_DRAFTS.md` with current v0.13
+  numbers.
+
+### Non-goals in this release
+
+- No event retroactive-classification beyond 24 h — sessions past
+  that point stay in their current trajectory. Retro is
+  forward-looking, not backfill-all-history.
+- No hand-tuned secret-detection rules beyond the five keyword
+  patterns. More specific scanners (GitHub token prefixes,
+  AWS-ARN shapes) are a v0.14 candidate if the false-negative
+  rate is high enough to measure.
+- No auto-clean for rejected retros. Operator who disagrees with a
+  retro (say, they manually traced a crashed session back and
+  classified it as useful) edits the WAL by hand.
+
+### Coverage
+
+- 10 new assertions in `test-memory-hooks.sh`: five for retro
+  (emits for orphans, skips already-closed, skips under-cutoff,
+  idempotent, shell-safety pipefail), five for secrets-detect
+  (block, fence-skip, out-of-scope-skip, bypass env, short-value-
+  tolerance). 262 → 272.
+
+### Deferred to v0.14+
+
+- **`session-metrics` wire-format fix** (v1 → v2 breaking bump).
+  Gated on an external review, per
+  `docs/plans/2026-04-23-roadmap-v0.10.5-onward.md § v1.0`.
+- **`bench-memory.sh` CI integration** — percentile-vs-baseline
+  threshold design still open.
+- **`cmd/memoryctl` coverage aggregation tooling** — subprocess
+  coverage still 0 % in `go test -cover` output despite real
+  functional coverage.
+- **Further `session-*.sh` decomposition** — current line counts
+  manageable; next touch when a feature forces it.
+
 ## [0.12.1] - 2026-04-23
 
 ### Fixed
