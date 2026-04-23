@@ -1,5 +1,64 @@
 # Changelog
 
+## [0.10.5] - 2026-04-23
+
+Pure-refactor release preparing the hook layer for v0.11 and v0.12
+additions. Five sections extracted from the two largest hooks into
+dedicated `lib/` modules; 15 subprocess tests added for `memoryctl`.
+No schema or behavioural changes; every v0.10.4 assertion still
+passes byte-for-byte.
+
+### Refactored
+
+- **`hooks/session-stop.sh` 608 → 346 lines** (−43 %):
+  - `lib/rotation.sh` — `lifecycle_rotate()` (147 lines).
+  - `lib/outcome-detection.sh` — `classify_outcome_positive()` (84 lines).
+  - `lib/feedback-loop.sh` — `classify_feedback_from_transcript()` (100 lines).
+- **`hooks/session-start.sh` 785 → 680 lines** (−13 %):
+  - `lib/detect-domains.sh` — `detect_domains()` (93 lines).
+  - `lib/health-check.sh` — `compute_health_warning()` (65 lines).
+- Combined hook line count **1393 → 1026** (−26 %).
+
+Remaining content in both files is tightly coupled (REMINDER
+assembly in session-stop, scoring/collect-mistakes in session-start)
+and needs a design pass before further extraction — not just a
+mechanical move. Out of scope for this release.
+
+### Added
+
+- **15 subprocess tests in `cmd/memoryctl/main_test.go`** covering
+  top-level dispatch (no-args, -h, unknown command), `fts` (no
+  subcommand, unknown subcommand, invalid `query` limit, missing
+  args), `dedup` (no subcommand, unknown subcommand), `tfidf`
+  (unknown subcommand, full `rebuild` against a 3-file fixture),
+  and `doctor` (clean fixture exits 0, `--json` parses, missing
+  memory_dir exits 1, unknown flag exits 2). Every dispatch branch
+  and most subcommand error paths are exercised.
+### Meta on coverage numbers
+
+`go test -cover ./cmd/memoryctl/` still reports 0 % because the
+subprocess-invoked binary's coverage data doesn't aggregate into
+per-package statistics without shared `GOCOVERDIR` + `go tool covdata`
+post-processing. The functional coverage is high — every dispatch
+branch is exercised — but the tooling to surface it as a number is
+deferred. `internal/fts` (45.3 %), `internal/dedup` (85.8 %),
+`internal/fuzzy` (90.4 %), `internal/doctor`, `internal/tfidf` are all
+well-covered via in-process tests and show real numbers.
+
+### Deferred to v0.10.6+
+
+Unchanged from v0.10.4's deferred list minus one item. Carried over:
+
+- Retroactive silent classification in `wal-compact.sh`.
+- `session-metrics` wire-format fix (v1 → v2 major bump; now
+  gated on the v1.0 external-review signal per
+  `docs/plans/2026-04-23-roadmap-v0.10.5-onward.md`).
+- Secrets detector on PreToolUse.
+- `bench-memory.sh` CI integration.
+- `cmd/memoryctl` coverage aggregation tooling (subprocess → number).
+- Further `session-start.sh` / `session-stop.sh` decomposition if
+  a v0.11 / v0.12 feature forces touching the tightly-coupled parts.
+
 ## [0.10.4] - 2026-04-23
 
 Observability + integrity follow-up. Closes a strange-loop in the FTS index, surfaces previously-dropped WAL signal in the analytics report, unblocks the substring-trigger channel on fresh installs by opening two templates, and backfills the `docs/decisions/` directory that prior releases kept referencing but never shipped.
