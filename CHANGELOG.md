@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.12.1] - 2026-04-23
+
+### Fixed
+
+- **CI build on v0.12.0 failed** with four `undefined: evidence.*`
+  errors. `internal/evidence/writer.go` and `writer_test.go` existed
+  locally and were referenced by `cmd/memoryctl/evidence.go`, but
+  the files were never added to git — the earlier commit used
+  `git add internal/evidence/miner.go` (specific file) rather than
+  the directory, and the writer pair stayed untracked. Local `go
+  build` and `go test` passed because the files were on disk; CI
+  clones a fresh tree and caught the gap immediately. Pure recovery
+  commit — the files are as-local-was.
+
 ## [0.12.0] - 2026-04-23
 
 Evidence learn — bootstrap the `evidence:` phrase block on any
