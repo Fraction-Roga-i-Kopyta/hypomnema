@@ -30,7 +30,7 @@ users actually hit, not to publish a shadow copy of private content.
 **Real corpora (local only):**
 - Mature corpus (maintainer) — 5/5 active. Observed: 44 outcomes in 14d,
   4807-term vocab.
-- Onboarding corpus (external-01, stored locally) — 3/5 active, both
+- Onboarding corpus (external-ref-corpus, stored locally) — 3/5 active, both
   Bayesian and TF-IDF DORMANT. Observed: 0 outcomes, 0 vocab.
 
 **Outcome:** synthetic and real corpora agreed on the verdict for both

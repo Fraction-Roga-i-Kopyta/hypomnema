@@ -2,17 +2,21 @@
 
 ## Reporting a vulnerability
 
-Email **oleksiy.ohmush@boosta.co** with:
+Prefer GitHub's **private vulnerability reporting** — submit a report at
+<https://github.com/Fraction-Roga-i-Kopyta/hypomnema/security/advisories/new>.
+No public issue, no disclosure until a fix lands.
+
+Include:
 
 - Steps to reproduce.
 - Affected version / commit hash (`git rev-parse HEAD` is enough).
 - Impact: what an attacker could do, under what preconditions.
 - Suggested fix, if obvious.
 
-I'll reply within a week. If the issue is confirmed, expect a fix
-tagged as a PATCH release with the disclosure noted in `CHANGELOG.md`
-under `### Security`. Coordinated disclosure is welcome; timeline
-discussed in the email thread.
+Maintainer responds within a week. If the issue is confirmed, expect
+a fix tagged as a PATCH release with the disclosure noted in
+`CHANGELOG.md` under `### Security`. Coordinated disclosure is
+welcome; timeline discussed in the advisory thread.
 
 Do **not** open a public GitHub issue for a vulnerability until a fix
 is on `main`.

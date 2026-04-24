@@ -47,7 +47,7 @@ The effect on real corpora:
 | Corpus | mistakes | outcome-positive events | `.tfidf-index` size | components contributing signal |
 |---|---:|---:|---:|---:|
 | author (akamash) | 29 | 40 (mistakes-only) | 257KB (legacy files only) | ~3/5 |
-| external-01 (onboarding, feedback-heavy) | 0 | 0 | 0 bytes | ~2/5 |
+| external-ref-corpus (onboarding, feedback-heavy) | 0 | 0 | 0 bytes | ~2/5 |
 
 On both corpora, `measurable precision` sits around 4% — not because
 rules are bad, but because half the formula is averaging itself out.

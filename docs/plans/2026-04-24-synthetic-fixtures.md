@@ -6,17 +6,17 @@
 
 **Что не подошло:**
 
-1. **Коммит external-01 snapshot** (43 файла + WAL от живого пользователя). Проблемы:
+1. **Коммит external-ref-corpus snapshot** (43 файла + WAL от живого пользователя). Проблемы:
    - Residual leakage risk (README snapshot'а сам требует manual scan перед публикацией).
    - Imitation risk: новый пользователь может принять перекошенный onboarding-корпус за канон.
-   - Bus factor Артёма: git-история не стирается.
+   - Bus factor внешнего ревьюера: git-история не стирается.
    - **Нет транскриптов сессий** в snapshot'е — P1.1 (evidence-match в сессиях) калибровать невозможно.
 
 2. **Private submodule.** Усложняет CI, внешние контрибьюторы не могут прогнать полный test suite.
 
-**Выбрано: synthetic fixtures + локальный cross-reference с external-01.**
+**Выбрано: synthetic fixtures + локальный cross-reference с external-ref-corpus.**
 
-Ключевой инсайт: synthetic fixtures могут включать **и memory-файлы, и synthetic transcripts** (jsonl), то есть покрывают P1.1 evidence-match — чего в real-snapshot'е нет. External-01 остаётся у мейнтейнера локально как «gut check» против synthetic'а.
+Ключевой инсайт: synthetic fixtures могут включать **и memory-файлы, и synthetic transcripts** (jsonl), то есть покрывают P1.1 evidence-match — чего в real-snapshot'е нет. External reference corpus остаётся у мейнтейнера локально как «gut check» против synthetic'а.
 
 ## Принципы дизайна
 
@@ -43,8 +43,8 @@
 
 ### 4. Cross-reference с реальным корпусом — локально, протокол
 
-External-01 **не commit'ится**. Но мейнтейнер прогоняет его локально раз в калибровку (перед merge ADR cold-start `proposed → active`, перед merge P1.1). Результат:
-- Если synthetic cold-start и external-01 дают одинаковый dormant-verdict — synthetic достаточно реалистичен.
+External reference corpus **не commit'ится**. Но мейнтейнер прогоняет его локально раз в калибровку (перед merge ADR cold-start `proposed → active`, перед merge P1.1). Результат:
+- Если synthetic cold-start и external-ref-corpus дают одинаковый dormant-verdict — synthetic достаточно реалистичен.
 - Если расходится — synthetic упрощает что-то, чего реальность не упрощает. **Триггер добавить новый synthetic-профиль** или скорректировать один из существующих.
 
 Результат cross-reference фиксируется в `docs/fixtures/real-corpus-notes.md` как **текст** (не данные): дата, версия hypomnema, synthetic verdict, real verdict, совпало/разошлось, действие.
@@ -52,9 +52,9 @@ External-01 **не commit'ится**. Но мейнтейнер прогоняе
 ### 5. Изоляция имён
 
 Synthetic fixture'ы используют **generic example-project naming**: `todo-app`, `blog-api`, `data-pipeline`, `weather-cli`. Это:
-- Не пересекается с anonymized external-01 slugs (`project-alpha`..`zeta`).
+- Не пересекается с anonymized external-ref-corpus slugs (`project-alpha`..`zeta`).
 - Сразу читается как «не чей-то реальный проект».
-- Stable — если в будущем external-01 slug переименуют, synthetic не затронет.
+- Stable — если в будущем external-ref-corpus slug переименуют, synthetic не затронет.
 
 ### 6. Без секретов, без реальных API-endpoint'ов, без реальных имён
 
@@ -238,7 +238,7 @@ fixtures/corpora/<profile-name>/
 **Purpose:** robustness-тесты на frontmatter-quirks, corrupt WAL, retro closing-set logic.
 
 **Structure:**
-- `memory/feedback/empty-status.md` — файл со **пустым `status:`** (в корпусе external-01 таких 3). Doctor должен WARN.
+- `memory/feedback/empty-status.md` — файл со **пустым `status:`** (в корпусе external-ref-corpus таких 3). Doctor должен WARN.
 - `memory/feedback/no-triggers.md` — файл без `triggers:` (после round 2: WARN, не FAIL).
 - `memory/feedback/corrupt-yaml.md` — невалидный YAML в frontmatter (отсутствует `---` в конце). Parser должен skip, journal warn.
 - `memory/knowledge/duplicate-slug-a.md` + `memory/notes/duplicate-slug-a.md` — один slug в двух dir'ах. Doctor WARN или FAIL.
@@ -346,27 +346,27 @@ diff <(jq -S . <<< "$actual") <(jq -S . "$EXPECTED") \
 
 ---
 
-## Cross-reference protocol с external-01
+## Cross-reference protocol с external-ref-corpus
 
 **Когда:** перед merge ADR cold-start (`proposed → active`), перед merge P1.1, перед каждым v0.x tag'ом, где trogatsya scoring/retro.
 
 **Процесс (документирован в `docs/fixtures/real-corpus-notes.md`):**
 
 1. Прогнать `make test-fixtures` → все зелёные.
-2. Прогнать тот же test harness вручную на external-01:
+2. Прогнать тот же test harness вручную на external-ref-corpus:
    ```bash
-   CLAUDE_MEMORY_DIR=~/external-01/memory ./hooks/test-fixture-snapshot.sh ~/external-01/
+   CLAUDE_MEMORY_DIR=~/external-ref-corpus/memory ./hooks/test-fixture-snapshot.sh ~/external-ref-corpus/
    ```
 3. Сравнить verdicts:
-   - Cold-start verdict (active/dormant): synthetic cold-start → dormant. external-01 → dormant. **Совпало** ✓.
-   - Precision diff pre/post P1.1: synthetic feedback-heavy → 0 → 25%. external-01 → [записать замер]. Если дельты расходятся на >10 п.п. — investigate.
+   - Cold-start verdict (active/dormant): synthetic cold-start → dormant. external-ref-corpus → dormant. **Совпало** ✓.
+   - Precision diff pre/post P1.1: synthetic feedback-heavy → 0 → 25%. external-ref-corpus → [записать замер]. Если дельты расходятся на >10 п.п. — investigate.
 4. Записать в `docs/fixtures/real-corpus-notes.md`:
    ```markdown
    ## 2026-04-26 · ADR cold-start calibration
 
    hypomnema version: v0.14.0-rc1
    synthetic: cold-start dormant, mature active, feedback-heavy precision 0 → 28% post-P1.1.
-   external-01: cold-start dormant ✓ matched. Post-P1.1 precision shift 0.5% → 3.2% (transcripts incomplete, replayed only session-005 + session-012).
+   external-ref-corpus: cold-start dormant ✓ matched. Post-P1.1 precision shift 0.5% → 3.2% (transcripts incomplete, replayed only session-005 + session-012).
    conclusion: cold-start threshold correct. P1.1 gain lower на реальном — либо evidence-phrases в synthetic более «чистые», либо real transcripts имеют noise.
    action: добавить synthetic-noisy-transcripts профиль (edge case "evidence-phrase in unrelated context") в v0.14.
    ```
@@ -409,7 +409,7 @@ diff <(jq -S . <<< "$actual") <(jq -S . "$EXPECTED") \
 
 ### Phase 2 (блокирует P1.1 merge)
 - `synthetic-feedback-heavy` с transcripts — ~3 часа.
-- **Тут же**: первый cross-reference с external-01, запись в real-corpus-notes.md.
+- **Тут же**: первый cross-reference с external-ref-corpus, запись в real-corpus-notes.md.
 
 ### Phase 3 (блокирует P1.3, P1.5, P1.7 merge)
 - `synthetic-multilingual` — ~2 часа.
@@ -430,12 +430,12 @@ diff <(jq -S . <<< "$actual") <(jq -S . "$EXPECTED") \
 - **Reproducibility:** любой контрибьютор может прогнать `make test-fixtures`.
 - **Regression:** snapshot-based diff ловит любое изменение scoring outputs.
 - **SPEC-first:** fixture как формальный контракт на каждый scoring-scenario.
-- **P1.1 calibration:** synthetic transcripts закрывают пробел, которого в external-01 нет.
+- **P1.1 calibration:** synthetic transcripts закрывают пробел, которого в external-ref-corpus нет.
 - **Multilingual coverage:** отдельный профиль — не «как-нибудь там».
 - **Edge-case coverage:** отдельный профиль с corrupt data, duplicate slugs, empty status.
 
 ### Не решает
-- **Surprise-value живого корпуса.** Реальные пользователи пишут файлы в неожиданных формах, которые я (и 5 агентов) не предусмотрим в synthetic. Компенсируется cross-reference с external-01.
+- **Surprise-value живого корпуса.** Реальные пользователи пишут файлы в неожиданных формах, которые я (и 5 агентов) не предусмотрим в synthetic. Компенсируется cross-reference с external-ref-corpus.
 - **Масштаб.** Synthetic fixtures маленькие (10-30 файлов). Live performance на 500-file корпусе тестирует `hooks/bench-memory.sh`, не эти fixtures.
 - **Team scenarios.** Все synthetic — single-user. Для multi-user адопшена нужен отдельный профиль, когда/если появится реальный team-кейс.
 
@@ -443,8 +443,8 @@ diff <(jq -S . <<< "$actual") <(jq -S . "$EXPECTED") \
 
 ## Связь с другими документами
 
-- **Основной план v0.14** — `docs/plans/2026-04-24-v0.13-review-followup.md`. Обновляется: `fixtures/corpora/` становится synthetic-first, external-01 упоминается как «local-only calibration reference».
-- **Round 2 ответ Артёму** — `docs/audits/2026-04-24-v0.13-response-round-2.md`. Обновляется секцией «Snapshot — не коммитим, используем локально; в репо идёт synthetic».
+- **Основной план v0.14** — `docs/plans/2026-04-24-v0.13-review-followup.md`. Обновляется: `fixtures/corpora/` становится synthetic-first, external-ref-corpus упоминается как «local-only calibration reference».
+- **Round 2 ответ внешнему ревьюеру** — `docs/audits/2026-04-24-v0.13-response-round-2.md`. Обновляется секцией «Snapshot — не коммитим, используем локально; в репо идёт synthetic».
 - **Cold-start ADR** — `docs/decisions/cold-start-scoring.md`. Tests: `fixtures/corpora/synthetic-cold-start/` + `synthetic-mature/`.
 - **CI** — `.github/workflows/test.yml`. Добавляется шаг `make test-fixtures`.
 - **Generator** — `scripts/gen-fixture.sh` (создаётся в phase 4).
