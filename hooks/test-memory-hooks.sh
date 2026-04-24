@@ -3674,6 +3674,74 @@ assert "P1.1 — mistake outcome-positive not duplicated (idempotent)" \
 
 safe_cleanup "$P11_DIR"
 
+# --- Test: v0.14 P1.2 — ref_count migration for legacy files ---
+# Before v0.14 the perl increment used `s/^ref_count: (\d+)/.../e` which
+# does substitution — if the file had no ref_count field the regex
+# didn't match and nothing happened. Legacy corpora authored before
+# the field existed stayed stuck at `_log_ref = 0` in the priority key
+# forever. v0.14 switches to a slurp-mode regex that inserts
+# `ref_count: 0` before the closing `---` when absent, then
+# increments — exactly-once migration on first inject after upgrade.
+P12_DIR=$(mktemp -d)
+cat > "$P12_DIR/no-ref.md" <<'P12_EOF'
+---
+type: feedback
+status: active
+keywords: [legacy]
+---
+
+Legacy file authored before ref_count existed.
+P12_EOF
+cat > "$P12_DIR/has-ref.md" <<'P12_EOF'
+---
+type: feedback
+status: active
+keywords: [current]
+ref_count: 7
+---
+
+Current file.
+P12_EOF
+
+# Run the same slurp-mode perl the session-start hook uses.
+TODAY="2026-04-24" perl -i -0777 -pe '
+  my $today = $ENV{TODAY};
+  s{
+    ^ ( --- \s* \n )
+      ( .*? )
+      ( \n --- \s* \n )
+  }{
+    my ($open, $body, $close) = ($1, $2, $3);
+    $body =~ s/^referenced:.*$/referenced: $today/m;
+    if ($body !~ /^ref_count\s*:/m) { $body .= "\nref_count: 0"; }
+    $body =~ s/^ref_count:\s*(\d+)/"ref_count: " . ($1 + 1)/em;
+    "$open$body$close";
+  }smxe;
+' "$P12_DIR/no-ref.md" "$P12_DIR/has-ref.md"
+
+assert "P1.2 — legacy file without ref_count gains ref_count: 1 on first pass" \
+  'grep -q "^ref_count: 1$" "$P12_DIR/no-ref.md"'
+assert "P1.2 — current file ref_count: 7 increments to 8" \
+  'grep -q "^ref_count: 8$" "$P12_DIR/has-ref.md"'
+assert "P1.2 — migrated file preserves original frontmatter fields" \
+  'grep -q "^type: feedback$" "$P12_DIR/no-ref.md" && grep -q "^keywords: \[legacy\]$" "$P12_DIR/no-ref.md"'
+
+# Second pass — legacy file should now increment like any other.
+TODAY="2026-04-24" perl -i -0777 -pe '
+  my $today = $ENV{TODAY};
+  s{^(---\s*\n)(.*?)(\n---\s*\n)}{
+    my ($open, $body, $close) = ($1, $2, $3);
+    if ($body !~ /^ref_count\s*:/m) { $body .= "\nref_count: 0"; }
+    $body =~ s/^ref_count:\s*(\d+)/"ref_count: " . ($1 + 1)/em;
+    "$open$body$close";
+  }smxe;
+' "$P12_DIR/no-ref.md"
+
+assert "P1.2 — migrated file increments normally on subsequent passes" \
+  'grep -q "^ref_count: 2$" "$P12_DIR/no-ref.md"'
+
+safe_cleanup "$P12_DIR"
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="
