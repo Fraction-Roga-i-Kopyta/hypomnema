@@ -195,9 +195,31 @@ if jq -e '.assertions.doctor' "$EXPECTED" >/dev/null 2>&1; then
   done
 fi
 
-# --- scoring_probe: deferred until memoryctl scoring-probe ships ---
+# --- scoring_probe: read-only ranking snapshot via memoryctl scoring-probe ---
+# Runs the subcommand against the fixture and checks each field under
+# `must_match`. Each declared key must be present in the probe output
+# and have the declared value (exact match on JSON scalars).
 if jq -e '.assertions.scoring_probe' "$EXPECTED" >/dev/null 2>&1; then
-  skip "scoring_probe (needs memoryctl scoring-probe subcommand — v0.14 follow-up)"
+  probe_slug=$(jq -r '.assertions.scoring_probe.slug' "$EXPECTED")
+  if [ -z "$probe_slug" ] || [ "$probe_slug" = "null" ]; then
+    fail "scoring_probe declared but no slug field — expected.json malformed"
+  else
+    probe_json=$(CLAUDE_MEMORY_DIR="$MEMORY" CLAUDE_DIR="$(dirname "$MEMORY")" \
+      "$MEMORYCTL" scoring-probe "$probe_slug" 2>/dev/null || true)
+    if [ -z "$probe_json" ]; then
+      fail "scoring_probe — memoryctl scoring-probe returned empty output"
+    else
+      for key in $(jq -r '.assertions.scoring_probe.must_match | keys[]' "$EXPECTED"); do
+        exp=$(jq --arg k "$key" '.assertions.scoring_probe.must_match[$k]' "$EXPECTED")
+        act=$(printf '%s' "$probe_json" | jq --arg k "$key" '.[$k]')
+        if [ "$exp" = "$act" ]; then
+          pass "scoring_probe.$probe_slug.$key == $exp"
+        else
+          fail "scoring_probe.$probe_slug.$key expected $exp, got $act"
+        fi
+      done
+    fi
+  fi
 fi
 
 echo "summary: passed=$PASS failed=$FAIL skipped=$SKIP"

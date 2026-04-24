@@ -27,9 +27,13 @@
       "decisions": 0
     },
     "scoring_probe": {
-      "prompt": "keep it simple please",
-      "bayesian_eff_for_any_slug_must_equal": 1.0,
-      "tfidf_score_for_any_slug_must_equal": 0.0
+      "slug": "fb-simplest-first",
+      "must_match": {
+        "bayesian_dormant": true,
+        "bayesian_eff": 1,
+        "tfidf_dormant": true,
+        "tfidf_vocab_size": 0
+      }
     }
   }
 }
