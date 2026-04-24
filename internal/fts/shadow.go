@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/pathutil"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/wal"
 )
 
@@ -119,8 +120,9 @@ func isCandidateDir(p string) bool {
 	return false
 }
 
-// slugFromPath: "/abs/path/mistakes/foo-bug.md" → "foo-bug".
+// slugFromPath is a local wrapper around pathutil.SlugFromPath so
+// in-package callers read cleanly. The canonical implementation
+// lives in internal/pathutil.
 func slugFromPath(p string) string {
-	base := filepath.Base(p)
-	return strings.TrimSuffix(base, ".md")
+	return pathutil.SlugFromPath(p)
 }

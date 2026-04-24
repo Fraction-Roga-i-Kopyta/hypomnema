@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/pathutil"
 )
 
 // ReadADR reads an ADR markdown file and returns the `review-triggers:`
@@ -33,13 +35,11 @@ func ReadADR(path string) (slug string, triggers []Trigger, err error) {
 	return slug, triggers, nil
 }
 
-// slugFromPath strips the trailing `.md` and any directory components.
+// slugFromPath is a local thin wrapper around pathutil.SlugFromPath.
+// Kept as a file-private helper so calls inside this package read as
+// domain code rather than a cross-package import at every site.
 func slugFromPath(path string) string {
-	base := path
-	if i := strings.LastIndexByte(base, '/'); i >= 0 {
-		base = base[i+1:]
-	}
-	return strings.TrimSuffix(base, ".md")
+	return pathutil.SlugFromPath(path)
 }
 
 // parseTriggersFromFrontmatter streams the file line-by-line, skips

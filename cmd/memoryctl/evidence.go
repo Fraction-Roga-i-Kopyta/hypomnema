@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -222,25 +223,31 @@ func locateMemoryFile(memDir, slug string) string {
 }
 
 // recentTranscripts returns the most-recent `limit` .jsonl files
-// under ~/.claude/projects/*/*.jsonl, sorted newest-first by mtime.
+// under $CLAUDE_HOME/projects/*/*.jsonl (defaulting to ~/.claude/projects),
+// sorted newest-first by mtime. Goes through claudeDir() rather than
+// os.UserHomeDir so test fixtures and parallel installs that set
+// CLAUDE_HOME are respected here too.
 func recentTranscripts(limit int) ([]string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, err
-	}
-	root := filepath.Join(home, ".claude", "projects")
+	root := filepath.Join(claudeDir(), "projects")
 	var matches []struct {
 		path string
 		mt   int64
 	}
-	err = filepath.Walk(root, func(p string, info os.FileInfo, walkErr error) error {
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return nil // skip unreadable entries
 		}
-		if info.IsDir() {
+		if d.IsDir() {
 			return nil
 		}
 		if !strings.HasSuffix(p, ".jsonl") {
+			return nil
+		}
+		// Only stat the entries we actually keep — avoids the per-file
+		// stat WalkDir used to do for us, gets us back on par with the
+		// old Walk call cost-wise.
+		info, statErr := d.Info()
+		if statErr != nil {
 			return nil
 		}
 		matches = append(matches, struct {
@@ -328,22 +335,12 @@ func readEvidenceBlock(path string) ([]string, error) {
 		if !inBlock {
 			continue
 		}
-		t := strings.TrimSpace(line)
-		if !strings.HasPrefix(t, "- ") {
-			// End of the block when we hit a non-indented line;
-			// blank lines are tolerated mid-block.
-			if t != "" && !strings.HasPrefix(line, "  ") {
+		v, ok := evidence.ParseYAMLListItem(line)
+		if !ok {
+			if strings.TrimSpace(line) != "" && !strings.HasPrefix(line, "  ") {
 				break
 			}
 			continue
-		}
-		v := strings.TrimPrefix(t, "- ")
-		v = strings.TrimSpace(v)
-		if len(v) >= 2 {
-			if (v[0] == '"' && v[len(v)-1] == '"') ||
-				(v[0] == '\'' && v[len(v)-1] == '\'') {
-				v = v[1 : len(v)-1]
-			}
 		}
 		out = append(out, strings.ToLower(v))
 	}

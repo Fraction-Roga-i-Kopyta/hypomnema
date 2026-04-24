@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/fuzzy"
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/pathutil"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/wal"
 )
 
@@ -294,6 +295,5 @@ func fileExists(p string) bool {
 }
 
 func slugFromPath(p string) string {
-	base := filepath.Base(p)
-	return strings.TrimSuffix(base, ".md")
+	return pathutil.SlugFromPath(p)
 }
