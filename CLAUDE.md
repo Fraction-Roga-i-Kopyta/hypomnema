@@ -185,9 +185,17 @@ Integration tests must hit a real database, not a mock.
 **How to apply:** When writing a test that touches the persistence layer, spin up the real database (Docker, ephemeral schema) instead of substituting a mock object.
 ```
 
+### Feedback-as-mistake: blurry boundary
+
+A behaviour rule given by the user that corrects a **repeated** agent mistake is a valid projection of both types. Write it as `feedback` (shorter, evidence-based, fires reactively via `triggers:`); do NOT also write a separate `mistake` file for the same rule — that duplicates signal and confuses Bayesian effectiveness scoring. If doctor later prints a HINT suggesting you promote an N-times-fired feedback to a mistake, that is a suggestion, not a mandate.
+
 ### When to write `knowledge`
 
 Domain facts, API specifics, infrastructure details that future sessions need to remember and that are not obvious from the code.
+
+### When to write `decision`
+
+An architecture or technology choice you want future sessions to defer to rather than re-litigate. Capture the alternatives considered and the specific trade-offs that made you pick this one — future-you will challenge the choice again without this, and the second round will cost more than writing the decision once. Prefer ADR-style (`What` / `Why` / `Trade-off accepted` / `When to revisit`). Optional `review-triggers:` metric+threshold blocks let `memoryctl decisions review` flag the choice for re-examination when the underlying assumption changes.
 
 ### When to write `continuity`
 
@@ -238,6 +246,34 @@ score = keyword_hits × 3
 Filter first (project ∈ {current, global}; status ∈ {active, pinned}; domains intersect current; recurrence ≥ threshold), then score, then apply adaptive quotas (3+3 mistakes; 12/10/8-slot flex pool depending on keyword signal strength).
 
 You do NOT need to set ranks manually. Write good frontmatter, let the hooks do the rest.
+
+## Scoring cold-start (v0.14)
+
+The five scoring components listed above are not all live from day one. When a fresh install has no outcome signal and almost no body vocabulary, the complex components would emit noise instead of rank. Two of them are gated:
+
+- **Bayesian effectiveness** stays at neutral 1.0 until ≥ `HYPOMNEMA_BAYESIAN_MIN_SAMPLES` (default 5) `outcome-*` events land within `HYPOMNEMA_OUTCOME_WINDOW_DAYS` (default 14). No `outcome-positive` / `outcome-negative` = component dormant, keyword/project/recency carry the rank.
+- **TF-IDF body match** stays suppressed until the index holds ≥ `HYPOMNEMA_TFIDF_MIN_VOCAB` (default 100) unique terms.
+
+`memoryctl doctor` prints `scoring_components_active: N/5` alongside each dormant component's reason. `measurable precision` below ~5 % on first weeks of a fresh install is **not** a bug — it reflects the Bayesian gate being dormant, not rules being bad. The ADR in `docs/decisions/cold-start-scoring.md` holds the full reasoning.
+
+## Secrets detection (v0.13)
+
+`hooks/memory-secrets-detect.sh` is a PreToolUse:Write|Edit gate on `$CLAUDE_MEMORY_DIR/*`. It blocks writes whose body contains a recognised credential pattern (`api_key` / `secret` / `password` / `token` / AWS access or secret key variants) outside fenced code blocks with value length ≥ 8. Blocked writes exit 2 and surface a message on stderr pointing at the offending line.
+
+Two escape hatches:
+
+- Whitelist a path permanently: add its glob to `~/.claude/memory/.secretsignore` (one pattern per line, `.gitignore`-subset syntax). Maintainer-supplied allowances live in `.secretsignore.default` and are overwritten on upgrade.
+- Override for a single invocation: prefix the tool call with `HYPOMNEMA_ALLOW_SECRETS=1`. Use only when you intentionally want to record a string that looks like a secret (e.g. documenting a `seeds/` hazard).
+
+If you get unexpectedly blocked, read the stderr message — it names the file and the line. Do not route around the gate by stripping the value; either whitelist the path or rewrite the text to make the value clearly a placeholder.
+
+## Retroactive silent classification (v0.13)
+
+`trigger-silent-retro` is a posthumous event: if a session injects some slug but emits no closing event (`clean-session`, `session-close`, `outcome-*`, `trigger-useful`, `trigger-silent`, `outcome-new`, `trigger-silent-retro`) within 24 h, `hooks/wal-retro-silent.sh` classifies each orphan inject as silent in retrospect. The date column is the retro-emission date, not the original inject date, so downstream analysis can separate retros from natural `trigger-silent` events.
+
+v0.14 added **soft-close semantics** — `session-close` is written alongside `session-metrics` whenever the Stop hook finishes (regardless of error count), and both that and `outcome-new` are now in the closing set. This fixes the previous false-positive where any session with errors >0 had no closing event at all and got retroactively silenced despite running normally.
+
+See `docs/FORMAT.md § 5.2 Closing events` for the canonical list.
 
 ## Shadow retrieval signal (v0.8)
 
