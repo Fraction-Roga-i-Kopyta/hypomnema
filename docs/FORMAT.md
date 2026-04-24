@@ -196,7 +196,8 @@ date|event|target|session
 
 **Session rollup:**
 
-- `session-metrics` — `target` = comma-separated `key:value` pairs (`error_count:N,tool_calls:M,duration:Ss`). A reader MUST tolerate unknown keys.
+- `session-metrics` — `target` = comma-separated `key:value` pairs (`error_count:N,tool_calls:M,duration:Ss`). A reader MUST tolerate unknown keys. NOT a closing signal on its own — see `session-close`.
+- `session-close` — Stop hook completed (any error count). `target` = session id. v0.14+ addition; carries the session id in the canonical `$4` position so `wal-retro-silent.sh` can tell "Stop hook finished" apart from "session disappeared". Emitted alongside `session-metrics`.
 
 **Strategy signals:**
 
@@ -230,11 +231,29 @@ date|event|target|session
 - `error-detect` — PostToolUse detected a stderr/stdout error pattern. `target` = `tool:category`.
 - `index-stale` — a derivative index (TF-IDF, FTS) was found stale. `target` = index name.
 
-### 5.2 Extension rules
+### 5.2 Closing events — soft-close semantics (v0.14)
+
+Retroactive silent classification (`wal-retro-silent.sh`) must decide whether a session ever finished. The original rule was strict: only `clean-session` (zero errors, terminal) and the feedback-loop verdicts (`trigger-useful`, `trigger-silent`, `outcome-positive`, `outcome-negative`) counted as "closed". Sessions where Stop ran with errors > 0 had no closing event at all — they were re-classified as silent after 24 h despite clearly having run, inflating the retroactive-silent metric with false positives.
+
+v0.14 soft-close rule: a session is **closed** if its WAL contains any of:
+
+- `clean-session` — terminal, zero errors.
+- `session-close` — Stop hook completed with any error count (v0.14 addition; see below).
+- `outcome-new` — new mistake registered mid-session.
+- `outcome-positive` / `outcome-negative` — evidence-match verdict on an injected slug.
+- `trigger-useful` / `trigger-silent` — natural feedback-loop classification.
+- `trigger-silent-retro` — a prior retro pass already classified.
+
+`session-metrics` is **not** in the closing set even though it also signals "Stop hook completed": its `$4` field is the metrics payload (`error_count:N,tool_calls:M,duration:Ts`), not a session id, so we can't attribute it to a specific inject. `session-close` exists solely to carry the session id in the canonical `$4` position alongside `session-metrics`.
+
+In-session state events like `error-detected-<level>`, `strategy-used`, `strategy-gap`, `evidence-missing`, `evidence-empty`, `cluster-load`, `cascade-review` describe what happened **inside** a session, not that it closed, and are deliberately **not** in the set. If a session has only `error-detected-*` but no `session-close`, the retro pass still classifies it as silent after 24 h — that's the diagnosis case "error-detect ran without Stop completing".
+
+### 5.3 Extension rules
 
 - Adding a new event type is non-breaking. Readers MUST ignore (not crash on) unknown events.
 - The four-column invariant is immutable within format v1. A fifth column requires a major version.
 - New events SHOULD follow the naming pattern `<domain>-<action>` (e.g., `cluster-load`, not `load_cluster`).
+- When adding an event that represents **session closure**, add it to the soft-close set above and the `closed[]` array in `wal-retro-silent.sh`.
 
 ---
 
