@@ -2,6 +2,9 @@
 *.bak
 *.tmp
 
+# Claude Code local settings (per-user permissions, paths)
+.claude/settings.local.json
+
 # Go build artefacts
 bin/memoryctl
 bin/memoryctl.exe
