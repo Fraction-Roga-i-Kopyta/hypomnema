@@ -75,11 +75,34 @@ jobs:
       - name: Run bash smoke tests
         run: bash hooks/test-memory-hooks.sh
 
+      - name: Run fixture snapshot tests
+        run: make test-fixtures
+
       - name: Run Go unit tests
         run: make test-go
 
       - name: Parity check (bash vs Go shadow)
         run: make parity
+
+      - name: Perf benchmarks (observational — surfaces numbers, does not fail)
+        # Observational-only for now. A stricter threshold policy is blocked
+        # on having enough CI-run data points to distinguish real regressions
+        # from runner variance. Numbers land in the GitHub step summary so
+        # PR reviewers can eyeball them; a >2x regression will still be
+        # visible to a human.
+        continue-on-error: true
+        run: |
+          echo "::group::Perf benchmark run"
+          bash hooks/bench-memory.sh perf 2>&1 | tee /tmp/perf.txt
+          echo "::endgroup::"
+          {
+            echo "## Perf benchmarks (${{ matrix.os }})"
+            echo '```'
+            grep -E "session-start|user-prompt-submit|stop|secrets-detect" /tmp/perf.txt || true
+            echo '```'
+            echo "Baselines: see \`hooks/bench-memory.sh\` and \`docs/measurements/\`."
+            echo "Policy: observational — fixed-threshold gating deferred (see P2 debt)."
+          } >> "$GITHUB_STEP_SUMMARY"
 
   shellcheck:
     runs-on: ubuntu-latest
