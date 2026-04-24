@@ -1,5 +1,161 @@
 # Changelog
 
+## [0.14.0] - 2026-04-24
+
+Scoring architecture work driven by the v0.13 external review.
+Two main features plus a cluster of supporting fixes. The
+headline story is that two of the five scoring components
+(Bayesian effectiveness, TF-IDF body match) were silently
+dormant on any young or feedback-heavy corpus — Bayesian for
+lack of outcome signal, TF-IDF because the builder skipped
+every file with a `keywords:` frontmatter. v0.14 diagnoses
+each state explicitly and closes the data-collection gap for
+non-mistake slugs.
+
+### Added
+
+- **Cold-start scoring gates (ADR proposed → active).**
+  `hooks/lib/score-records.sh` returns neutral Bayesian
+  effectiveness `1.0` when outcome events within
+  `HYPOMNEMA_OUTCOME_WINDOW_DAYS` (default 14) fall below
+  `HYPOMNEMA_BAYESIAN_MIN_SAMPLES` (default 5);
+  `hooks/session-start.sh` suppresses TF-IDF body match when
+  `.tfidf-index` vocabulary is smaller than
+  `HYPOMNEMA_TFIDF_MIN_VOCAB` (default 100). All thresholds
+  ENV-overrideable. See `docs/decisions/cold-start-scoring.md`
+  for the reasoning and `docs/fixtures/real-corpus-notes.md`
+  for the calibration pass that activated the ADR.
+- **`outcome-positive` beyond `mistakes/`.** New
+  `classify_outcome_positive_from_evidence` in
+  `hooks/lib/outcome-detection.sh` emits `outcome-positive`
+  for every slug feedback-loop marked `trigger-useful`
+  (evidence actually referenced in the transcript). Bayesian
+  effectiveness now discriminates on feedback-heavy corpora
+  where no mistakes are ever written. Dry-run on the author
+  corpus: +71 new (slug, session) pairs over a 14-day window,
+  ~1.8× the existing outcome-positive baseline, all from
+  non-mistake types.
+- **`session-close` WAL event.** Emitted alongside
+  `session-metrics` on every completed Stop hook regardless of
+  error count; carries the session id in the canonical `$4`
+  column (`session-metrics $4` is the payload, not an id).
+  Consumed by `wal-retro-silent.sh` as a closing signal —
+  sessions that had errors > 0 are no longer retroactively
+  classified as silent.
+- **`.secretsignore` + `.secretsignore.default`.** Two-file
+  allowlist for `memory-secrets-detect.sh`. `.default` is
+  committed to the repo and overwritten on every install;
+  user-level `.secretsignore` is optional and untouched by
+  the installer. Minimal `.gitignore` subset (line-by-line,
+  `#` comments, `!` negation, `**` glob). Unblocks `seeds/`
+  hazard documentation without requiring per-call
+  `HYPOMNEMA_ALLOW_SECRETS=1`.
+- **Doctor check `scoring_components_active`.** Reports
+  `N/5` active components with per-dormant reasons (sample
+  counts, vocab size, threshold values) in the JSON `extra`
+  field. Makes "low measurable precision" diagnosable without
+  guesswork.
+- **Doctor check `corpus_frontmatter_quality`.** Scans
+  memory files; WARNs on empty `status:` values and on
+  `feedback`/`knowledge` files without `triggers:`. Surfaces
+  up to 5 sample filenames per issue so the operator knows
+  where to look.
+- **Synthetic corpus fixtures** under `fixtures/corpora/`:
+  `synthetic-cold-start` (claim: Bayesian + TF-IDF dormant on
+  zero-outcome / low-vocab corpus) and `synthetic-mature`
+  (claim: all 5 components active at ≥ threshold signal). No
+  real user content — SPEC-first `expected.json` per fixture.
+  `hooks/test-fixture-snapshot.sh` diffs actual doctor output
+  against spec; `make test-fixtures` runs the suite.
+- **Session-close and soft-close semantics in
+  `docs/FORMAT.md § 5.2`.** Canonical list of closing events
+  for retro classification, plus justification for keeping
+  `session-metrics` OUT of the set (`$4` is payload, not id).
+- **CLAUDE.md sections** for Scoring cold-start, Secrets
+  detection, Retroactive silent classification,
+  "When to write a `decision`", and a
+  "Feedback-as-mistake: blurry boundary" subsection that kills
+  the double-write ambiguity between the two types.
+
+### Changed
+
+- **`hooks/memory-index.sh` + `internal/tfidf/tfidf.go`** no
+  longer skip files that declare `keywords:` in frontmatter.
+  The build-time skip was an over-correction that left every
+  well-frontmattered corpus with an empty TF-IDF index;
+  vocabulary gating at the call site handles the small-corpus
+  case instead. TF-IDF tests flipped polarity
+  (`TestRebuild_SkipsFilesWithKeywords` →
+  `TestRebuild_IndexesFilesWithKeywords`).
+- **`internal/doctor/doctor.go`** now counts
+  `memory-secrets-detect.sh` among the required hook commands
+  (v0.13 registered it but doctor kept counting to seven).
+  Full hook coverage on `settings_hooks_registered` again.
+- **`hooks/wal-retro-silent.sh`** closing set includes
+  `session-close` and `outcome-new`; both WAL passes guarded
+  by `NF == 4` so corrupt lines cannot poison the set or emit
+  a malformed retro record.
+- **`internal/doctor` `Check` struct** gained an optional
+  `Extra map[string]interface{}` (omitempty). Lets checks emit
+  structured context (counts, thresholds, samples) without
+  encoding them into the `Detail` string.
+
+### Fixed
+
+- **`hooks/session-start.sh` `ref_count` migration.** Perl
+  was a pure substitution, so files authored before the
+  `ref_count` field existed stayed permanently at the zero
+  bucket of the priority key. Rewritten to slurp the
+  frontmatter block and inject `ref_count: 0` before the
+  closing fence when absent, then increment. Exactly-once
+  migration on first injection after upgrade.
+- **`cmd/memoryctl/main.go`** FTS shadow / sync / query calls
+  now use `context.WithTimeout` (2 s / 10 s / 3 s).
+  `context.Background()` meant an unhealthy SQLite could
+  stall `UserPromptSubmit` indefinitely even though shadow
+  is observational and must never block prompt latency.
+- **Tautological tests.** Two new guards catch the drift
+  pattern that left the real v0.13 hook-registration gap
+  invisible: `TestRequiredHookCommands_MatchInstallScript`
+  parses `install.sh` directly and diffs against
+  `requiredHookCommands`;
+  `TestIndexSubdirs_MatchesExpectedSet` compares
+  `indexSubdirs` element-for-element against an independent
+  whitelist.
+- **Documentation consistency pass.** Test counts, composite
+  score formula, `status:` enum, and clone URL were
+  inconsistent across `README.md`, `CLAUDE.md`, and
+  `docs/QUICKSTART.md`. Canonical weights now live solely in
+  `CLAUDE.md`; `README.md` summarises components and links
+  out. `superseded` removed from `status:` enum (unused by
+  any code). `docs/QUICKSTART.md` clone URL aligned to the
+  public repo.
+
+### Tests
+
+- 279 → 296 smoke asserts (+17 across
+  P1.1 evidence-match / P1.2 ref_count migration /
+  P1.5 soft-close / P1.7 `.secretsignore` / P1.8 doctor
+  checks).
+- `make test-fixtures` target runs snapshot diff against
+  synthetic fixtures (27 assertions across cold-start +
+  mature).
+- `make parity` unchanged — it compares bash vs Go shadow,
+  orthogonal to the scoring work.
+
+### Calibration
+
+Cross-reference pass on 2026-04-24 compared two synthetic
+fixtures against two local real corpora:
+  - `synthetic-cold-start` (3/5 active) ↔ local onboarding
+    corpus (3/5 active) — matched.
+  - `synthetic-mature` (5/5 active) ↔ author corpus
+    (5/5 active, 44 outcomes in 14d, 4807-term vocab) —
+    matched.
+
+No threshold needed tuning. Full record in
+`docs/fixtures/real-corpus-notes.md`.
+
 ## [0.13.1] - 2026-04-24
 
 Recovery patch for v0.13.0. Three gap defects in the two features
