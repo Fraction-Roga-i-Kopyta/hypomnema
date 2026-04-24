@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -272,6 +274,72 @@ func mustWriteWAL(t *testing.T, mem string, lines []string) {
 	if err := os.WriteFile(filepath.Join(mem, ".wal"),
 		[]byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestRequiredHookCommands_MatchInstallScript guards against the
+// tautological drift the doctor suite suffered pre-P1.4. Both the
+// clean fixture and the missing-hook test iterate requiredHookCommands
+// to build their input, so a hook added in install.sh without a
+// matching entry in the constant left every existing assertion green.
+// This test reads install.sh directly, greps the suffix of every
+// register_hook invocation, and compares the set — a real drift
+// between install.sh and the doctor's view of "what should be wired
+// up" fails the test instead of surfacing only at runtime.
+func TestRequiredHookCommands_MatchInstallScript(t *testing.T) {
+	// Walk upward from the test file location to the repo root
+	// (install.sh lives there). Tests run with CWD = package dir.
+	installPath := ""
+	for _, candidate := range []string{
+		"../../install.sh",
+		"../install.sh",
+		"install.sh",
+	} {
+		if _, err := os.Stat(candidate); err == nil {
+			installPath = candidate
+			break
+		}
+	}
+	if installPath == "" {
+		t.Skip("install.sh not found from test CWD — skipping drift check")
+	}
+
+	data, err := os.ReadFile(installPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", installPath, err)
+	}
+	// Match every register_hook line that references ~/.claude/hooks/<name>.sh.
+	// register_hook lines follow the shape:
+	//   register_hook <event> <matcher> "~/.claude/hooks/memory-X.sh" <pri> "<msg>"
+	re := regexp.MustCompile(`~/\.claude/hooks/(memory-[a-z0-9-]+\.sh)`)
+	matches := re.FindAllStringSubmatch(string(data), -1)
+
+	fromInstall := map[string]struct{}{}
+	for _, m := range matches {
+		fromInstall[m[1]] = struct{}{}
+	}
+
+	fromDoctor := map[string]struct{}{}
+	for _, cmd := range requiredHookCommands {
+		fromDoctor[cmd] = struct{}{}
+	}
+
+	var missing, extra []string
+	for k := range fromInstall {
+		if _, ok := fromDoctor[k]; !ok {
+			missing = append(missing, k)
+		}
+	}
+	for k := range fromDoctor {
+		if _, ok := fromInstall[k]; !ok {
+			extra = append(extra, k)
+		}
+	}
+	if len(missing) > 0 || len(extra) > 0 {
+		sort.Strings(missing)
+		sort.Strings(extra)
+		t.Errorf("requiredHookCommands drifted from install.sh:\n  in install.sh but NOT in requiredHookCommands: %v\n  in requiredHookCommands but NOT in install.sh: %v",
+			missing, extra)
 	}
 }
 

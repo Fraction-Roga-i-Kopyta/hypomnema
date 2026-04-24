@@ -104,6 +104,24 @@ func writeFile(t *testing.T, mem, sub, slug, frontmatter, body string) {
 	}
 }
 
+// TestIndexSubdirs_MatchesExpectedSet guards against silent renames or
+// reorderings of the indexed subdirectory list. The fixture uses the
+// same constant, so an erroneous rename there wouldn't fail any other
+// test — this one compares against an independent whitelist that must
+// be updated deliberately.
+func TestIndexSubdirs_MatchesExpectedSet(t *testing.T) {
+	expected := []string{"mistakes", "feedback", "knowledge", "strategies", "notes"}
+	if len(indexSubdirs) != len(expected) {
+		t.Fatalf("indexSubdirs length drift: want %d, got %d (%v)",
+			len(expected), len(indexSubdirs), indexSubdirs)
+	}
+	for i, want := range expected {
+		if indexSubdirs[i] != want {
+			t.Errorf("indexSubdirs[%d]: want %q, got %q", i, want, indexSubdirs[i])
+		}
+	}
+}
+
 func TestRebuild_IndexesFilesWithKeywords(t *testing.T) {
 	// Cold-start ADR flipped this: files with `keywords:` are now indexed
 	// the same as any other file. Vocabulary gating at the call site
