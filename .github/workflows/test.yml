@@ -48,7 +48,11 @@ jobs:
       - name: Set up Go (for memoryctl build + parity)
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          # Matches `go 1.25.0` in go.mod. `check-latest: true` resolves
+          # to the newest patch release. Before v0.15 this was '1.22' and
+          # only passed because setup-go's `check-latest` implicitly
+          # up-ranged to the latest available — a fragile coincidence.
+          go-version: '1.25'
           check-latest: true
 
       - name: Build memoryctl
