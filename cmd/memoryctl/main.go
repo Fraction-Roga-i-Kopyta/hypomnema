@@ -15,12 +15,25 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/dedup"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/doctor"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/fts"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/profile"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/tfidf"
+)
+
+// FTS-call timeouts (P1.6). Plain context.Background() calls could
+// stall arbitrarily long on busy SQLite — shadow pass is meant to be
+// observational and must never block UserPromptSubmit. Sync/query
+// are slightly more forgiving so migration-style rebuilds still
+// complete. All values are conservative defaults; they can be
+// relaxed later if a real workload hits the cap.
+const (
+	ftsShadowTimeout = 2 * time.Second
+	ftsSyncTimeout   = 10 * time.Second
+	ftsQueryTimeout  = 3 * time.Second
 )
 
 const usage = `memoryctl — hypomnema memory CLI
@@ -239,7 +252,12 @@ func runShadow(args []string) {
 		Today:     os.Getenv("HYPOMNEMA_TODAY"),
 	}
 	// Shadow is observational — always exit 0 even if the call errored.
-	_ = fts.Shadow(context.Background(), memoryDir(), prompt, sessionID, injected, cfg)
+	// Timeout covers the case where SQLite is busy and the busy_timeout
+	// gauntlet makes the pass stall; the whole point of shadow is that
+	// a single slow pass never blocks UserPromptSubmit latency.
+	ctx, cancel := context.WithTimeout(context.Background(), ftsShadowTimeout)
+	defer cancel()
+	_ = fts.Shadow(ctx, memoryDir(), prompt, sessionID, injected, cfg)
 	os.Exit(0)
 }
 
@@ -255,7 +273,9 @@ func runSync(args []string) {
 		os.Exit(1)
 	}
 	defer ix.Close()
-	if err := ix.Sync(context.Background(), memoryDir()); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), ftsSyncTimeout)
+	defer cancel()
+	if err := ix.Sync(ctx, memoryDir()); err != nil {
 		fmt.Fprintf(os.Stderr, "memoryctl fts sync: %v\n", err)
 		os.Exit(1)
 	}
@@ -281,9 +301,13 @@ func runQuery(args []string) {
 		os.Exit(0) // graceful — no results
 	}
 	defer ix.Close()
-	_ = ix.Sync(context.Background(), memoryDir())
+	syncCtx, syncCancel := context.WithTimeout(context.Background(), ftsSyncTimeout)
+	defer syncCancel()
+	_ = ix.Sync(syncCtx, memoryDir())
 
-	hits, err := ix.Query(context.Background(), args[0], limit)
+	queryCtx, queryCancel := context.WithTimeout(context.Background(), ftsQueryTimeout)
+	defer queryCancel()
+	hits, err := ix.Query(queryCtx, args[0], limit)
 	if err != nil {
 		os.Exit(0)
 	}
