@@ -2,7 +2,7 @@
 type: decision
 project: global
 created: 2026-04-24
-status: proposed
+status: active
 description: Complex scoring components (Bayesian effectiveness, TF-IDF body match) stay dormant until the corpus accumulates enough outcome signal to make their weights meaningful, and the dormant state is visible to both user and agent.
 keywords: [scoring, cold-start, bayesian, tfidf, dormant, calibration]
 domains: [ranking]
@@ -18,6 +18,14 @@ review-triggers:
     source: self-profile
   - after: "2026-10-24"
 ---
+
+## Status history
+
+- 2026-04-24 — proposed (drafted from external review round 2).
+- 2026-04-24 — active after calibration on `fixtures/corpora/synthetic-*`
+  plus local cross-reference with two real corpora. Defaults 5/14/100
+  held without adjustment. See `docs/fixtures/real-corpus-notes.md`
+  for the verdict record.
 
 ## What
 
