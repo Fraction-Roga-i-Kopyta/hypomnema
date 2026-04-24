@@ -106,38 +106,42 @@ echo "  Removed $removed_bin utility symlink(s)."
 # --- Strip our hooks from settings.json ---
 # Do NOT blindly restore $SETTINGS.backup-hypomnema: a user may have
 # added unrelated hooks after install, and the backup would wipe them.
-# Instead, surgically remove entries whose command references our
-# scripts, then drop empty hook arrays.
+# Instead, walk every hook event and drop entries whose `.command`
+# references a `memory-*.sh` script — matches what install.sh installs
+# regardless of the number of hooks. The previous hard-coded pair list
+# missed v0.11-v0.13 additions (memory-dedup, memory-outcome,
+# memory-error-detect, memory-precompact, memory-secrets-detect) and
+# left them as ghost entries after uninstall.
 echo "[3/3] Stripping hypomnema entries from $SETTINGS..."
 if [ -f "$SETTINGS" ]; then
-  for pair in "SessionStart:memory-session-start.sh" \
-              "Stop:memory-stop.sh" \
-              "UserPromptSubmit:memory-user-prompt-submit.sh"; do
-    hook_name="${pair%%:*}"
-    cmd_frag="${pair##*:}"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    affected=$(jq '[.hooks // {} | to_entries[] | .value[]?.hooks[]?
+                    | select((.command // "") | test("memory-[a-z0-9-]+\\.sh"))] | length' \
+                  "$SETTINGS" 2>/dev/null || echo 0)
+    echo "[dry-run] would strip $affected hypomnema entry(ies) across all hook events"
+  else
     tmp="$SETTINGS.tmp.$$"
-    if [ "$DRY_RUN" -eq 1 ]; then
-      echo "[dry-run] would strip entries referencing '$cmd_frag' from .hooks.$hook_name"
-      continue
-    fi
-    jq --arg name "$hook_name" --arg frag "$cmd_frag" '
-      if (.hooks // {})[$name] then
-        .hooks[$name] |= (
-          map(
-            .hooks = ((.hooks // []) | map(select((.command // "") | contains($frag) | not)))
+    jq '
+      if (.hooks // {}) == {} then .
+      else
+        .hooks |= (
+          with_entries(
+            .value |= (
+              map(
+                .hooks = ((.hooks // []) | map(select(
+                  (.command // "") | test("memory-[a-z0-9-]+\\.sh") | not
+                )))
+              )
+              | map(select(((.hooks // []) | length) > 0))
+            )
           )
-          | map(select(((.hooks // []) | length) > 0))
+          | with_entries(select((.value | length) > 0))
         )
-        | if ((.hooks[$name] // []) | length) == 0 then del(.hooks[$name]) else . end
-      else . end
+        | if (.hooks // {}) == {} then del(.hooks) else . end
+      end
     ' "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS"
-  done
-  # If .hooks is now empty object, remove it too
-  if [ "$DRY_RUN" -eq 0 ]; then
-    tmp="$SETTINGS.tmp.$$"
-    jq 'if (.hooks // {}) == {} then del(.hooks) else . end' "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS"
+    echo "  settings.json updated (all memory-*.sh entries removed)."
   fi
-  echo "  settings.json updated."
 else
   echo "  $SETTINGS not found — skipping."
 fi
