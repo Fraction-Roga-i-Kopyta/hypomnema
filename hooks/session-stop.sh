@@ -334,11 +334,16 @@ fi
 # inject events whose session never closed. Must run BEFORE
 # compaction because compaction turns `inject` into `inject-agg` and
 # loses session_id. Same lock as wal-compact; self-checks cutoff.
+#
+# Run synchronously (no `&`) so the compaction job started below
+# can't win the WAL lock first and aggregate the `inject` rows retro
+# needs to read. Retro is bounded work (bench: ~250ms on 100K WAL
+# lines) — the extra Stop latency is the correct trade-off versus
+# silently losing retro data to scheduler ordering.
 if [ -f "$WAL_FILE" ]; then
   RETRO_SCRIPT="$(dirname "$0")/wal-retro-silent.sh"
   if [ -x "$RETRO_SCRIPT" ]; then
-    CLAUDE_MEMORY_DIR="$MEMORY_DIR" bash "$RETRO_SCRIPT" 2>/dev/null &
-    disown 2>/dev/null || true
+    CLAUDE_MEMORY_DIR="$MEMORY_DIR" bash "$RETRO_SCRIPT" 2>/dev/null || true
   fi
 fi
 

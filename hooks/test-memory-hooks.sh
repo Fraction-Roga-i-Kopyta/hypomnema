@@ -3471,7 +3471,88 @@ SEC_EXIT=0
 printf '%s' "$SEC_PLACEHOLDER_JSON" | CLAUDE_MEMORY_DIR="$SEC_MEM" bash "$SEC_HOOK" >/dev/null 2>&1 || SEC_EXIT=$?
 assert "v0.13 — secrets detect tolerates short placeholder values" '[ "$SEC_EXIT" -eq 0 ]'
 
+# 6. Edit tool with secret in `new_string` → exit 2 (regression for
+#    0.13.1; before the fallback the hook read only `content` and every
+#    Edit-originated write slipped through).
+SEC_EDIT_JSON=$(jq -n --arg fp "$SEC_MEM/mistakes/x.md" \
+  --arg s "api_key: sk_live_abcd1234efgh5678" \
+  '{tool_name: "Edit", tool_input: {file_path: $fp, new_string: $s}}')
+SEC_EXIT=0
+printf '%s' "$SEC_EDIT_JSON" | CLAUDE_MEMORY_DIR="$SEC_MEM" bash "$SEC_HOOK" >/dev/null 2>&1 || SEC_EXIT=$?
+assert "v0.13.1 — secrets detect blocks api_key in Edit new_string (exit 2)" '[ "$SEC_EXIT" -eq 2 ]'
+
+# 7. Edit without secret → exit 0 (Edit path remains non-destructive on
+#    legitimate content).
+SEC_EDIT_CLEAN_JSON=$(jq -n --arg fp "$SEC_MEM/mistakes/x.md" \
+  --arg s "# just plain documentation, no credential" \
+  '{tool_name: "Edit", tool_input: {file_path: $fp, new_string: $s}}')
+SEC_EXIT=0
+printf '%s' "$SEC_EDIT_CLEAN_JSON" | CLAUDE_MEMORY_DIR="$SEC_MEM" bash "$SEC_HOOK" >/dev/null 2>&1 || SEC_EXIT=$?
+assert "v0.13.1 — secrets detect allows Edit with clean new_string (exit 0)" '[ "$SEC_EXIT" -eq 0 ]'
+
 safe_cleanup "$SEC_DIR"
+
+# --- Test: 0.13.1 — uninstall strips all memory-*.sh hook entries ---
+# Before 0.13.1 uninstall.sh hard-coded 3 (SessionStart/Stop/UserPromptSubmit),
+# leaving 5 hypomnema hooks as ghost entries in settings.json after a
+# v0.11-v0.13 uninstall. Now the stripper walks every hook event and
+# removes any entry whose .command references memory-*.sh.
+REPO_ROOT_FOR_TEST="$(dirname "$HOOKS_SRC_DIR")"
+UNINSTALL_DIR=$(mktemp -d)
+UNINSTALL_HOME="$UNINSTALL_DIR/claude"
+mkdir -p "$UNINSTALL_HOME/hooks" "$UNINSTALL_HOME/bin"
+
+# Seed all 8 hypomnema hook registrations + one unrelated user hook that
+# must survive the uninstall.
+cat > "$UNINSTALL_HOME/settings.json" <<'UNINST_EOF'
+{
+  "hooks": {
+    "SessionStart": [{"matcher": "", "hooks": [{"type": "command", "command": "~/.claude/hooks/memory-session-start.sh"}]}],
+    "Stop": [{"matcher": "", "hooks": [{"type": "command", "command": "~/.claude/hooks/memory-stop.sh"}]}],
+    "UserPromptSubmit": [{"matcher": "", "hooks": [{"type": "command", "command": "~/.claude/hooks/memory-user-prompt-submit.sh"}]}],
+    "PreToolUse": [
+      {"matcher": "Write", "hooks": [{"type": "command", "command": "~/.claude/hooks/memory-dedup.sh"}]},
+      {"matcher": "Write|Edit", "hooks": [{"type": "command", "command": "~/.claude/hooks/memory-secrets-detect.sh"}]},
+      {"matcher": "Bash", "hooks": [{"type": "command", "command": "~/.claude/hooks/my-custom-hook.sh"}]}
+    ],
+    "PostToolUse": [
+      {"matcher": "Write|Edit", "hooks": [{"type": "command", "command": "~/.claude/hooks/memory-outcome.sh"}]},
+      {"matcher": "Bash", "hooks": [{"type": "command", "command": "~/.claude/hooks/memory-error-detect.sh"}]}
+    ],
+    "PreCompact": [{"matcher": "", "hooks": [{"type": "command", "command": "~/.claude/hooks/memory-precompact.sh"}]}]
+  }
+}
+UNINST_EOF
+
+CLAUDE_DIR="$UNINSTALL_HOME" bash "$REPO_ROOT_FOR_TEST/uninstall.sh" --yes >/dev/null 2>&1 || true
+
+UNINST_MEMORY_COUNT=$(jq '[.hooks // {} | to_entries[] | .value[]?.hooks[]?
+                          | select((.command // "") | test("memory-[a-z0-9-]+\\.sh"))] | length' \
+                       "$UNINSTALL_HOME/settings.json" 2>/dev/null)
+assert "0.13.1 — uninstall strips all 8 memory-*.sh entries from settings.json" \
+  '[ "$UNINST_MEMORY_COUNT" = "0" ]'
+
+UNINST_CUSTOM_COUNT=$(jq '[.hooks // {} | to_entries[] | .value[]?.hooks[]?
+                          | select((.command // "") | test("my-custom-hook"))] | length' \
+                       "$UNINSTALL_HOME/settings.json" 2>/dev/null)
+assert "0.13.1 — uninstall preserves unrelated user hooks" \
+  '[ "$UNINST_CUSTOM_COUNT" = "1" ]'
+
+safe_cleanup "$UNINSTALL_DIR"
+
+# --- Test: 0.13.1 — retro runs synchronously before compact in session-stop ---
+# Before 0.13.1 both wal-retro-silent.sh and wal-compact.sh were started
+# with `&`, giving the scheduler permission to let compact win the WAL
+# lock first; compact rewrites `inject` rows into `inject-agg`, losing
+# session_id, and retro silently finds nothing. The fix runs retro
+# synchronously; compact remains backgrounded.
+SSTOP_SRC="$HOOKS_SRC_DIR/session-stop.sh"
+assert "0.13.1 — wal-retro-silent.sh invocation is NOT backgrounded (&)" \
+  '! grep -E "bash[[:space:]]+\"\\\$RETRO_SCRIPT\".*&[[:space:]]*\$" "$SSTOP_SRC"'
+assert "0.13.1 — wal-compact.sh invocation IS still backgrounded (&)" \
+  'grep -E "bash[[:space:]]+\"\\\$COMPACT_SCRIPT\".*&[[:space:]]*\$" "$SSTOP_SRC" >/dev/null'
+assert "0.13.1 — wal-retro-silent still invoked somewhere in session-stop" \
+  'grep -q "RETRO_SCRIPT" "$SSTOP_SRC"'
 
 # --- Results ---
 echo ""

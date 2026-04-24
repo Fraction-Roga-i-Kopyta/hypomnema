@@ -32,7 +32,11 @@ case "$FILE_PATH" in
   *) exit 0 ;;
 esac
 
-CONTENT=$(printf '%s' "$INPUT" | jq -r '.tool_input.content // empty' 2>/dev/null)
+# Write tool delivers text via `content`; Edit delivers it via
+# `new_string`. Hook is registered on both (PreToolUse:Write|Edit in
+# install.sh), so fall back between the two fields or Edit writes
+# slip past the gate entirely.
+CONTENT=$(printf '%s' "$INPUT" | jq -r '.tool_input.content // .tool_input.new_string // empty' 2>/dev/null)
 [ -z "$CONTENT" ] && exit 0
 
 # Scan the content. Strategy: strip fenced code blocks and inline

@@ -1,5 +1,52 @@
 # Changelog
 
+## [0.13.1] - 2026-04-24
+
+Recovery patch for v0.13.0. Three gap defects in the two features
+that shipped yesterday: the secrets-detect hook missed Edit-tool
+inputs entirely, the uninstaller left ghost hook entries in
+`settings.json`, and the retroactive-silent classifier raced with
+compaction over the WAL lock and could erase its own inputs.
+
+### Fixed
+
+- **`hooks/memory-secrets-detect.sh`** now reads
+  `tool_input.new_string` as a fallback to `tool_input.content`.
+  The hook is registered on `PreToolUse:Write|Edit`, but previously
+  parsed only the Write-style `content` field; every `Edit` that
+  wrote a plaintext secret into `~/.claude/memory/` slipped past
+  the gate. Agents use `Edit` more often than `Write` for memory
+  files, so the practical coverage of the v0.13 feature was
+  near-zero. Two regression tests added (`Edit` with secret →
+  block; `Edit` with clean content → pass).
+- **`uninstall.sh`** now strips every `memory-*.sh` entry from
+  `settings.json`, not just the three hard-coded pairs
+  (SessionStart, Stop, UserPromptSubmit). `install.sh` registers 8
+  hooks; the previous uninstaller left 5 as ghost entries that
+  Claude Code would try to execute and fail on each subsequent
+  `Write`/`Edit`/`Bash`/`PreCompact` call — visible to the user as
+  repeated "no such file" errors for hooks they had told the
+  uninstaller to remove. Rewritten as a single `jq` walk over all
+  hook events with a regex match on the command field; unrelated
+  user hooks are preserved. Two regression tests added.
+- **`hooks/session-stop.sh`** now runs `wal-retro-silent.sh`
+  synchronously, before the backgrounded `wal-compact.sh`. Both
+  were previously fired as `&` jobs with no `wait` between them,
+  so the scheduler could let compact acquire the WAL lock first
+  and rewrite raw `inject` rows into `inject-agg` — whereupon
+  retro's pass-2 matcher (`$2 == "inject"`) found nothing and
+  silently emitted no `trigger-silent-retro`. Retro is bounded
+  work (~250 ms on a 100K-line WAL), so the added synchronous Stop
+  latency is the correct trade-off versus losing retroactive
+  classification to scheduler ordering. Three regression guards
+  added (source-level check that retro is not backgrounded and
+  compact still is).
+
+### Tests
+
+- 272 → 279 smoke asserts (+2 secrets-detect Edit coverage,
+  +2 uninstall settings.json cleanup, +3 session-stop race guards).
+
 ## [0.13.0] - 2026-04-23
 
 Measurement-bias fix + write-path safety + public-release
