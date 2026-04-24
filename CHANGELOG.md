@@ -338,11 +338,11 @@ the first hour of use, landed together.
 - **`CONTRIBUTING.md`** — "issues open, PRs by invitation" framing,
   local-test commands, invariants a PR must not cross, commit-style
   conventions. Points at ADRs and roadmap.
-- **`SECURITY.md`** — vulnerability-report channel
-  (oleksiy.ohmush@boosta.co), threat-model scope (no network
-  surface; in-scope = LLM-authored content escalating beyond
-  markdown-inert), enumerated known-not-vulnerabilities (exit-0
-  fail-safe, LLM-authored memory, session_ids are UUIDs).
+- **`SECURITY.md`** — vulnerability-report channel (GitHub private
+  vulnerability advisories), threat-model scope (no network surface;
+  in-scope = LLM-authored content escalating beyond markdown-inert),
+  enumerated known-not-vulnerabilities (exit-0 fail-safe, LLM-authored
+  memory, session_ids are UUIDs).
 - `trigger-silent-retro` registered in `docs/FORMAT.md §5.1`.
 
 ### Changed
