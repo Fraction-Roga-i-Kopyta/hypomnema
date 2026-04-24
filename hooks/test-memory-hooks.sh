@@ -1223,7 +1223,11 @@ EOF
   echo "2026-04-06|outcome-negative|proven-bad|s2"
   echo "2026-04-07|outcome-negative|proven-bad|s3"
 } > "$BAYES_MEM/.wal"
-BAYES_OUT=$(printf '{"session_id":"bayes-test","cwd":"/tmp"}' | HYPOMNEMA_TODAY=2026-04-10 CLAUDE_MEMORY_DIR="$BAYES_MEM" bash "$HOOK" 2>/dev/null)
+BAYES_OUT=$(printf '{"session_id":"bayes-test","cwd":"/tmp"}' | \
+  HYPOMNEMA_TODAY=2026-04-10 \
+  HYPOMNEMA_BAYESIAN_MIN_SAMPLES=1 \
+  HYPOMNEMA_OUTCOME_WINDOW_DAYS=365 \
+  CLAUDE_MEMORY_DIR="$BAYES_MEM" bash "$HOOK" 2>/dev/null)
 BAYES_CTX=$(printf '%s' "$BAYES_OUT" | jq -r '.hookSpecificOutput.additionalContext')
 BAYES_POS_GOOD=$(printf '%s\n' "$BAYES_CTX" | grep -n "proven-good" | head -1 | cut -d: -f1)
 BAYES_POS_BAD=$(printf '%s\n' "$BAYES_CTX" | grep -n "proven-bad" | head -1 | cut -d: -f1)

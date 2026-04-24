@@ -20,14 +20,28 @@ compute_wal_scores() {
   local wal_file="$1" today="$2"
   [ -f "$wal_file" ] || return 0
 
-  local cutoff_30d
+  # Cold-start ADR (docs/decisions/cold-start-scoring.md):
+  # Bayesian effectiveness is gated behind a minimum outcome-signal
+  # threshold inside a short recency window. When the window holds
+  # fewer than MIN_SAMPLES outcome-* events for a slug, eff is pinned
+  # to 1.0 (neutral) instead of being computed from the formula —
+  # keyword/project/recency still rank, but noise slugs don't get
+  # systematically halved by pseudo-counts on empty data.
+  # Thresholds ENV-overrideable for local calibration.
+  local min_samples="${HYPOMNEMA_BAYESIAN_MIN_SAMPLES:-5}"
+  local window_days="${HYPOMNEMA_OUTCOME_WINDOW_DAYS:-14}"
+
+  local cutoff_30d cutoff_gate
   if [[ "$OSTYPE" == darwin* ]]; then
     cutoff_30d=$(date -v-30d +%Y-%m-%d 2>/dev/null || echo "0000-00-00")
+    cutoff_gate=$(date -v-"${window_days}"d +%Y-%m-%d 2>/dev/null || echo "0000-00-00")
   else
     cutoff_30d=$(date -d "30 days ago" +%Y-%m-%d 2>/dev/null || echo "0000-00-00")
+    cutoff_gate=$(date -d "${window_days} days ago" +%Y-%m-%d 2>/dev/null || echo "0000-00-00")
   fi
 
-  awk -F'|' -v cutoff="$cutoff_30d" -v today="$today" '
+  awk -F'|' -v cutoff="$cutoff_30d" -v cutoff_gate="$cutoff_gate" \
+    -v today="$today" -v min_samples="$min_samples" '
     $1 >= cutoff && $2 == "inject" {
       count[$3]++
       days[$3, $1] = 1
@@ -40,6 +54,12 @@ compute_wal_scores() {
     }
     $1 >= cutoff && $2 == "outcome-positive" { pos_count[$3]++ }
     $1 >= cutoff && $2 == "outcome-negative" { neg_count[$3]++ }
+    # Gate window is narrower than the formula window so we can detect
+    # "stale signal" — a slug with outcomes only from 30 days ago stays
+    # dormant rather than coasting on old data.
+    $1 >= cutoff_gate && ($2 == "outcome-positive" || $2 == "outcome-negative") {
+      gate_count[$3]++
+    }
     # C9 (audit-2026-04-16): trigger-match is a retrieval/exposure signal,
     # NOT evidence that a record actually helped. Counting it into the
     # Bayesian effectiveness term let frequently-injected-but-never-useful
@@ -66,10 +86,17 @@ compute_wal_scores() {
         ds = days_between(last_day[name], today)
         if (ds < 0) ds = 0
         decay = 1.0 / (1.0 + ds / 7.0)
-        pc = 0; nc = 0
-        if (name in pos_count) pc = pos_count[name]
-        if (name in neg_count) nc = neg_count[name]
-        effectiveness = (pc + 1) / (pc + nc + 2)
+        gs = (name in gate_count) ? gate_count[name] : 0
+        if (gs < min_samples) {
+          # Dormant: neutral 1.0. See cold-start ADR trade-off note on
+          # 1.0 vs 0.5 — 0.5 systematically halved every slug on sparse
+          # corpora, 1.0 lets the rest of the formula carry signal.
+          effectiveness = 1.0
+        } else {
+          pc = (name in pos_count) ? pos_count[name] : 0
+          nc = (name in neg_count) ? neg_count[name] : 0
+          effectiveness = (pc + 1) / (pc + nc + 2)
+        }
         raw = spread * decay * effectiveness
         if (raw > 10) raw = 10
         su = 0

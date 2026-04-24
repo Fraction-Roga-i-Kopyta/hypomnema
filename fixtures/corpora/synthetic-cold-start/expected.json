@@ -1,0 +1,35 @@
+{
+  "fixture_name": "synthetic-cold-start",
+  "claim": "zero-outcome, low-vocab corpus must have bayesian + tfidf dormant",
+  "assertions": {
+    "doctor": {
+      "scoring_components_active": {
+        "status": 0,
+        "extra": {
+          "active": 3,
+          "total": 5,
+          "dormant_components_sorted": ["bayesian", "tfidf"]
+        }
+      }
+    },
+    "wal_counts": {
+      "inject_min": 30,
+      "trigger_silent_min": 5,
+      "outcome_positive": 0,
+      "outcome_negative": 0,
+      "clean_session": 0
+    },
+    "corpus_counts": {
+      "feedback": 5,
+      "knowledge": 3,
+      "mistakes": 0,
+      "strategies": 0,
+      "decisions": 0
+    },
+    "scoring_probe": {
+      "prompt": "keep it simple please",
+      "bayesian_eff_for_any_slug_must_equal": 1.0,
+      "tfidf_score_for_any_slug_must_equal": 0.0
+    }
+  }
+}
