@@ -71,21 +71,22 @@ if jq -e '.assertions.wal_counts' "$EXPECTED" >/dev/null 2>&1; then
   if [ ! -f "$WAL" ]; then
     fail "wal_counts declared but $WAL missing"
   else
-    # grep -c always prints a number on stdout (0 on no match, N on matches)
-    # and exits 1 when no match — so we can drop the `|| echo 0` fallback,
-    # which otherwise concatenates "0\n0" into the variable and breaks equality.
-    declare -A actual_wal
-    actual_wal[inject]=$(grep -c '|inject|' "$WAL" 2>/dev/null)
-    actual_wal[inject_agg]=$(grep -c '|inject-agg|' "$WAL" 2>/dev/null)
-    actual_wal[trigger_silent]=$(grep -c '|trigger-silent|' "$WAL" 2>/dev/null)
-    actual_wal[trigger_useful]=$(grep -c '|trigger-useful|' "$WAL" 2>/dev/null)
-    actual_wal[outcome_positive]=$(grep -c '|outcome-positive|' "$WAL" 2>/dev/null)
-    actual_wal[outcome_negative]=$(grep -c '|outcome-negative|' "$WAL" 2>/dev/null)
-    actual_wal[clean_session]=$(grep -c '|clean-session|' "$WAL" 2>/dev/null)
-
+    # Count events on demand per key — `declare -A` is bash 4+ only,
+    # and /bin/bash on macos-runner (and any stock macOS) is 3.2.
+    # grep -c prints 0 on no match and exits 1; we swallow the exit.
     while IFS=$'\t' read -r key op value; do
       [ -z "$key" ] && continue
-      actual="${actual_wal[$key]:-0}"
+      case "$key" in
+        inject)           actual=$(grep -c '|inject|'           "$WAL" 2>/dev/null || true) ;;
+        inject_agg)       actual=$(grep -c '|inject-agg|'       "$WAL" 2>/dev/null || true) ;;
+        trigger_silent)   actual=$(grep -c '|trigger-silent|'   "$WAL" 2>/dev/null || true) ;;
+        trigger_useful)   actual=$(grep -c '|trigger-useful|'   "$WAL" 2>/dev/null || true) ;;
+        outcome_positive) actual=$(grep -c '|outcome-positive|' "$WAL" 2>/dev/null || true) ;;
+        outcome_negative) actual=$(grep -c '|outcome-negative|' "$WAL" 2>/dev/null || true) ;;
+        clean_session)    actual=$(grep -c '|clean-session|'    "$WAL" 2>/dev/null || true) ;;
+        *)                actual=0 ;;
+      esac
+      actual="${actual:-0}"
       case "$op" in
         eq)
           if [ "$actual" = "$value" ]; then
