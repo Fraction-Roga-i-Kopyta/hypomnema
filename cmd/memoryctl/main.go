@@ -22,6 +22,7 @@ import (
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/fts"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/profile"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/tfidf"
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/wal"
 )
 
 // FTS-call timeouts (P1.6). Plain context.Background() calls could
@@ -160,7 +161,22 @@ func main() {
 // error is silent so session-stop's backgrounded invocation can't leak
 // noise into the user's terminal — matches the bash script's `|| true`
 // posture.
+//
+// Generate + AppendDecisionsPressure are serialised under a single lock
+// (P2.12). Before v0.15 they ran back-to-back without a shared lock; a
+// concurrent SessionStart reading self-profile.md could observe the
+// Generate output before AppendDecisionsPressure had a chance to add
+// the pressure section, and two overlapping session-stops could
+// clobber each other's writes. The dedicated lock file is separate
+// from the WAL lock so profile regen cannot block WAL appends.
 func runSelfProfile(_ []string) {
+	lockPath := filepath.Join(memoryDir(), ".self-profile.lockd")
+	lock, _ := wal.AcquirePath(lockPath, wal.DefaultLockConfig)
+	// Follow the bash script's policy: if the lock cannot be acquired,
+	// run anyway — losing a race is strictly better than skipping the
+	// regen entirely. Release is a no-op on a nil handle.
+	defer lock.Release()
+
 	if err := profile.Generate(memoryDir()); err != nil {
 		// Non-zero exit would get swallowed by session-stop's `2>/dev/null &`
 		// anyway; still, propagate for tests that call the binary directly.
