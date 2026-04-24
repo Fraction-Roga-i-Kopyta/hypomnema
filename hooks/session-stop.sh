@@ -266,6 +266,13 @@ if [ -n "$TRANSCRIPT_PATH" ] && [ -f "$TRANSCRIPT_PATH" ]; then
 
   wal_append "$TODAY|session-metrics|$METRIC_DOMAINS|error_count:$METRIC_ERROR_COUNT,tool_calls:$TOOL_CALLS,duration:${METRIC_DURATION}s"
 
+  # v0.14 soft-close signal. session-metrics itself can't be used
+  # for retro closing-set membership because its $4 is the payload,
+  # not a session id. session-close carries the session id in the
+  # canonical $4 position and exists solely so wal-retro-silent can
+  # tell "Stop hook completed" apart from "session disappeared".
+  wal_append "$TODAY|session-close|$METRIC_DOMAINS|$SAFE_SESSION_ID" "session-close|$METRIC_DOMAINS|$SAFE_SESSION_ID"
+
   if [ "${METRIC_ERROR_COUNT:-0}" -eq 0 ]; then
     wal_append "$TODAY|clean-session|$METRIC_DOMAINS|$SAFE_SESSION_ID" "clean-session|$METRIC_DOMAINS|$SAFE_SESSION_ID"
   fi

@@ -3742,6 +3742,45 @@ assert "P1.2 — migrated file increments normally on subsequent passes" \
 
 safe_cleanup "$P12_DIR"
 
+# --- Test: v0.14 P1.5 — retro soft-close semantics ---
+# Before v0.14 the retro closing-set was strict: only clean-session,
+# trigger-useful/silent, outcome-positive/negative, trigger-silent-retro
+# counted as "closed". Any session with session-metrics (Stop ran with
+# errors) or outcome-new (fresh mistake captured) was re-flagged as
+# silent after 24 h despite demonstrably running. v0.14 adds
+# session-metrics + outcome-new to the closing set, plus NF==4 guards
+# on both passes.
+P15_DIR=$(mktemp -d); P15_MEM="$P15_DIR/memory"
+mkdir -p "$P15_MEM"
+
+# Three orphan `inject` events, all old enough to qualify for retro:
+#   s-close     — closed by session-close (should NOT become silent-retro)
+#   s-newmist   — closed by outcome-new    (should NOT become silent-retro)
+#   s-orphan    — no closing event at all  (SHOULD become silent-retro)
+# Plus one corrupt line (NF != 4) that must not appear in output.
+cat > "$P15_MEM/.wal" <<'P15_EOF'
+2026-04-01|inject|rule-closed|s-close
+2026-04-01|session-metrics|backend|error_count:3,tool_calls:10,duration:300s
+2026-04-01|session-close|backend|s-close
+2026-04-01|inject|rule-new|s-newmist
+2026-04-01|outcome-new|rule-new|s-newmist
+2026-04-01|inject|rule-orphan|s-orphan
+2026-04-01|inject|rule-with|extra|columns
+P15_EOF
+
+CLAUDE_MEMORY_DIR="$P15_MEM" bash "$HOOKS_SRC_DIR/wal-retro-silent.sh" 2>/dev/null
+
+assert "P1.5 — session-close closes the session (no silent-retro)" \
+  '! grep -q "trigger-silent-retro|rule-closed|s-close" "$P15_MEM/.wal"'
+assert "P1.5 — outcome-new closes the session (no silent-retro)" \
+  '! grep -q "trigger-silent-retro|rule-new|s-newmist" "$P15_MEM/.wal"'
+assert "P1.5 — truly orphan session still gets silent-retro" \
+  'grep -q "trigger-silent-retro|rule-orphan|s-orphan" "$P15_MEM/.wal"'
+assert "P1.5 — corrupt WAL line (NF!=4) does not emit a retro record" \
+  '! grep -qE "^[^|]*\|trigger-silent-retro\|.*\|extra" "$P15_MEM/.wal"'
+
+safe_cleanup "$P15_DIR"
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="

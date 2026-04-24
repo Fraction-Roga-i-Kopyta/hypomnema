@@ -48,15 +48,34 @@ trap 'wal_lock_release 2>/dev/null' EXIT INT TERM
 # and keeps retros separable from natural trigger-silent events in
 # downstream analysis.
 awk -F'|' -v cutoff="$CUTOFF" -v today="$TODAY" '
+  # Closing event set (v0.14 soft-close semantics — docs/FORMAT.md §
+  # Closing events). A session is considered closed for retro purposes
+  # if ANY of these events appear against it, not just clean-session.
+  #
+  # The narrow pre-v0.14 set only counted terminal signals
+  # (clean-session and the feedback-loop verdicts), so any session
+  # that produced session-metrics (Stop hook completed, maybe with
+  # errors) or outcome-new (fresh mistake captured) was re-flagged as
+  # silent after 24 h even though Stop demonstrably ran. The new
+  # session-close event is the canonical Stop-hook-completed signal
+  # (see session-stop.sh); session-metrics cannot be used here
+  # because its $4 is the metrics payload, not a session id.
+  #
+  # Guard NF == 4: the WAL is canonical 4-column; anything else came
+  # from a crashed writer or a user-pasted artefact and must not
+  # poison the closing-set.
   FNR == NR {
+    if (NF != 4) next
     if ($2 == "trigger-useful" || $2 == "trigger-silent" ||
         $2 == "outcome-positive" || $2 == "outcome-negative" ||
-        $2 == "clean-session" || $2 == "trigger-silent-retro") {
+        $2 == "clean-session" || $2 == "trigger-silent-retro" ||
+        $2 == "session-close" || $2 == "outcome-new") {
       closed[$4] = 1
     }
     if ($2 == "trigger-silent-retro") retro[$4 "|" $3] = 1
     next
   }
+  NF != 4 { next }
   $2 == "inject" && $1 < cutoff {
     if ($4 in closed) next
     key = $4 "|" $3
