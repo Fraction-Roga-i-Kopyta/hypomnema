@@ -118,9 +118,14 @@ type doc struct {
 
 // parseBody reads a single markdown file and returns either the parsed
 // body + token frequencies, or (nil, nil) if the file should be skipped
-// for any non-fatal reason: unclosed frontmatter, explicit `keywords:`
-// field present (same skip as bash `if (has_kw) return`), empty body
-// after tokenisation. Errors surface only for I/O problems.
+// for any non-fatal reason: unclosed frontmatter, or empty body after
+// tokenisation. Errors surface only for I/O problems.
+//
+// Historically this also skipped files with a `keywords:` field — that
+// skip is lifted by the cold-start ADR (docs/decisions/cold-start-scoring.md):
+// vocabulary now drives the TF-IDF gate at the call site, so excluding
+// the most well-frontmattered files at build time only left the index
+// empty on any mature corpus.
 func parseBody(path string, sw map[string]struct{}) (*doc, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -132,11 +137,10 @@ func parseBody(path string, sw map[string]struct{}) (*doc, error) {
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	var (
-		inFM     bool
-		fmCount  int
-		hasKw    bool
-		bodyBuf  strings.Builder
-		pastFM   bool
+		inFM    bool
+		fmCount int
+		bodyBuf strings.Builder
+		pastFM  bool
 	)
 	for sc.Scan() {
 		line := sc.Text()
@@ -155,9 +159,6 @@ func parseBody(path string, sw map[string]struct{}) (*doc, error) {
 			}
 		}
 		if inFM {
-			if strings.HasPrefix(line, "keywords:") {
-				hasKw = true
-			}
 			continue
 		}
 		if pastFM {
@@ -168,10 +169,11 @@ func parseBody(path string, sw map[string]struct{}) (*doc, error) {
 	if err := sc.Err(); err != nil {
 		return nil, err
 	}
-	// Unclosed frontmatter or file with explicit keywords: skip (bash
-	// parity — those files get ranked by keyword score instead, so the
-	// TF-IDF bonus would double-count).
-	if fmCount < 2 || hasKw {
+	// Still require a closed frontmatter — otherwise the whole file is
+	// treated as frontmatter and the body is empty. Cold-start ADR:
+	// the `keywords:` skip is gone, vocabulary gating handles small
+	// corpora instead.
+	if fmCount < 2 {
 		return nil, nil
 	}
 	tokens := Tokenize(bodyBuf.String(), sw)

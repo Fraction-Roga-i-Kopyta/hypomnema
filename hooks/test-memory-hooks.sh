@@ -304,7 +304,10 @@ TEOF
 CLAUDE_MEMORY_DIR="$TFIDF_MEM" bash "$HOME/.claude/hooks/memory-index.sh" 2>/dev/null
 assert "TF-IDF index created" '[ -f "$TFIDF_MEM/.tfidf-index" ]'
 assert "TF-IDF index has entries" '[ -s "$TFIDF_MEM/.tfidf-index" ]'
-assert "TF-IDF skips files with keywords" '! grep -q "has-kw" "$TFIDF_MEM/.tfidf-index"'
+# Cold-start ADR flipped the build-time skip: files with `keywords:` are
+# now indexed just like any other file. Vocabulary gating at the call
+# site handles small corpora.
+assert "TF-IDF indexes files with keywords (cold-start ADR)" 'grep -q "has-kw" "$TFIDF_MEM/.tfidf-index"'
 assert "TF-IDF includes files without keywords" 'grep -q "no-kw" "$TFIDF_MEM/.tfidf-index"'
 safe_cleanup "$TFIDF_DIR"
 

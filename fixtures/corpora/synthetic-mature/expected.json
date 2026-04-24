@@ -1,0 +1,29 @@
+{
+  "fixture_name": "synthetic-mature",
+  "claim": "corpus with sufficient outcome signal + tfidf vocab must activate all 5 scoring components",
+  "assertions": {
+    "doctor": {
+      "scoring_components_active": {
+        "status": 0,
+        "extra": {
+          "active": 5,
+          "total": 5,
+          "dormant_components_sorted": []
+        }
+      }
+    },
+    "wal_counts": {
+      "inject_min": 30,
+      "outcome_positive_min": 5,
+      "outcome_negative_min": 2,
+      "clean_session_min": 3
+    },
+    "corpus_counts": {
+      "mistakes": 5,
+      "feedback": 5,
+      "knowledge": 3,
+      "strategies": 2,
+      "decisions": 0
+    }
+  }
+}
