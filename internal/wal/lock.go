@@ -45,12 +45,20 @@ type Lock struct {
 }
 
 // Acquire blocks until the WAL lock at memoryDir/.wal.lockd is held, or the
-// configured deadline elapses.
+// configured deadline elapses. Thin wrapper around AcquirePath for the
+// canonical WAL lock location.
 func Acquire(memoryDir string, cfg LockConfig) (*Lock, error) {
+	return AcquirePath(filepath.Join(memoryDir, ".wal.lockd"), cfg)
+}
+
+// AcquirePath blocks until the lock directory at lockDir is held, or the
+// configured deadline elapses. Same mkdir-atomicity semantics as Acquire;
+// exposed so non-WAL resources (e.g. self-profile.md writes) can reuse the
+// same stale-takeover logic without duplicating it per-package.
+func AcquirePath(lockDir string, cfg LockConfig) (*Lock, error) {
 	if cfg.MaxWait == 0 {
 		cfg = DefaultLockConfig
 	}
-	lockDir := filepath.Join(memoryDir, ".wal.lockd")
 	deadline := time.Now().Add(cfg.MaxWait)
 
 	for {

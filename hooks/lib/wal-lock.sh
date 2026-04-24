@@ -43,7 +43,18 @@ wal_lock_release() {
   return 0
 }
 
-# Run command under lock; if lock unavailable, runs anyway (better than dropping writes).
+# Run command under lock. If lock acquisition fails, policy is
+# controlled by WAL_LOCK_STRICT:
+#   0 (default) — legacy fail-open: log to stderr and run anyway.
+#                 Preserves pre-v0.15 behaviour so existing callers
+#                 that tolerate a race window still work.
+#   1           — fail-closed: return 75 (EX_TEMPFAIL) without
+#                 running. Use for critical writes the caller would
+#                 rather skip than emit twice (outcome-positive,
+#                 dedupe-sensitive events).
+# Either way the lock-acquisition failure is now surfaced on stderr
+# so session-stop's journal and CI logs can see real contention —
+# previously the fail-open path was entirely silent (P2.8).
 wal_run_locked() {
   if wal_lock_acquire; then
     "$@"
@@ -51,6 +62,11 @@ wal_run_locked() {
     wal_lock_release
     return "$rc"
   fi
+  if [ "${WAL_LOCK_STRICT:-0}" = "1" ]; then
+    echo "wal-lock: acquire failed (strict), refusing to run unlocked" >&2
+    return 75
+  fi
+  echo "wal-lock: acquire failed, running without lock (race window open)" >&2
   "$@"
 }
 
