@@ -1,6 +1,16 @@
 # Hypomnema
 
+[![CI](https://github.com/Fraction-Roga-i-Kopyta/hypomnema/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/Fraction-Roga-i-Kopyta/hypomnema/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Latest release](https://img.shields.io/github/v/release/Fraction-Roga-i-Kopyta/hypomnema?include_prereleases&sort=semver)](https://github.com/Fraction-Roga-i-Kopyta/hypomnema/releases)
+
 **File-based long-term memory for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — markdown, YAML, shell hooks. No cloud, no database, no embeddings.** Claude Code starts every session from zero; hypomnema fixes that.
+
+> **Status:** Beta. Memory format (`format_version: 1`) and hook contract (`docs/hooks-contract.md`) are marked stable; the project is in active daily development by a solo maintainer. Breaking changes before `v1.0` are possible but tracked in [CHANGELOG.md](CHANGELOG.md).
+>
+> **Platforms:** macOS (primary, daily-driver, covered by CI on `macos-latest`). Linux: expected to work — the shell layer follows a `bash 3.2-safe` convention and depends only on coreutils + `jq` + `perl` + `sqlite3` — but not currently covered by CI. Windows: WSL only, native unsupported.
+>
+> _Not affiliated with or endorsed by Anthropic. Hypomnema is an independent project that integrates with Claude Code's public hook API._
 
 Runtime deps: bash, jq, perl, awk, sqlite3 with FTS5. Optional Go 1.22+ for the `memoryctl` binary that replaces the slow paths. 290+ bash hook smoke tests + 27 synthetic-fixture snapshot tests + Go unit tests across `internal/{fuzzy,profile,wal,fts,dedup,doctor,tfidf,evidence}` at ~70–90% coverage on data-critical packages. Canonical counts live in `CHANGELOG.md § [latest]`. SessionStart hook ~0.3 s on a 100-file corpus.
 
@@ -671,6 +681,16 @@ Yes — `~/.claude/memory/` is plain markdown + YAML. `git init` inside it, comm
 
 **Is this going to get `systemd`-level complicated?**
 Design constraints in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) are explicit: no network, no embeddings, no external dependencies beyond the shell baseline, bash/Go parity contract, append-only WAL, agent-writes/hooks-don't-write invariant. If a change violates one of those, it gets pushed back or moved to a fork.
+
+## Contributing
+
+Issues are open — bug reports, reproduction recipes, and design questions are all welcome. Please include `memoryctl doctor` output and relevant `~/.claude/memory/.wal` lines when filing.
+
+Pull requests are **gated by invitation** while the format contract is still hardening through external use. Read [CONTRIBUTING.md](CONTRIBUTING.md) for the current posture and the kinds of change that can land without prior discussion (docs typos, seed additions) vs. those that need a paired issue first (anything touching `internal/`, the hook layer, or the format contract).
+
+Report security vulnerabilities privately via GitHub Security Advisories — see [SECURITY.md](SECURITY.md).
+
+Release history and breaking-change log: [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
