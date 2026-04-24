@@ -66,7 +66,12 @@ in_fm && /^keywords:/ { prev_has_kw = 1 }
 past_fm { body = body " " $0 }
 
 function process_doc(filepath, text, has_kw,    words, n, i, w, tf, total_w, fname) {
-  if (has_kw) return
+  # Historically this bailed out for any file with `keywords:` in its
+  # frontmatter — an over-correction that left the TF-IDF index empty
+  # on any corpus that followed the documented best practice. The
+  # cold-start ADR (docs/decisions/cold-start-scoring.md) gates TF-IDF
+  # at the runtime call site on vocabulary size instead, so the
+  # keyword-based skip is no longer needed here.
 
   gsub(/[^a-zA-Z\300-\377]/, " ", text)
   n = split(tolower(text), words, " ")

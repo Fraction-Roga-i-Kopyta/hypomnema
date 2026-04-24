@@ -104,13 +104,15 @@ func writeFile(t *testing.T, mem, sub, slug, frontmatter, body string) {
 	}
 }
 
-func TestRebuild_SkipsFilesWithKeywords(t *testing.T) {
+func TestRebuild_IndexesFilesWithKeywords(t *testing.T) {
+	// Cold-start ADR flipped this: files with `keywords:` are now indexed
+	// the same as any other file. Vocabulary gating at the call site
+	// handles the small-corpus case that the build-time skip used to
+	// cover. This test pins the new behaviour.
 	mem := newFixture(t)
-	// File with keywords: MUST be skipped — bash parity (`if (has_kw) return`).
 	writeFile(t, mem, "mistakes", "has-keywords",
 		"type: mistake\nkeywords: [foo, bar]\n",
-		"connection timeout when querying the external API")
-	// File without keywords: SHOULD index.
+		"connection timeout when querying the external service")
 	writeFile(t, mem, "mistakes", "no-keywords",
 		"type: mistake\n",
 		"missing readme instructions during onboarding")
@@ -120,11 +122,12 @@ func TestRebuild_SkipsFilesWithKeywords(t *testing.T) {
 		t.Fatal(err)
 	}
 	index := buf.String()
-	if strings.Contains(index, "has-keywords") {
-		t.Errorf("file with keywords must be excluded from TF-IDF, got:\n%s", index)
+	if !strings.Contains(index, "has-keywords") {
+		t.Errorf("file with keywords must now be indexed alongside others, got:\n%s", index)
 	}
-	// One doc, tf·idf collapses to log2(1/1) = 0 — filtered by MinIDFKept.
-	// That's fine; the point is that `has-keywords` never appeared.
+	if !strings.Contains(index, "no-keywords") {
+		t.Errorf("file without keywords must still index, got:\n%s", index)
+	}
 }
 
 func TestRebuild_CyrillicBodyProducesRealTokens(t *testing.T) {
