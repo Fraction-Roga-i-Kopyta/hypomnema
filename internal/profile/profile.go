@@ -14,6 +14,7 @@ package profile
 import (
 	"bufio"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -241,17 +242,17 @@ func parseErrorCount(s string) int {
 // `precision_class: ambient` line (frontmatter or body — bash uses `grep`).
 func collectAmbientSlugs(memoryDir string) (map[string]bool, error) {
 	out := map[string]bool{}
-	err := filepath.Walk(memoryDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info == nil {
+	err := filepath.WalkDir(memoryDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d == nil {
 			// Ignore per-file errors: bash `grep -r` with redirection to
 			// /dev/null keeps going, so must we.
 			return nil
 		}
-		if info.IsDir() || !strings.HasSuffix(info.Name(), ".md") {
+		if d.IsDir() || !strings.HasSuffix(d.Name(), ".md") {
 			return nil
 		}
 		if hasAmbientLine(path) {
-			out[strings.TrimSuffix(info.Name(), ".md")] = true
+			out[strings.TrimSuffix(d.Name(), ".md")] = true
 		}
 		return nil
 	})

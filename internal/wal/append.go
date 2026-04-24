@@ -57,9 +57,22 @@ func writeLine(memoryDir, line, dedupKey string) error {
 	return err
 }
 
-// containsLine is the Go equivalent of `grep -qF $dedupKey $wal` — substring
-// match (not regex), line-by-line so huge WALs stream through a buffer rather
-// than loading whole-file.
+// dedupTailBytes is how many trailing bytes of the WAL containsLine
+// scans when looking for a recent dedup key. Dedup events we care about
+// are always recently appended — older duplicates are natural load
+// history and the scan was only ever walking them to confirm absence.
+// 256 KiB covers ~2000 canonical 4-column events and keeps the dedup
+// check at O(1) instead of O(WAL-size). Tunable for tests.
+const dedupTailBytes int64 = 256 * 1024
+
+// containsLine is the Go equivalent of `grep -qF $dedupKey $(tail -c 256K $wal)`
+// — substring match against the trailing slice of the WAL only. Dedup
+// events arrive in append order, so the last few kilobytes of events
+// are the only region a fresh duplicate could land in. On a small WAL
+// (< dedupTailBytes) we read the whole file, matching the previous
+// behaviour; on a 50 MB live WAL we read 256 KiB instead of 50 MB,
+// removing the quadratic blow-up the older implementation had when
+// WAL growth outpaced compaction.
 func containsLine(walPath, key string) (bool, error) {
 	f, err := os.Open(walPath)
 	if err != nil {
@@ -70,9 +83,29 @@ func containsLine(walPath, key string) (bool, error) {
 	}
 	defer f.Close()
 
+	fi, err := f.Stat()
+	if err != nil {
+		return false, err
+	}
+	size := fi.Size()
+	offset := int64(0)
+	if size > dedupTailBytes {
+		offset = size - dedupTailBytes
+		if _, err := f.Seek(offset, 0); err != nil {
+			return false, err
+		}
+	}
+
 	scanner := bufio.NewScanner(f)
-	// Memory files can be long; bump the line buffer from the 64 KB default.
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	// When we seeked into the middle of a line, the first Scan() returns a
+	// fragment. Skip it — any real duplicate in that fragment would also
+	// exist in the next full line(s) since dedup events are rewritten, not
+	// partially embedded.
+	if offset > 0 && scanner.Scan() {
+		// Discard the first (partial) line.
+		_ = scanner.Text()
+	}
 	for scanner.Scan() {
 		if strings.Contains(scanner.Text(), key) {
 			return true, nil

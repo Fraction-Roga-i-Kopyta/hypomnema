@@ -163,21 +163,14 @@ func collectExisting(lines []string, evidenceIdx, closeIdx int) map[string]struc
 		return out
 	}
 	for i := evidenceIdx + 1; i < closeIdx; i++ {
-		t := strings.TrimSpace(lines[i])
-		if !strings.HasPrefix(t, "- ") {
-			// First non-list line ends the block (as in YAML).
-			if t != "" && !strings.HasPrefix(lines[i], "  ") {
+		val, ok := ParseYAMLListItem(lines[i])
+		if !ok {
+			// First non-list line ends the block (as in YAML). Blank
+			// lines and indented continuation are tolerated.
+			if strings.TrimSpace(lines[i]) != "" && !strings.HasPrefix(lines[i], "  ") {
 				return out
 			}
 			continue
-		}
-		val := strings.TrimPrefix(t, "- ")
-		val = strings.TrimSpace(val)
-		if len(val) >= 2 {
-			if (val[0] == '"' && val[len(val)-1] == '"') ||
-				(val[0] == '\'' && val[len(val)-1] == '\'') {
-				val = val[1 : len(val)-1]
-			}
 		}
 		out[strings.ToLower(val)] = struct{}{}
 	}
