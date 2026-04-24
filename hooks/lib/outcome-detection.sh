@@ -82,3 +82,63 @@ classify_outcome_positive() {
     wal_append "$TODAY|outcome-positive|$mistake_name|$SAFE_SESSION_ID" "outcome-positive|$mistake_name|$SAFE_SESSION_ID"
   done <<< "$INJECTED_MISTAKES"
 }
+
+# classify_outcome_positive_from_evidence — P1.1 extension. For every
+# injected slug (from any directory — feedback, knowledge, strategies,
+# …) that the feedback-loop has already marked trigger-useful (i.e.
+# evidence was actually referenced in the assistant transcript),
+# emit outcome-positive — unless the slug already has one in this
+# session (from the mistake path or a prior run), or an outcome-negative.
+#
+# Semantics summary:
+#   mistake:  injected AND not outcome-negative → outcome-positive
+#             (unchanged; tolerant because repetition is the negative signal)
+#   other:    injected AND trigger-useful AND not outcome-negative
+#             → outcome-positive (strict; requires evidence-match)
+#
+# Depends on caller having sourced lib/wal-lock.sh and set:
+#   $MEMORY_DIR, $WAL_FILE, $SAFE_SESSION_ID, $TODAY
+#
+# MUST run AFTER classify_feedback_from_transcript so trigger-useful
+# events are present in the WAL for this session.
+classify_outcome_positive_from_evidence() {
+  [ -f "$WAL_FILE" ] || return 0
+  [ -n "$SAFE_SESSION_ID" ] || return 0
+
+  local TRIGGER_USEFUL NEGATIVE_SLUGS EXISTING_POS
+  TRIGGER_USEFUL=$(wal_run_locked awk -F'|' -v sid="$SAFE_SESSION_ID" '
+    $4 == sid && $2 == "trigger-useful" { print $3 }
+  ' "$WAL_FILE" 2>/dev/null | sort -u)
+
+  [ -n "$TRIGGER_USEFUL" ] || return 0
+
+  NEGATIVE_SLUGS=$(wal_run_locked awk -F'|' -v sid="$SAFE_SESSION_ID" '
+    $4 == sid && $2 == "outcome-negative" { print $3 }
+  ' "$WAL_FILE" 2>/dev/null)
+
+  EXISTING_POS=$(wal_run_locked awk -F'|' -v sid="$SAFE_SESSION_ID" '
+    $4 == sid && $2 == "outcome-positive" { print $3 }
+  ' "$WAL_FILE" 2>/dev/null)
+
+  local slug slug_file
+  while IFS= read -r slug; do
+    [ -z "$slug" ] && continue
+    # Idempotency + mistake-path dedupe: if mistake pass or a prior
+    # Stop already emitted outcome-positive for this slug in this
+    # session, skip.
+    if printf '%s\n' "$EXISTING_POS" | grep -qxF "$slug" 2>/dev/null; then
+      continue
+    fi
+    # Negative takes precedence over evidence-match.
+    if printf '%s\n' "$NEGATIVE_SLUGS" | grep -qxF "$slug" 2>/dev/null; then
+      continue
+    fi
+    # Phantom guard — slug's file must exist under memory/ (covers the
+    # case where a file was removed after the inject but before stop).
+    slug_file=$(find "$MEMORY_DIR" -maxdepth 3 -name "${slug}.md" 2>/dev/null | head -1)
+    [ -n "$slug_file" ] || continue
+
+    wal_append "$TODAY|outcome-positive|$slug|$SAFE_SESSION_ID" \
+      "outcome-positive|$slug|$SAFE_SESSION_ID"
+  done <<< "$TRIGGER_USEFUL"
+}

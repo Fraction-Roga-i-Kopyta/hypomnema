@@ -3561,6 +3561,119 @@ assert "0.13.1 — wal-compact.sh invocation IS still backgrounded (&)" \
 assert "0.13.1 — wal-retro-silent still invoked somewhere in session-stop" \
   'grep -q "RETRO_SCRIPT" "$SSTOP_SRC"'
 
+# --- Test: v0.14 P1.1 — outcome-positive extends beyond mistakes/ ---
+# Before v0.14 `classify_outcome_positive` was hardcoded to
+# $MEMORY_DIR/mistakes/{slug}.md, so feedback / knowledge / strategies
+# slugs never contributed to the Bayesian effectiveness signal even
+# when the user clearly referenced them in the transcript. v0.14
+# adds `classify_outcome_positive_from_evidence` which runs AFTER
+# `classify_feedback_from_transcript` and emits outcome-positive for
+# every trigger-useful slug that isn't already one.
+P11_DIR=$(mktemp -d)
+P11_MEM="$P11_DIR/memory"
+mkdir -p "$P11_MEM"/{feedback,mistakes}
+
+# Feedback with evidence — evidence-match in transcript below must
+# produce outcome-positive under P1.1.
+cat > "$P11_MEM/feedback/p11-parameterized.md" <<'P11_EOF'
+---
+type: feedback
+project: global
+status: active
+keywords: [sql]
+evidence:
+  - "parameterized queries only"
+---
+Never concatenate user input into SQL.
+P11_EOF
+
+# Feedback whose evidence is NOT in transcript — control, must stay
+# trigger-silent, NO outcome-positive.
+cat > "$P11_MEM/feedback/p11-no-match.md" <<'P11_EOF'
+---
+type: feedback
+project: global
+status: active
+keywords: [timeouts]
+evidence:
+  - "explicit network timeout"
+---
+Default timeouts are usually too long.
+P11_EOF
+
+# Mistake without evidence — classic path must still emit
+# outcome-positive (backward compat).
+cat > "$P11_MEM/mistakes/p11-race.md" <<'P11_EOF'
+---
+type: mistake
+project: global
+status: active
+severity: minor
+keywords: [concurrency]
+domains: [general]
+---
+Shared state race.
+P11_EOF
+
+P11_TRANSCRIPT="$P11_DIR/session-p11.jsonl"
+cat > "$P11_TRANSCRIPT" <<'P11_EOF'
+{"type":"user","text":"help me fix sql injection in my app"}
+{"type":"assistant","text":"You must use parameterized queries only for every user input"}
+P11_EOF
+
+TODAY_P11=$(date +%Y-%m-%d)
+cat > "$P11_MEM/.wal" <<P11_EOF
+${TODAY_P11}|inject|p11-parameterized|s-p11-test
+${TODAY_P11}|inject|p11-no-match|s-p11-test
+${TODAY_P11}|inject|p11-race|s-p11-test
+P11_EOF
+
+# Invoke the classification functions directly, same order as
+# session-stop.sh:
+#   1. classify_outcome_positive (mistakes-only, existing path)
+#   2. classify_feedback_from_transcript (emits trigger-useful/silent)
+#   3. classify_outcome_positive_from_evidence (P1.1, new)
+(
+  export MEMORY_DIR="$P11_MEM"
+  export WAL_FILE="$MEMORY_DIR/.wal"
+  export SAFE_SESSION_ID="s-p11-test"
+  export TRANSCRIPT_PATH="$P11_TRANSCRIPT"
+  export CWD="/tmp"
+  export TODAY="$TODAY_P11"
+
+  # shellcheck disable=SC1091
+  . "$HOOKS_SRC_DIR/lib/wal-lock.sh"
+  # shellcheck disable=SC1091
+  . "$HOOKS_SRC_DIR/lib/evidence-extract.sh"
+  # shellcheck disable=SC1091
+  . "$HOOKS_SRC_DIR/lib/feedback-loop.sh"
+  # shellcheck disable=SC1091
+  . "$HOOKS_SRC_DIR/lib/outcome-detection.sh"
+
+  classify_outcome_positive 2>/dev/null || true
+  classify_feedback_from_transcript 2>/dev/null || true
+  classify_outcome_positive_from_evidence 2>/dev/null || true
+) >/dev/null 2>&1
+
+assert "P1.1 — outcome-positive emitted for feedback with evidence-match" \
+  'grep -q "outcome-positive|p11-parameterized|s-p11-test" "$P11_MEM/.wal"'
+
+assert "P1.1 — outcome-positive emitted for mistake (backward compat)" \
+  'grep -q "outcome-positive|p11-race|s-p11-test" "$P11_MEM/.wal"'
+
+assert "P1.1 — NO outcome-positive for feedback without evidence-match (control)" \
+  '! grep -q "outcome-positive|p11-no-match|s-p11-test" "$P11_MEM/.wal"'
+
+P11_POS_FB=$(grep -c "outcome-positive|p11-parameterized|" "$P11_MEM/.wal")
+assert "P1.1 — feedback outcome-positive not duplicated (idempotent)" \
+  '[ "$P11_POS_FB" = "1" ]'
+
+P11_POS_MIS=$(grep -c "outcome-positive|p11-race|" "$P11_MEM/.wal")
+assert "P1.1 — mistake outcome-positive not duplicated (idempotent)" \
+  '[ "$P11_POS_MIS" = "1" ]'
+
+safe_cleanup "$P11_DIR"
+
 # --- Results ---
 echo ""
 echo "=== Test Results ==="
