@@ -1,5 +1,113 @@
 # Changelog
 
+## [0.15.0] - 2026-04-24
+
+P2-debt release. Twelve hygiene items the v0.13 external review
+surfaced and v0.14 deferred. Nothing here changes scoring
+behaviour; the entire release is refactor, lock robustness,
+install/CI cleanup, and two ADRs documenting magic constants
+whose rationale lived nowhere outside the code.
+
+### Added
+
+- **ADR `docs/decisions/scoring-weights.md`** (P2.1). Records the
+  five-component weights (keyword ×3, project ×1, WAL 0–10,
+  strategy +6 cap, TF-IDF ×2 capped, noise −3) as deliberately
+  kept rather than re-calibrated, and sets three review triggers
+  — `measurable_precision < 0.10`, `shadow_miss_ratio > 0.50`,
+  calendar `2027-04-24`.
+- **ADR `docs/decisions/quota-pool.md`** (P2.2). Explains the
+  12/10/8 adaptive pool and 5/10 keyword thresholds. Trigger:
+  `ambient_fraction > 0.75` on self-profile, or calendar
+  `2027-04-24`.
+- **`internal/pathutil` package.** Single home for `SlugFromPath`,
+  which had drifted into three per-package copies (one of which
+  used `strings.LastIndexByte('/')`, breaking non-Unix
+  portability).
+- **`internal/evidence.ParseYAMLListItem`.** Dedupes the
+  `- "phrase"` / `- 'phrase'` parsing that was inlined in both
+  `cmd/memoryctl/evidence.go:readEvidenceBlock` and
+  `internal/evidence/writer.go:collectExisting`, where the two
+  copies had already diverged on case handling.
+- **`wal.AcquirePath`.** Public variant of `wal.Acquire` that
+  locks an arbitrary directory, used by `runSelfProfile` for a
+  dedicated `.self-profile.lockd` (see fix section).
+- **`internal/wal/lock_test.go`.** Seven tests covering
+  empty-dir acquire, idempotent release, timeout under
+  contention, stale takeover, no-takeover on a fresh lock,
+  custom lock path, and an 8-worker concurrency test asserting
+  no two callers hold simultaneously. The lock's
+  mkdir-atomicity contract was previously tested only
+  transitively through `Append`.
+
+### Changed
+
+- **`wal.containsLine`** (P2.3) now seeks to a trailing 256 KiB
+  of the WAL before scanning. On a 50 MB live WAL this removed
+  the O(WAL-size) dedup cost on every append — the hot path no
+  longer blocks while the file grew between compactions. Small
+  WALs (< 256 KiB) still read whole, preserving previous
+  behaviour for test fixtures and fresh installs.
+- **`filepath.Walk` → `filepath.WalkDir`** (P2.11) in
+  `internal/profile/profile.go:collectAmbientSlugs` and
+  `cmd/memoryctl/evidence.go:recentTranscripts`. WalkDir avoids
+  the implicit per-entry stat; explicit `d.Info()` only where
+  we keep the entry. Net cost is lower.
+- **`hooks/lib/wal-lock.sh:wal_run_locked`** (P2.8) no longer
+  runs silently on lock-acquisition failure. Always logs the
+  failure to stderr so session-stop's journal and CI logs
+  surface real contention. `WAL_LOCK_STRICT=1` opt-in returns
+  EX_TEMPFAIL (75) instead of running unlocked — use for
+  critical writes where skipping is preferable to racing.
+  Default stays fail-open for backward compat.
+- **`cmd/memoryctl/evidence.go:recentTranscripts`** (P2.5) now
+  goes through `claudeDir()` instead of calling
+  `os.UserHomeDir()` directly, so `CLAUDE_HOME` (for parallel
+  installs and test fixtures) is respected here alongside the
+  doctor and FTS code paths.
+- **`install.sh` settings backup** (P2.9) now writes
+  `settings.json.backup-hypomnema-YYYYMMDD-HHMMSS`. Previous
+  installs wrote a single unversioned path that the next
+  install happily overwrote, discarding the original
+  pre-hypomnema snapshot after one upgrade. The legacy
+  unversioned name is kept as a symlink to the first backup
+  so existing scripts still find it.
+- **`.github/workflows/test.yml`** Go pin (P2.10): `1.22` →
+  `1.25` to match `go.mod:3`. The 1.22 pin only passed because
+  setup-go's `check-latest` silently up-ranged — removed that
+  fragility.
+
+### Fixed
+
+- **`runSelfProfile` race** (P2.12). `profile.Generate` and
+  `profile.AppendDecisionsPressure` previously ran back-to-back
+  with no shared lock. Concurrent SessionStart could observe
+  the core profile before the Decisions section landed;
+  overlapping session-stop calls could clobber each other.
+  v0.15 serialises both under `.self-profile.lockd` via the new
+  `wal.AcquirePath`. The profile lock is separate from the WAL
+  lock so regen cannot block WAL appends.
+
+### CI
+
+- **Perf bench step** (observational). `bash hooks/bench-memory.sh
+  perf` now runs on every push and PR; session-start /
+  user-prompt-submit / stop / secrets-detect numbers land in the
+  GitHub step summary next to the in-script baselines. No
+  threshold gating yet — blocked on having enough CI runs to
+  distinguish real regressions from runner variance, flagged for
+  a v0.16 follow-up. Human reviewers can still eyeball the
+  summary for > 2× regressions.
+- **Fixture snapshot step.** `make test-fixtures` runs on every
+  push/PR so synthetic-cold-start / synthetic-mature assertions
+  catch regressions in scoring gates before merge.
+
+### Tests
+
+- 296 → 303 Go tests (+7 in `internal/wal/lock_test.go`).
+- 296 bash smoke asserts unchanged.
+- 27 synthetic-fixture snapshot assertions unchanged.
+
 ## [0.14.0] - 2026-04-24
 
 Scoring architecture work driven by the v0.13 external review.
