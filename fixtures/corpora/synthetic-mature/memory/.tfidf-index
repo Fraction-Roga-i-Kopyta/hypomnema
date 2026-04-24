@@ -1,0 +1,367 @@
+aborts	kb-deploy-pipeline:0.0651
+access	kb-auth-flow:0.0606	m-cors-misconfig:0.1292
+account	kb-auth-flow:0.0814
+across	st-systematic-debugging:0.0610
+add	st-systematic-debugging:0.0610
+against	kb-deploy-pipeline:0.1302
+alembic	kb-db-schema:0.0831
+alertable	fb-structured-logging:0.2442
+all	st-verification-before-done:0.0583
+allow	m-cors-misconfig:0.2605
+always	kb-db-schema:0.0831
+and	fb-explicit-timeouts:0.0394	fb-structured-logging:0.0567	kb-auth-flow:0.0378	kb-db-schema:0.0193	m-auth-state-leak:0.0193	m-sql-string-interp:0.0313	st-systematic-debugging:0.0283	st-verification-before-done:0.0135
+any	kb-deploy-pipeline:0.0318	m-cors-misconfig:0.0424	st-systematic-debugging:0.0298	st-verification-before-done:0.0285
+api	m-cors-misconfig:0.0646	st-systematic-debugging:0.0454
+append	kb-db-schema:0.0831
+application	kb-db-schema:0.0618	kb-deploy-pipeline:0.0484
+applies	kb-deploy-pipeline:0.0651
+appropriate	fb-explicit-timeouts:0.1699
+are	kb-auth-flow:0.1211	kb-db-schema:0.0618
+around	m-race-deadlock:0.1347
+attempts	kb-auth-flow:0.0814
+audit	kb-db-schema:0.0831
+audit_events	kb-db-schema:0.0831
+auth	m-auth-state-leak:0.0494	m-cors-misconfig:0.0516	st-verification-before-done:0.0347
+authentication	m-auth-state-leak:0.0831
+author	m-pagination-n1:0.2442
+automated	st-verification-before-done:0.0583
+based	st-systematic-debugging:0.0610
+before	kb-deploy-pipeline:0.0969	st-verification-before-done:0.0868
+benign	fb-parameterized-queries:0.2056
+blind	fb-idempotent-retries:0.2056
+blocked	m-race-deadlock:0.1347
+blog	st-systematic-debugging:0.0610
+both	m-race-deadlock:0.1347
+bound	fb-explicit-timeouts:0.1699
+browsers	m-cors-misconfig:0.0868
+bug	fb-no-sentinel-errors:0.1615	m-sql-string-interp:0.1002
+build	kb-deploy-pipeline:0.0651
+built	m-sql-string-interp:0.1347
+but	kb-db-schema:0.0406	m-cors-misconfig:0.0424	m-sql-string-interp:0.0658	st-verification-before-done:0.0285
+bytes	kb-auth-flow:0.0814
+cached	m-auth-state-leak:0.0831
+caller	fb-explicit-timeouts:0.1264	fb-no-sentinel-errors:0.1615
+can	fb-idempotent-retries:0.1530	st-verification-before-done:0.0434
+cascade	kb-db-schema:0.0831
+caught	st-verification-before-done:0.0583
+change	kb-db-schema:0.0831
+charge	fb-idempotent-retries:0.2056
+check	fb-no-sentinel-errors:0.1615	st-verification-before-done:0.0434
+clause	m-sql-string-interp:0.1347
+clears	kb-auth-flow:0.0814
+client	fb-idempotent-retries:0.2056
+clients	fb-explicit-timeouts:0.1699
+clock	st-systematic-debugging:0.0610
+code	kb-db-schema:0.0618	kb-deploy-pipeline:0.0484
+coexist	m-cors-misconfig:0.0868
+combo	m-cors-misconfig:0.0868
+comments	kb-db-schema:0.1663
+complete	st-verification-before-done:0.0583
+completed	st-verification-before-done:0.0583
+completes	kb-deploy-pipeline:0.0651
+concatenation	m-sql-string-interp:0.1347
+concurrent	m-auth-state-leak:0.0831
+conditions	st-systematic-debugging:0.0610
+context	m-auth-state-leak:0.0831
+control	m-cors-misconfig:0.1736
+cookie	kb-auth-flow:0.0814
+cookies	kb-auth-flow:0.0606	m-cors-misconfig:0.0646
+core	kb-db-schema:0.0831
+correlate	st-systematic-debugging:0.0610
+cost	m-sql-string-interp:0.1347
+could	m-auth-state-leak:0.0831
+count	st-systematic-debugging:0.0610
+cpu	st-systematic-debugging:0.0610
+credentials	m-cors-misconfig:0.1736
+current	m-auth-state-leak:0.0831
+data	fb-parameterized-queries:0.1222	m-pagination-n1:0.0726	st-systematic-debugging:0.0363
+database	kb-deploy-pipeline:0.0651
+dedicated	fb-no-sentinel-errors:0.2170
+default	fb-explicit-timeouts:0.1699
+delete	kb-db-schema:0.0831
+deploy	kb-deploy-pipeline:0.0774	m-cors-misconfig:0.0516	st-verification-before-done:0.0347
+design	fb-idempotent-retries:0.2056
+different	st-systematic-debugging:0.0610
+distinctly	fb-explicit-timeouts:0.1699
+document	st-verification-before-done:0.0583
+documented	m-race-deadlock:0.1347
+double	fb-idempotent-retries:0.2056
+down	kb-db-schema:0.0618	kb-deploy-pipeline:0.0484
+driver	fb-parameterized-queries:0.1530	m-sql-string-interp:0.1002
+dry	kb-deploy-pipeline:0.0651
+each	kb-auth-flow:0.0606	st-systematic-debugging:0.0454
+either	fb-idempotent-retries:0.2056
+empties	kb-auth-flow:0.0814
+empty	st-verification-before-done:0.0583
+endpoint	fb-idempotent-retries:0.1222	m-pagination-n1:0.0726	m-sql-string-interp:0.0801
+enforced	m-race-deadlock:0.1347
+enumerate	st-verification-before-done:0.0583
+environment	m-cors-misconfig:0.0646	st-systematic-debugging:0.0454
+error	fb-no-sentinel-errors:0.4341
+errors	fb-explicit-timeouts:0.1699
+even	fb-parameterized-queries:0.2056
+event	fb-structured-logging:0.1817	st-systematic-debugging:0.0454
+events	kb-db-schema:0.0618	m-race-deadlock:0.2005
+ever	m-cors-misconfig:0.0868
+every	kb-db-schema:0.0831
+everyone	fb-structured-logging:0.2442
+exist	fb-parameterized-queries:0.2056
+expiry	kb-auth-flow:0.0814
+explicit	m-cors-misconfig:0.0868
+explicitly	m-auth-state-leak:0.0831
+exploitable	m-sql-string-interp:0.1347
+exposed	m-cors-misconfig:0.0868
+failed	fb-structured-logging:0.1817	st-verification-before-done:0.0434
+failure	kb-deploy-pipeline:0.0484	st-systematic-debugging:0.0454
+failures	fb-explicit-timeouts:0.1699
+first	kb-deploy-pipeline:0.0484	m-auth-state-leak:0.0618
+fix	m-auth-state-leak:0.0337	m-cors-misconfig:0.0352	m-pagination-n1:0.0495	m-race-deadlock:0.0547	m-sql-string-interp:0.0547
+flakes	st-systematic-debugging:0.0610
+flaky	st-systematic-debugging:0.0610
+flow	st-verification-before-done:0.0583
+for	fb-parameterized-queries:0.1004	kb-db-schema:0.0406	m-race-deadlock:0.0658	st-systematic-debugging:0.0298
+foreign	kb-db-schema:0.0831
+forgets	fb-no-sentinel-errors:0.2170
+forward	st-verification-before-done:0.0583
+from	fb-explicit-timeouts:0.1010	fb-structured-logging:0.1451	kb-db-schema:0.0494
+generates	fb-idempotent-retries:0.2056
+genuinely	st-systematic-debugging:0.0610
+goes	st-systematic-debugging:0.0610
+green	st-systematic-debugging:0.0610
+had	st-systematic-debugging:0.0610
+handlers	m-auth-state-leak:0.0831
+have	st-verification-before-done:0.0583
+header	fb-idempotent-retries:0.2056
+hour	kb-auth-flow:0.0814
+how	st-verification-before-done:0.0583
+httponly	kb-auth-flow:0.0814
+idempotency	fb-idempotent-retries:0.2056
+idempotent	fb-idempotent-retries:0.2056
+image	kb-deploy-pipeline:0.1302
+index	kb-db-schema:0.0618	m-pagination-n1:0.0908
+infinite	fb-explicit-timeouts:0.1699
+injection	fb-parameterized-queries:0.2056
+input	fb-parameterized-queries:0.1530	m-sql-string-interp:0.1002
+inside	m-pagination-n1:0.1221
+instead	m-auth-state-leak:0.0831
+integration	kb-deploy-pipeline:0.0484	st-verification-before-done:0.0434
+internal	m-sql-string-interp:0.1347
+interpolating	fb-parameterized-queries:0.2056
+into	fb-parameterized-queries:0.2056
+issuing	m-pagination-n1:0.1221
+job	m-race-deadlock:0.2694
+join	kb-db-schema:0.0831
+joinedload	m-pagination-n1:0.1221
+jwt	kb-auth-flow:0.0814
+keyed	m-cors-misconfig:0.0868
+keys	kb-db-schema:0.0831
+level	fb-structured-logging:0.1817	m-auth-state-leak:0.1237
+like	fb-structured-logging:0.1817	m-sql-string-interp:0.1002
+limits	kb-auth-flow:0.0814
+line	fb-structured-logging:0.2442
+lint	kb-deploy-pipeline:0.0651
+list	m-cors-misconfig:0.0868
+live	kb-db-schema:0.0831
+lived	st-systematic-debugging:0.0610
+load	m-auth-state-leak:0.0618	m-race-deadlock:0.1002
+loaded	m-pagination-n1:0.1221
+local	m-auth-state-leak:0.0618	st-systematic-debugging:0.0454
+locally	st-systematic-debugging:0.0908	st-verification-before-done:0.0434
+lock	m-race-deadlock:0.1347
+log	fb-structured-logging:0.1451	st-systematic-debugging:0.0363	st-verification-before-done:0.0347
+login	fb-structured-logging:0.2442
+logout	kb-auth-flow:0.0814
+looks	fb-parameterized-queries:0.2056
+loop	m-pagination-n1:0.1221
+make	fb-idempotent-retries:0.2056
+manual	kb-deploy-pipeline:0.0651
+manually	st-verification-before-done:0.0583
+marking	st-verification-before-done:0.0583
+memory	st-systematic-debugging:0.0610
+metrics	m-race-deadlock:0.2694
+middleware	m-auth-state-leak:0.0831
+migration	kb-db-schema:0.0494	kb-deploy-pipeline:0.1161	st-verification-before-done:0.0347
+migrations	kb-db-schema:0.0494	kb-deploy-pipeline:0.0387	st-verification-before-done:0.0347
+minimum	st-verification-before-done:0.0583
+minute	fb-explicit-timeouts:0.1264	kb-auth-flow:0.0606
+minutes	fb-explicit-timeouts:0.1699
+missed	fb-no-sentinel-errors:0.2170
+module	m-auth-state-leak:0.1663
+most	fb-explicit-timeouts:0.1699
+name	m-sql-string-interp:0.1347
+new	kb-deploy-pipeline:0.0651
+newer	m-cors-misconfig:0.0868
+none	fb-no-sentinel-errors:0.2170
+not	fb-explicit-timeouts:0.1264	st-verification-before-done:0.0434
+nothing	m-sql-string-interp:0.1347
+object	m-auth-state-leak:0.0831
+observable	st-systematic-debugging:0.0610
+old	kb-auth-flow:0.0814
+older	m-cors-misconfig:0.0868
+one	kb-auth-flow:0.0397	m-auth-state-leak:0.0406	m-pagination-n1:0.1192	st-verification-before-done:0.0854
+ones	m-cors-misconfig:0.0868
+only	kb-db-schema:0.0831
+opaque	kb-auth-flow:0.0814
+ordering	m-race-deadlock:0.1347
+origin	m-cors-misconfig:0.1736
+other	fb-explicit-timeouts:0.1264	m-race-deadlock:0.1002
+outcome	st-systematic-debugging:0.0454	st-verification-before-done:0.0434
+output	st-verification-before-done:0.0583
+page	m-pagination-n1:0.1221
+pair	kb-db-schema:0.0831
+parameterized	m-sql-string-interp:0.1347
+partial	kb-db-schema:0.0831
+path	st-verification-before-done:0.0583
+payment	fb-idempotent-retries:0.2056
+per	kb-auth-flow:0.1211	m-pagination-n1:0.2725
+performs	kb-deploy-pipeline:0.0651
+pick	fb-explicit-timeouts:0.1699
+pipeline	st-systematic-debugging:0.0610
+placeholder	m-sql-string-interp:0.1347
+placeholders	fb-parameterized-queries:0.2056
+plus	kb-deploy-pipeline:0.0484	m-cors-misconfig:0.0646
+pods	kb-deploy-pipeline:0.0651
+point	st-systematic-debugging:0.1221
+post	fb-idempotent-retries:0.1530	m-pagination-n1:0.2725
+post_tags	kb-db-schema:0.0831
+posts	kb-db-schema:0.1855	m-pagination-n1:0.1817
+previous	kb-deploy-pipeline:0.0651
+pytest	st-systematic-debugging:0.0610
+queries	m-pagination-n1:0.0908	m-sql-string-interp:0.1002
+query	m-pagination-n1:0.3663
+queryable	fb-structured-logging:0.2442
+raced	m-auth-state-leak:0.0831
+racy	st-systematic-debugging:0.0610
+raise	fb-no-sentinel-errors:0.2170
+random	kb-auth-flow:0.0814
+rate	kb-auth-flow:0.0814
+read	m-auth-state-leak:0.0831
+reason	fb-parameterized-queries:0.2056
+recent	kb-db-schema:0.0831
+record	st-verification-before-done:0.0583
+red	st-systematic-debugging:0.0610
+refresh	kb-auth-flow:0.3256
+refuses	m-cors-misconfig:0.0868
+regressions	st-verification-before-done:0.0583
+reject	m-cors-misconfig:0.0868
+relying	m-auth-state-leak:0.0831
+repetition	st-systematic-debugging:0.0610
+replace	st-systematic-debugging:0.0610
+reporting	m-sql-string-interp:0.1347
+reports	m-race-deadlock:0.1347
+request	m-auth-state-leak:0.1237	m-pagination-n1:0.0908
+requests	m-auth-state-leak:0.0831
+require	fb-idempotent-retries:0.2056
+requires	kb-db-schema:0.0831
+resolution	st-systematic-debugging:0.0610
+resolved	st-systematic-debugging:0.0610
+restrict	kb-db-schema:0.0831
+result	fb-no-sentinel-errors:0.2170
+retry	fb-idempotent-retries:0.2056
+return	fb-no-sentinel-errors:0.2170
+returned	fb-no-sentinel-errors:0.1615	m-cors-misconfig:0.0646
+reverse	m-race-deadlock:0.1347
+reviewed	kb-db-schema:0.0831
+revokes	kb-auth-flow:0.0814
+rollback	kb-deploy-pipeline:0.0651
+rolled	st-verification-before-done:0.0583
+rolling	kb-deploy-pipeline:0.0651
+rollout	kb-deploy-pipeline:0.0651
+rotates	kb-auth-flow:0.0814
+rows	kb-db-schema:0.0831
+run	kb-deploy-pipeline:0.1161	st-systematic-debugging:0.0363	st-verification-before-done:0.0347
+same	m-pagination-n1:0.1221
+samesite	kb-auth-flow:0.0814
+saw	m-auth-state-leak:0.0831
+scale	fb-explicit-timeouts:0.1699
+schema	kb-db-schema:0.0831
+second	m-auth-state-leak:0.0831
+seconds	fb-explicit-timeouts:0.1699
+separate	kb-deploy-pipeline:0.0651
+separately	kb-db-schema:0.0831
+sequence	kb-deploy-pipeline:0.0651
+server	kb-auth-flow:0.0814
+set	st-verification-before-done:0.0583
+shipped	st-verification-before-done:0.0583
+side	kb-auth-flow:0.0814
+signed	kb-auth-flow:0.0814
+silent	fb-no-sentinel-errors:0.2170
+silently	m-cors-misconfig:0.0868
+sleep	st-systematic-debugging:0.0610
+slower	st-systematic-debugging:0.0610
+smoke	kb-deploy-pipeline:0.0387	m-cors-misconfig:0.0516	st-verification-before-done:0.0347
+source_ip	fb-structured-logging:0.2442
+specific	st-systematic-debugging:0.0610
+sql	fb-parameterized-queries:0.2056
+stage	kb-deploy-pipeline:0.1302
+staging	st-verification-before-done:0.0583
+starts	m-race-deadlock:0.1347
+step	st-verification-before-done:0.0583
+steps	st-systematic-debugging:0.0454	st-verification-before-done:0.0434
+still	m-sql-string-interp:0.1347
+storage	m-auth-state-leak:0.0831
+stored	kb-auth-flow:0.0814
+strict	kb-auth-flow:0.0814
+string	fb-structured-logging:0.1817	m-sql-string-interp:0.1002
+strings	fb-parameterized-queries:0.2056
+structured	st-systematic-debugging:0.0610
+subsequent	m-auth-state-leak:0.0831
+surface	fb-explicit-timeouts:0.1264	fb-parameterized-queries:0.1530
+suspect	st-systematic-debugging:0.0610
+switches	kb-deploy-pipeline:0.0651
+synchronisation	st-systematic-debugging:0.0610
+syntax	m-sql-string-interp:0.1347
+tables	kb-db-schema:0.0618	st-verification-before-done:0.0434
+tag	kb-deploy-pipeline:0.0651
+tags	kb-db-schema:0.0831
+target	kb-deploy-pipeline:0.0651
+task	st-verification-before-done:0.1166
+template	m-pagination-n1:0.1221
+test	m-cors-misconfig:0.0516	st-systematic-debugging:0.0363	st-verification-before-done:0.0347
+tests	kb-deploy-pipeline:0.1953
+that	fb-no-sentinel-errors:0.1059	m-cors-misconfig:0.0848	st-systematic-debugging:0.0298	st-verification-before-done:0.1138
+the	fb-explicit-timeouts:0.0140	fb-idempotent-retries:0.0339	fb-parameterized-queries:0.0169	kb-auth-flow:0.0268	kb-deploy-pipeline:0.0376	m-auth-state-leak:0.0411	m-cors-misconfig:0.0072	m-pagination-n1:0.0201	m-race-deadlock:0.0111	m-sql-string-interp:0.0222	st-systematic-debugging:0.0050	st-verification-before-done:0.0144
+them	m-race-deadlock:0.1002	st-verification-before-done:0.0434
+then	kb-deploy-pipeline:0.0484	m-race-deadlock:0.1002
+thread	m-auth-state-leak:0.1663
+three	st-systematic-debugging:0.0454	st-verification-before-done:0.0434
+through	m-auth-state-leak:0.0831
+tighter	st-systematic-debugging:0.0610
+timeout	fb-explicit-timeouts:0.1699
+timeouts	fb-explicit-timeouts:0.1699
+times	st-systematic-debugging:0.0610
+together	m-cors-misconfig:0.0868
+token	kb-auth-flow:0.1211	m-auth-state-leak:0.1237
+tokens	kb-auth-flow:0.1628
+took	m-race-deadlock:0.2694
+tool	m-sql-string-interp:0.1347
+transaction	m-race-deadlock:0.1347
+true	m-cors-misconfig:0.0868
+two	m-auth-state-leak:0.0831
+type	fb-no-sentinel-errors:0.2170
+under	m-auth-state-leak:0.0494	m-race-deadlock:0.0801	st-systematic-debugging:0.0363
+unit	kb-deploy-pipeline:0.0484	st-verification-before-done:0.0434
+update	kb-deploy-pipeline:0.0651
+use	fb-no-sentinel-errors:0.2170
+user	fb-parameterized-queries:0.1530	fb-structured-logging:0.1817
+user_id	fb-structured-logging:0.2442
+users	kb-db-schema:0.1663
+variable	m-auth-state-leak:0.0831
+verification	st-verification-before-done:0.0583
+verified	st-verification-before-done:0.0583
+version	kb-deploy-pipeline:0.0651
+versions	m-cors-misconfig:0.0868
+via	m-sql-string-interp:0.2694
+waiting	fb-no-sentinel-errors:0.1615	m-race-deadlock:0.1002
+waits	st-systematic-debugging:0.0610
+wall	st-systematic-debugging:0.0610
+was	m-auth-state-leak:0.0494	m-pagination-n1:0.0726	st-verification-before-done:0.0347
+weeks	st-systematic-debugging:0.0610
+what	st-verification-before-done:0.0583
+when	fb-parameterized-queries:0.2056
+where	m-sql-string-interp:0.1347
+wildcard	m-cors-misconfig:0.0868
+with	kb-auth-flow:0.0397	kb-db-schema:0.0406	m-cors-misconfig:0.0424	st-systematic-debugging:0.0596
+worked	st-verification-before-done:0.0583
+would	st-verification-before-done:0.0583
+wrapper	m-race-deadlock:0.1347
