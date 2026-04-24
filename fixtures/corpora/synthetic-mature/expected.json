@@ -14,7 +14,7 @@
     },
     "wal_counts": {
       "inject_min": 30,
-      "outcome_positive_min": 5,
+      "outcome_positive_min": 10,
       "outcome_negative_min": 2,
       "clean_session_min": 3
     },
@@ -24,6 +24,13 @@
       "knowledge": 3,
       "strategies": 2,
       "decisions": 0
+    },
+    "scoring_probe": {
+      "slug": "m-auth-state-leak",
+      "must_match": {
+        "bayesian_dormant": false,
+        "tfidf_dormant": false
+      }
     }
   }
 }

@@ -83,6 +83,13 @@ Usage:
       accepted phrases append to the rule's evidence: frontmatter
       block. Rejected-pattern phrases persist in
       ~/.claude/memory/.runtime/evidence-rejections/<slug>.list.
+  memoryctl scoring-probe <slug>
+      Read-only snapshot of a slug's ranking inputs as of the current
+      WAL + tfidf-index: Bayesian effectiveness (+ dormancy reason),
+      outcomes in the cold-start window, TF-IDF vocab size, 30-day
+      inject spread, last-inject age, strategy-used count. JSON output
+      for fixture-harness assertions and one-off debugging. Does not
+      mutate state.
 
 Environment:
   CLAUDE_MEMORY_DIR       Memory root (default: ~/.claude/memory).
@@ -151,6 +158,8 @@ func main() {
 		runDecisions(os.Args[2:])
 	case "evidence":
 		runEvidence(os.Args[2:])
+	case "scoring-probe":
+		runScoringProbe(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "memoryctl: unknown command %q\n", os.Args[1])
 		os.Exit(2)
