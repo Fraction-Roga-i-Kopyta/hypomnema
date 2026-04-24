@@ -550,17 +550,35 @@ if [ ${#INJECTED_FILES[@]} -gt $_TOTAL_CAP ]; then
   INJECTED_FILES=("${INJECTED_FILES[@]:0:$_TOTAL_CAP}")
 fi
 
-# Update accessed dates — single perl call for all files (13x faster than grep+sed+rm loop)
-# Only modify within frontmatter block (between first and second ---)
+# Update accessed dates + Hebbian increment — one perl slurp per file
+# so the whole frontmatter is visible at once. Walking the file line by
+# line (the previous approach) cannot insert a missing `ref_count: 0`
+# before the closing `---`, which left legacy files (authored before
+# the field existed) permanently stuck at 0 in the priority key.
+# P1.2 fix: slurp the frontmatter block, inject `ref_count: 0` if
+# absent, then increment — exactly-once migration happens lazily on
+# first injection after upgrade.
 if [ ${#INJECTED_FILES[@]} -gt 0 ]; then
-  perl -pi -e '
-    $in_fm = 1 if /^---$/ && !$seen_fm++;
-    $in_fm = 0 if /^---$/ && $seen_fm > 1;
-    if ($in_fm) {
-      s/^referenced: .*/referenced: '"$TODAY"'/;
-      s/^ref_count: (\d+)/"ref_count: " . ($1 + 1)/e;
-    }
-    if (eof) { $seen_fm = 0; $in_fm = 0; }
+  TODAY="$TODAY" perl -i -0777 -pe '
+    my $today = $ENV{TODAY};
+    s{
+      ^ ( --- \s* \n )   # $1: opening fence
+        ( .*? )           # $2: frontmatter body
+        ( \n --- \s* \n ) # $3: closing fence
+    }{
+      my ($open, $body, $close) = ($1, $2, $3);
+      # Refresh referenced timestamp (idempotent on re-inject same day).
+      $body =~ s/^referenced:.*$/referenced: $today/m;
+      # Migrate: add ref_count: 0 just before the closing fence if the
+      # file is from before the field existed. Exactly once per file;
+      # subsequent runs skip this branch.
+      if ($body !~ /^ref_count\s*:/m) {
+        $body .= "\nref_count: 0";
+      }
+      # Hebbian: increment current value.
+      $body =~ s/^ref_count:\s*(\d+)/"ref_count: " . ($1 + 1)/em;
+      "$open$body$close";
+    }smxe;
   ' "${INJECTED_FILES[@]}" 2>/dev/null || true
 fi
 
