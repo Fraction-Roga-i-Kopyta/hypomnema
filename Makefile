@@ -13,7 +13,7 @@ GO_FILES := $(shell find . -name '*.go' -not -path './vendor/*')
 # compilable. modernc.org/sqlite is pure Go, so this works.
 GO_BUILD := CGO_ENABLED=0 go build -trimpath -ldflags="-s -w"
 
-.PHONY: all build test test-go test-hooks parity replay install clean help
+.PHONY: all build test test-go test-hooks test-fixtures parity replay install clean help
 
 all: build test
 
@@ -31,6 +31,17 @@ test-go:
 
 test-hooks:
 	bash hooks/test-memory-hooks.sh
+
+# Snapshot tests against synthetic corpora in fixtures/corpora/. Each
+# fixture has an expected.json written SPEC-first; the harness diffs
+# actual doctor / wal / corpus state against it.
+test-fixtures: build
+	@any_fail=0; \
+	for d in fixtures/corpora/synthetic-*/; do \
+		[ -d "$$d" ] || continue; \
+		MEMORYCTL="$(abspath $(MEMORYCTL))" bash hooks/test-fixture-snapshot.sh "$$d" || any_fail=1; \
+	done; \
+	exit $$any_fail
 
 # Parity check: same fixture, same prompt, bash vs Go shadow. Ensures the
 # Go pilot stays drop-in compatible with the reference implementation.
@@ -59,6 +70,7 @@ help:
 	@echo "  test        — go test + bash hooks/test-memory-hooks.sh"
 	@echo "  test-go     — just the Go test suite"
 	@echo "  test-hooks  — just the bash hooks smoke test"
+	@echo "  test-fixtures — snapshot tests against fixtures/corpora/synthetic-*"
 	@echo "  parity      — bash vs Go shadow pass comparison"
 	@echo "  replay      — synthetic corpus replay, retrieval metrics"
 	@echo "  install     — symlink bin/memoryctl into ~/.claude/bin/"

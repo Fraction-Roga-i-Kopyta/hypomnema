@@ -276,11 +276,20 @@ WAL_SCORES=$(compute_wal_scores "$WAL_FILE" "$TODAY")
 TFIDF_INDEX="$MEMORY_DIR/.tfidf-index"
 TFIDF_SCORES=""
 idx_age=999
+# Cold-start ADR gate (docs/decisions/cold-start-scoring.md): TF-IDF body
+# match is dormant until the index holds MIN_TFIDF_VOCAB unique terms.
+# Below the threshold the score mostly reflects tokenisation noise on a
+# tiny vocabulary; keyword_hits + project + recency rank reliably on their
+# own until more content accumulates. Threshold ENV-overrideable.
+MIN_TFIDF_VOCAB="${HYPOMNEMA_TFIDF_MIN_VOCAB:-100}"
 if [ -f "$TFIDF_INDEX" ]; then
   idx_mtime=$(_stat_mtime "$TFIDF_INDEX")
   idx_age=$(( ($(date +%s) - idx_mtime) / 86400 ))
   if [ "$idx_age" -le 7 ]; then
-    TFIDF_SCORES=$(compute_tfidf_scores "$TFIDF_INDEX" "$KEYWORDS")
+    idx_vocab=$(wc -l < "$TFIDF_INDEX" 2>/dev/null | tr -d ' ')
+    if [ "${idx_vocab:-0}" -ge "$MIN_TFIDF_VOCAB" ]; then
+      TFIDF_SCORES=$(compute_tfidf_scores "$TFIDF_INDEX" "$KEYWORDS")
+    fi
   else
     wal_append "$TODAY|index-stale|tfidf|$SESSION_ID" "index-stale|tfidf|$SESSION_ID"
   fi

@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -48,11 +49,16 @@ func (s Status) String() string {
 	return "?"
 }
 
-// Check is a single diagnostic result.
+// Check is a single diagnostic result. Extra carries structured
+// context that shells can parse (see `scoring_components_active`,
+// which exposes active/total/dormant lists instead of packing them
+// into Detail); omitted when empty to keep the JSON output stable
+// for checks that don't need it.
 type Check struct {
-	Name   string `json:"name"`
-	Status Status `json:"status"`
-	Detail string `json:"detail,omitempty"`
+	Name   string                 `json:"name"`
+	Status Status                 `json:"status"`
+	Detail string                 `json:"detail,omitempty"`
+	Extra  map[string]interface{} `json:"extra,omitempty"`
 }
 
 // Report is the aggregated set of checks returned by Run.
@@ -130,6 +136,7 @@ func Run(claudeDir, memoryDir string) Report {
 		checkOpenQuanta(filepath.Join(memoryDir, ".wal"), now),
 		checkDecisionsPressure(memoryDir, now),
 		checkIndices(memoryDir, now),
+		checkScoringComponents(memoryDir, now),
 	)
 	return r
 }
@@ -645,4 +652,162 @@ func checkDecisionsPressure(memoryDir string, now time.Time) Check {
 		Detail: fmt.Sprintf("%d trigger(s) fired across %d ADR(s): %s; run `memoryctl decisions review` for detail",
 			fired, adrCount, strings.Join(examples, ", ")),
 	}
+}
+
+// checkScoringComponents reports how many of the five SessionStart
+// scoring components are active vs dormant under the cold-start gates
+// from `docs/decisions/cold-start-scoring.md`.
+//
+// Active components: keyword_hits, project_boost, recency — always live.
+// Dormant when thresholds unmet: wal_spaced_repetition (Bayesian),
+// tfidf_body_match.
+//
+// Thresholds mirror the ENV variables the hook scripts read:
+//   - HYPOMNEMA_BAYESIAN_MIN_SAMPLES (default 5)
+//   - HYPOMNEMA_OUTCOME_WINDOW_DAYS  (default 14)
+//   - HYPOMNEMA_TFIDF_MIN_VOCAB      (default 100)
+//
+// The check always returns OK status — it's an INFO-level report on
+// scoring-pipeline state, not a health problem. Extra carries the
+// machine-readable breakdown so shells (and the fixture harness) can
+// assert against specific fields.
+func checkScoringComponents(memoryDir string, now time.Time) Check {
+	const name = "scoring_components_active"
+	minSamples := envInt("HYPOMNEMA_BAYESIAN_MIN_SAMPLES", 5)
+	windowDays := envInt("HYPOMNEMA_OUTCOME_WINDOW_DAYS", 14)
+	minVocab := envInt("HYPOMNEMA_TFIDF_MIN_VOCAB", 100)
+
+	walPath := filepath.Join(memoryDir, ".wal")
+	tfidfPath := filepath.Join(memoryDir, ".tfidf-index")
+
+	cutoff := now.AddDate(0, 0, -windowDays).Format("2006-01-02")
+	outcomeCount := countOutcomeEventsAfter(walPath, cutoff)
+	vocabSize := countFileLines(tfidfPath)
+
+	type dormantEntry struct {
+		Component string `json:"component"`
+		Reason    string `json:"reason"`
+	}
+
+	total := 5
+	active := total
+	var dormant []dormantEntry
+	var dormantNames []string
+
+	if outcomeCount < minSamples {
+		active--
+		dormant = append(dormant, dormantEntry{
+			Component: "bayesian",
+			Reason:    fmt.Sprintf("need >=%d outcomes in %dd, have %d", minSamples, windowDays, outcomeCount),
+		})
+		dormantNames = append(dormantNames, "bayesian")
+	}
+	if vocabSize < minVocab {
+		active--
+		dormant = append(dormant, dormantEntry{
+			Component: "tfidf",
+			Reason:    fmt.Sprintf("vocab <%d, have %d", minVocab, vocabSize),
+		})
+		dormantNames = append(dormantNames, "tfidf")
+	}
+
+	detail := fmt.Sprintf("%d/%d active", active, total)
+	if len(dormant) > 0 {
+		var parts []string
+		for _, d := range dormant {
+			parts = append(parts, fmt.Sprintf("%s (%s)", d.Component, d.Reason))
+		}
+		detail = fmt.Sprintf("%d/%d active; dormant: %s", active, total, strings.Join(parts, ", "))
+	}
+
+	// Explicit non-nil slices so JSON emits [] instead of null when the
+	// corpus has all components active — stable shape for downstream jq.
+	if dormant == nil {
+		dormant = []dormantEntry{}
+	}
+	if dormantNames == nil {
+		dormantNames = []string{}
+	}
+
+	return Check{
+		Name:   name,
+		Status: OK,
+		Detail: detail,
+		Extra: map[string]interface{}{
+			"active":             active,
+			"total":              total,
+			"dormant":            dormant,
+			"dormant_components": dormantNames,
+			"thresholds": map[string]interface{}{
+				"min_outcome_samples": minSamples,
+				"outcome_window_days": windowDays,
+				"min_tfidf_vocab":     minVocab,
+			},
+			"observed": map[string]interface{}{
+				"outcome_events_in_window": outcomeCount,
+				"tfidf_vocab_size":         vocabSize,
+			},
+		},
+	}
+}
+
+func envInt(key string, def int) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return def
+	}
+	return n
+}
+
+// countOutcomeEventsAfter counts outcome-positive + outcome-negative
+// events whose WAL date column is >= cutoff (lexicographic compare on
+// YYYY-MM-DD works for 4-column canonical WAL lines).
+func countOutcomeEventsAfter(walPath, cutoff string) int {
+	f, err := os.Open(walPath)
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+	s := bufio.NewScanner(f)
+	s.Buffer(make([]byte, 64*1024), 1024*1024)
+	count := 0
+	for s.Scan() {
+		line := s.Text()
+		if line == "" {
+			continue
+		}
+		fields := strings.Split(line, "|")
+		if len(fields) != 4 {
+			continue
+		}
+		if fields[0] < cutoff {
+			continue
+		}
+		if fields[1] == "outcome-positive" || fields[1] == "outcome-negative" {
+			count++
+		}
+	}
+	return count
+}
+
+// countFileLines returns the number of newline-terminated lines in
+// path, or 0 if the file can't be opened. Used for TF-IDF vocab size
+// (one term per line in .tfidf-index).
+func countFileLines(path string) int {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+	s := bufio.NewScanner(f)
+	s.Buffer(make([]byte, 64*1024), 1024*1024)
+	n := 0
+	for s.Scan() {
+		n++
+	}
+	return n
 }
