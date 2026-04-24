@@ -5,7 +5,7 @@ Five minutes from clone to your first injected context.
 ## 1. Install (30 seconds)
 
 ```bash
-git clone https://github.com/<your-fork>/hypomnema.git
+git clone https://github.com/Fraction-Roga-i-Kopyta/hypomnema.git
 cd hypomnema
 ./install.sh
 ```

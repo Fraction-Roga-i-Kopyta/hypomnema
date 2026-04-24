@@ -2,7 +2,7 @@
 
 **File-based long-term memory for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — markdown, YAML, shell hooks. No cloud, no database, no embeddings.** Claude Code starts every session from zero; hypomnema fixes that.
 
-Runtime deps: bash, jq, perl, awk, sqlite3 with FTS5. Optional Go 1.22+ for the `memoryctl` binary that replaces the slow paths. 262 bash hook smoke tests + Go unit tests across `internal/{fuzzy,profile,wal,fts,dedup,doctor}` at ~70–90% coverage on data-critical packages. SessionStart hook ~0.3 s on a 100-file corpus.
+Runtime deps: bash, jq, perl, awk, sqlite3 with FTS5. Optional Go 1.22+ for the `memoryctl` binary that replaces the slow paths. 290+ bash hook smoke tests + 27 synthetic-fixture snapshot tests + Go unit tests across `internal/{fuzzy,profile,wal,fts,dedup,doctor,tfidf,evidence}` at ~70–90% coverage on data-critical packages. Canonical counts live in `CHANGELOG.md § [latest]`. SessionStart hook ~0.3 s on a 100-file corpus.
 
 ## What it looks like
 
@@ -246,7 +246,7 @@ The hooks activate on next session start.
 3. Extracts keywords from git context: branch name, diff filenames, commit messages, CWD basename. Falls back to project domains as pseudo-keywords when git signal is weak (< 3 keywords)
 4. Parses all memory files using single-pass BSD-compatible awk (no subprocess spawning per file)
 5. Filters by `project` (global + current), `status` (active/pinned), `domains` (intersection with active), and `recurrence` threshold
-6. Scores records: `keyword_hits × 3 + tfidf_bonus × 2 + wal_spaced_score (0-10)`
+6. Scores records with a five-component composite (keyword + project + WAL spaced-repetition + strategy + TF-IDF, with a noise penalty). Cold-start gates keep Bayesian and TF-IDF dormant until the corpus has accumulated signal. Canonical formula: `CLAUDE.md § How injection ranks files`.
 7. Applies adaptive quotas: 3+3 mistakes, shared budget of 12 for feedback/knowledge/strategies/decisions/notes
 8. Injects everything as markdown into Claude's system context
 9. Updates `injected:` and `referenced:` dates in frontmatter (scoped to frontmatter block only)
@@ -418,7 +418,7 @@ project: global        # global | your-project-id
 created: 2025-01-15    # used by recency-boost ranking (≤7/30/90 days → rank 3/2/1)
 injected: 2025-01-15   # auto-updated by SessionStart on each injection
 referenced: 2025-01-15 # auto-updated when file is accessed
-status: active         # active | pinned | stale | archived | superseded
+status: active         # active | pinned | stale | archived
 
 # Ranking signals (optional, used by UserPromptSubmit trigger-match priority key)
 ref_count: 108         # auto-incremented per injection (log10-bucketed in priority key)
@@ -516,7 +516,7 @@ hooks/
 ├── wal-compact.sh
 ├── regen-memory-index.sh
 ├── bench-memory.sh            # perf benchmarks
-├── test-memory-hooks.sh       # 258 smoke tests
+├── test-memory-hooks.sh       # 290+ smoke tests (see CHANGELOG for exact count)
 └── lib/                       # v0.8 — shared sourced helpers
     ├── wal-lock.sh            # mkdir-based WAL locking
     ├── stat-helpers.sh        # portable _stat_mtime/_stat_size
@@ -552,15 +552,27 @@ Memory files use `domains: [css, frontend]` in frontmatter. Records with `domain
 
 ## Scoring
 
-Records are ranked by a composite score:
+Records are ranked by a composite five-component score. The canonical
+formula lives in `CLAUDE.md § How injection ranks files` — duplicating
+it here invited drift, so this section summarises the components and
+links out for the weights.
 
-```
-score = keyword_hits × 3 + tfidf_bonus × 2 + wal_spaced_score (0-10)
-```
-
-- **Keywords** — `keywords:` in frontmatter matched against git context (branch name, diff filenames, commit messages, CWD basename). Primary mechanism. When git signal is weak (< 3 keywords), project domains are used as fallback pseudo-keywords.
-- **TF-IDF** — Offline index of body text for records without keywords. Weak signal (~3 IDF units at 30-50 docs), but catches unlabeled records.
-- **WAL spaced repetition** — `spread × decay × (1 - negative_ratio)`. Rewards records used consistently across days, penalizes burst usage (benchmarks) and records with negative outcomes.
+- **Keyword hits** — primary mechanism. `keywords:` in frontmatter
+  matched against git context (branch, diff filenames, commit messages,
+  CWD basename). When git signal is weak (< 3 keywords), project
+  domains are used as fallback pseudo-keywords.
+- **Project boost** — `file.project == current project` adds a fixed
+  bonus so project-local records outrank `global` records on ties.
+- **WAL spaced repetition** — Bayesian effectiveness × recency decay ×
+  spread-of-days. Rewards records used consistently, penalises burst
+  usage and records with negative outcomes. Gated behind a minimum
+  outcome-sample threshold on fresh corpora (cold-start ADR).
+- **Strategy bonus** — `min(success_count × 2, 6)` so battle-tested
+  strategies surface ahead of rarely-used ones.
+- **TF-IDF body match** — offline index of body text across the full
+  corpus. Gated until the index holds ≥ 100 unique terms.
+- **Noise penalty** — records that match no active signal at all take
+  a fixed `−3`, so clearly-irrelevant files don't occupy quota.
 
 ## Outcome tracking
 
@@ -574,7 +586,7 @@ Negative outcomes reduce the record's WAL score over time. Records that repeated
 ## Testing
 
 ```bash
-# 258 smoke tests (injection, domain filtering, WAL, TF-IDF, outcome, error detection, dedup,
+# 290+ smoke tests (injection, domain filtering, WAL, TF-IDF, outcome, error detection, dedup,
 #                  decisions, precompact, cold start, cluster activation, cascade signals, prompt triggers)
 bash hooks/test-memory-hooks.sh
 
