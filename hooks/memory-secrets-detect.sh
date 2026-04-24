@@ -32,6 +32,47 @@ case "$FILE_PATH" in
   *) exit 0 ;;
 esac
 
+# .secretsignore whitelist (P1.7). Two files, either of which can
+# whitelist a path:
+#   .secretsignore.default — committed to the repo and copied by
+#       install.sh; holds maintainer-supplied rules (e.g. seeds/**).
+#   .secretsignore         — user-managed, optional, for domain-
+#       specific paths the user knows are safe (docs/examples/**).
+# Syntax is a minimal subset of .gitignore: one pattern per line,
+# `#` comments, leading `!` to un-ignore, `**` matches any number
+# of path segments. Paths are matched relative to $MEMORY_DIR.
+_secretsignore_match() {
+  local ignore_file="$1" path="$2"
+  [ -f "$ignore_file" ] || return 1
+  local line pattern negate matched=1 raw
+  shopt -s globstar extglob 2>/dev/null || true
+  while IFS= read -r raw || [ -n "$raw" ]; do
+    line="${raw%%#*}"
+    # Strip leading / trailing whitespace.
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [ -z "$line" ] && continue
+    negate=0
+    if [ "${line:0:1}" = "!" ]; then
+      negate=1; pattern="${line#!}"
+    else
+      pattern="$line"
+    fi
+    # shellcheck disable=SC2053  # glob match, intentional
+    if [[ "$path" == $pattern ]]; then
+      matched=$negate
+    fi
+  done < "$ignore_file"
+  # matched=0 → whitelisted; matched=1 → not whitelisted (shell bool inverted).
+  return "$matched"
+}
+
+REL_PATH="${FILE_PATH#$MEMORY_DIR/}"
+if _secretsignore_match "$MEMORY_DIR/.secretsignore.default" "$REL_PATH" ||
+   _secretsignore_match "$MEMORY_DIR/.secretsignore" "$REL_PATH"; then
+  exit 0
+fi
+
 # Write tool delivers text via `content`; Edit delivers it via
 # `new_string`. Hook is registered on both (PreToolUse:Write|Edit in
 # install.sh), so fall back between the two fields or Edit writes

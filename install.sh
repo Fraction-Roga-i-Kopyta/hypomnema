@@ -285,6 +285,14 @@ if [ ! -f "$MEMORY_DIR/.config.sh" ] && [ -f "$SCRIPT_DIR/templates/.config.sh.e
   echo "  Copied default .config.sh (edit to override caps/limits)"
 fi
 
+# v0.14: .secretsignore.default — whitelist for memory-secrets-detect.
+# Overwritten on every install so maintainer-side updates propagate.
+# User overrides go in .secretsignore (never touched by install.sh).
+if [ -f "$SCRIPT_DIR/templates/.secretsignore.default" ]; then
+  cp "$SCRIPT_DIR/templates/.secretsignore.default" "$MEMORY_DIR/.secretsignore.default"
+  echo "  Copied .secretsignore.default (secrets-detect whitelist; add your own patterns to .secretsignore)"
+fi
+
 echo ""
 echo "=== Done ==="
 echo ""

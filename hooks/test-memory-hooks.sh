@@ -3497,6 +3497,55 @@ SEC_EXIT=0
 printf '%s' "$SEC_EDIT_CLEAN_JSON" | CLAUDE_MEMORY_DIR="$SEC_MEM" bash "$SEC_HOOK" >/dev/null 2>&1 || SEC_EXIT=$?
 assert "v0.13.1 — secrets detect allows Edit with clean new_string (exit 0)" '[ "$SEC_EXIT" -eq 0 ]'
 
+# 8. P1.7 — .secretsignore.default whitelist for seeds/**.
+mkdir -p "$SEC_MEM/seeds"
+cat > "$SEC_MEM/.secretsignore.default" <<'SI_EOF'
+seeds/**
+SI_EOF
+SEC_SEED_JSON=$(jq -n --arg fp "$SEC_MEM/seeds/bad-example.md" \
+  --arg c "api_key: sk_live_abcd1234efgh5678" \
+  '{tool_input: {file_path: $fp, content: $c}}')
+SEC_EXIT=0
+printf '%s' "$SEC_SEED_JSON" | CLAUDE_MEMORY_DIR="$SEC_MEM" bash "$SEC_HOOK" >/dev/null 2>&1 || SEC_EXIT=$?
+assert "P1.7 — .secretsignore.default whitelists seeds/** (exit 0)" '[ "$SEC_EXIT" -eq 0 ]'
+
+# 9. P1.7 — user .secretsignore for docs/examples/**.
+mkdir -p "$SEC_MEM/docs/examples"
+cat > "$SEC_MEM/.secretsignore" <<'SI_EOF'
+docs/examples/**
+SI_EOF
+SEC_DOCS_JSON=$(jq -n --arg fp "$SEC_MEM/docs/examples/walkthrough.md" \
+  --arg c "api_key: sk_live_abcd1234efgh5678" \
+  '{tool_input: {file_path: $fp, content: $c}}')
+SEC_EXIT=0
+printf '%s' "$SEC_DOCS_JSON" | CLAUDE_MEMORY_DIR="$SEC_MEM" bash "$SEC_HOOK" >/dev/null 2>&1 || SEC_EXIT=$?
+assert "P1.7 — user .secretsignore whitelists docs/examples/** (exit 0)" '[ "$SEC_EXIT" -eq 0 ]'
+
+# 10. P1.7 — non-whitelisted path still blocks.
+SEC_EXIT=0
+SEC_HOT_JSON=$(jq -n --arg fp "$SEC_MEM/mistakes/leaked.md" \
+  --arg c "api_key: sk_live_abcd1234efgh5678" \
+  '{tool_input: {file_path: $fp, content: $c}}')
+printf '%s' "$SEC_HOT_JSON" | CLAUDE_MEMORY_DIR="$SEC_MEM" bash "$SEC_HOOK" >/dev/null 2>&1 || SEC_EXIT=$?
+assert "P1.7 — mistakes/ still blocked despite whitelist files (exit 2)" '[ "$SEC_EXIT" -eq 2 ]'
+
+# 11. P1.7 — negation: !knowledge/sensitive.md under knowledge/** coverage.
+mkdir -p "$SEC_MEM/knowledge"
+cat > "$SEC_MEM/.secretsignore" <<'SI_EOF'
+knowledge/**
+!knowledge/sensitive.md
+SI_EOF
+SEC_SENSITIVE_JSON=$(jq -n --arg fp "$SEC_MEM/knowledge/sensitive.md" \
+  --arg c "api_key: sk_live_abcd1234efgh5678" \
+  '{tool_input: {file_path: $fp, content: $c}}')
+SEC_EXIT=0
+printf '%s' "$SEC_SENSITIVE_JSON" | CLAUDE_MEMORY_DIR="$SEC_MEM" bash "$SEC_HOOK" >/dev/null 2>&1 || SEC_EXIT=$?
+assert "P1.7 — negation un-ignores knowledge/sensitive.md (exit 2)" '[ "$SEC_EXIT" -eq 2 ]'
+
+# Clean up .secretsignore files so later tests in the suite are not
+# affected (they reuse $SEC_MEM).
+rm -f "$SEC_MEM/.secretsignore.default" "$SEC_MEM/.secretsignore"
+
 safe_cleanup "$SEC_DIR"
 
 # --- Test: 0.13.1 — uninstall strips all memory-*.sh hook entries ---
