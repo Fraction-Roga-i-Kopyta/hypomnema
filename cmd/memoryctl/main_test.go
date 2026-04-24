@@ -213,12 +213,12 @@ func newDoctorFixture(t *testing.T) string {
 			t.Fatal(err)
 		}
 	}
-	// settings.json with all 7 required hypomnema hook commands.
+	// settings.json with all required hypomnema hook commands (v0.14: 8).
 	hooks := []string{
 		"memory-session-start.sh", "memory-stop.sh",
 		"memory-user-prompt-submit.sh", "memory-dedup.sh",
 		"memory-outcome.sh", "memory-error-detect.sh",
-		"memory-precompact.sh",
+		"memory-precompact.sh", "memory-secrets-detect.sh",
 	}
 	lines := make([]string, 0, len(hooks))
 	for _, h := range hooks {

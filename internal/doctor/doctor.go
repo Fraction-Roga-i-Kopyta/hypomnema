@@ -137,6 +137,7 @@ func Run(claudeDir, memoryDir string) Report {
 		checkDecisionsPressure(memoryDir, now),
 		checkIndices(memoryDir, now),
 		checkScoringComponents(memoryDir, now),
+		checkCorpusQuality(memoryDir),
 	)
 	return r
 }
@@ -192,6 +193,8 @@ var requiredHookCommands = []string{
 	"memory-outcome.sh",
 	"memory-error-detect.sh",
 	"memory-precompact.sh",
+	// v0.13 addition — install.sh registers this on PreToolUse:Write|Edit.
+	"memory-secrets-detect.sh",
 }
 
 func checkSettings(path string) Check {
@@ -350,6 +353,136 @@ func checkCorpus(memoryDir string) Check {
 		detail = "corpus is empty — hypomnema has nothing to inject yet"
 	}
 	return Check{Name: "corpus_counts", Status: status, Detail: detail}
+}
+
+// fmFacts captures the narrow frontmatter properties checkCorpusQuality
+// needs. No general-purpose parse; just the flags we actually inspect.
+type fmFacts struct {
+	hasStatus   bool
+	statusValue string
+	hasTriggers bool
+}
+
+// readFMQuick reads the first YAML frontmatter block and returns the
+// subset of fields checkCorpusQuality cares about. Stops at the second
+// `---` sentinel.
+func readFMQuick(path string) fmFacts {
+	var facts fmFacts
+	f, err := os.Open(path)
+	if err != nil {
+		return facts
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 8*1024), 64*1024)
+	fmCount := 0
+	for sc.Scan() {
+		line := sc.Text()
+		if line == "---" {
+			fmCount++
+			if fmCount >= 2 {
+				break
+			}
+			continue
+		}
+		if fmCount != 1 {
+			continue
+		}
+		if strings.HasPrefix(line, "status:") {
+			facts.hasStatus = true
+			v := strings.TrimSpace(strings.TrimPrefix(line, "status:"))
+			v = strings.Trim(v, `"'`)
+			facts.statusValue = v
+		}
+		if strings.HasPrefix(line, "triggers:") || strings.HasPrefix(line, "trigger:") {
+			facts.hasTriggers = true
+		}
+	}
+	return facts
+}
+
+// checkCorpusQuality surfaces frontmatter issues the ranking pipeline
+// cannot act on but the user probably didn't mean:
+//   - `status:` present but empty → filter drops the file silently
+//   - feedback / knowledge without `triggers:` → reactive injection
+//     cannot fire (the keyword pipeline still works from SessionStart)
+//
+// Always WARN-level — these are nudges, never hard failures, per round
+// 2 decision on `triggers:` remaining optional.
+func checkCorpusQuality(memoryDir string) Check {
+	const name = "corpus_frontmatter_quality"
+	var emptyStatus, missingTriggers []string
+	for _, t := range memoryTypes {
+		dir := filepath.Join(memoryDir, t)
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+				continue
+			}
+			path := filepath.Join(dir, e.Name())
+			fm := readFMQuick(path)
+			if fm.hasStatus && fm.statusValue == "" {
+				emptyStatus = append(emptyStatus, t+"/"+e.Name())
+			}
+			if (t == "feedback" || t == "knowledge") && !fm.hasTriggers {
+				missingTriggers = append(missingTriggers, t+"/"+e.Name())
+			}
+		}
+	}
+	sort.Strings(emptyStatus)
+	sort.Strings(missingTriggers)
+
+	status := OK
+	var parts []string
+	hint := ""
+	if len(emptyStatus) > 0 {
+		status = WARN
+		parts = append(parts, fmt.Sprintf("%d with empty status:", len(emptyStatus)))
+	}
+	if len(missingTriggers) > 0 {
+		status = WARN
+		parts = append(parts, fmt.Sprintf("%d feedback/knowledge without triggers:", len(missingTriggers)))
+	}
+	detail := "all files have valid frontmatter"
+	if len(parts) > 0 {
+		detail = strings.Join(parts, ", ")
+		hint = "set status: to 'active' (or remove the line); feedback/knowledge without triggers: won't fire reactively — see CLAUDE.md § When to write feedback"
+	}
+
+	extra := map[string]interface{}{
+		"empty_status_count":     len(emptyStatus),
+		"missing_triggers_count": len(missingTriggers),
+	}
+	if hint != "" {
+		extra["hint"] = hint
+	}
+	// Surface sample filenames (capped) so the operator knows where to
+	// look without running a separate grep.
+	const sampleCap = 5
+	if len(emptyStatus) > 0 {
+		if len(emptyStatus) > sampleCap {
+			extra["empty_status_sample"] = emptyStatus[:sampleCap]
+		} else {
+			extra["empty_status_sample"] = emptyStatus
+		}
+	}
+	if len(missingTriggers) > 0 {
+		if len(missingTriggers) > sampleCap {
+			extra["missing_triggers_sample"] = missingTriggers[:sampleCap]
+		} else {
+			extra["missing_triggers_sample"] = missingTriggers
+		}
+	}
+
+	return Check{
+		Name:   name,
+		Status: status,
+		Detail: detail,
+		Extra:  extra,
+	}
 }
 
 // quickReadStatus scans at most the first ~40 lines of a file for a
