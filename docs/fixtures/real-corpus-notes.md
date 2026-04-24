@@ -52,3 +52,48 @@ carried through all four pairings without adjustment.
   formula (30-day) still reads its outcomes. Intentional — gate
   is meant to dormant on stale data — but worth re-reading after
   one more corpus.
+
+---
+
+## 2026-04-24 · P1.1 dry-run — outcome-positive beyond mistakes/
+
+**Version:** post-code `classify_outcome_positive_from_evidence` +
+session-stop ordering fix (no commit yet at time of pass).
+
+**Method:** no live prod session-stop run on real corpora (would
+mutate WAL). Instead, diff'd the existing 14-day WAL:
+- trigger-useful events = universe of slugs with evidence-match
+- outcome-positive events = currently emitted subset (mistakes + any
+  prior path)
+- potential new emissions = trigger-useful events whose (slug, session)
+  has no matching outcome-positive
+
+**Maintainer corpus (14d window):**
+- trigger-useful:            90 events
+- outcome-positive existing: 40 events
+- P1.1 new emissions (dry):  71 (slug, session) pairs
+  → ~1.8× existing outcome-positive baseline
+
+**Top slugs gaining signal** (all non-mistake types, as designed):
+- `verification-before-done` (strategy): 8 session-pairs
+- `coolify-post-deploy-check` (feedback): 8
+- `debugging-approach` (feedback): 7
+- `code-approach` (feedback): 7
+- `css-layout-debugging` (strategy): 5
+
+**Verdict:** significant lift expected — ≫ ADR's 5-15 pp minimum.
+Direction matches plan: non-mistake types start contributing to the
+Bayesian numerator. Formula now has data on slugs that previously sat
+at the dormant 1.0.
+
+**Not measured:** post-P1.1 `measurable_precision` delta. The formula
+change compounds with the cold-start gate lift (P1.0 already lifted
+gates on this corpus), so attributing the precision shift between
+P1.0 and P1.1 requires a clean before/after run on a fresh synthetic
+corpus. Deferred until `synthetic-feedback-heavy` fixture lands (the
+task was intentionally scoped out of P1.1 — unit test in
+`test-memory-hooks.sh` covers the contractual claims).
+
+**Regression unit test:** 5 assertions in `test-memory-hooks.sh`
+pin the behaviour — evidence-match emits, no-match stays silent,
+idempotent on re-run, mistake path unchanged.

@@ -303,6 +303,14 @@ fi
 # Body lives in lib/feedback-loop.sh.
 classify_feedback_from_transcript 2>/dev/null || true
 
+# P1.1: outcome-positive extension beyond mistakes/. For every non-mistake
+# slug that feedback-loop just marked trigger-useful, emit
+# outcome-positive — gives the Bayesian effectiveness component a
+# signal on feedback-heavy corpora that never write mistakes.
+# MUST run after classify_feedback_from_transcript (above) so
+# trigger-useful events are in the WAL.
+classify_outcome_positive_from_evidence 2>/dev/null || true
+
 # Strategies reminder: long clean session → suggest recording approach
 if [ "${METRIC_ERROR_COUNT:-0}" -eq 0 ] && [ "${ELAPSED:-0}" -gt 600 ]; then
   REMINDER="${REMINDER}${REMINDER:+
