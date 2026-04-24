@@ -208,9 +208,24 @@ if [ ! -f "$SETTINGS" ]; then
   fi
 fi
 
-# Backup
+# Backup (P2.9). Before v0.15 every install re-overwrote a single file
+# ($SETTINGS.backup-hypomnema), so a sequence of upgrades silently
+# discarded the original pre-hypomnema settings. Now each install
+# writes a timestamped backup and leaves older ones in place —
+# if the user wants to reclaim disk they can `ls $SETTINGS.backup-*`
+# and delete, but the oldest (genuine pre-install) snapshot is never
+# destroyed by the installer itself.
 if [ -f "$SETTINGS" ]; then
-  _run cp "$SETTINGS" "${SETTINGS}.backup-hypomnema"
+  BACKUP_TS=$(date +%Y%m%d-%H%M%S)
+  _run cp "$SETTINGS" "${SETTINGS}.backup-hypomnema-${BACKUP_TS}"
+  # Keep the legacy symlink name for operators who scripted against it.
+  # If the unversioned file already exists leave it alone (the first
+  # install's snapshot); otherwise link it to this run's backup.
+  if [ ! -e "${SETTINGS}.backup-hypomnema" ] && [ "$DRY_RUN" -eq 0 ]; then
+    ln -s "$(basename "${SETTINGS}.backup-hypomnema-${BACKUP_TS}")" \
+          "${SETTINGS}.backup-hypomnema" 2>/dev/null || \
+          cp "${SETTINGS}" "${SETTINGS}.backup-hypomnema"
+  fi
 fi
 
 # Register one hypomnema hook entry. Idempotent by command string: if any
