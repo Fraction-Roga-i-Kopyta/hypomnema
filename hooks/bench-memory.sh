@@ -688,12 +688,103 @@ FM
   _bench_hook "user-prompt-submit (no-match)"   "$UP_HOOK" "$UP_INPUT_NONE"   3
   _bench_hook "user-prompt-submit (broad)"      "$UP_HOOK" "$UP_INPUT_BROAD"  3
 
+  # --- Stop-hook latency (v0.14 addition). Stop triggers three WAL
+  # passes on top of the lifecycle/metrics work: classify_outcome_positive
+  # (mistake path), classify_feedback_from_transcript (trigger-useful),
+  # and classify_outcome_positive_from_evidence (non-mistake path).
+  # This scenario seeds enough WAL traffic and a transcript with a
+  # matched evidence phrase so all three passes actually do work.
+  STOP_HOOK="$HOME/.claude/hooks/memory-stop.sh"
+  [ -f "$STOP_HOOK" ] || STOP_HOOK="$(dirname "$0")/session-stop.sh"
+  if [ -f "$STOP_HOOK" ]; then
+    # Seed ~50 injects, 5 outcome-negative pre-existing, 1 feedback with
+    # evidence: frontmatter that the transcript will match.
+    STOP_WAL="$PERF_MEM/.wal"
+    {
+      for i in 1 2 3 4 5; do
+        echo "2026-04-22|inject|m${i}|perf-stop-sess"
+      done
+      for i in 1 2 3; do
+        echo "2026-04-22|inject|fb${i}|perf-stop-sess"
+      done
+      echo "2026-04-22|outcome-negative|m1|perf-stop-sess"
+    } > "$STOP_WAL"
+
+    # Feedback file with an evidence phrase for feedback-loop to match.
+    cat > "$PERF_MEM/feedback/fb-evidenced.md" <<FM
+---
+type: feedback
+project: global
+status: active
+keywords: [bench]
+evidence:
+  - "perf stop bench evidence phrase"
+---
+Body matching the transcript below.
+FM
+    echo "2026-04-22|inject|fb-evidenced|perf-stop-sess" >> "$STOP_WAL"
+
+    STOP_TRANSCRIPT="$PERF_TMP/perf-stop.jsonl"
+    cat > "$STOP_TRANSCRIPT" <<JL
+{"type":"user","text":"how do I test this"}
+{"type":"assistant","text":"I will follow the perf stop bench evidence phrase guideline"}
+JL
+
+    # Marker ≥ MIN_SESSION_SECONDS old so Stop runs the full pipeline.
+    STOP_MARKER="/tmp/.claude-session-perf-stop-sess"
+    touch "$STOP_MARKER"
+    # portable: bump mtime back 10 minutes so ELAPSED > 120s comfortably.
+    if [[ "$OSTYPE" == darwin* ]]; then
+      touch -t "$(date -v-10M +%Y%m%d%H%M)" "$STOP_MARKER"
+    else
+      touch -d "10 minutes ago" "$STOP_MARKER"
+    fi
+
+    STOP_INPUT=$(printf '{"session_id":"perf-stop-sess","transcript_path":"%s","cwd":"/tmp/perf-bench"}' \
+      "$STOP_TRANSCRIPT")
+    _bench_hook "stop (3 WAL passes + evidence)" "$STOP_HOOK" "$STOP_INPUT" 3
+
+    rm -f "$STOP_MARKER"
+  fi
+
+  # --- memory-secrets-detect latency vs .secretsignore size (v0.14).
+  # The PreToolUse hook walks the two ignore files (default + user) with
+  # shell glob-match per pattern per hooked write. Scenarios sweep
+  # 0 / 10 / 100 user patterns so the pattern-scan cost can be bounded
+  # before users push past it.
+  SEC_HOOK="$HOME/.claude/hooks/memory-secrets-detect.sh"
+  [ -f "$SEC_HOOK" ] || SEC_HOOK="$(dirname "$0")/memory-secrets-detect.sh"
+  if [ -f "$SEC_HOOK" ]; then
+    SEC_FILE="$PERF_MEM/feedback/perf-secrets-target.md"
+    SEC_CONTENT="Simple memory write — no credential, just prose."
+    SEC_INPUT=$(jq -n --arg fp "$SEC_FILE" --arg c "$SEC_CONTENT" \
+      '{tool_input: {file_path: $fp, content: $c}}')
+
+    # Scenario 1: no .secretsignore files at all.
+    rm -f "$PERF_MEM/.secretsignore" "$PERF_MEM/.secretsignore.default"
+    _bench_hook "secrets-detect (0 patterns)" "$SEC_HOOK" "$SEC_INPUT" 5
+
+    # Scenario 2: 10 patterns in user .secretsignore.
+    printf 'pattern-%d/**\n' $(seq 1 10) > "$PERF_MEM/.secretsignore"
+    _bench_hook "secrets-detect (10 patterns)" "$SEC_HOOK" "$SEC_INPUT" 5
+
+    # Scenario 3: 100 patterns.
+    printf 'pattern-%d/**\n' $(seq 1 100) > "$PERF_MEM/.secretsignore"
+    _bench_hook "secrets-detect (100 patterns)" "$SEC_HOOK" "$SEC_INPUT" 5
+
+    # Cleanup so next run of perf does not inherit a .secretsignore file.
+    rm -f "$PERF_MEM/.secretsignore"
+  fi
+
   echo ""
   echo "  Baseline (audit-2026-04-16, 500 files, macOS darwin 25.3.0):"
   echo "    session-start                      ≈ 700ms   (post P1+P3, was 5500ms)"
   echo "    user-prompt-submit (no-match)      ≈ 3400ms  (extract_meta per file dominates)"
   echo "    user-prompt-submit (broad, pre-P4) ≈ 6500ms  (date -j -f per file)"
   echo "    user-prompt-submit (broad, post-P4)≈ 5000ms  (pure-bash JDN, −23%)"
+  echo "  v0.14 baselines (first real measurement — see docs/measurements/):"
+  echo "    stop (3 WAL passes + evidence)    — first measurement in this release"
+  echo "    secrets-detect (0/10/100 ignore)  — first measurement in this release"
   echo "  Regression guard: eyeball current vs baseline; investigate >1.5x slowdown."
   echo "--------------------------------------------"
 fi
