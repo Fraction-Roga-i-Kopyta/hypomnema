@@ -13,7 +13,7 @@ GO_FILES := $(shell find . -name '*.go' -not -path './vendor/*')
 # compilable. modernc.org/sqlite is pure Go, so this works.
 GO_BUILD := CGO_ENABLED=0 go build -trimpath -ldflags="-s -w"
 
-.PHONY: all build test test-go test-go-cover test-hooks test-fixtures parity replay install clean help
+.PHONY: all build test test-go test-go-cover test-hooks test-fixtures parity bench-gate replay install clean help
 
 all: build test
 
@@ -69,6 +69,13 @@ test-fixtures: build
 parity: build
 	@bash scripts/parity-check.sh
 
+# Perf-regression gate: runs hooks/bench-memory.sh perf and fails if any
+# "gated" scenario in docs/measurements/baselines.json exceeds its
+# baseline × tolerance threshold for the current platform. Used by CI;
+# runnable locally to reproduce a CI gate failure on the same fixture.
+bench-gate:
+	@bash scripts/bench-gate.sh
+
 # Batch-replay a corpus of synthetic prompts through UserPromptSubmit and
 # report aggregate retrieval metrics (trigger-match, shadow-miss). Use
 # this to measure retrieval quality against a hand-crafted prompt spread
@@ -91,6 +98,7 @@ help:
 	@echo "  test        — go test + bash hooks/test-memory-hooks.sh"
 	@echo "  test-go     — just the Go test suite"
 	@echo "  test-go-cover — Go tests + cmd/memoryctl subprocess coverage report"
+	@echo "  bench-gate  — perf-regression gate against docs/measurements/baselines.json"
 	@echo "  test-hooks  — just the bash hooks smoke test"
 	@echo "  test-fixtures — snapshot tests against fixtures/corpora/synthetic-*"
 	@echo "  parity      — bash vs Go shadow pass comparison"
