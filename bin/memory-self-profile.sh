@@ -185,6 +185,58 @@ else
   precision_pct="n/a"
 fi
 
+# --- ADR review-trigger metrics ---
+# ambient_fraction: share of all reactive trigger fires that are ambient
+# (precision_class: ambient) rules. Watched by docs/decisions/quota-pool.
+trigger_total_all=$((trigger_useful_all + trigger_silent_all))
+if [ "$trigger_total_all" -gt 0 ]; then
+  ambient_fraction_pct=$(awk -v a="$ambient_activations" -v t="$trigger_total_all" \
+    'BEGIN { printf "%.0f", a * 100 / t }')
+else
+  ambient_fraction_pct="n/a"
+fi
+
+# corpus_fraction_with_active_bayesian: fraction of memory records with
+# enough recent outcome events (≥ MIN_SAMPLES in WINDOW_DAYS) for the
+# Bayesian effectiveness score to be active rather than dormant. Watched
+# by docs/decisions/cold-start-scoring.
+CB_WINDOW_DAYS="${HYPOMNEMA_OUTCOME_WINDOW_DAYS:-14}"
+CB_MIN_SAMPLES="${HYPOMNEMA_BAYESIAN_MIN_SAMPLES:-5}"
+CB_TODAY="${HYPOMNEMA_TODAY:-${HYPOMNEMA_NOW%% *}}"
+CB_TODAY="${CB_TODAY:-$(date +%Y-%m-%d)}"
+if [[ "$OSTYPE" == darwin* ]]; then
+  CB_CUTOFF=$(date -v-"${CB_WINDOW_DAYS}"d -j -f '%Y-%m-%d' "$CB_TODAY" +%Y-%m-%d 2>/dev/null || echo "0000-00-00")
+else
+  CB_CUTOFF=$(date -d "$CB_TODAY - $CB_WINDOW_DAYS days" +%Y-%m-%d 2>/dev/null || echo "0000-00-00")
+fi
+CB_TMP=$(mktemp)
+awk -F'|' -v cutoff="$CB_CUTOFF" '
+  $1 >= cutoff && ($2 == "outcome-positive" || $2 == "outcome-negative") { c[$3]++ }
+  END { for (s in c) print s "\t" c[s] }
+' "$WAL_FILE" 2>/dev/null > "$CB_TMP"
+corpus_total=0
+corpus_active=0
+for type_dir in mistakes feedback strategies knowledge notes decisions; do
+  [ -d "$MEMORY_DIR/$type_dir" ] || continue
+  while IFS= read -r _f; do
+    [ -z "$_f" ] && continue
+    _slug=$(basename "$_f" .md)
+    corpus_total=$((corpus_total + 1))
+    _count=$(awk -F'\t' -v s="$_slug" '$1==s {print $2; exit}' "$CB_TMP")
+    [ -z "$_count" ] && _count=0
+    if [ "$_count" -ge "$CB_MIN_SAMPLES" ]; then
+      corpus_active=$((corpus_active + 1))
+    fi
+  done < <(find "$MEMORY_DIR/$type_dir" -maxdepth 1 -name "*.md" 2>/dev/null)
+done
+rm -f "$CB_TMP"
+if [ "$corpus_total" -gt 0 ]; then
+  corpus_bayesian_pct=$(awk -v a="$corpus_active" -v t="$corpus_total" \
+    'BEGIN { printf "%.0f", a * 100 / t }')
+else
+  corpus_bayesian_pct="n/a"
+fi
+
 cat > "$OUT" <<EOF
 ---
 type: self-profile
@@ -212,6 +264,8 @@ source: derived from .wal + mistakes/ + strategies/
 | **measurable precision** (useful + applied) / (useful + silent) | **${precision_pct}%** |
 | evidence-empty rules (unique, cannot match trigger by design) | ${evidence_empty_unique} |
 | outcome-new (fresh mistakes recorded — learning rate) | ${outcome_new_count} |
+| **ambient_fraction** (ambient activations / all reactive fires) | **${ambient_fraction_pct}%** |
+| **corpus_fraction_with_active_bayesian** (slugs with ≥min outcomes / total) | **${corpus_bayesian_pct}%** (${corpus_active}/${corpus_total}) |
 
 ## Strengths (top strategies by success_count)
 ${strengths:-_no data_}
