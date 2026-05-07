@@ -13,7 +13,7 @@ GO_FILES := $(shell find . -name '*.go' -not -path './vendor/*')
 # compilable. modernc.org/sqlite is pure Go, so this works.
 GO_BUILD := CGO_ENABLED=0 go build -trimpath -ldflags="-s -w"
 
-.PHONY: all build test test-go test-hooks test-fixtures parity replay install clean help
+.PHONY: all build test test-go test-go-cover test-hooks test-fixtures parity replay install clean help
 
 all: build test
 
@@ -28,6 +28,27 @@ test: test-go test-hooks
 
 test-go:
 	go test -race ./...
+
+# Go test suite + meaningful subprocess coverage for cmd/memoryctl.
+# Plain `go test -cover ./cmd/memoryctl/...` reports 0.0% because the
+# tests drive the CLI through `exec.Command`; the parent test binary's
+# own statements are nearly trivial. The subprocess writes binary
+# coverage data into the per-package GOCOVERDIR (set via TestMain),
+# and we ask `go tool covdata textfmt` to convert it to the standard
+# textual profile that `go tool cover` understands.
+test-go-cover:
+	@mkdir -p coverage
+	@rm -f coverage/cmd-memoryctl-subprocess.out coverage/test.out
+	go test ./... -coverprofile=coverage/test.out
+	@MEMORYCTL_SUBPROCESS_COVER_OUT=$(PWD)/coverage/cmd-memoryctl-subprocess.out \
+		go test ./cmd/memoryctl/... > /dev/null
+	@echo "=== test-binary coverage (in-process) ==="
+	@go tool cover -func=coverage/test.out | tail -1
+	@echo "=== cmd/memoryctl subprocess coverage ==="
+	@go tool cover -func=coverage/cmd-memoryctl-subprocess.out | tail -1
+	@echo
+	@echo "Profiles in ./coverage/. View HTML with:"
+	@echo "  go tool cover -html=coverage/cmd-memoryctl-subprocess.out"
 
 test-hooks:
 	bash hooks/test-memory-hooks.sh
@@ -69,6 +90,7 @@ help:
 	@echo "  build       — compile bin/memoryctl (CGO_ENABLED=0, static)"
 	@echo "  test        — go test + bash hooks/test-memory-hooks.sh"
 	@echo "  test-go     — just the Go test suite"
+	@echo "  test-go-cover — Go tests + cmd/memoryctl subprocess coverage report"
 	@echo "  test-hooks  — just the bash hooks smoke test"
 	@echo "  test-fixtures — snapshot tests against fixtures/corpora/synthetic-*"
 	@echo "  parity      — bash vs Go shadow pass comparison"

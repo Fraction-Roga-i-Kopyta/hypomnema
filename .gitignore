@@ -9,6 +9,7 @@
 bin/memoryctl
 bin/memoryctl.exe
 coverage.out
+coverage/
 
 # Runtime artefacts from ~/.claude/memory/. Not expected to appear here,
 # but cheap insurance if a user ever version-controls their memory dir.
