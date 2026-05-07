@@ -10,19 +10,25 @@ set -uo pipefail
 # being triggered directly is a trigger-miss candidate.
 #
 # Designed to run detached from user-prompt-submit.sh:
-#   ( memory-fts-shadow.sh "$CLEAN_PROMPT" "$SAFE_SESSION_ID" "$NEW_INJECTED" ) \
+#   ( memory-fts-shadow.sh "$CLEAN_PROMPT" "$SAFE_SESSION_ID" "$NEW_INJECTED" "$CURRENT_PROJECT" ) \
 #     >/dev/null 2>&1 &
 #
 # Args:
 #   $1 = prompt text (already fence/blockquote/inline-code stripped)
 #   $2 = safe session id (| and / already substituted)
 #   $3 = newline-separated slugs the primary hook injected this prompt
+#   $4 = current project slug (optional). When non-empty, files whose
+#        frontmatter `project:` is neither empty/global nor equal to this
+#        slug are skipped — mirrors the project filter the primary
+#        substring pipeline applies via priority key. When empty, no
+#        project filter is applied (back-compat).
 #
 # Fail-safe: any failure → silent exit 0. Running in background, nobody reads stderr.
 
 PROMPT="${1:-}"
 SESSION_ID="${2:-}"
 NEW_INJECTED="${3:-}"
+CURRENT_PROJECT="${4:-}"
 
 [ -z "$PROMPT" ] && exit 0
 [ -z "$SESSION_ID" ] && exit 0
@@ -66,6 +72,28 @@ while IFS=$'\t' read -r _path _score; do
 
   # Skip records already in the injected set.
   case "$INJECTED_SET" in *" ${_slug} "*) continue ;; esac
+
+  # Skip cross-project files when current project is known. Mirrors the
+  # primary pipeline rule that other-project files cannot inject. Empty
+  # frontmatter `project:` is treated as global (matches awk default in
+  # hooks/user-prompt-submit.sh).
+  if [ -n "$CURRENT_PROJECT" ]; then
+    _file_project=$(awk '
+      /^---[[:space:]]*$/ { fm++; if (fm == 2) exit; next }
+      fm == 1 && /^project:[[:space:]]*/ {
+        val = $0
+        sub(/^project:[[:space:]]*/, "", val)
+        gsub(/["'"'"']/, "", val)
+        sub(/[[:space:]]+$/, "", val)
+        print val
+        exit
+      }
+    ' "$_path" 2>/dev/null)
+    case "$_file_project" in
+      ""|"global"|"$CURRENT_PROJECT") ;;
+      *) continue ;;
+    esac
+  fi
 
   # Emit shadow-miss (wal_append dedupes by the same key within the WAL).
   wal_append \

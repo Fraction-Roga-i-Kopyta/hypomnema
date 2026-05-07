@@ -31,13 +31,19 @@ compute_wal_scores() {
   local min_samples="${HYPOMNEMA_BAYESIAN_MIN_SAMPLES:-5}"
   local window_days="${HYPOMNEMA_OUTCOME_WINDOW_DAYS:-14}"
 
+  # Cutoffs anchored at $today (HYPOMNEMA_TODAY when frozen by tests,
+  # real date otherwise). Anchoring on real `date` made fixtures with
+  # frozen HYPOMNEMA_TODAY rot once wall-clock drifted past their WAL
+  # window — fixtures wrote WAL events relative to HYPOMNEMA_TODAY but
+  # the cutoff was being computed from real today, silently dropping
+  # in-window events into the "out of window" bucket.
   local cutoff_30d cutoff_gate
   if [[ "$OSTYPE" == darwin* ]]; then
-    cutoff_30d=$(date -v-30d +%Y-%m-%d 2>/dev/null || echo "0000-00-00")
-    cutoff_gate=$(date -v-"${window_days}"d +%Y-%m-%d 2>/dev/null || echo "0000-00-00")
+    cutoff_30d=$(date -v-30d -j -f '%Y-%m-%d' "$today" +%Y-%m-%d 2>/dev/null || echo "0000-00-00")
+    cutoff_gate=$(date -v-"${window_days}"d -j -f '%Y-%m-%d' "$today" +%Y-%m-%d 2>/dev/null || echo "0000-00-00")
   else
-    cutoff_30d=$(date -d "30 days ago" +%Y-%m-%d 2>/dev/null || echo "0000-00-00")
-    cutoff_gate=$(date -d "${window_days} days ago" +%Y-%m-%d 2>/dev/null || echo "0000-00-00")
+    cutoff_30d=$(date -d "$today - 30 days" +%Y-%m-%d 2>/dev/null || echo "0000-00-00")
+    cutoff_gate=$(date -d "$today - ${window_days} days" +%Y-%m-%d 2>/dev/null || echo "0000-00-00")
   fi
 
   awk -F'|' -v cutoff="$cutoff_30d" -v cutoff_gate="$cutoff_gate" \

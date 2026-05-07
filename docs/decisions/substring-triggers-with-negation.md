@@ -81,3 +81,17 @@ populated (non-seeds-only) corpus, or `shadow-miss` counts in
 `triggers:` are non-empty. Either signal indicates that the
 channel is structurally incapable of matching user prompts, not
 just that the author has undertrained phrases.
+
+## Calibration history
+
+**2026-05-07 — shadow-miss false-positive cleanup.** This ADR was
+flagged at `shadow_miss_ratio = 0.65` (threshold 0.60). Evidence
+probe found 8/8 sampled shadow-miss events were FTS5 false-
+positives caused by cross-project body-keyword overlap, not by
+substring-trigger weakness. The fix landed on the shadow side
+(project filter — see ADR `fts5-shadow-retrieval` calibration
+history), not on the substring side. The 0.60 threshold here
+remains the right escalation: if it still fires after a 14-day
+post-patch window with cleaner shadow signal, the channel is
+genuinely under-recalling and a structural revisit (broader
+trigger sets, regex, or embeddings) is warranted.

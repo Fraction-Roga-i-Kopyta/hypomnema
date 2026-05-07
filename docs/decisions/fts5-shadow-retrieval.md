@@ -66,3 +66,25 @@ that point the injection authority moves, and the question becomes
 "how does FTS injection coexist with priority-key ordering"
 (composite score vs lexicographic key in the same pipeline), which
 is a v0.12 evidence-learn-adjacent problem.
+
+## Calibration history
+
+**2026-05-07 — false-positive cleanup.** `decisions review` fired
+pressure at `shadow_miss_ratio = 0.65` (threshold 0.30). Evidence
+probe against the 14-day session JSONL transcripts classified 8/8
+sampled events as FTS5 false-positives: cross-project files (e.g. an
+iOS Swift strategy `project: fly-mobile`) surfaced in unrelated
+sessions (a Groovy/Confluence JIRA session) on incidental body-
+keyword overlap. The substring pipeline already filters by project
+via the priority-key first bucket; the shadow pass was missing the
+same filter and so emitted shadow-miss for files that — by primary-
+pipeline rules — could not have injected anyway.
+
+Fix: added `CurrentProject` to `ShadowConfig` (Go) and a fourth
+positional arg to `bin/memory-fts-shadow.sh` (bash). Files whose
+frontmatter `project:` is neither empty/global nor equal to the
+current project are now skipped before WAL emission. The 0.30
+threshold is preserved — post-patch the ratio is expected to drop
+sharply; if pressure still fires after a 14-day post-patch window,
+the remaining miss events are the genuine recall gap and the
+trigger phrases of the offending slugs should be widened.

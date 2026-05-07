@@ -1,6 +1,7 @@
 {
   "fixture_name": "synthetic-mature",
   "claim": "corpus with sufficient outcome signal + tfidf vocab must activate all 5 scoring components",
+  "frozen_today": "2026-04-25",
   "assertions": {
     "doctor": {
       "scoring_components_active": {
