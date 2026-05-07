@@ -122,7 +122,7 @@ func (r Report) PrintJSON(w io.Writer) {
 // All checks are defensive: individual read failures are rendered as WARN
 // or FAIL in the relevant check, never panic.
 func Run(claudeDir, memoryDir string) Report {
-	now := time.Now()
+	now := resolveDoctorNow()
 	r := Report{ClaudeDir: claudeDir, MemoryDir: memoryDir, Now: now}
 	r.Checks = append(r.Checks,
 		checkClaudeDir(claudeDir),
@@ -882,6 +882,24 @@ func checkScoringComponents(memoryDir string, now time.Time) Check {
 			},
 		},
 	}
+}
+
+// resolveDoctorNow mirrors the HYPOMNEMA_TODAY / HYPOMNEMA_NOW
+// precedence used by internal/profile so doctor's WAL-window cutoffs
+// freeze with the rest of the system in tests and fixture snapshots.
+// Falls back to wall-clock time when neither var is set.
+func resolveDoctorNow() time.Time {
+	if s := os.Getenv("HYPOMNEMA_TODAY"); s != "" {
+		if t, err := time.Parse("2006-01-02", s); err == nil {
+			return t
+		}
+	}
+	if s := os.Getenv("HYPOMNEMA_NOW"); s != "" {
+		if t, err := time.Parse("2006-01-02 15:04", s); err == nil {
+			return t
+		}
+	}
+	return time.Now()
 }
 
 func envInt(key string, def int) int {
