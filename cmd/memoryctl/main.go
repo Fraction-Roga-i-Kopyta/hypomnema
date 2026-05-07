@@ -271,10 +271,15 @@ func runShadow(args []string) {
 	if len(args) >= 3 && args[2] != "" {
 		injected = strings.Split(args[2], "\n")
 	}
+	var currentProject string
+	if len(args) >= 4 {
+		currentProject = args[3]
+	}
 
 	cfg := fts.ShadowConfig{
-		MaxShadow: parseShadowMaxEnv(),
-		Today:     os.Getenv("HYPOMNEMA_TODAY"),
+		MaxShadow:      parseShadowMaxEnv(),
+		Today:          os.Getenv("HYPOMNEMA_TODAY"),
+		CurrentProject: currentProject,
 	}
 	// Shadow is observational — always exit 0 even if the call errored.
 	// Timeout covers the case where SQLite is busy and the busy_timeout
