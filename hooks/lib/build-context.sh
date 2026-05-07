@@ -315,11 +315,16 @@ ${CONTRADICTS_WARNINGS}"
 # --- apply_cascade_markers ---
 apply_cascade_markers() {
   [ -f "$WAL_FILE" ] || return 0
+  # Cutoff anchored at $TODAY (HYPOMNEMA_TODAY when frozen by tests, real
+  # date otherwise). Anchoring on real `date` made fixtures with frozen
+  # cascade-review events rot once wall-clock drifted past the 14-day
+  # window — the same time-bomb fixed in score-records.sh.
+  local _today="${TODAY:-$(date +%Y-%m-%d)}"
   local _CASCADE_CUTOFF
   if [[ "$OSTYPE" == darwin* ]]; then
-    _CASCADE_CUTOFF=$(date -v-14d +%Y-%m-%d 2>/dev/null || echo "0000-00-00")
+    _CASCADE_CUTOFF=$(date -v-14d -j -f '%Y-%m-%d' "$_today" +%Y-%m-%d 2>/dev/null || echo "0000-00-00")
   else
-    _CASCADE_CUTOFF=$(date -d "14 days ago" +%Y-%m-%d 2>/dev/null || echo "0000-00-00")
+    _CASCADE_CUTOFF=$(date -d "$_today - 14 days" +%Y-%m-%d 2>/dev/null || echo "0000-00-00")
   fi
   local _CASCADE_MAP
   _CASCADE_MAP=$(awk -F'|' -v cutoff="$_CASCADE_CUTOFF" '
