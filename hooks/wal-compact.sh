@@ -34,11 +34,23 @@ awk -F'|' -v cutoff="$CUTOFF" '
   $2 == "session-metrics" {
     month = substr($1, 1, 7)
     metrics_count[month]++
-    ec = $4; sub(/.*error_count:/, "", ec); sub(/,.*/, "", ec)
+    # Format detection (FORMAT.md §5). v2 carries the metrics blob in
+    # $3 with a `domains:` prefix; v1 keeps it in $4.
+    if (substr($3, 1, 8) == "domains:") {
+      _rest = substr($3, 9)
+      if (match(_rest, /,[a-z_]+:/)) {
+        _metrics = substr(_rest, RSTART + 1)
+      } else {
+        _metrics = ""
+      }
+    } else {
+      _metrics = $4
+    }
+    ec = _metrics; sub(/.*error_count:/, "", ec); sub(/,.*/, "", ec)
     metrics_errors[month] += ec + 0
-    tc = $4; sub(/.*tool_calls:/, "", tc); sub(/,.*/, "", tc)
+    tc = _metrics; sub(/.*tool_calls:/, "", tc); sub(/,.*/, "", tc)
     metrics_tools[month] += tc + 0
-    dur = $4; sub(/.*duration:/, "", dur); sub(/s.*/, "", dur)
+    dur = _metrics; sub(/.*duration:/, "", dur); sub(/s.*/, "", dur)
     metrics_duration[month] += dur + 0
     next
   }

@@ -58,8 +58,10 @@ awk -F'|' -v cutoff="$CUTOFF" -v today="$TODAY" '
   # errors) or outcome-new (fresh mistake captured) was re-flagged as
   # silent after 24 h even though Stop demonstrably ran. The new
   # session-close event is the canonical Stop-hook-completed signal
-  # (see session-stop.sh); session-metrics cannot be used here
-  # because its $4 is the metrics payload, not a session id.
+  # (see session-stop.sh). Format v2 of session-metrics carries
+  # session_id in $4 too, but mixing v1 and v2 formats here would
+  # require per-line detection — session-close is the cleaner
+  # universal signal for both v1 and v2 WALs.
   #
   # Guard NF == 4: the WAL is canonical 4-column; anything else came
   # from a crashed writer or a user-pasted artefact and must not
