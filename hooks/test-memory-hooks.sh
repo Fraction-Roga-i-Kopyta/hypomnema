@@ -1807,7 +1807,10 @@ EOF
 printf '2026-04-11|cascade-review|cascade-mistake|parent:some-parent\n' > "$CASCADE_MEM/.wal"
 
 mkdir -p /tmp/cascade-test
-CASCADE_OUT=$(echo '{"session_id":"cascade-test","cwd":"/tmp/cascade-test"}' | CLAUDE_MEMORY_DIR="$CASCADE_MEM" bash "$HOOK" 2>/dev/null)
+# HYPOMNEMA_TODAY frozen so the 14-day cascade-review window holds the
+# fixture's 2026-04-11 event regardless of wall clock — without this,
+# the test rots once real today drifts > 14 days from the fixture date.
+CASCADE_OUT=$(echo '{"session_id":"cascade-test","cwd":"/tmp/cascade-test"}' | HYPOMNEMA_TODAY=2026-04-15 CLAUDE_MEMORY_DIR="$CASCADE_MEM" bash "$HOOK" 2>/dev/null)
 CASCADE_CTX=$(printf '%s' "$CASCADE_OUT" | jq -r '.hookSpecificOutput.additionalContext // ""')
 assert "Cascade display — REVIEW marker appears" 'printf "%s" "$CASCADE_CTX" | grep -q "REVIEW.*some-parent.*updated"'
 

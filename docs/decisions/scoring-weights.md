@@ -119,6 +119,20 @@ Manual revisits are also warranted if a third user corpus
 measures `measurable_precision` materially below the maintainer
 baseline and the gap is not explained by cold-start gating.
 
+## Calibration history
+
+**2026-05-07 — shadow-miss false-positive cleanup.** `decisions
+review` flagged this ADR at `shadow_miss_ratio = 0.65` (threshold
+0.50). Evidence probe found 8/8 sampled shadow-miss events were
+FTS5 false-positives — cross-project files surfaced on incidental
+body-keyword overlap. The signal does not reflect a weight-level
+mis-retrieval problem; it reflected a missing project filter in
+the shadow pass itself (see ADR `fts5-shadow-retrieval` calibration
+history). After the project filter landed, this threshold remains
+correct: if `shadow_miss_ratio` still exceeds 0.50 after a 14-day
+post-patch window, the gap is genuine and weight tuning is
+warranted.
+
 ## Implementation note
 
 The weights live in `hooks/session-start.sh:328-380` (awk-generated

@@ -54,9 +54,19 @@ pass() { echo "  ✓ $*"; PASS=$((PASS + 1)); }
 fail() { echo "  ✗ $*" >&2; FAIL=$((FAIL + 1)); }
 skip() { echo "  - $* (skipped)"; SKIP=$((SKIP + 1)); }
 
+# --- Resolve frozen `today` from fixture metadata ---
+# Fixtures author WAL events with absolute dates. memoryctl's WAL-window
+# cutoffs (Bayesian gate, decisions review) anchor on real `now` by
+# default, which causes fixtures to rot once wall clock drifts past the
+# events they declare. Honour an optional `frozen_today: YYYY-MM-DD`
+# field in expected.json to freeze memoryctl's clock at the date the
+# fixture was written for.
+FROZEN_TODAY=$(jq -r '.frozen_today // empty' "$EXPECTED" 2>/dev/null)
+
 # --- Run memoryctl doctor against the fixture ---
 # doctor exits non-zero on FAIL-severity checks; we only need the JSON.
 DOCTOR_JSON=$(CLAUDE_MEMORY_DIR="$MEMORY" CLAUDE_DIR="$(dirname "$MEMORY")" \
+  HYPOMNEMA_TODAY="$FROZEN_TODAY" \
   "$MEMORYCTL" doctor --json 2>/dev/null || true)
 
 if [ -z "$DOCTOR_JSON" ]; then
@@ -206,6 +216,7 @@ if jq -e '.assertions.scoring_probe' "$EXPECTED" >/dev/null 2>&1; then
     fail "scoring_probe declared but no slug field — expected.json malformed"
   else
     probe_json=$(CLAUDE_MEMORY_DIR="$MEMORY" CLAUDE_DIR="$(dirname "$MEMORY")" \
+      HYPOMNEMA_TODAY="$FROZEN_TODAY" \
       "$MEMORYCTL" scoring-probe "$probe_slug" 2>/dev/null || true)
     if [ -z "$probe_json" ]; then
       fail "scoring_probe — memoryctl scoring-probe returned empty output"

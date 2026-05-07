@@ -1,6 +1,7 @@
 {
   "fixture_name": "synthetic-cold-start",
   "claim": "zero-outcome, low-vocab corpus must have bayesian + tfidf dormant",
+  "frozen_today": "2026-04-25",
   "assertions": {
     "doctor": {
       "scoring_components_active": {
