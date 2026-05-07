@@ -390,7 +390,7 @@ fi
 # trigger pipeline did not inject. Feeds roadmap v0.8 trigger-tuning.
 # Detached subshell: cannot slow the hook or affect output.
 if [ -x "$HOME/.claude/bin/memory-fts-shadow.sh" ]; then
-  ( "$HOME/.claude/bin/memory-fts-shadow.sh" "$CLEAN_PROMPT" "$SAFE_SESSION_ID" "$NEW_INJECTED" ) \
+  ( "$HOME/.claude/bin/memory-fts-shadow.sh" "$CLEAN_PROMPT" "$SAFE_SESSION_ID" "$NEW_INJECTED" "$CURRENT_PROJECT" ) \
     >/dev/null 2>&1 &
   disown 2>/dev/null || true
 fi

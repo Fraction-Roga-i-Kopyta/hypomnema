@@ -21,6 +21,13 @@ type ShadowConfig struct {
 	// Today is the date stamp written to each WAL event. When zero, uses
 	// the current local date.
 	Today string
+	// CurrentProject is the project slug the prompt was issued from
+	// (resolved by the caller via projects.json + cwd). When non-empty,
+	// files whose frontmatter project is neither empty/global nor equal
+	// to this slug are skipped — mirrors the project filter the primary
+	// substring pipeline applies via priority key. Empty value disables
+	// the filter (back-compat).
+	CurrentProject string
 }
 
 // Shadow runs the full FTS5 recall-shadow pass: tokenizes the prompt, queries
@@ -71,6 +78,11 @@ func Shadow(ctx context.Context, memoryDir, prompt, sessionID string, newInjecte
 		slug := slugFromPath(h.Path)
 		if _, seen := injected[slug]; seen {
 			continue
+		}
+		if cfg.CurrentProject != "" {
+			if !projectAllowed(h.Path, cfg.CurrentProject) {
+				continue
+			}
 		}
 		line := cfg.Today + "|shadow-miss|" + slug + "|" + sessionID
 		dedupKey := "shadow-miss|" + slug + "|" + sessionID
@@ -125,4 +137,48 @@ func isCandidateDir(p string) bool {
 // lives in internal/pathutil.
 func slugFromPath(p string) string {
 	return pathutil.SlugFromPath(p)
+}
+
+// projectAllowed reads the frontmatter `project:` field of the file at
+// path and returns true if the file is admissible under currentProject.
+// Empty / "global" / equal-to-current → admissible. Anything else →
+// rejected. Files we cannot open are admitted (fail-open matches the
+// shadow pass's observational contract — never block on disk noise).
+func projectAllowed(path, currentProject string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return true
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 8*1024), 64*1024)
+	fmCount := 0
+	for sc.Scan() {
+		line := sc.Text()
+		trimmed := strings.TrimRight(line, " \t")
+		if trimmed == "---" {
+			fmCount++
+			if fmCount >= 2 {
+				return true // no project: line found inside frontmatter → empty → global
+			}
+			continue
+		}
+		if fmCount != 1 {
+			continue
+		}
+		if !strings.HasPrefix(line, "project:") {
+			continue
+		}
+		v := strings.TrimSpace(strings.TrimPrefix(line, "project:"))
+		v = strings.Trim(v, `"'`)
+		v = strings.TrimSpace(v)
+		switch v {
+		case "", "global", currentProject:
+			return true
+		default:
+			return false
+		}
+	}
+	// File has no closing `---` or scanner error — fail-open.
+	return true
 }
