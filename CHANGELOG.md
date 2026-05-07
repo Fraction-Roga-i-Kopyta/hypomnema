@@ -2,13 +2,14 @@
 
 ## [1.0.0] - 2026-05-07
 
-Format v1 → v2 bump — first breaking grammar change since v0.3.
-Single forcing function: `session-metrics` events finally carry
-their `session_id` in the canonical `$4` slot, matching every
-other 4-column event. The v1 shape stuffed metrics into `$4` and
-left no place for the session id, which kept `wal-retro-silent`
-from using `session-metrics` alone for closing-set membership and
-forced `session-close` to ship as a parallel marker.
+Format v1 → v2 bump — first breaking grammar change since v0.3 —
+plus a sweep of correctness, observability, and CI-quality work
+that landed in the same day. Headline: `session-metrics` events
+finally carry their `session_id` in the canonical `$4` slot,
+matching every other 4-column event. Supporting cast: shadow-pass
+project filter, three independent test-fixture time-bombs, four
+ADR review-trigger metric gaps closed, and the perf bench moved
+from observational to gated.
 
 ### Changed (breaking)
 
@@ -39,11 +40,85 @@ forced `session-close` to ship as a parallel marker.
 - `scripts/parity-check.sh` mixes v1 and v2 rows in its fixture
   WAL so the bash-vs-Go diff exercises both demuxers.
 
+### Fixed
+
+- **Shadow-pass cross-project false-positives** (PR #1). FTS5
+  body-keyword overlap surfaced cross-project files (e.g. an iOS
+  Swift strategy in a JIRA Groovy session) and the resulting
+  `shadow-miss` events tripped pressure on three review triggers
+  on noise. `bin/memory-fts-shadow.sh` and the Go pilot now skip
+  files whose `project:` is neither empty/global nor equal to the
+  current project — mirrors the priority-key first bucket of the
+  primary substring pipeline.
+- **Three test-fixture time-bombs** (PR #1) — `score-records.sh`,
+  `build-context.sh`, and `internal/doctor/doctor.go` all anchored
+  WAL-window cutoffs on real `date` instead of `HYPOMNEMA_TODAY`.
+  CI on 2026-04-24 was green because the fixture WAL events
+  (2026-04-12..-15) were inside the 14- and 30-day windows; replay
+  on 2026-05-07 silently dropped them outside. All three now use
+  the resolved-today variable; fixture snapshots add an explicit
+  `frozen_today` field.
+- **`measurable_precision` regex never matched production** (PR
+  #2). Loader regex `[^|]*?` stopped at the markdown-table pipe
+  and never reached the value cell. Test fixture used a bogus
+  inline form not present in production — classic
+  test-fixture-encodes-the-bug. Replaced with a line-wide match;
+  unblocks the `precision-class-ambient` and `scoring-weights`
+  ADRs that depended on it.
+- **`cold-start-scoring` ADR threshold mis-calibrated for
+  single-install corpora** (PR #3). Original 0.30 trigger was
+  drafted assuming fleet-aggregate measurement; on a personal
+  install where rules fire episodically, the structural ceiling
+  is around 0.10–0.15 with `MIN_SAMPLES = 5` over 14 days.
+  Threshold relaxed to 0.10; defaults stay because lowering them
+  degrades Bayesian smoothing.
+
+### Added
+
+- **`ambient_fraction` and `corpus_fraction_with_active_bayesian`
+  metrics** (PR #2) — both computed in `internal/profile` and
+  `bin/memory-self-profile.sh`, surfaced in `self-profile.md`,
+  loaded by `internal/decisions/snapshot.go`. Closes 4/5 SKIPPED
+  metrics in `memoryctl decisions review`. The remaining one
+  (`bayesian_override_env_usage`) is fleet-level by design.
+- **Subprocess coverage aggregation for `cmd/memoryctl`** (PR #4).
+  TestMain now uses a persistent `GOCOVERDIR` (per-test
+  `t.TempDir()` was auto-cleaned before aggregation, which is
+  why `go test -cover ./cmd/memoryctl/...` reported 0.0%). New
+  `make test-go-cover` target prints both in-process and
+  subprocess coverage; `MEMORYCTL_SUBPROCESS_COVER_OUT` env
+  controls the textual profile path. Real number on the maintainer
+  tree: 34.6% (was hidden as 0.0%).
+- **Perf-regression CI gate** (PR #6).
+  `scripts/bench-gate.sh` runs `bench-memory.sh perf`, parses the
+  per-scenario `avg=Nms` lines, and fails when observed >
+  `baseline × tolerance` for any scenario flagged `gated: true`
+  in `docs/measurements/baselines.json`. Replaces the previous
+  `continue-on-error: true` observational step. High-variance
+  scenarios stay observational. First calibration record at
+  `docs/measurements/2026-05-07-bench-gate-calibration.md`.
+
+### Documentation
+
+- README status updated to v1.0 / `format_version: 2`; sub-claims
+  brought in line with the current state (Go 1.25+, ubuntu-latest
+  CI coverage).
+- `docs/decisions/{fts5-shadow-retrieval,scoring-weights,
+  substring-triggers-with-negation,cold-start-scoring}.md` —
+  calibration history sections added documenting today's
+  threshold and metric reasoning.
+- `docs/measurements/2026-05-07-bench-gate-calibration.md` —
+  initial baseline numbers, both runners' first CI observations,
+  recommended Linux tightening pass for a future PR.
+
 ### Not in this release
 
 - `memoryctl wal validate` and `memoryctl wal migrate` subcommands.
 - `docs/EVENTS.md` normative event-type registry.
 - WAL-header v2 marker comment.
+- Linux baseline tightening — current values leave 3–4× headroom;
+  worth a follow-up after a few CI rounds populate the real
+  distribution.
 
 These were originally bundled into the v1.0 plan but are
 orthogonal to the wire-format fix itself; they ship as follow-up
