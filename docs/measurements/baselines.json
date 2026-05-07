@@ -29,17 +29,17 @@
     },
     "secrets-detect (0 patterns)": {
       "gated": true,
-      "darwin": { "avg_ms": 50, "tolerance": 1.5 },
+      "darwin": { "avg_ms": 70, "tolerance": 1.5 },
       "linux":  { "avg_ms": 100, "tolerance": 1.5 }
     },
     "secrets-detect (10 patterns)": {
       "gated": true,
-      "darwin": { "avg_ms": 50, "tolerance": 1.5 },
+      "darwin": { "avg_ms": 70, "tolerance": 1.5 },
       "linux":  { "avg_ms": 100, "tolerance": 1.5 }
     },
     "secrets-detect (100 patterns)": {
       "gated": true,
-      "darwin": { "avg_ms": 60, "tolerance": 1.5 },
+      "darwin": { "avg_ms": 80, "tolerance": 1.5 },
       "linux":  { "avg_ms": 120, "tolerance": 1.5 }
     }
   }

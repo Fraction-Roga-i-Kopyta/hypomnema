@@ -102,6 +102,29 @@ long-term answer would be ratio-vs-main comparison, but that's
 2× CI time and not worth the complexity until single-baseline
 gating proves insufficient.
 
+## Same-day re-calibration (round 2): secrets-detect bumped
+
+Post-merge run #25521696126 on main flunked two more darwin
+scenarios: `secrets-detect (10 patterns)` at **78 ms** (ceiling
+75 ms) and `(100 patterns)` at **91 ms** (ceiling 90 ms). Three
+samples on the same code:
+
+| Scenario       | PR #6 | PR #8 first | Post-#8 main |
+| -------------- | ----: | ----------: | -----------: |
+| (0 patterns)   | 47 ms |       63 ms |        71 ms |
+| (10 patterns)  | 50 ms |       67 ms |    **78 ms** |
+| (100 patterns) | 59 ms |       69 ms |    **91 ms** |
+
+The numbers crept up across runs — same pattern of hosted-darwin
+variance the session-start hot-paths showed earlier. The
+original 50 / 50 / 60 ms baselines were calibrated against the
+local M-series Mac where the hook completes in ~33 ms; hosted
+macos-latest sits comfortably 1.4–1.6× above local. Bumping
+darwin baselines to **70 / 70 / 80 ms** (ceilings 105 / 105 /
+120 ms) covers the worst-observed sample with ~15 ms of
+headroom. Tolerance stays at 1.5×. Linux numbers (28–30 ms) are
+unchanged — far below their already-generous ceilings.
+
 ## Stop-hook variance
 
 `stop (3 WAL passes + evidence)` stayed observational because the
