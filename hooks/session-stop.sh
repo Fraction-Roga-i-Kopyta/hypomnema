@@ -264,13 +264,17 @@ if [ -n "$TRANSCRIPT_PATH" ] && [ -f "$TRANSCRIPT_PATH" ]; then
   METRIC_DOMAINS=$(printf '%s' "$METRIC_DOMAINS" | tr ' ' ',')
   [ -z "$METRIC_DOMAINS" ] && METRIC_DOMAINS="unknown"
 
-  wal_append "$TODAY|session-metrics|$METRIC_DOMAINS|error_count:$METRIC_ERROR_COUNT,tool_calls:$TOOL_CALLS,duration:${METRIC_DURATION}s"
+  # Format v2 (FORMAT.md §5): session-metrics carries a structured blob
+  # in column 3 (`domains:X,error_count:N,tool_calls:M,duration:Ys`)
+  # with session_id in the canonical fourth-column slot. v1 split
+  # domains into col3 and the metrics blob into col4 with no
+  # session_id at all — readers detect the shape by presence of the
+  # `domains:` prefix in col3 and parse both formats.
+  wal_append "$TODAY|session-metrics|domains:$METRIC_DOMAINS,error_count:$METRIC_ERROR_COUNT,tool_calls:$TOOL_CALLS,duration:${METRIC_DURATION}s|$SAFE_SESSION_ID"
 
-  # v0.14 soft-close signal. session-metrics itself can't be used
-  # for retro closing-set membership because its $4 is the payload,
-  # not a session id. session-close carries the session id in the
-  # canonical $4 position and exists solely so wal-retro-silent can
-  # tell "Stop hook completed" apart from "session disappeared".
+  # session-close kept for v0.14 soft-close — wal-retro-silent's
+  # closing-set still uses it as a parallel signal. Folding it into
+  # session-metrics is a semantic change for after v2 lands.
   wal_append "$TODAY|session-close|$METRIC_DOMAINS|$SAFE_SESSION_ID" "session-close|$METRIC_DOMAINS|$SAFE_SESSION_ID"
 
   if [ "${METRIC_ERROR_COUNT:-0}" -eq 0 ]; then
