@@ -6,13 +6,13 @@
 
 **File-based long-term memory for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — markdown, YAML, shell hooks. No cloud, no database, no embeddings.** Claude Code starts every session from zero; hypomnema fixes that.
 
-> **Status:** Beta. Memory format (`format_version: 1`) and hook contract (`docs/hooks-contract.md`) are marked stable; the project is in active daily development by a solo maintainer. Breaking changes before `v1.0` are possible but tracked in [CHANGELOG.md](CHANGELOG.md).
+> **Status:** v1.0 (memory format `format_version: 2`). Active daily development by a solo maintainer. Subsequent breaking changes will increment the major version and are tracked in [CHANGELOG.md](CHANGELOG.md); the v1→v2 bump is a one-time migration with backward-compat readers (existing v1 WAL keeps parsing).
 >
-> **Platforms:** macOS (primary, daily-driver, covered by CI on `macos-latest`). Linux: expected to work — the shell layer follows a `bash 3.2-safe` convention and depends only on coreutils + `jq` + `perl` + `sqlite3` — but not currently covered by CI. Windows: WSL only, native unsupported.
+> **Platforms:** macOS (primary, daily-driver) and Linux (`ubuntu-latest`), both covered by CI. The shell layer follows a `bash 3.2-safe` convention and depends only on coreutils + `jq` + `perl` + `sqlite3`. Windows: WSL only, native unsupported.
 >
 > _Not affiliated with or endorsed by Anthropic. Hypomnema is an independent project that integrates with Claude Code's public hook API._
 
-Runtime deps: bash, jq, perl, awk, sqlite3 with FTS5. Optional Go 1.22+ for the `memoryctl` binary that replaces the slow paths. 290+ bash hook smoke tests + 27 synthetic-fixture snapshot tests + Go unit tests across `internal/{fuzzy,profile,wal,fts,dedup,doctor,tfidf,evidence}` at ~70–90% coverage on data-critical packages. Canonical counts live in `CHANGELOG.md § [latest]`. SessionStart hook ~0.3 s on a 100-file corpus.
+Runtime deps: bash, jq, perl, awk, sqlite3 with FTS5. Optional Go 1.25+ for the `memoryctl` binary that replaces the slow paths. ~300 bash hook smoke tests + ~30 synthetic-fixture snapshot tests + Go unit tests across `internal/{fuzzy,profile,wal,fts,dedup,doctor,tfidf,evidence}` at ~70–90% coverage on data-critical packages, plus a CI-gated bench (`scripts/bench-gate.sh` against `docs/measurements/baselines.json`). Canonical counts live in `CHANGELOG.md § [latest]`. SessionStart hook ~0.3 s on a 100-file corpus.
 
 ## What it looks like
 
