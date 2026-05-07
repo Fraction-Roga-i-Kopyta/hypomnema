@@ -79,14 +79,30 @@ if [ -d "$MEMORY_DIR/strategies" ]; then
 fi
 
 # --- Calibration: error-prone domains from session-metrics WAL events ---
-# Parse session-metrics rows: $3=domains (comma-sep), $4=error_count:N,tool_calls:M,duration:Xs
+# Parse session-metrics rows. Format detection (FORMAT.md §5):
+#   v1: $3 = "backend,testing"           $4 = "error_count:N,tool_calls:M,duration:Xs"
+#   v2: $3 = "domains:backend,testing,error_count:N,tool_calls:M,duration:Xs"
+#       $4 = session_id
 calibration=$(awk -F'|' '
   $2 == "session-metrics" {
-    ec = 0
-    if (match($4, /error_count:[0-9]+/)) {
-      s = substr($4, RSTART, RLENGTH); sub(/^error_count:/, "", s); ec = s + 0
+    if (substr($3, 1, 8) == "domains:") {
+      _rest = substr($3, 9)
+      if (match(_rest, /,[a-z_]+:/)) {
+        _domains = substr(_rest, 1, RSTART - 1)
+        _metrics = substr(_rest, RSTART + 1)
+      } else {
+        _domains = _rest
+        _metrics = ""
+      }
+    } else {
+      _domains = $3
+      _metrics = $4
     }
-    n = split($3, doms, ",")
+    ec = 0
+    if (match(_metrics, /error_count:[0-9]+/)) {
+      s = substr(_metrics, RSTART, RLENGTH); sub(/^error_count:/, "", s); ec = s + 0
+    }
+    n = split(_domains, doms, ",")
     for (i=1; i<=n; i++) {
       d = doms[i]
       if (d == "" || d == "unknown") continue

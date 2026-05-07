@@ -88,6 +88,104 @@ func TestGenerate(t *testing.T) {
 	}
 }
 
+// TestSplitSessionMetrics covers the format-v1/v2 demultiplexer
+// directly, since both real-WAL parsing paths and the calibration
+// pipeline depend on it agreeing with the bash awk that mirrors the
+// same logic. Each case asserts: given (col3, col4) on the wire, what
+// (domains_csv, metrics_blob) does the reader yield.
+func TestSplitSessionMetrics(t *testing.T) {
+	cases := []struct {
+		name        string
+		col3, col4  string
+		wantDomains string
+		wantMetrics string
+	}{
+		{
+			name:        "v1-single-domain",
+			col3:        "backend",
+			col4:        "error_count:0,tool_calls:5,duration:60s",
+			wantDomains: "backend",
+			wantMetrics: "error_count:0,tool_calls:5,duration:60s",
+		},
+		{
+			name:        "v1-multi-domain",
+			col3:        "backend,testing",
+			col4:        "error_count:3,tool_calls:20,duration:120s",
+			wantDomains: "backend,testing",
+			wantMetrics: "error_count:3,tool_calls:20,duration:120s",
+		},
+		{
+			name:        "v1-unknown",
+			col3:        "unknown",
+			col4:        "error_count:0,tool_calls:10,duration:30s",
+			wantDomains: "unknown",
+			wantMetrics: "error_count:0,tool_calls:10,duration:30s",
+		},
+		{
+			name:        "v2-single-domain",
+			col3:        "domains:backend,error_count:0,tool_calls:5,duration:60s",
+			col4:        "sess-uuid",
+			wantDomains: "backend",
+			wantMetrics: "error_count:0,tool_calls:5,duration:60s",
+		},
+		{
+			name:        "v2-multi-domain",
+			col3:        "domains:backend,testing,error_count:3,tool_calls:20,duration:120s",
+			col4:        "sess-uuid",
+			wantDomains: "backend,testing",
+			wantMetrics: "error_count:3,tool_calls:20,duration:120s",
+		},
+		{
+			name:        "v2-unknown",
+			col3:        "domains:unknown,error_count:0,tool_calls:11,duration:247s",
+			col4:        "sess-uuid",
+			wantDomains: "unknown",
+			wantMetrics: "error_count:0,tool_calls:11,duration:247s",
+		},
+	}
+	for _, tc := range cases {
+		gotD, gotM := splitSessionMetrics(tc.col3, tc.col4)
+		if gotD != tc.wantDomains || gotM != tc.wantMetrics {
+			t.Errorf("%s:\n  col3=%q col4=%q\n  got  (%q, %q)\n  want (%q, %q)",
+				tc.name, tc.col3, tc.col4, gotD, gotM, tc.wantDomains, tc.wantMetrics)
+		}
+	}
+}
+
+// TestGenerateMixedV1V2WAL verifies that a single WAL containing both
+// format-v1 and format-v2 session-metrics rows aggregates correctly.
+// This is the realistic upgrade path: existing v1 entries stay on
+// disk, new v2 entries land alongside them, every reader must
+// reconcile both shapes in one pass.
+func TestGenerateMixedV1V2WAL(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "mistakes"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mixed := `2026-04-01|session-metrics|backend|error_count:5,tool_calls:10,duration:60s
+2026-04-02|session-metrics|domains:backend,error_count:3,tool_calls:20,duration:120s|sess-v2-a
+2026-04-03|session-metrics|frontend,testing|error_count:0,tool_calls:8,duration:45s
+2026-04-04|session-metrics|domains:frontend,testing,error_count:2,tool_calls:15,duration:90s|sess-v2-b
+`
+	mustWrite(t, filepath.Join(dir, ".wal"), mixed)
+	if err := Generate(dir); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "self-profile.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := string(got)
+
+	// 4 session-metrics rows (2 v1 + 2 v2).
+	mustContain(t, out, "| total sessions (logged) | 4 |")
+	// Calibration domains: backend ×2 (1 v1 + 1 v2), frontend ×2, testing ×2.
+	// Errors: backend has 5+3=8, frontend has 0+2=2, testing has 0+2=2.
+	// Per-session avg: backend 4.00 (8/2), frontend 1.00 (2/2), testing 1.00 (2/2).
+	mustContain(t, out, "`backend`: 4.00 err/session avg (n=2)")
+	mustContain(t, out, "`frontend`: 1.00 err/session avg (n=2)")
+}
+
 func TestGenerateNoWAL(t *testing.T) {
 	// Mirrors bash `[ -f "$WAL_FILE" ] || exit 0` — no .wal means no-op,
 	// no self-profile.md written.

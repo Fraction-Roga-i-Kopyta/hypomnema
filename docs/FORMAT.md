@@ -13,13 +13,18 @@ If you are writing code that reads or writes `~/.claude/memory/`, conform to thi
 Every implementation declares a format version it understands:
 
 ```
-format_version: 1
+format_version: 2
 ```
 
-This document describes **format 1**. A file or WAL produced under format 1 is valid input for any format-1 reader. Additive changes (new optional fields, new WAL event types) stay at format 1. Removing, renaming, or changing the semantics of an existing field increments the major version.
+This document describes **format 2**. The breaking change against format 1 is the `session-metrics` WAL event shape — see § 5 for detail. All other v1 surfaces (frontmatter fields, directory layout, every other event type) are unchanged.
+
+Backward-compat reading is mandatory: a format-2 reader MUST also parse format-1 `session-metrics` rows (no session id, metrics in `$4`). The boundary check is per-line, keyed on the `domains:` prefix in `$3`. New writes always use the format-2 shape; old WAL entries stay v1 on disk and are read alongside.
+
+Additive changes (new optional fields, new WAL event types) stay at format 2. Removing, renaming, or changing the semantics of an existing field increments the major version again.
 
 Implementations MUST:
-- Accept format-1 input and produce format-1 output.
+- Accept format-2 input and produce format-2 output.
+- Accept format-1 `session-metrics` input for backward compat (other event types are wire-identical between v1 and v2).
 - Ignore unknown frontmatter fields (forward-compatibility).
 - Log, not crash, on unknown WAL event types (see § 5).
 
@@ -196,7 +201,11 @@ date|event|target|session
 
 **Session rollup:**
 
-- `session-metrics` — `target` = comma-separated `key:value` pairs (`error_count:N,tool_calls:M,duration:Ss`). A reader MUST tolerate unknown keys. NOT a closing signal on its own — see `session-close`.
+- `session-metrics` — Stop-hook session rollup. Two on-disk shapes that readers MUST both accept:
+  - **v1** (legacy): `<date>|session-metrics|<domains_csv>|<error_count:N,tool_calls:M,duration:Ss>`. `$3` is the comma-separated domain list; `$4` is the metrics payload. No session id is carried.
+  - **v2** (v1.0+): `<date>|session-metrics|domains:<csv>,error_count:N,tool_calls:M,duration:Ss|<session_id>`. `$3` is a structured `key:value` blob whose first key is `domains:`; `$4` is the session id, in canonical position. Detector: `$3` starts with `domains:` ⇒ v2; otherwise v1.
+
+  A reader MUST tolerate unknown `key:value` pairs in either format and treat absent keys as 0. NOT a closing signal on its own — see `session-close`.
 - `session-close` — Stop hook completed (any error count). `target` = session id. v0.14+ addition; carries the session id in the canonical `$4` position so `wal-retro-silent.sh` can tell "Stop hook finished" apart from "session disappeared". Emitted alongside `session-metrics`.
 
 **Strategy signals:**
@@ -244,7 +253,7 @@ v0.14 soft-close rule: a session is **closed** if its WAL contains any of:
 - `trigger-useful` / `trigger-silent` — natural feedback-loop classification.
 - `trigger-silent-retro` — a prior retro pass already classified.
 
-`session-metrics` is **not** in the closing set even though it also signals "Stop hook completed": its `$4` field is the metrics payload (`error_count:N,tool_calls:M,duration:Ts`), not a session id, so we can't attribute it to a specific inject. `session-close` exists solely to carry the session id in the canonical `$4` position alongside `session-metrics`.
+`session-metrics` is **not** in the closing set even though it also signals "Stop hook completed". In v1 the `$4` field is the metrics payload (no session id at all); in v2 the `$4` field IS a session id, but mixing the two formats inside a single closing-set check would require per-line format detection. `session-close` (always v1-shaped, always carrying the session id in `$4`) is the cleaner universal signal that works against both v1 and v2 WALs.
 
 In-session state events like `error-detected-<level>`, `strategy-used`, `strategy-gap`, `evidence-missing`, `evidence-empty`, `cluster-load`, `cascade-review` describe what happened **inside** a session, not that it closed, and are deliberately **not** in the set. If a session has only `error-detected-*` but no `session-close`, the retro pass still classifies it as silent after 24 h — that's the diagnosis case "error-detect ran without Stop completing".
 
