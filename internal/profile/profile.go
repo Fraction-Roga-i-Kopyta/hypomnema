@@ -260,9 +260,9 @@ func collectWALSignals(walPath string, ambient map[string]bool, outcomeCutoff st
 		case "session-metrics":
 			sig.totalSessions++
 			if len(fields) >= 4 {
-				ec := parseErrorCount(fields[3])
-				domains := strings.Split(fields[2], ",")
-				for _, d := range domains {
+				domainsCSV, metricsBlob := splitSessionMetrics(fields[2], fields[3])
+				ec := parseErrorCount(metricsBlob)
+				for _, d := range strings.Split(domainsCSV, ",") {
 					if d == "" || d == "unknown" {
 						continue
 					}
@@ -367,6 +367,47 @@ func parseErrorCount(s string) int {
 	}
 	n, _ := strconv.Atoi(rest[:end])
 	return n
+}
+
+// splitSessionMetrics demultiplexes the v1 and v2 session-metrics WAL
+// shapes into a uniform (domains_csv, metrics_blob) pair so callers
+// don't have to branch on format.
+//
+//	v1: col3 = "backend,testing"           col4 = "error_count:0,..."
+//	v2: col3 = "domains:backend,testing,error_count:0,..."  col4 = session_id
+//
+// The detector keys on the `domains:` prefix in col3 — v1 emitted the
+// raw comma-separated domain list with no key prefix, v2 always opens
+// the structured blob with `domains:`. When the prefix is present we
+// peel `domains:<csv>` off the front and return the remainder as the
+// metrics blob; when absent we treat the inputs as v1 verbatim.
+func splitSessionMetrics(col3, col4 string) (domainsCSV, metricsBlob string) {
+	if !strings.HasPrefix(col3, "domains:") {
+		return col3, col4
+	}
+	rest := col3[len("domains:"):]
+	// Domains run until the first comma that introduces another
+	// `key:value` pair. v2 always emits `domains:<csv>,error_count:...`,
+	// so we look for the next "<word>:" substring.
+	for i := 0; i < len(rest); i++ {
+		if rest[i] != ',' {
+			continue
+		}
+		// Peek ahead for `<alnum_underscore>+:`
+		j := i + 1
+		for j < len(rest) && (isWordByte(rest[j])) {
+			j++
+		}
+		if j > i+1 && j < len(rest) && rest[j] == ':' {
+			return rest[:i], rest[i+1:]
+		}
+	}
+	// No metrics blob found — domains-only payload (defensive).
+	return rest, ""
+}
+
+func isWordByte(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_'
 }
 
 // --- Ambient set ----------------------------------------------------------

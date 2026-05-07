@@ -62,10 +62,27 @@ ANALYTICS=$(awk -F'|' \
   }
   $2 == "session-metrics" {
     total_sessions++
-    ec = $4; sub(/.*error_count:/, "", ec); sub(/,.*/, "", ec)
+    # Format detection (FORMAT.md §5):
+    #   v1 — $3 = domains_csv,         $4 = metrics_blob
+    #   v2 — $3 = "domains:csv,error_count:N,tool_calls:M,duration:Xs"
+    #        $4 = session_id
+    if (substr($3, 1, 8) == "domains:") {
+      _rest = substr($3, 9)
+      if (match(_rest, /,[a-z_]+:/)) {
+        _domains = substr(_rest, 1, RSTART - 1)
+        _metrics = substr(_rest, RSTART + 1)
+      } else {
+        _domains = _rest
+        _metrics = ""
+      }
+    } else {
+      _domains = $3
+      _metrics = $4
+    }
+    ec = _metrics; sub(/.*error_count:/, "", ec); sub(/,.*/, "", ec)
     total_errors += ec + 0
     if (ec + 0 > 0) {
-      n = split($3, doms, ",")
+      n = split(_domains, doms, ",")
       for (i = 1; i <= n; i++) error_domains[doms[i]]++
     }
   }

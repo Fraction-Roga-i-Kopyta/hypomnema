@@ -1,5 +1,54 @@
 # Changelog
 
+## [1.0.0] - 2026-05-07
+
+Format v1 → v2 bump — first breaking grammar change since v0.3.
+Single forcing function: `session-metrics` events finally carry
+their `session_id` in the canonical `$4` slot, matching every
+other 4-column event. The v1 shape stuffed metrics into `$4` and
+left no place for the session id, which kept `wal-retro-silent`
+from using `session-metrics` alone for closing-set membership and
+forced `session-close` to ship as a parallel marker.
+
+### Changed (breaking)
+
+- **`session-metrics` wire format.** New shape:
+
+  ```
+  <date>|session-metrics|domains:<csv>,error_count:N,tool_calls:M,duration:Ss|<session_id>
+  ```
+
+  v1 shape (`<date>|session-metrics|<domains>|<error_count:...>` with
+  no session id) is still accepted on the read path indefinitely —
+  every reader detects the format per line, keyed on whether `$3`
+  begins with `domains:`. New writes use v2 only. No automatic
+  WAL migration ships in this release; existing v1 entries stay
+  v1 on disk and are read alongside v2 ones.
+- **`docs/FORMAT.md` declares `format_version: 2`.** Backward-
+  compat reading of v1 `session-metrics` is now mandatory; all
+  other event types and frontmatter surfaces are wire-identical
+  between v1 and v2.
+
+### Reader compatibility
+
+- `internal/profile/profile.go:splitSessionMetrics` is the canonical
+  Go demuxer — accepts both v1 and v2 inputs and returns a uniform
+  `(domains_csv, metrics_blob)` pair.
+- `bin/memory-self-profile.sh`, `hooks/memory-analytics.sh`, and
+  `hooks/wal-compact.sh` parse both formats inline (mirrored awk).
+- `scripts/parity-check.sh` mixes v1 and v2 rows in its fixture
+  WAL so the bash-vs-Go diff exercises both demuxers.
+
+### Not in this release
+
+- `memoryctl wal validate` and `memoryctl wal migrate` subcommands.
+- `docs/EVENTS.md` normative event-type registry.
+- WAL-header v2 marker comment.
+
+These were originally bundled into the v1.0 plan but are
+orthogonal to the wire-format fix itself; they ship as follow-up
+PRs without further format breakage.
+
 ## [0.15.0] - 2026-04-24
 
 P2-debt release. Twelve hygiene items the v0.13 external review

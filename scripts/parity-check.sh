@@ -106,9 +106,13 @@ _run_profile_case() {
   MEM="$TMP/memory"
   mkdir -p "$MEM"/{mistakes,strategies}
 
+  # WAL fixture mixes format-v1 and format-v2 session-metrics rows so
+  # both readers' demuxers are exercised in parity. v1 keeps domains
+  # in $3 and the metrics blob in $4 with no session_id; v2 carries
+  # `domains:<csv>,error_count:N,...` in $3 and session_id in $4.
   cat > "$MEM/.wal" <<'WAL'
 2026-04-01|session-metrics|backend,testing|error_count:3,tool_calls:20,duration:120s
-2026-04-02|session-metrics|backend|error_count:0,tool_calls:10,duration:60s
+2026-04-02|session-metrics|domains:backend,error_count:0,tool_calls:10,duration:60s|sess1
 2026-04-02|clean-session|unknown|sess1
 2026-04-03|session-metrics|frontend|error_count:1,tool_calls:5,duration:30s
 2026-04-04|outcome-positive|foo-mistake|sess2
