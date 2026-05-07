@@ -4,21 +4,21 @@
     "darwin": "Apple Silicon, macOS 25.x — measured locally (3 runs, avg)",
     "linux":  "GitHub-hosted ubuntu-24.04 — initial estimate ~2x of darwin baseline; will tighten after the first few CI rounds populate real distribution"
   },
-  "_tolerance_rationale": "1.5x absorbs the ~30 % runner variance documented in v0.14 measurements + a buffer for incidental work; tighter ratios (1.2x) would flake on cold-cache first runs.",
+  "_tolerance_rationale": "1.5x absorbs ~30 % runner variance + buffer. darwin baselines moved to hosted-runner ceilings (PR #6: 708ms session-start; PR #8: 1302ms session-start — same code, different runner moments). The original numbers were calibrated against a local M-series Mac, which is materially faster than the GitHub-hosted macOS runner; the gate has to pass on the runner that actually runs CI. Linux runners are tighter (~30 % variance) and the original numbers there were already safe.",
   "scenarios": {
     "session-start": {
       "gated": true,
-      "darwin": { "avg_ms": 600, "tolerance": 1.5 },
+      "darwin": { "avg_ms": 1000, "tolerance": 1.5 },
       "linux":  { "avg_ms": 1200, "tolerance": 1.5 }
     },
     "user-prompt-submit (no-match)": {
       "gated": true,
-      "darwin": { "avg_ms": 3000, "tolerance": 1.5 },
+      "darwin": { "avg_ms": 5000, "tolerance": 1.5 },
       "linux":  { "avg_ms": 5000, "tolerance": 1.5 }
     },
     "user-prompt-submit (broad)": {
       "gated": true,
-      "darwin": { "avg_ms": 3500, "tolerance": 1.5 },
+      "darwin": { "avg_ms": 5500, "tolerance": 1.5 },
       "linux":  { "avg_ms": 6000, "tolerance": 1.5 }
     },
     "stop (3 WAL passes + evidence)": {

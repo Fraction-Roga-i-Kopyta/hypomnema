@@ -65,6 +65,43 @@ These keep `1.5×` tolerance but cut headroom from 3–4× to ≈ 1.5×,
 restoring the gate's signal on Linux. Wait for more samples
 before applying — a single CI run is not a distribution.
 
+## Same-day re-calibration: darwin baselines bumped
+
+Within hours of the first CI capture, PR #8 (a doc-only changelog
+expansion, no code changes) hit a darwin gate failure with
+session-start at **1302 ms** vs the 600 ms × 1.5 = 900 ms ceiling.
+Two macOS samples on the same code:
+
+| Sample      | session-start | user-prompt-submit (broad) |
+| ----------- | ------------: | -------------------------: |
+| PR #6 run   |        708 ms |                    3521 ms |
+| PR #8 run   |       1302 ms |                    6842 ms |
+| ratio (PR8 / PR6) | 1.84× | 1.94× |
+
+Same code, ~2× spread on the bash-heavy hot-paths between two
+runs minutes apart. This is the macOS hosted-runner variance the
+v0.14 measurements doc already warned about; the initial darwin
+baselines (600 / 3000 / 3500 ms) were calibrated against the
+maintainer's local M-series Mac, which is materially faster than
+hosted macos-latest.
+
+darwin baselines moved to **hosted-runner ceilings** so the gate
+passes on the runner that actually runs CI:
+
+| Scenario                              | Old darwin baseline | New darwin baseline |
+| ------------------------------------- | ------------------: | ------------------: |
+| session-start                         |              600 ms |             1000 ms |
+| user-prompt-submit (no-match)         |             3000 ms |             5000 ms |
+| user-prompt-submit (broad)            |             3500 ms |             5500 ms |
+
+Tolerance stays at 1.5×; ceilings now sit at 1500 / 7500 / 8250 ms,
+covering the worst PR #8 sample with headroom. Local M-series numbers
+(520–2940 ms) sit at 0.52–0.53× of baseline — that's the price of
+calibrating to the slower of the two environments. The cleaner
+long-term answer would be ratio-vs-main comparison, but that's
+2× CI time and not worth the complexity until single-baseline
+gating proves insufficient.
+
 ## Stop-hook variance
 
 `stop (3 WAL passes + evidence)` stayed observational because the
