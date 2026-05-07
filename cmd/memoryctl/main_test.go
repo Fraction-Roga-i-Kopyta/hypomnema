@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,9 +15,23 @@ import (
 // TestMain so each test reuses the same executable.
 var binPath string
 
+// coverDir is the GOCOVERDIR every subprocess invocation writes its
+// binary coverage data to. Shared across the whole TestMain so the
+// per-test data accumulates instead of being thrown away (the previous
+// `t.TempDir()` was auto-cleaned before aggregation, which is why
+// `go test -cover ./cmd/memoryctl/...` reported 0.0% despite real
+// functional coverage).
+var coverDir string
+
 // TestMain builds the memoryctl binary to a temp location and runs
 // every test against it as a subprocess. Each subcommand exercised
 // this way counts toward cmd/memoryctl coverage via -coverpkg.
+//
+// When MEMORYCTL_SUBPROCESS_COVER_OUT is set, after all tests finish
+// we convert the accumulated binary coverage data into Go's textual
+// cover format and write it to that path. Callers (Makefile, CI)
+// can then merge this with the test-binary cover profile to report
+// real coverage instead of the 0% the runtime alone would show.
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "memoryctl-test-")
 	if err != nil {
@@ -34,19 +49,38 @@ func TestMain(m *testing.M) {
 	if err := build.Run(); err != nil {
 		panic(err)
 	}
-	os.Exit(m.Run())
+
+	coverDir = filepath.Join(dir, "cover")
+	if err := os.MkdirAll(coverDir, 0o755); err != nil {
+		panic(err)
+	}
+
+	code := m.Run()
+
+	if outPath := os.Getenv("MEMORYCTL_SUBPROCESS_COVER_OUT"); outPath != "" {
+		conv := exec.Command("go", "tool", "covdata", "textfmt",
+			"-i="+coverDir, "-o="+outPath)
+		conv.Stdout = os.Stderr
+		conv.Stderr = os.Stderr
+		if err := conv.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "covdata textfmt failed: %v\n", err)
+		}
+	}
+
+	os.Exit(code)
 }
 
 // run invokes the built binary with `args` and optional env overrides.
-// Returns stdout, stderr, exit code. The t.TempDir() for coverage
-// output keeps parallel tests from stomping on each other.
+// Returns stdout, stderr, exit code. GOCOVERDIR points at the shared
+// TestMain-level coverdir so subprocess coverage accumulates across
+// every test instead of being deleted with each per-test t.TempDir.
 func run(t *testing.T, env map[string]string, args ...string) (stdout, stderr string, exit int) {
 	t.Helper()
 	cmd := exec.Command(binPath, args...)
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &errBuf
-	cmd.Env = append(os.Environ(), "GOCOVERDIR="+t.TempDir())
+	cmd.Env = append(os.Environ(), "GOCOVERDIR="+coverDir)
 	for k, v := range env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
