@@ -48,8 +48,17 @@ func BuildSnapshot(memoryDir string, now time.Time) (Snapshot, error) {
 // self-profile.sh and internal/profile). We read the handful of
 // metrics v0.11 cares about; anything else is forward-compat-ignored.
 var (
-	// "measurable precision: 53% (14/26)"  OR  "measurable precision ... 53%"
-	reMeasurablePrecision = regexp.MustCompile(`(?i)measurable precision[^|]*?(\d+(?:\.\d+)?)\s*%`)
+	// Self-profile generators (Go + bash) emit metrics as markdown
+	// table rows:
+	//   | **measurable precision** ... | **67%** |
+	// The previous regex stopped at `[^|]*?` and never crossed the
+	// pipe into the value cell. Match digits anywhere on the line —
+	// each metric label appears once, so a line-wide search is
+	// unambiguous and survives both table and inline formats.
+	// "n/a%" cells correctly produce no match (metric undefined).
+	reMeasurablePrecision    = regexp.MustCompile(`(?i)measurable precision.*?(\d+(?:\.\d+)?)\s*%`)
+	reAmbientFraction        = regexp.MustCompile(`(?i)ambient_fraction.*?(\d+(?:\.\d+)?)\s*%`)
+	reCorpusBayesianFraction = regexp.MustCompile(`(?i)corpus_fraction_with_active_bayesian.*?(\d+(?:\.\d+)?)\s*%`)
 	// "top recurrence: 6" / "recurrence peak: 6" — accept a few wordings.
 	reRecurrenceTop = regexp.MustCompile(`(?i)(?:top recurrence|recurrence peak|highest recurrence)[^0-9]+(\d+)`)
 )
@@ -72,6 +81,16 @@ func loadSelfProfileMetrics(path string, out map[string]float64) error {
 				// self-profile emits whole percents (53%); normalize
 				// to 0..1 so triggers compare like "< 0.40".
 				out["measurable_precision"] = v / 100.0
+			}
+		}
+		if m := reAmbientFraction.FindStringSubmatch(line); m != nil {
+			if v, err := strconv.ParseFloat(m[1], 64); err == nil {
+				out["ambient_fraction"] = v / 100.0
+			}
+		}
+		if m := reCorpusBayesianFraction.FindStringSubmatch(line); m != nil {
+			if v, err := strconv.ParseFloat(m[1], 64); err == nil {
+				out["corpus_fraction_with_active_bayesian"] = v / 100.0
 			}
 		}
 		if m := reRecurrenceTop.FindStringSubmatch(line); m != nil {

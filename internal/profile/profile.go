@@ -38,8 +38,21 @@ func Generate(memoryDir string) error {
 		return err
 	}
 
-	sig, err := collectWALSignals(walPath, ambient)
+	// Outcome cutoff for the per-slug Bayesian sampling window. Mirrors
+	// the constants `internal/doctor` uses for its scoring_components_active
+	// gate so the two stay synchronized.
+	windowDays := envIntDefault("HYPOMNEMA_OUTCOME_WINDOW_DAYS", 14)
+	minSamples := envIntDefault("HYPOMNEMA_BAYESIAN_MIN_SAMPLES", 5)
+	cutoff := windowCutoffDate(windowDays)
+
+	sig, err := collectWALSignals(walPath, ambient, cutoff)
 	if err != nil {
+		return err
+	}
+
+	// Aggregate ADR review-trigger metrics.
+	computeAmbientFraction(sig)
+	if err := computeCorpusBayesianFraction(memoryDir, sig, minSamples); err != nil {
 		return err
 	}
 
@@ -59,6 +72,102 @@ func Generate(memoryDir string) error {
 	out := renderProfile(ts, sig, weaknesses, strengths, calibration)
 
 	return os.WriteFile(filepath.Join(memoryDir, "self-profile.md"), []byte(out), 0o644)
+}
+
+// envIntDefault reads an integer env var, falling back to def when the
+// value is missing or unparsable. Mirrors `internal/doctor.envInt`.
+func envIntDefault(key string, def int) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return def
+	}
+	return n
+}
+
+// windowCutoffDate returns YYYY-MM-DD `windowDays` before the resolved
+// "today" (HYPOMNEMA_TODAY → HYPOMNEMA_NOW → real). Empty windowDays
+// disables the filter and the function returns "".
+func windowCutoffDate(windowDays int) string {
+	if windowDays <= 0 {
+		return ""
+	}
+	var anchor time.Time
+	if s := os.Getenv("HYPOMNEMA_TODAY"); s != "" {
+		if t, err := time.Parse("2006-01-02", s); err == nil {
+			anchor = t
+		}
+	}
+	if anchor.IsZero() {
+		if s := os.Getenv("HYPOMNEMA_NOW"); s != "" {
+			if t, err := time.Parse("2006-01-02 15:04", s); err == nil {
+				anchor = t
+			}
+		}
+	}
+	if anchor.IsZero() {
+		anchor = time.Now()
+	}
+	return anchor.AddDate(0, 0, -windowDays).Format("2006-01-02")
+}
+
+// computeAmbientFraction derives the share of ambient activations among
+// all reactive trigger fires. Denominator is `triggerUsefulAll +
+// triggerSilentAll`; numerator is `ambientActivations`. When the
+// denominator is 0 the fraction is left undefined so the renderer
+// emits "n/a%" instead of a misleading 0%.
+func computeAmbientFraction(sig *walSignals) {
+	total := sig.triggerUsefulAll + sig.triggerSilentAll
+	if total <= 0 {
+		return
+	}
+	sig.ambientFraction = float64(sig.ambientActivations) / float64(total)
+	sig.ambientFractionDefined = true
+}
+
+// computeCorpusBayesianFraction walks every memory record (mistakes,
+// feedback, strategies, knowledge, notes, decisions) and counts how
+// many have ≥ minSamples outcome events inside the window already
+// loaded into sig.outcomesPerSlug. The fraction is what the cold-
+// start-scoring ADR's review-trigger watches for the corpus-level
+// "Bayesian gate is dormant for too many slugs" signal.
+func computeCorpusBayesianFraction(memoryDir string, sig *walSignals, minSamples int) error {
+	memoryTypes := []string{"mistakes", "feedback", "strategies", "knowledge", "notes", "decisions"}
+	var total, active int
+	for _, t := range memoryTypes {
+		dir := filepath.Join(memoryDir, t)
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return err
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			name := e.Name()
+			if !strings.HasSuffix(name, ".md") {
+				continue
+			}
+			slug := strings.TrimSuffix(name, ".md")
+			total++
+			if sig.outcomesPerSlug[slug] >= minSamples {
+				active++
+			}
+		}
+	}
+	sig.corpusBayesianTotal = total
+	sig.corpusBayesianActive = active
+	if total > 0 {
+		sig.corpusBayesianFraction = float64(active) / float64(total)
+		sig.corpusBayesianFractionDefined = true
+	}
+	return nil
 }
 
 // now returns the formatted timestamp. HYPOMNEMA_NOW overrides for tests
@@ -92,13 +201,30 @@ type walSignals struct {
 	outcomeNewCount     int
 	precisionPct        string // "N" or "n/a"
 
+	// Per-slug outcome counts in last OUTCOME_WINDOW days. Used to
+	// compute corpus_fraction_with_active_bayesian.
+	outcomesPerSlug map[string]int
+
+	// Aggregate metrics for ADR review-triggers (cold-start-scoring,
+	// quota-pool). Fractions stay as 0 when denominator is 0 — we
+	// distinguish "fraction is 0" from "metric undefined" in the
+	// render layer via the separate `*Defined` flags.
+	ambientFraction              float64
+	ambientFractionDefined       bool
+	corpusBayesianActive         int
+	corpusBayesianTotal          int
+	corpusBayesianFraction       float64
+	corpusBayesianFractionDefined bool
+
 	domainTotal map[string]int
 	domainErr   map[string]int
 }
 
 // collectWALSignals streams the WAL once. ambient maps slug→true; lookups
-// drive the ambient-exclusion for precision calculation.
-func collectWALSignals(walPath string, ambient map[string]bool) (*walSignals, error) {
+// drive the ambient-exclusion for precision calculation. outcomeCutoff is
+// the YYYY-MM-DD date below which outcome events do not count toward
+// per-slug Bayesian-gate sampling (empty string disables the filter).
+func collectWALSignals(walPath string, ambient map[string]bool, outcomeCutoff string) (*walSignals, error) {
 	f, err := os.Open(walPath)
 	if err != nil {
 		return nil, err
@@ -106,8 +232,9 @@ func collectWALSignals(walPath string, ambient map[string]bool) (*walSignals, er
 	defer f.Close()
 
 	sig := &walSignals{
-		domainTotal: map[string]int{},
-		domainErr:   map[string]int{},
+		domainTotal:     map[string]int{},
+		domainErr:       map[string]int{},
+		outcomesPerSlug: map[string]int{},
 	}
 
 	// For silent-applied correlation we need to cross-reference two event
@@ -152,8 +279,14 @@ func collectWALSignals(walPath string, ambient map[string]bool) (*walSignals, er
 			if len(fields) >= 4 {
 				positive[fields[2]+"|"+fields[3]] = true
 			}
+			if len(fields) >= 3 && (outcomeCutoff == "" || fields[0] >= outcomeCutoff) {
+				sig.outcomesPerSlug[fields[2]]++
+			}
 		case "outcome-negative":
 			sig.outcomeNegative++
+			if len(fields) >= 3 && (outcomeCutoff == "" || fields[0] >= outcomeCutoff) {
+				sig.outcomesPerSlug[fields[2]]++
+			}
 		case "strategy-used":
 			sig.strategyUsed++
 		case "strategy-gap":
@@ -489,6 +622,8 @@ func renderProfile(ts string, sig *walSignals, weak []weakness, strong []strengt
 	fmt.Fprintf(&b, "| **measurable precision** (useful + applied) / (useful + silent) | **%s%%** |\n", sig.precisionPct)
 	fmt.Fprintf(&b, "| evidence-empty rules (unique, cannot match trigger by design) | %d |\n", sig.evidenceEmptyUnique)
 	fmt.Fprintf(&b, "| outcome-new (fresh mistakes recorded — learning rate) | %d |\n", sig.outcomeNewCount)
+	fmt.Fprintf(&b, "| **ambient_fraction** (ambient activations / all reactive fires) | **%s** |\n", formatFractionPct(sig.ambientFractionDefined, sig.ambientFraction))
+	fmt.Fprintf(&b, "| **corpus_fraction_with_active_bayesian** (slugs with ≥min outcomes / total) | **%s** (%d/%d) |\n", formatFractionPct(sig.corpusBayesianFractionDefined, sig.corpusBayesianFraction), sig.corpusBayesianActive, sig.corpusBayesianTotal)
 
 	fmt.Fprintf(&b, "\n## Strengths (top strategies by success_count)\n")
 	if len(strong) == 0 {
@@ -532,4 +667,15 @@ func renderProfile(ts string, sig *walSignals, weak []weakness, strong []strengt
 // formatRate mimics awk's "%.2f" — trailing zeros preserved.
 func formatRate(r float64) string {
 	return strconv.FormatFloat(r, 'f', 2, 64)
+}
+
+// formatFractionPct renders a fraction in the same shape as
+// `measurable_precision` ("NN%" or "n/a%"). The defined flag lets us
+// distinguish a real 0% from "denominator was 0 — fraction undefined"
+// without forcing a sentinel into the float.
+func formatFractionPct(defined bool, frac float64) string {
+	if !defined {
+		return "n/a%"
+	}
+	return strconv.Itoa(int(frac*100+0.5)) + "%"
 }

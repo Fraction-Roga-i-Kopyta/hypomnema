@@ -9,15 +9,22 @@ import (
 
 func TestBuildSnapshot_SelfProfileMetricsParsed(t *testing.T) {
 	mem := t.TempDir()
-	// Two lines the self-profile generator emits verbatim — if these
-	// regexes fail to match them, the analytics loop is broken.
+	// Mirror the actual self-profile generator output verbatim
+	// (internal/profile/profile.go and bin/memory-self-profile.sh).
+	// Markdown table format — earlier inline form was a fixture-encodes-
+	// the-bug case that masked the real regex never matched production.
 	profile := `# Self-profile
 
-## Metrics
+## Meta-signals
+| signal | count |
+|---|---|
+| total sessions (logged) | 10 |
+| **measurable precision** (useful + applied) / (useful + silent) | **47%** |
+| silent-applied measurable (silent + outcome-positive) | 4 |
+| **ambient_fraction** (ambient activations / all reactive fires) | **22%** |
+| **corpus_fraction_with_active_bayesian** (slugs with ≥min outcomes / total) | **18%** (4/22) |
 
-- sessions: 10
-- measurable precision: 47% (9/19)
-- silent-applied: 4
+## Weaknesses
 - top recurrence: 8 (wrong-root-cause-diagnosis)
 `
 	if err := os.WriteFile(filepath.Join(mem, "self-profile.md"),
@@ -30,6 +37,12 @@ func TestBuildSnapshot_SelfProfileMetricsParsed(t *testing.T) {
 	}
 	if snap.Metrics["measurable_precision"] != 0.47 {
 		t.Errorf("measurable_precision: got %v, want 0.47", snap.Metrics["measurable_precision"])
+	}
+	if snap.Metrics["ambient_fraction"] != 0.22 {
+		t.Errorf("ambient_fraction: got %v, want 0.22", snap.Metrics["ambient_fraction"])
+	}
+	if snap.Metrics["corpus_fraction_with_active_bayesian"] != 0.18 {
+		t.Errorf("corpus_fraction_with_active_bayesian: got %v, want 0.18", snap.Metrics["corpus_fraction_with_active_bayesian"])
 	}
 	if snap.Metrics["recurrence_top_mistake"] != 8 {
 		t.Errorf("recurrence_top_mistake: got %v, want 8", snap.Metrics["recurrence_top_mistake"])
