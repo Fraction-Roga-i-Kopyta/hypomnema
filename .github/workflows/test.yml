@@ -84,25 +84,26 @@ jobs:
       - name: Parity check (bash vs Go shadow)
         run: make parity
 
-      - name: Perf benchmarks (observational — surfaces numbers, does not fail)
-        # Observational-only for now. A stricter threshold policy is blocked
-        # on having enough CI-run data points to distinguish real regressions
-        # from runner variance. Numbers land in the GitHub step summary so
-        # PR reviewers can eyeball them; a >2x regression will still be
-        # visible to a human.
-        continue-on-error: true
+      - name: Perf benchmarks (gated — fails on regression)
+        # Gate fails when any "gated" scenario in
+        # docs/measurements/baselines.json exceeds its avg_ms × tolerance
+        # threshold. High-variance scenarios (currently `stop`) are
+        # marked `gated: false` and remain observational. Tolerance is
+        # 1.5x by default — wide enough to absorb the ~30 % runner
+        # variance documented in v0.14 measurements.
         run: |
-          echo "::group::Perf benchmark run"
-          bash hooks/bench-memory.sh perf 2>&1 | tee /tmp/perf.txt
+          echo "::group::Perf benchmark gate"
+          bash scripts/bench-gate.sh 2>&1 | tee /tmp/perf.txt
+          GATE_EXIT=${PIPESTATUS[0]}
           echo "::endgroup::"
           {
-            echo "## Perf benchmarks (${{ matrix.os }})"
+            echo "## Perf benchmark gate (${{ matrix.os }})"
             echo '```'
-            grep -E "session-start|user-prompt-submit|stop|secrets-detect" /tmp/perf.txt || true
+            sed -n '/=== bench-gate /,$p' /tmp/perf.txt
             echo '```'
-            echo "Baselines: see \`hooks/bench-memory.sh\` and \`docs/measurements/\`."
-            echo "Policy: observational — fixed-threshold gating deferred (see P2 debt)."
+            echo "Baselines: \`docs/measurements/baselines.json\`. Edit there + record calibration in \`docs/measurements/\` if a regression is genuine."
           } >> "$GITHUB_STEP_SUMMARY"
+          exit $GATE_EXIT
 
   shellcheck:
     runs-on: ubuntu-latest
