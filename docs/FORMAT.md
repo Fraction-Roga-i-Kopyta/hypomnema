@@ -178,6 +178,11 @@ date|event|target|session
 
 ### 5.1 Defined event types
 
+> See [`EVENTS.md`](EVENTS.md) for the normative registry: producer/
+> consumer matrix, first-seen versions, closing-set membership, and
+> sub-delimiter glossary. The grouping below is a narrative
+> companion; EVENTS.md is the authoritative spec.
+
 **Core injection lifecycle:**
 
 - `inject` — SessionStart injected a file. `target` = slug.
