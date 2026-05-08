@@ -169,3 +169,33 @@ data points. If round 4 follows the same template (gate fails on
 darwin, code didn't change), the right move is no longer baseline
 bumping but switching to ratio-vs-main comparison or sampling >3
 runs to smooth the tail. Park as v1.x followup if it recurs.
+
+## Same-day re-calibration (round 4, 2026-05-08): user-prompt-submit (broad) bumped
+
+PR #16 (a docs-only addition: `docs/EVENTS.md` registry) hit the
+darwin gate at `user-prompt-submit (broad)` = **8651 ms** vs the
+round-3 ceiling 5500 ms × 1.5 = 8250 ms (ratio 1.57×). Code path
+identical; same hosted-runner variance pattern as rounds 1-3, just
+hitting a different scenario.
+
+| Scenario                              | Round-3 darwin baseline | Round-4 darwin baseline | New ceiling | Worst observed |
+| ------------------------------------- | ----------------------: | ----------------------: | ----------: | -------------: |
+| user-prompt-submit (broad)            |                 5500 ms |                 6500 ms |     9750 ms |        8651 ms |
+
+Tolerance unchanged at 1.5×. Linux baselines untouched.
+
+This is the **fourth** baseline bump in 48 h. The round-3 closing
+note named ratio-vs-main / multi-sample as the right architectural
+fix at this point. **Decision after round 4:** ratio-vs-main is
+deferred to v1.x as a focused work item — it doubles CI runtime
+(needs a `main` reference run) and the implementation isn't a
+copy-paste of an existing pattern. Sample-count smoothing
+(`hooks/bench-memory.sh perf` runs ≥5 instead of 3 per scenario,
+take p50 not avg) is the smaller intermediate step worth piloting
+first; tracked in maintainer's local memory under v1.x followups.
+
+Until that lands, future round-N bumps follow this template
+unchanged. The cost is calibration-debt growing (each bump moves
+the gate further from real-machine numbers); the benefit is the
+gate stays signal-bearing for genuinely large regressions while
+absorbing runner variance.

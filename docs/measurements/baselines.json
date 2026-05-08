@@ -18,7 +18,7 @@
     },
     "user-prompt-submit (broad)": {
       "gated": true,
-      "darwin": { "avg_ms": 5500, "tolerance": 1.5 },
+      "darwin": { "avg_ms": 6500, "tolerance": 1.5 },
       "linux":  { "avg_ms": 6000, "tolerance": 1.5 }
     },
     "stop (3 WAL passes + evidence)": {
