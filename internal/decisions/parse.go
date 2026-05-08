@@ -195,6 +195,8 @@ func applyKV(t *Trigger, kv string) error {
 		t.Source = val
 	case "after":
 		t.After = val
+	case "direction":
+		t.Direction = val
 	}
 	return nil
 }
@@ -225,6 +227,11 @@ func validateTrigger(t Trigger) error {
 		return fmt.Errorf("missing source (want self-profile, wal, or file)")
 	default:
 		return fmt.Errorf("source %q unsupported (want self-profile, wal, or file)", t.Source)
+	}
+	switch t.Direction {
+	case "", "above", "below":
+	default:
+		return fmt.Errorf("direction %q unsupported (want above, below, or unset)", t.Direction)
 	}
 	return nil
 }
