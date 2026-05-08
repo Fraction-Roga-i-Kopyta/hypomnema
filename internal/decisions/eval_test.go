@@ -231,3 +231,104 @@ review-triggers:
 		t.Errorf("bare-operator parse: got %q, want <", triggers[0].Operator)
 	}
 }
+
+// --- direction (above/below) — new in v1.1 -----------------------
+
+// TestEvaluate_DirectionAbove_FiringEmitsReached pins the contract for
+// positive milestone triggers. When Direction == "above" and the
+// metric crosses, status MUST be StatusReached, not StatusPressure.
+// See ADR intuition-milestone.md.
+func TestEvaluate_DirectionAbove_FiringEmitsReached(t *testing.T) {
+	tr := Trigger{
+		Metric:    "silent_applied_to_useful_ratio_30d",
+		Operator:  ">",
+		Threshold: 1.0,
+		Source:    "self-profile",
+		Direction: "above",
+	}
+	snap := Snapshot{
+		Metrics: map[string]float64{"silent_applied_to_useful_ratio_30d": 1.42},
+	}
+	r := Evaluate([]Trigger{tr}, "intuition-milestone", snap)[0]
+	if r.Status != StatusReached {
+		t.Errorf("direction=above + crossed: got %v, want StatusReached", r.Status)
+	}
+	if !strings.Contains(r.Message, "✓ reached") {
+		t.Errorf("reached message should carry ✓ marker, got %q", r.Message)
+	}
+}
+
+func TestEvaluate_DirectionAbove_NotCrossedEmitsOK(t *testing.T) {
+	tr := Trigger{
+		Metric:    "silent_applied_to_useful_ratio_30d",
+		Operator:  ">",
+		Threshold: 1.0,
+		Source:    "self-profile",
+		Direction: "above",
+	}
+	snap := Snapshot{
+		Metrics: map[string]float64{"silent_applied_to_useful_ratio_30d": 0.32},
+	}
+	r := Evaluate([]Trigger{tr}, "intuition-milestone", snap)[0]
+	if r.Status != StatusOK {
+		t.Errorf("direction=above + not crossed: got %v, want StatusOK", r.Status)
+	}
+}
+
+// TestEvaluate_DirectionUnsetEmitsPressure preserves backward
+// compatibility — every pre-direction ADR has Direction = "" and must
+// continue to emit Pressure on crossing.
+func TestEvaluate_DirectionUnsetEmitsPressure(t *testing.T) {
+	tr := Trigger{
+		Metric:    "shadow_miss_ratio",
+		Operator:  ">",
+		Threshold: 0.30,
+		Source:    "self-profile",
+	}
+	snap := Snapshot{Metrics: map[string]float64{"shadow_miss_ratio": 0.42}}
+	r := Evaluate([]Trigger{tr}, "fts5-shadow-retrieval", snap)[0]
+	if r.Status != StatusPressure {
+		t.Errorf("direction unset + crossed: got %v, want StatusPressure", r.Status)
+	}
+}
+
+// TestParseTriggers_DirectionField checks that `direction:` parses
+// out of frontmatter into Trigger.Direction.
+func TestParseTriggers_DirectionField(t *testing.T) {
+	src := `---
+review-triggers:
+  - metric: silent_applied_to_useful_ratio_30d
+    operator: ">"
+    threshold: 1.0
+    source: self-profile
+    direction: above
+  - after: "2027-05-08"
+---
+`
+	triggers, err := parseTriggersFromFrontmatter(strings.NewReader(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(triggers) != 2 {
+		t.Fatalf("expected 2 triggers, got %d", len(triggers))
+	}
+	if triggers[0].Direction != "above" {
+		t.Errorf("direction parse: got %q, want above", triggers[0].Direction)
+	}
+}
+
+func TestValidateTrigger_DirectionUnsupported(t *testing.T) {
+	src := `---
+review-triggers:
+  - metric: foo
+    operator: ">"
+    threshold: 1
+    source: self-profile
+    direction: sideways
+---
+`
+	_, err := parseTriggersFromFrontmatter(strings.NewReader(src))
+	if err == nil {
+		t.Error("expected error for unknown direction")
+	}
+}

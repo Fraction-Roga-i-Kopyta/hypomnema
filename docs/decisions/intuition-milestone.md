@@ -2,11 +2,18 @@
 type: decision
 project: global
 created: 2026-05-08
-status: proposed
+status: active
 description: When silent-applied / trigger-useful exceeds 1.0 sustained over a 30-day window, hypomnema's rules are internalised faster than they are explicitly cited; this is an observational milestone, not a release.
 keywords: [intuition, milestone, silent-applied, trigger-useful, ratio, internalised]
 domains: [scoring, observability]
 related: [precision-class-ambient, two-scoring-pipelines]
+review-triggers:
+  - metric: silent_applied_to_useful_ratio_30d
+    operator: ">"
+    threshold: 1.0
+    source: self-profile
+    direction: above
+  - after: "2027-05-08"
 ---
 
 ## Status history
@@ -15,6 +22,16 @@ related: [precision-class-ambient, two-scoring-pipelines]
   (the ratio is not currently reported); ADR is written first per the
   project's ADR-first convention. Implementation tracked in v1.1
   cycle.
+- 2026-05-08 (later that day) — active. v1.1 implementation landed:
+  `internal/profile.collectWALSignals` now tracks
+  `silent_applied_30d` and `trigger_useful_30d` (windowed via
+  `HYPOMNEMA_INTUITION_WINDOW_DAYS`, default 30). `renderProfile`
+  emits the `## Intuition signal` section. `internal/decisions`
+  schema gained `direction: above|below` on Triggers and a new
+  `StatusReached` to disambiguate positive milestones from
+  degradation pressure. The `review-triggers:` block above is now
+  enforced — `memoryctl decisions review` reports
+  `intuition-milestone: reached` on sustained crossing.
 
 ## What
 

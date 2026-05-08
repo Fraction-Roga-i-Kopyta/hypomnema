@@ -44,8 +44,13 @@ func Generate(memoryDir string) error {
 	windowDays := envIntDefault("HYPOMNEMA_OUTCOME_WINDOW_DAYS", 14)
 	minSamples := envIntDefault("HYPOMNEMA_BAYESIAN_MIN_SAMPLES", 5)
 	cutoff := windowCutoffDate(windowDays)
+	// Intuition-milestone window. Default 30 days per ADR
+	// intuition-milestone.md; ENV-overrideable for fixture tests
+	// (`HYPOMNEMA_INTUITION_WINDOW_DAYS=0` disables the filter).
+	intuitionDays := envIntDefault("HYPOMNEMA_INTUITION_WINDOW_DAYS", 30)
+	intuitionCutoff := windowCutoffDate(intuitionDays)
 
-	sig, err := collectWALSignals(walPath, ambient, cutoff)
+	sig, err := collectWALSignals(walPath, ambient, cutoff, intuitionCutoff)
 	if err != nil {
 		return err
 	}
@@ -247,15 +252,31 @@ type walSignals struct {
 	corpusBayesianFraction       float64
 	corpusBayesianFractionDefined bool
 
+	// Intuition-milestone metric (ADR intuition-milestone.md, v1.1).
+	// Windowed counters over the last INTUITION_WINDOW_DAYS (default 30)
+	// for the silent-applied / trigger-useful ratio. Crossing > 1.0
+	// sustained over the window is the operational definition of the
+	// "intuition tier" — rules applied silently more often than they
+	// are cited explicitly.
+	silentAppliedRecent    int
+	triggerUsefulMeasRecent int
+	intuitionRatio         float64
+	intuitionRatioDefined  bool
+
 	domainTotal map[string]int
 	domainErr   map[string]int
 }
 
 // collectWALSignals streams the WAL once. ambient maps slug→true; lookups
-// drive the ambient-exclusion for precision calculation. outcomeCutoff is
-// the YYYY-MM-DD date below which outcome events do not count toward
-// per-slug Bayesian-gate sampling (empty string disables the filter).
-func collectWALSignals(walPath string, ambient map[string]bool, outcomeCutoff string) (*walSignals, error) {
+// drive the ambient-exclusion for precision calculation.
+//
+//   - outcomeCutoff is the YYYY-MM-DD date below which outcome events do
+//     not count toward per-slug Bayesian-gate sampling (empty string
+//     disables the filter).
+//   - intuitionCutoff is the YYYY-MM-DD date below which trigger-useful
+//     and trigger-silent events do not count toward the intuition-
+//     milestone ratio. Same empty-string-disables semantics.
+func collectWALSignals(walPath string, ambient map[string]bool, outcomeCutoff, intuitionCutoff string) (*walSignals, error) {
 	f, err := os.Open(walPath)
 	if err != nil {
 		return nil, err
@@ -273,6 +294,13 @@ func collectWALSignals(walPath string, ambient map[string]bool, outcomeCutoff st
 	silent := map[string]bool{}   // slug|session seen as trigger-silent (non-ambient)
 	positive := map[string]bool{} // slug|session seen as outcome-positive
 	evidenceEmpty := map[string]bool{}
+
+	// Intuition-milestone windowed buckets — same shape as the
+	// total-corpus silent / positive maps above, but only filled when
+	// the row's date is within the intuition window. Empty cutoff
+	// disables the filter (treat all rows as in-window). See ADR
+	// intuition-milestone.md.
+	silentRecent := map[string]bool{}
 
 	sc := bufio.NewScanner(f)
 	// WAL lines can be long if the bash side buffered arguments. Bump max
@@ -332,6 +360,9 @@ func collectWALSignals(walPath string, ambient map[string]bool, outcomeCutoff st
 				sig.ambientActivations++
 			} else {
 				sig.triggerUsefulMeas++
+				if intuitionCutoff == "" || fields[0] >= intuitionCutoff {
+					sig.triggerUsefulMeasRecent++
+				}
 			}
 		case "trigger-silent":
 			sig.triggerSilentAll++
@@ -345,6 +376,9 @@ func collectWALSignals(walPath string, ambient map[string]bool, outcomeCutoff st
 				sig.triggerSilentMeas++
 				if len(fields) >= 4 {
 					silent[slug+"|"+fields[3]] = true
+					if intuitionCutoff == "" || fields[0] >= intuitionCutoff {
+						silentRecent[slug+"|"+fields[3]] = true
+					}
 				}
 			}
 		case "evidence-empty":
@@ -357,6 +391,21 @@ func collectWALSignals(walPath string, ambient map[string]bool, outcomeCutoff st
 	}
 	if err := sc.Err(); err != nil {
 		return nil, err
+	}
+
+	// Windowed silent-applied correlation for intuition milestone.
+	// Uses the same positive[] map (positive events that lie outside
+	// the intuition window are still legitimate observations of
+	// "silent rule applied" — what we filter is the trigger-silent
+	// side, which is the noisier signal that benefits from windowing).
+	for k := range silentRecent {
+		if positive[k] {
+			sig.silentAppliedRecent++
+		}
+	}
+	if sig.triggerUsefulMeasRecent > 0 {
+		sig.intuitionRatio = float64(sig.silentAppliedRecent) / float64(sig.triggerUsefulMeasRecent)
+		sig.intuitionRatioDefined = true
 	}
 
 	// Correlate silent (non-ambient) with positive of same (slug, session).
@@ -697,6 +746,19 @@ func renderProfile(ts string, sig *walSignals, weak []weakness, strong []strengt
 	fmt.Fprintf(&b, "| **ambient_fraction** (ambient activations / all reactive fires) | **%s** |\n", formatFractionPct(sig.ambientFractionDefined, sig.ambientFraction))
 	fmt.Fprintf(&b, "| **corpus_fraction_with_active_bayesian** (slugs with ≥min outcomes / total) | **%s** (%d/%d) |\n", formatFractionPct(sig.corpusBayesianFractionDefined, sig.corpusBayesianFraction), sig.corpusBayesianActive, sig.corpusBayesianTotal)
 
+	// Intuition signal — operational definition of v1.0 milestone
+	// (ADR intuition-milestone.md). Ratio > 1.0 sustained over the
+	// 30-day window means rules are applied more often than cited;
+	// `memoryctl decisions review` reports `intuition-milestone:
+	// reached` on sustained crossing.
+	fmt.Fprintf(&b, "\n## Intuition signal\n")
+	fmt.Fprintf(&b, "| signal | value |\n")
+	fmt.Fprintf(&b, "|---|---|\n")
+	fmt.Fprintf(&b, "| silent-applied (last 30d) | %d |\n", sig.silentAppliedRecent)
+	fmt.Fprintf(&b, "| trigger-useful measurable (last 30d) | %d |\n", sig.triggerUsefulMeasRecent)
+	fmt.Fprintf(&b, "| **silent_applied_to_useful_ratio_30d** | **%s** |\n", formatRatio(sig.intuitionRatioDefined, sig.intuitionRatio))
+	fmt.Fprintf(&b, "| interpretation | %s |\n", interpretIntuitionRatio(sig.intuitionRatioDefined, sig.intuitionRatio))
+
 	fmt.Fprintf(&b, "\n## Strengths (top strategies by success_count)\n")
 	if len(strong) == 0 {
 		fmt.Fprintf(&b, "_no data_\n")
@@ -750,4 +812,34 @@ func formatFractionPct(defined bool, frac float64) string {
 		return "n/a%"
 	}
 	return strconv.Itoa(int(frac*100+0.5)) + "%"
+}
+
+// formatRatio renders the intuition ratio with two decimal places
+// when defined, "n/a" when the denominator (trigger-useful) is 0.
+// Distinct from formatFractionPct because a ratio is unbounded above
+// 1.0; rendering as a percentage would mislead.
+func formatRatio(defined bool, r float64) string {
+	if !defined {
+		return "n/a"
+	}
+	return strconv.FormatFloat(r, 'f', 2, 64)
+}
+
+// interpretIntuitionRatio maps the ratio into a one-line operator
+// reading. Boundaries are deliberately fuzzy — the metric is meant to
+// signal a tier crossing, not a precise diagnostic.
+func interpretIntuitionRatio(defined bool, r float64) string {
+	if !defined {
+		return "no measurable trigger-useful events in window — cold start"
+	}
+	switch {
+	case r >= 1.0:
+		return "✓ rules applied more often than cited (intuition tier — see intuition-milestone ADR)"
+	case r >= 0.6:
+		return "rules applied silently in a meaningful fraction of cases — approaching tier"
+	case r >= 0.2:
+		return "rules cited more than applied silently — typical mid-corpus state"
+	default:
+		return "citations dominate — rules not yet internalised"
+	}
 }
