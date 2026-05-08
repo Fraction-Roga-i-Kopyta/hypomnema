@@ -360,3 +360,35 @@ func TestRun_MissingMistakesDirAllows(t *testing.T) {
 		t.Errorf("expected no WAL, got: %s", wal)
 	}
 }
+
+// TestRun_RejectsTargetOutsideMemoryDir guards against a caller (or a
+// poorly-written hook) handing dedup a path that lives outside MemoryDir.
+// Without the boundary check, dedup would happily read the outside file's
+// root-cause line, run similarity against in-memdir mistakes, and on a
+// 100% match enter the posttool merge path — which deletes the outside
+// file and writes a dedup-merged WAL event for content that never
+// belonged in the memory directory. External review 2026-05-08, finding E3.
+func TestRun_RejectsTargetOutsideMemoryDir(t *testing.T) {
+	mem := setupMemoryDir(t)
+	const sharedRC = "matches malicious content exactly here long enough"
+	writeMistake(t, mem, "genuine", sharedRC, 1)
+
+	outsideDir := t.TempDir()
+	outsidePath := filepath.Join(outsideDir, "malicious.md")
+	maliciousContent := "---\nroot-cause: \"" + sharedRC + "\"\n---\nBody.\n"
+	if err := os.WriteFile(outsidePath, []byte(maliciousContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	decision, _, wal := runDedup(t, mem, outsidePath, nil)
+
+	if decision != Allow {
+		t.Errorf("expected Allow (target outside MemoryDir must be rejected), got %v", decision)
+	}
+	if wal != "" {
+		t.Errorf("expected no WAL events on rejected target, got: %q", wal)
+	}
+	if _, err := os.Stat(outsidePath); err != nil {
+		t.Errorf("outside file must survive rejection (dedup must not touch it): %v", err)
+	}
+}
