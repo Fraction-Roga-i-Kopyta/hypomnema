@@ -1,5 +1,110 @@
 # Changelog
 
+## [1.1.0] - 2026-05-08
+
+Minor release covering the v1.1 work cycle that landed across eight
+PRs the same day v1.0.1 shipped. Headline: **`memoryctl wal validate`
+subcommand**, the **EVENTS.md normative registry**, and the
+**intuition-milestone observational ADR going active** with a working
+metric. Plus parity-check matrix expansion that exposed (and fixed) a
+real bash slug-sanitisation drift, a contributor-DX `make
+test-uninstalled` target, and a forward-looking WAL header marker ADR.
+
+### Added
+
+- **`memoryctl wal validate`** (PR #19). Scans `$CLAUDE_MEMORY_DIR/.wal`
+  for grammar violations against the four-column invariant: column
+  count, date format (`YYYY-MM-DD`), event name (`[a-z][a-z0-9-]*`),
+  slug sanitisation, non-empty session. Tolerates the optional v2
+  header on row 1 (see `docs/decisions/wal-header-v2-marker.md`).
+  Exit codes 0/1/2 (clean / failures present / WAL missing or
+  command misuse). Surfaced 39 historical `metrics-agg` rows with
+  3 columns on the maintainer's personal corpus — known v0.x event
+  shape no current code path emits, treated as historical noise.
+- **`docs/EVENTS.md` normative registry** (PR #16). Single source of
+  truth for WAL event types: per-event producer/consumer matrix,
+  first-seen version, soft-close set membership, sub-delimiter
+  glossary, authoring checklist for new events. Catalogues all 30
+  active events plus a Reserved entry for `cascade-predictive`
+  (planned v0.9 release candidate, see maintainer's local roadmap).
+  `FORMAT.md § 5.1` now points readers here as the authoritative
+  source.
+- **`make test-uninstalled`** (PR #15). Runs the bash hooks smoke
+  suite against the in-repo `$REPO/hooks/` and `$REPO/bin/` instead
+  of `$HOME/.claude/{hooks,bin}/`, removing the `./install.sh`
+  precondition for contributor runs. New `scripts/run-uninstalled-tests.sh`
+  helper materialises a throwaway tmpdir of symlinks that mirrors
+  install.sh's `_rename_dest` layout. Test runner reads
+  `HYPOMNEMA_HOOKS_DIR` / `HYPOMNEMA_BIN_DIR` with default paths
+  unchanged. 296/296 tests pass against an uninstalled checkout.
+- **`docs/decisions/intuition-milestone.md`** (PRs #14 + #21).
+  Observational-milestone ADR — when the windowed ratio
+  `silent_applied_30d / trigger_useful_30d > 1.0` sustains for 30
+  days, hypomnema has crossed the v1.0 «Интуиция» tier, formalised
+  as a **measurable state** rather than a release. Promoted from
+  the aspirational concept-roadmap entry on 2026-05-08. Status
+  `proposed` → `active` once the underlying metric implementation
+  landed in the same release cycle.
+- **`docs/decisions/wal-header-v2-marker.md`** (PR #20). Reserves
+  the line shape `# hypomnema-wal v2` as an optional first-line
+  marker for `.wal`. Companion to `wal-four-column-invariant.md`:
+  that ADR defines a row, this one defines a file. Status
+  `proposed` — readers already tolerate the marker (`internal/wal.Validate`
+  + every existing reader's `len(fields) < 2` skip), writer
+  enablement deferred to v1.2+ pending observed value.
+- **`Direction` field on `Trigger` schema + `StatusReached`** (PR #21).
+  The `decisions review` evaluator now distinguishes positive
+  milestones (Direction = `"above"` + crossed → `StatusReached`,
+  marked with `✓ reached:`) from degradation pressure (legacy
+  empty Direction or `"below"` + crossed → `StatusPressure`).
+  Pre-existing ADRs continue unchanged. `intuition-milestone` is
+  the first ADR to use the positive-event channel.
+- **`## Intuition signal` section in `self-profile.md`** (PR #21).
+  Renders `silent_applied_30d`, `trigger_useful_meas_30d`, the
+  ratio, and a one-line interpretation. Window
+  ENV-overrideable via `HYPOMNEMA_INTUITION_WINDOW_DAYS` (default 30).
+
+### Changed
+
+- **Parity check matrix expanded 4 shadow → 6 shadow + 1 self-
+  profile + 1 tfidf = 8 cases** (PR #17). Two new shadow fixtures:
+  `edge-slug-pipe` (hostile basename `foo|outcome-positive|bar.md`,
+  validates that both implementations sanitise WAL-grammar-breaking
+  characters before emitting `shadow-miss`) and
+  `large-wal-256k-prefilled` (~260 KiB pre-filled WAL, validates
+  the dedup tail-cap optimisation does not cause divergence).
+  `_run_case` now accepts an optional fixture-seed function name
+  and snapshots/restores any pre-seeded `.wal` so Go runs against
+  the same starting state as bash.
+
+### Fixed
+
+- **`bin/memory-fts-shadow.sh` slug sanitisation regression** (PR #17).
+  The bash shadow reader derived `_slug="${_path##*/}"; _slug="${_slug%.md}"`
+  and emitted it verbatim, drifting from the Go-side
+  `pathutil.SlugFromPath` fix shipped in v1.0.1 (E1) and from the
+  audit-2026-04-16 marker S6 invariant. Discovered by the new
+  `edge-slug-pipe` parity fixture. Fixed inline with
+  `_slug=$(printf '%s' "$_slug" | tr '|\n\r' '_')`. Audit marker S6
+  now applies symmetrically to both writer and shadow reader paths.
+
+### CI
+
+- **darwin bench-gate round 4** (PR #18). Same hosted-runner
+  variance pattern as rounds 1-3 hit `user-prompt-submit (broad)`
+  on PR #16's docs-only run (8651 ms vs 8250 ms ceiling, ratio
+  1.57×). Bumped baseline 5500 → 6500 ms; ceiling 9750 ms with
+  current 1.5× tolerance. **Decision after round 4:** ratio-vs-
+  main is deferred to v1.x (doubles CI runtime; not a copy-paste
+  pattern). Sample-count smoothing (≥5 runs, take p50 not avg) is
+  the smaller intermediate step worth piloting first.
+
+### Process
+
+- **Auto-merge enabled at the repo level**. Future PR sequences
+  with multiple ready PRs queue + auto-rebase + auto-merge once
+  CI is green, removing manual chasing during multi-PR releases.
+
 ## [1.0.1] - 2026-05-08
 
 Hardening patch addressing three findings from an external review of
