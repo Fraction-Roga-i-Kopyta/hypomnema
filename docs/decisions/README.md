@@ -29,3 +29,4 @@ Conventions:
 6. [fts5-shadow-retrieval](fts5-shadow-retrieval.md) — FTS5 runs alongside substring triggers as an observational recall signal, not as an injection source.
 7. [substring-triggers-with-negation](substring-triggers-with-negation.md) — reactive injection matches substrings with a ±40-character negation window.
 8. [precision-class-ambient](precision-class-ambient.md) — rules that shape behaviour without being cited are excluded from the measurable-precision denominator.
+9. [intuition-milestone](intuition-milestone.md) — when `silent_applied / trigger_useful > 1.0` sustained over a 30-day window, the system has crossed the intuition tier; observational milestone, not a release.
