@@ -22,6 +22,14 @@ done
 HOOKS_SRC_DIR="$(cd "$(dirname "$_src")" && pwd)"
 unset _src _link
 
+# Hook + bin script locations. Default to the installed copy (matches
+# the historical integration-style approach: install.sh has been run,
+# tests exercise what users actually invoke). Override both via env
+# to drive the suite against an uninstalled checkout — `make
+# test-uninstalled` does this. external review 2026-05-08 finding E5.
+HOOKS_DIR="${HYPOMNEMA_HOOKS_DIR:-$HOME/.claude/hooks}"
+BIN_DIR="${HYPOMNEMA_BIN_DIR:-$HOME/.claude/bin}"
+
 assert() {
   local name="$1" condition="$2"
   if eval "$condition"; then
@@ -205,7 +213,7 @@ EOF
 
 # --- Run tests ---
 
-HOOK="$HOME/.claude/hooks/memory-session-start.sh"
+HOOK="$HOOKS_DIR/memory-session-start.sh"
 
 # Test 1: Basic injection works
 OUTPUT=$(echo '{"session_id":"t1","cwd":"/tmp/test-project"}' | CLAUDE_MEMORY_DIR="$FIXTURE" bash "$HOOK" 2>/dev/null)
@@ -272,7 +280,7 @@ BOUNDARY_CTX=$(printf '%s' "$BOUNDARY_OUT" | jq -r '.hookSpecificOutput.addition
 assert "Prefix boundary — /test-project-other != test-proj" '! printf "%s" "$BOUNDARY_CTX" | grep -q "Project: test-proj"'
 
 # Test 15: Stop hook syntax OK
-STOP_HOOK="$HOME/.claude/hooks/memory-stop.sh"
+STOP_HOOK="$HOOKS_DIR/memory-stop.sh"
 assert "Stop hook syntax valid" 'bash -n "$STOP_HOOK" 2>/dev/null'
 
 # Test: TF-IDF indexer
@@ -301,7 +309,7 @@ the
 is
 a
 TEOF
-CLAUDE_MEMORY_DIR="$TFIDF_MEM" bash "$HOME/.claude/hooks/memory-index.sh" 2>/dev/null
+CLAUDE_MEMORY_DIR="$TFIDF_MEM" bash "$HOOKS_DIR/memory-index.sh" 2>/dev/null
 assert "TF-IDF index created" '[ -f "$TFIDF_MEM/.tfidf-index" ]'
 assert "TF-IDF index has entries" '[ -s "$TFIDF_MEM/.tfidf-index" ]'
 # Cold-start ADR flipped the build-time skip: files with `keywords:` are
@@ -316,20 +324,20 @@ OUTCOME_DIR=$(mktemp -d)
 OUTCOME_MEM="$OUTCOME_DIR/memory"
 mkdir -p "$OUTCOME_MEM"
 printf '2026-04-10|inject|wrong-root-cause-diagnosis|outcome-test-session\n' > "$OUTCOME_MEM/.wal"
-echo '{"session_id":"outcome-test-session","tool_name":"Write","tool_input":{"file_path":"'"$OUTCOME_MEM"'/mistakes/wrong-root-cause-diagnosis.md","content":"test"}}' | CLAUDE_MEMORY_DIR="$OUTCOME_MEM" bash "$HOME/.claude/hooks/memory-outcome.sh" 2>/dev/null
+echo '{"session_id":"outcome-test-session","tool_name":"Write","tool_input":{"file_path":"'"$OUTCOME_MEM"'/mistakes/wrong-root-cause-diagnosis.md","content":"test"}}' | CLAUDE_MEMORY_DIR="$OUTCOME_MEM" bash "$HOOKS_DIR/memory-outcome.sh" 2>/dev/null
 assert "Outcome hook — negative detected" 'grep -q "outcome-negative.*wrong-root-cause" "$OUTCOME_MEM/.wal"'
 
 # Test: outcome hook — new mistake (not injected)
-echo '{"session_id":"outcome-test-session","tool_name":"Write","tool_input":{"file_path":"'"$OUTCOME_MEM"'/mistakes/brand-new-bug.md","content":"test"}}' | CLAUDE_MEMORY_DIR="$OUTCOME_MEM" bash "$HOME/.claude/hooks/memory-outcome.sh" 2>/dev/null
+echo '{"session_id":"outcome-test-session","tool_name":"Write","tool_input":{"file_path":"'"$OUTCOME_MEM"'/mistakes/brand-new-bug.md","content":"test"}}' | CLAUDE_MEMORY_DIR="$OUTCOME_MEM" bash "$HOOKS_DIR/memory-outcome.sh" 2>/dev/null
 assert "Outcome hook — new mistake detected" 'grep -q "outcome-new.*brand-new-bug" "$OUTCOME_MEM/.wal"'
 
 # Test: outcome hook — dedup same session write (regression for double outcome-new)
-echo '{"session_id":"outcome-test-session","tool_name":"Write","tool_input":{"file_path":"'"$OUTCOME_MEM"'/mistakes/brand-new-bug.md","content":"test"}}' | CLAUDE_MEMORY_DIR="$OUTCOME_MEM" bash "$HOME/.claude/hooks/memory-outcome.sh" 2>/dev/null
+echo '{"session_id":"outcome-test-session","tool_name":"Write","tool_input":{"file_path":"'"$OUTCOME_MEM"'/mistakes/brand-new-bug.md","content":"test"}}' | CLAUDE_MEMORY_DIR="$OUTCOME_MEM" bash "$HOOKS_DIR/memory-outcome.sh" 2>/dev/null
 OUTCOME_NEW_COUNT=$(grep -c "outcome-new|brand-new-bug|outcome-test-session" "$OUTCOME_MEM/.wal")
 assert "Outcome hook — outcome-new deduped within session" '[ "$OUTCOME_NEW_COUNT" -eq 1 ]'
 
 # Test: outcome hook — non-mistake file: no outcome entry, but cascade scan runs
-echo '{"session_id":"outcome-test-session","tool_name":"Write","tool_input":{"file_path":"'"$OUTCOME_MEM"'/feedback/test.md","content":"test"}}' | CLAUDE_MEMORY_DIR="$OUTCOME_MEM" bash "$HOME/.claude/hooks/memory-outcome.sh" 2>/dev/null
+echo '{"session_id":"outcome-test-session","tool_name":"Write","tool_input":{"file_path":"'"$OUTCOME_MEM"'/feedback/test.md","content":"test"}}' | CLAUDE_MEMORY_DIR="$OUTCOME_MEM" bash "$HOOKS_DIR/memory-outcome.sh" 2>/dev/null
 OUTCOME_LINES=$(wc -l < "$OUTCOME_MEM/.wal")
 assert "Outcome hook — non-mistake no outcome entry" '[ "$OUTCOME_LINES" -eq 3 ]'
 safe_cleanup "$OUTCOME_DIR"
@@ -368,7 +376,7 @@ Child bug body.
 EOF
 
 # Write to parent — should cascade to child
-echo '{"session_id":"casc-session","tool_name":"Write","tool_input":{"file_path":"'"$CASC_MEM"'/mistakes/parent-bug.md","content":"updated"}}' | CLAUDE_MEMORY_DIR="$CASC_MEM" bash "$HOME/.claude/hooks/memory-outcome.sh" 2>/dev/null
+echo '{"session_id":"casc-session","tool_name":"Write","tool_input":{"file_path":"'"$CASC_MEM"'/mistakes/parent-bug.md","content":"updated"}}' | CLAUDE_MEMORY_DIR="$CASC_MEM" bash "$HOOKS_DIR/memory-outcome.sh" 2>/dev/null
 assert "Cascade — child detected on parent update" 'grep -q "cascade-review|child-bug|parent:parent-bug" "$CASC_MEM/.wal"'
 assert "Cascade — outcome-new also written for mistake" 'grep -q "outcome-new|parent-bug" "$CASC_MEM/.wal"'
 
@@ -393,7 +401,7 @@ related:
 Child knowledge.
 EOF
 
-echo '{"session_id":"casc-session","tool_name":"Write","tool_input":{"file_path":"'"$CASC_MEM"'/feedback/parent-fb.md","content":"updated"}}' | CLAUDE_MEMORY_DIR="$CASC_MEM" bash "$HOME/.claude/hooks/memory-outcome.sh" 2>/dev/null
+echo '{"session_id":"casc-session","tool_name":"Write","tool_input":{"file_path":"'"$CASC_MEM"'/feedback/parent-fb.md","content":"updated"}}' | CLAUDE_MEMORY_DIR="$CASC_MEM" bash "$HOOKS_DIR/memory-outcome.sh" 2>/dev/null
 assert "Cascade — cross-dir instance_of detected" 'grep -q "cascade-review|child-kb|parent:parent-fb" "$CASC_MEM/.wal"'
 assert "Cascade — no outcome entry for non-mistake" '! grep -q "outcome-.*parent-fb" "$CASC_MEM/.wal"'
 
@@ -408,7 +416,7 @@ No children here.
 EOF
 
 CASC_LINES_BEFORE=$(wc -l < "$CASC_MEM/.wal")
-echo '{"session_id":"casc-session","tool_name":"Write","tool_input":{"file_path":"'"$CASC_MEM"'/feedback/lonely.md","content":"updated"}}' | CLAUDE_MEMORY_DIR="$CASC_MEM" bash "$HOME/.claude/hooks/memory-outcome.sh" 2>/dev/null
+echo '{"session_id":"casc-session","tool_name":"Write","tool_input":{"file_path":"'"$CASC_MEM"'/feedback/lonely.md","content":"updated"}}' | CLAUDE_MEMORY_DIR="$CASC_MEM" bash "$HOOKS_DIR/memory-outcome.sh" 2>/dev/null
 CASC_LINES_AFTER=$(wc -l < "$CASC_MEM/.wal")
 assert "Cascade — no cascade for file without children" '[ "$CASC_LINES_BEFORE" -eq "$CASC_LINES_AFTER" ]'
 
@@ -481,7 +489,7 @@ cat > "$ERR_DIR/transcript.jsonl" << 'EEOF'
 EEOF
 MARKER_ERR="/tmp/.claude-session-err-test"
 touch -t 202601010000 "$MARKER_ERR"
-STOP_OUT=$(printf '{"session_id":"err-test","transcript_path":"%s/transcript.jsonl"}' "$ERR_DIR" | CLAUDE_MEMORY_DIR="$ERR_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null)
+STOP_OUT=$(printf '{"session_id":"err-test","transcript_path":"%s/transcript.jsonl"}' "$ERR_DIR" | CLAUDE_MEMORY_DIR="$ERR_MEM" bash "$HOOKS_DIR/memory-stop.sh" 2>/dev/null)
 STOP_CTX=$(printf '%s' "$STOP_OUT" | jq -r '.hookSpecificOutput.additionalContext // ""' 2>/dev/null)
 assert "Error detection — npm error found" 'printf "%s" "$STOP_CTX" | grep -q "npm"'
 assert "Error detection — grep excluded" '! printf "%s" "$STOP_CTX" | grep -q "grep foo"'
@@ -489,7 +497,7 @@ assert "Error detection — WAL entry" 'grep -q "error-detected" "$ERR_MEM/.wal"
 safe_cleanup "$ERR_DIR" "$MARKER_ERR"
 
 # Test: dedup wrapper — syntax and graceful fallback
-assert "Dedup wrapper syntax valid" 'bash -n "$HOME/.claude/hooks/memory-dedup.sh" 2>/dev/null'
+assert "Dedup wrapper syntax valid" 'bash -n "$HOOKS_DIR/memory-dedup.sh" 2>/dev/null'
 DEDUP_DIR=$(mktemp -d)
 DEDUP_MEM="$DEDUP_DIR/memory"
 mkdir -p "$DEDUP_MEM/mistakes"
@@ -514,7 +522,7 @@ prevention: "Verify CSS custom properties"
 ---
 DEOF
 DEDUP_EXIT=0
-echo '{"session_id":"dedup-test","tool_name":"Write","tool_input":{"file_path":"'"$DEDUP_MEM"'/mistakes/new-similar.md"}}' | CLAUDE_MEMORY_DIR="$DEDUP_MEM" bash "$HOME/.claude/hooks/memory-dedup.sh" 2>/dev/null || DEDUP_EXIT=$?
+echo '{"session_id":"dedup-test","tool_name":"Write","tool_input":{"file_path":"'"$DEDUP_MEM"'/mistakes/new-similar.md"}}' | CLAUDE_MEMORY_DIR="$DEDUP_MEM" bash "$HOOKS_DIR/memory-dedup.sh" 2>/dev/null || DEDUP_EXIT=$?
 assert "Dedup wrapper — no crash" '[ $DEDUP_EXIT -eq 0 ]'
 if python3 -c "import rapidfuzz" 2>/dev/null; then
   assert "Dedup — merged duplicate" '[ ! -f "$DEDUP_MEM/mistakes/new-similar.md" ]'
@@ -532,7 +540,7 @@ cat > "$CRLF_MEM/projects.json" <<'CREOF'
 CREOF
 # Create CRLF file (Windows-style line endings)
 printf -- "---\r\ntype: mistake\r\nstatus: active\r\nproject: global\r\nrecurrence: 3\r\nseverity: major\r\ndomains: [general]\r\n---\r\nCRLF body line\r\n" > "$CRLF_MEM/mistakes/crlf-test.md"
-CRLF_OUT=$(echo '{"session_id":"crlf-test","cwd":"/test/crlf"}' | CLAUDE_MEMORY_DIR="$CRLF_MEM" bash "$HOME/.claude/hooks/memory-session-start.sh" 2>/dev/null)
+CRLF_OUT=$(echo '{"session_id":"crlf-test","cwd":"/test/crlf"}' | CLAUDE_MEMORY_DIR="$CRLF_MEM" bash "$HOOKS_DIR/memory-session-start.sh" 2>/dev/null)
 assert "CRLF — file injected" 'echo "$CRLF_OUT" | grep -q "crlf-test"'
 assert "CRLF — body preserved" 'echo "$CRLF_OUT" | grep -q "CRLF body line"'
 safe_cleanup "$CRLF_DIR"
@@ -550,7 +558,7 @@ domains: [general]
 ---
 Test feedback body
 WPEOF
-echo '{"session_id":"sess|with|pipes","cwd":"/tmp"}' | CLAUDE_MEMORY_DIR="$WAL_PIPE_MEM" bash "$HOME/.claude/hooks/memory-session-start.sh" >/dev/null 2>&1
+echo '{"session_id":"sess|with|pipes","cwd":"/tmp"}' | CLAUDE_MEMORY_DIR="$WAL_PIPE_MEM" bash "$HOOKS_DIR/memory-session-start.sh" >/dev/null 2>&1
 WAL_LAST=$(tail -1 "$WAL_PIPE_MEM/.wal" 2>/dev/null)
 assert "WAL — pipe in session_id sanitized" 'echo "$WAL_LAST" | grep -q "sess_with_pipes"'
 assert "WAL — exactly 4 fields" '[ "$(echo "$WAL_LAST" | awk -F"|" "{print NF}")" -eq 4 ]'
@@ -640,7 +648,7 @@ CEOF
 PERL_MARKER="/tmp/.claude-session-perl-test"
 touch -t 202601010000 "$PERL_MARKER"
 PERL_EXIT=0
-echo '{"session_id":"perl-test","cwd":"/tmp/perl-test"}' | CLAUDE_MEMORY_DIR="$PERL_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null || PERL_EXIT=$?
+echo '{"session_id":"perl-test","cwd":"/tmp/perl-test"}' | CLAUDE_MEMORY_DIR="$PERL_MEM" bash "$HOOKS_DIR/memory-stop.sh" 2>/dev/null || PERL_EXIT=$?
 assert "Special chars in git — no crash" '[ $PERL_EXIT -eq 0 ]'
 assert "Continuity file intact" '[ -f "$PERL_MEM/continuity/perl-proj.md" ]'
 safe_cleanup "$PERL_DIR" /tmp/perl-test "$PERL_MARKER"
@@ -690,7 +698,7 @@ mkdir -p "$WALC_MEM"
   done
 } > "$WALC_MEM/.wal"
 WAL_BEFORE=$(wc -l < "$WALC_MEM/.wal")
-CLAUDE_MEMORY_DIR="$WALC_MEM" bash "$HOME/.claude/hooks/wal-compact.sh" 2>/dev/null
+CLAUDE_MEMORY_DIR="$WALC_MEM" bash "$HOOKS_DIR/wal-compact.sh" 2>/dev/null
 WAL_AFTER=$(wc -l < "$WALC_MEM/.wal")
 assert "WAL compaction — reduced size" '[ "$WAL_AFTER" -lt "$WAL_BEFORE" ]'
 assert "WAL compaction — has aggregates" 'grep -q "inject-agg" "$WALC_MEM/.wal"'
@@ -713,7 +721,7 @@ Very old feedback.
 EOF
 # No session marker exists — stop hook should still do lifecycle rotation
 LC_EXIT=0
-echo '{"session_id":"no-marker-test"}' | CLAUDE_MEMORY_DIR="$LC_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null || LC_EXIT=$?
+echo '{"session_id":"no-marker-test"}' | CLAUDE_MEMORY_DIR="$LC_MEM" bash "$HOOKS_DIR/memory-stop.sh" 2>/dev/null || LC_EXIT=$?
 LC_STATUS=$(awk '/^---$/{n++} n==1 && /^status:/{sub(/^status: */,""); print; exit}' "$LC_MEM/feedback/old-stale.md" 2>/dev/null)
 assert "Lifecycle rotation without marker — file marked stale" '[ "$LC_STATUS" = "stale" ]'
 safe_cleanup "$LC_DIR"
@@ -738,7 +746,7 @@ mkdir -p "$NOFM_MEM/notes"
 printf '# No frontmatter here\nJust a note.\n' > "$NOFM_MEM/notes/no-fm.md"
 # Set mtime to 100 days ago
 touch -t $(date -v-100d +%Y%m%d0000 2>/dev/null || date -d "100 days ago" +%Y%m%d0000) "$NOFM_MEM/notes/no-fm.md"
-echo '{"session_id":"nofm-test"}' | CLAUDE_MEMORY_DIR="$NOFM_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null
+echo '{"session_id":"nofm-test"}' | CLAUDE_MEMORY_DIR="$NOFM_MEM" bash "$HOOKS_DIR/memory-stop.sh" 2>/dev/null
 assert "Frontmatter-less file archived" '[ ! -f "$NOFM_MEM/notes/no-fm.md" ] && [ -f "$NOFM_MEM/archive/notes/no-fm.md" ]'
 safe_cleanup "$NOFM_DIR"
 
@@ -811,13 +819,13 @@ OUT_FP_DIR=$(mktemp -d)
 OUT_FP_MEM="$OUT_FP_DIR/memory"
 mkdir -p "$OUT_FP_MEM/mistakes"
 printf '2026-04-10|inject|test-other-bug|sess-100\n' > "$OUT_FP_MEM/.wal"
-echo '{"session_id":"sess-10","tool_name":"Write","tool_input":{"file_path":"'"$OUT_FP_MEM"'/mistakes/test.md","content":"x"}}' | CLAUDE_MEMORY_DIR="$OUT_FP_MEM" bash "$HOME/.claude/hooks/memory-outcome.sh" 2>/dev/null
+echo '{"session_id":"sess-10","tool_name":"Write","tool_input":{"file_path":"'"$OUT_FP_MEM"'/mistakes/test.md","content":"x"}}' | CLAUDE_MEMORY_DIR="$OUT_FP_MEM" bash "$HOOKS_DIR/memory-outcome.sh" 2>/dev/null
 assert "Outcome — no false positive on substring" 'grep -q "outcome-new.*test" "$OUT_FP_MEM/.wal"'
 assert "Outcome — no false negative detection" '! grep -q "outcome-negative" "$OUT_FP_MEM/.wal"'
 safe_cleanup "$OUT_FP_DIR"
 
 # --- Error detection hook tests ---
-DETECT_HOOK="$HOME/.claude/hooks/memory-error-detect.sh"
+DETECT_HOOK="$HOOKS_DIR/memory-error-detect.sh"
 if [ -x "$DETECT_HOOK" ] || [ -L "$DETECT_HOOK" ]; then
 
 # Test: pattern matched in stdout
@@ -913,7 +921,7 @@ safe_cleanup "$DEC_DIR" /tmp/dec-proj
 # --- End decision tests ---
 
 # --- PreCompact hook tests ---
-PC_HOOK="$HOME/.claude/hooks/memory-precompact.sh"
+PC_HOOK="$HOOKS_DIR/memory-precompact.sh"
 if [ -x "$PC_HOOK" ] || [ -L "$PC_HOOK" ]; then
 
 # Test: outputs valid JSON with reminder
@@ -995,7 +1003,7 @@ safe_cleanup "$CS_DIR" /tmp/cold-start-proj
 # --- End cold start tests ---
 
 # --- Fuzzy dedup (PreToolUse) tests ---
-DEDUP_HOOK="$HOME/.claude/hooks/memory-dedup.sh"
+DEDUP_HOOK="$HOOKS_DIR/memory-dedup.sh"
 if [ -x "$DEDUP_HOOK" ] || [ -L "$DEDUP_HOOK" ]; then
 if command -v uv >/dev/null 2>&1; then
 
@@ -1078,7 +1086,7 @@ cat > "$OP_DIR/transcript.jsonl" << 'OPEOF'
 {"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Edit","input":{"file_path":"test.css"}}]}}
 {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"OK"}]}}
 OPEOF
-echo '{"session_id":"op-test-session","cwd":"/tmp","transcript_path":"'"$OP_DIR"'/transcript.jsonl"}' | CLAUDE_MEMORY_DIR="$OP_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null
+echo '{"session_id":"op-test-session","cwd":"/tmp","transcript_path":"'"$OP_DIR"'/transcript.jsonl"}' | CLAUDE_MEMORY_DIR="$OP_MEM" bash "$HOOKS_DIR/memory-stop.sh" 2>/dev/null
 assert "Outcome-positive — written to WAL" 'grep -q "outcome-positive|css-var-bug" "$OP_MEM/.wal"'
 safe_cleanup "$OP_DIR" "$OP_MARKER"
 
@@ -1108,7 +1116,7 @@ cat > "$ON_DIR/transcript.jsonl" << 'ONEOF'
 {"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"echo test"}}]}}
 {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"test"}]}}
 ONEOF
-echo '{"session_id":"on-test-session","cwd":"/tmp","transcript_path":"'"$ON_DIR"'/transcript.jsonl"}' | CLAUDE_MEMORY_DIR="$ON_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null
+echo '{"session_id":"on-test-session","cwd":"/tmp","transcript_path":"'"$ON_DIR"'/transcript.jsonl"}' | CLAUDE_MEMORY_DIR="$ON_MEM" bash "$HOOKS_DIR/memory-stop.sh" 2>/dev/null
 assert "Outcome-positive — not written when negative exists" '! grep -q "outcome-positive|repeated-bug" "$ON_MEM/.wal"'
 safe_cleanup "$ON_DIR" "$ON_MARKER"
 
@@ -1129,7 +1137,7 @@ cat > "$SM_DIR/transcript.jsonl" << 'SMEOF'
 {"type":"assistant","message":{"content":[{"type":"tool_use","id":"t3","name":"Bash","input":{"command":"npm run build"}}]}}
 {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t3","content":"OK"}]}}
 SMEOF
-echo '{"session_id":"sm-test-session","cwd":"/tmp","transcript_path":"'"$SM_DIR"'/transcript.jsonl"}' | CLAUDE_MEMORY_DIR="$SM_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null
+echo '{"session_id":"sm-test-session","cwd":"/tmp","transcript_path":"'"$SM_DIR"'/transcript.jsonl"}' | CLAUDE_MEMORY_DIR="$SM_MEM" bash "$HOOKS_DIR/memory-stop.sh" 2>/dev/null
 assert "Session metrics — written to WAL" 'grep -q "session-metrics" "$SM_MEM/.wal" 2>/dev/null'
 assert "Session metrics — has error_count" 'grep "session-metrics" "$SM_MEM/.wal" | grep -q "error_count:1"'
 assert "Session metrics — has tool_calls" 'grep "session-metrics" "$SM_MEM/.wal" | grep -q "tool_calls:3"'
@@ -1149,7 +1157,7 @@ cat > "$CS_DIR/transcript.jsonl" << 'CSEOF'
 {"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Edit","input":{"file_path":"x.ts"}}]}}
 {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"OK"}]}}
 CSEOF
-echo '{"session_id":"cs-test-session","cwd":"/tmp","transcript_path":"'"$CS_DIR"'/transcript.jsonl"}' | CLAUDE_MEMORY_DIR="$CS_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null
+echo '{"session_id":"cs-test-session","cwd":"/tmp","transcript_path":"'"$CS_DIR"'/transcript.jsonl"}' | CLAUDE_MEMORY_DIR="$CS_MEM" bash "$HOOKS_DIR/memory-stop.sh" 2>/dev/null
 assert "Clean session — written to WAL" 'grep -q "clean-session" "$CS_MEM/.wal"'
 safe_cleanup "$CS_DIR" "$CS_MARKER"
 
@@ -1175,7 +1183,7 @@ mkdir -p "$WALC2_MEM"
     echo "${d}|strategy-gap|frontend|sess-${day}-5"
   done
 } > "$WALC2_MEM/.wal"
-CLAUDE_MEMORY_DIR="$WALC2_MEM" bash "$HOME/.claude/hooks/wal-compact.sh" 2>/dev/null
+CLAUDE_MEMORY_DIR="$WALC2_MEM" bash "$HOOKS_DIR/wal-compact.sh" 2>/dev/null
 assert "Compact v2 — outcome-positive preserved" 'grep -q "outcome-positive" "$WALC2_MEM/.wal"'
 assert "Compact v2 — outcome-negative preserved" 'grep -q "outcome-negative" "$WALC2_MEM/.wal"'
 assert "Compact v2 — clean-session preserved" 'grep -q "clean-session" "$WALC2_MEM/.wal"'
@@ -1308,7 +1316,7 @@ cat > "$SU_DIR/transcript.jsonl" << 'SUEOF'
 {"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Edit","input":{"file_path":"x.py"}}]}}
 {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"OK"}]}}
 SUEOF
-echo '{"session_id":"su-test-session","cwd":"/tmp","transcript_path":"'"$SU_DIR"'/transcript.jsonl"}' | CLAUDE_MEMORY_DIR="$SU_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null
+echo '{"session_id":"su-test-session","cwd":"/tmp","transcript_path":"'"$SU_DIR"'/transcript.jsonl"}' | CLAUDE_MEMORY_DIR="$SU_MEM" bash "$HOOKS_DIR/memory-stop.sh" 2>/dev/null
 assert "Strategy-used — written to WAL" 'grep -q "strategy-used|debug-strat" "$SU_MEM/.wal"'
 safe_cleanup "$SU_DIR" "$SU_MARKER"
 
@@ -1326,7 +1334,7 @@ cat > "$SG_DIR/transcript.jsonl" << 'SGEOF'
 {"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Edit","input":{"file_path":"x.py"}}]}}
 {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"OK"}]}}
 SGEOF
-echo '{"session_id":"sg-test-session","cwd":"/tmp","transcript_path":"'"$SG_DIR"'/transcript.jsonl"}' | CLAUDE_MEMORY_DIR="$SG_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null
+echo '{"session_id":"sg-test-session","cwd":"/tmp","transcript_path":"'"$SG_DIR"'/transcript.jsonl"}' | CLAUDE_MEMORY_DIR="$SG_MEM" bash "$HOOKS_DIR/memory-stop.sh" 2>/dev/null
 assert "Strategy-gap — written to WAL" 'grep -q "strategy-gap" "$SG_MEM/.wal"'
 safe_cleanup "$SG_DIR" "$SG_MARKER"
 
@@ -1347,7 +1355,7 @@ cat > "$SR2_DIR/transcript.jsonl" << 'SR2EOF'
 {"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Edit","input":{"file_path":"x.py"}}]}}
 {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"OK"}]}}
 SR2EOF
-SR2_OUT=$(echo '{"session_id":"sr2-test-session","cwd":"/tmp","transcript_path":"'"$SR2_DIR"'/transcript.jsonl"}' | CLAUDE_MEMORY_DIR="$SR2_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null)
+SR2_OUT=$(echo '{"session_id":"sr2-test-session","cwd":"/tmp","transcript_path":"'"$SR2_DIR"'/transcript.jsonl"}' | CLAUDE_MEMORY_DIR="$SR2_MEM" bash "$HOOKS_DIR/memory-stop.sh" 2>/dev/null)
 SR2_CTX=$(printf '%s' "$SR2_OUT" | jq -r '.hookSpecificOutput.additionalContext // ""' 2>/dev/null)
 assert "Strategies reminder — shown on long clean session" 'printf "%s" "$SR2_CTX" | grep -qi "strateg"'
 safe_cleanup "$SR2_DIR" "$SR2_MARKER"
@@ -1389,7 +1397,7 @@ EOF
     echo "${d}|session-metrics|frontend|error_count:2,tool_calls:8,duration:600s"
   done
 } > "$AN_MEM/.wal"
-CLAUDE_MEMORY_DIR="$AN_MEM" bash "$HOME/.claude/hooks/memory-analytics.sh" 2>/dev/null
+CLAUDE_MEMORY_DIR="$AN_MEM" bash "$HOOKS_DIR/memory-analytics.sh" 2>/dev/null
 assert "Analytics — report created" '[ -f "$AN_MEM/.analytics-report" ]'
 assert "Analytics — has winners" 'grep -q "winner-file" "$AN_MEM/.analytics-report"'
 assert "Analytics — has noise" 'grep -q "noise-file" "$AN_MEM/.analytics-report"'
@@ -1470,7 +1478,7 @@ cat > "$AT_DIR/transcript.jsonl" << 'ATEOF'
 {"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"echo ok"}}]}}
 {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}
 ATEOF
-echo '{"session_id":"at-test-session","cwd":"/tmp","transcript_path":"'"$AT_DIR"'/transcript.jsonl"}' | CLAUDE_MEMORY_DIR="$AT_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null
+echo '{"session_id":"at-test-session","cwd":"/tmp","transcript_path":"'"$AT_DIR"'/transcript.jsonl"}' | CLAUDE_MEMORY_DIR="$AT_MEM" bash "$HOOKS_DIR/memory-stop.sh" 2>/dev/null
 sleep 1
 assert "Analytics trigger — report refreshed" '[ -f "$AT_MEM/.analytics-report" ]'
 if [[ "$OSTYPE" == darwin* ]]; then
@@ -1526,7 +1534,7 @@ cat > "$FULL_DIR/transcript.jsonl" << 'FULLEOF'
 {"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Edit","input":{"file_path":"x.py"}}]}}
 {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"OK"}]}}
 FULLEOF
-echo '{"session_id":"full-test","cwd":"/tmp/full-test","transcript_path":"'"$FULL_DIR"'/transcript.jsonl"}' | CLAUDE_MEMORY_DIR="$FULL_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null
+echo '{"session_id":"full-test","cwd":"/tmp/full-test","transcript_path":"'"$FULL_DIR"'/transcript.jsonl"}' | CLAUDE_MEMORY_DIR="$FULL_MEM" bash "$HOOKS_DIR/memory-stop.sh" 2>/dev/null
 assert "Full pipeline — outcome-positive written" 'grep -q "outcome-positive|test-mistake" "$FULL_MEM/.wal"'
 assert "Full pipeline — strategy-used written" 'grep -q "strategy-used|test-strat" "$FULL_MEM/.wal"'
 assert "Full pipeline — clean-session written" 'grep -q "clean-session" "$FULL_MEM/.wal"'
@@ -2215,7 +2223,7 @@ FB_MARKER="/tmp/.claude-session-fb-e2e"
 touch -t 202601010000 "$FB_MARKER"
 
 printf '{"session_id":"fb-e2e","transcript_path":"%s/transcript.jsonl"}' "$FB_DIR" | \
-  CLAUDE_MEMORY_DIR="$FB_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null >/dev/null
+  CLAUDE_MEMORY_DIR="$FB_MEM" bash "$HOOKS_DIR/memory-stop.sh" 2>/dev/null >/dev/null
 
 assert "Feedback e2e — evidence match → trigger-useful" \
   'grep -q "|trigger-useful|sql-rule|fb-e2e" "$FB_MEM/.wal"'
@@ -2246,7 +2254,7 @@ FB_MARKER="/tmp/.claude-session-fb-body"
 touch -t 202601010000 "$FB_MARKER"
 
 printf '{"session_id":"fb-body","transcript_path":"%s/transcript.jsonl"}' "$FB_DIR" | \
-  CLAUDE_MEMORY_DIR="$FB_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null >/dev/null
+  CLAUDE_MEMORY_DIR="$FB_MEM" bash "$HOOKS_DIR/memory-stop.sh" 2>/dev/null >/dev/null
 
 assert "Feedback e2e — body-mining ≥2 tokens → trigger-useful" \
   'grep -q "|trigger-useful|bodyonly-rule|fb-body" "$FB_MEM/.wal"'
@@ -2351,7 +2359,7 @@ printf '%s|schema-error|broken-one|prev-session\n' "$(date +%Y-%m-%d)" > "$HC_ME
 printf '%s|schema-error|broken-two|prev-session\n' "$(date +%Y-%m-%d)" >> "$HC_MEM/.wal"
 
 HC_OUT=$(echo '{"session_id":"hc-test","cwd":"/tmp"}' | \
-  CLAUDE_MEMORY_DIR="$HC_MEM" bash "$HOME/.claude/hooks/memory-session-start.sh" 2>/dev/null)
+  CLAUDE_MEMORY_DIR="$HC_MEM" bash "$HOOKS_DIR/memory-session-start.sh" 2>/dev/null)
 HC_CTX=$(printf '%s' "$HC_OUT" | jq -r '.hookSpecificOutput.additionalContext // ""')
 assert "Health — schema-error count surfaced in SessionStart" \
   'printf "%s" "$HC_CTX" | grep -q "schema.*2"'
@@ -2393,7 +2401,7 @@ EOF
 
 # Source the lib and call the function
 set +e
-. "$HOME/.claude/hooks/lib/evidence-extract.sh" 2>/dev/null || \
+. "$HOOKS_DIR/lib/evidence-extract.sh" 2>/dev/null || \
   . "$(dirname "$0")/lib/evidence-extract.sh" 2>/dev/null || \
   . "$HOOKS_SRC_DIR/lib/evidence-extract.sh"
 set -e
@@ -2418,7 +2426,7 @@ Always use parameterized queries; never interpolate strings.
 EOF
 
 set +e
-. "$HOME/.claude/hooks/lib/evidence-extract.sh" 2>/dev/null || \
+. "$HOOKS_DIR/lib/evidence-extract.sh" 2>/dev/null || \
   . "$(dirname "$0")/lib/evidence-extract.sh" 2>/dev/null || \
   . "$HOOKS_SRC_DIR/lib/evidence-extract.sh"
 set -e
@@ -2461,7 +2469,7 @@ This memory is about selfslug concepts and parameterized handling.
 EOF
 
 set +e
-. "$HOME/.claude/hooks/lib/evidence-extract.sh" 2>/dev/null || \
+. "$HOOKS_DIR/lib/evidence-extract.sh" 2>/dev/null || \
   . "$(dirname "$0")/lib/evidence-extract.sh" 2>/dev/null || \
   . "$HOOKS_SRC_DIR/lib/evidence-extract.sh"
 set -e
@@ -2509,7 +2517,7 @@ FB_MARKER="/tmp/.claude-session-fb-miss"
 touch -t 202601010000 "$FB_MARKER"
 
 printf '{"session_id":"fb-miss","transcript_path":"%s/transcript.jsonl"}' "$FB_DIR" | \
-  CLAUDE_MEMORY_DIR="$FB_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null >/dev/null
+  CLAUDE_MEMORY_DIR="$FB_MEM" bash "$HOOKS_DIR/memory-stop.sh" 2>/dev/null >/dev/null
 
 assert "Feedback — evidence-missing event when file absent" \
   'grep -q "|evidence-missing|ghost-file|fb-miss" "$FB_MEM/.wal"'
@@ -2541,7 +2549,7 @@ FB_MARKER="/tmp/.claude-session-fb-empty"
 touch -t 202601010000 "$FB_MARKER"
 
 printf '{"session_id":"fb-empty","transcript_path":"%s/transcript.jsonl"}' "$FB_DIR" | \
-  CLAUDE_MEMORY_DIR="$FB_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null >/dev/null
+  CLAUDE_MEMORY_DIR="$FB_MEM" bash "$HOOKS_DIR/memory-stop.sh" 2>/dev/null >/dev/null
 
 assert "Feedback — evidence-empty event when body has no content tokens" \
   'grep -q "|evidence-empty|noevid|fb-empty" "$FB_MEM/.wal"'
@@ -2574,7 +2582,7 @@ FB_MARKER="/tmp/.claude-session-fb-case"
 touch -t 202601010000 "$FB_MARKER"
 
 printf '{"session_id":"fb-case","transcript_path":"%s/transcript.jsonl"}' "$FB_DIR" | \
-  CLAUDE_MEMORY_DIR="$FB_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null >/dev/null
+  CLAUDE_MEMORY_DIR="$FB_MEM" bash "$HOOKS_DIR/memory-stop.sh" 2>/dev/null >/dev/null
 
 assert "Feedback — case-insensitive match works" \
   'grep -q "|trigger-useful|case-rule|fb-case" "$FB_MEM/.wal"'
@@ -2790,7 +2798,7 @@ safe_cleanup "$S1_DIR1"
 S1_DIR2=$(mktemp -d); mkdir -p "$S1_DIR2"
 S1_CANARY2="$S1_DIR2/PWNED"
 printf "touch '%s'\n" "$S1_CANARY2" > "$S1_DIR2/.config.sh"
-echo '{"session_id":"s1stop","cwd":"/tmp","transcript_path":"/dev/null"}' | CLAUDE_MEMORY_DIR="$S1_DIR2" bash "$HOME/.claude/hooks/memory-stop.sh" >/dev/null 2>&1 || true
+echo '{"session_id":"s1stop","cwd":"/tmp","transcript_path":"/dev/null"}' | CLAUDE_MEMORY_DIR="$S1_DIR2" bash "$HOOKS_DIR/memory-stop.sh" >/dev/null 2>&1 || true
 assert "S1 — session-stop: .config.sh shell code NOT executed" '[ ! -f "$S1_CANARY2" ]'
 safe_cleanup "$S1_DIR2"
 
@@ -2798,7 +2806,7 @@ safe_cleanup "$S1_DIR2"
 S1_DIR3=$(mktemp -d); mkdir -p "$S1_DIR3"
 S1_CANARY3="$S1_DIR3/PWNED"
 printf "touch '%s'\n" "$S1_CANARY3" > "$S1_DIR3/.config.sh"
-echo '{"session_id":"s1ups","cwd":"/tmp","prompt":"hi"}' | CLAUDE_MEMORY_DIR="$S1_DIR3" bash "$HOME/.claude/hooks/memory-user-prompt-submit.sh" >/dev/null 2>&1 || true
+echo '{"session_id":"s1ups","cwd":"/tmp","prompt":"hi"}' | CLAUDE_MEMORY_DIR="$S1_DIR3" bash "$HOOKS_DIR/memory-user-prompt-submit.sh" >/dev/null 2>&1 || true
 assert "S1 — user-prompt-submit: .config.sh shell code NOT executed" '[ ! -f "$S1_CANARY3" ]'
 safe_cleanup "$S1_DIR3"
 
@@ -2825,7 +2833,7 @@ status: active
 ---
 beta gamma other stuff filler tokens around
 R1MD
-LC_ALL=ru_RU.UTF-8 CLAUDE_MEMORY_DIR="$R1_MEM" bash "$HOME/.claude/hooks/memory-index.sh" >/dev/null 2>&1 || true
+LC_ALL=ru_RU.UTF-8 CLAUDE_MEMORY_DIR="$R1_MEM" bash "$HOOKS_DIR/memory-index.sh" >/dev/null 2>&1 || true
 assert "R1 — tfidf-index uses locale-stable decimal separator" '[ -f "$R1_MEM/.tfidf-index" ] && ! grep -qE ":[0-9]+,[0-9]+" "$R1_MEM/.tfidf-index"'
 safe_cleanup "$R1_DIR"
 
@@ -3312,7 +3320,7 @@ else
   touch -d "100 days ago" "$C10_MEM/notes/c10-regular-nofm.md"
 fi
 echo '{"session_id":"c10-test"}' | CLAUDE_MEMORY_DIR="$C10_MEM" \
-  bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null || true
+  bash "$HOOKS_DIR/memory-stop.sh" 2>/dev/null || true
 assert "C10 — pinned file with broken frontmatter preserved (not archived)" \
   '[ -f "$C10_MEM/mistakes/c10-pinned-broken.md" ] && [ ! -f "$C10_MEM/archive/mistakes/c10-pinned-broken.md" ]'
 assert "C10 — raw pinned note (no frontmatter) preserved" \
@@ -3355,7 +3363,7 @@ TODAY=$(date +%Y-%m-%d)
   printf '%s|session-metrics|unknown|error_count:0,tool_calls:5,duration:60s\n' "$TODAY"
 } > "$PC_MEM/.wal"
 
-CLAUDE_MEMORY_DIR="$PC_MEM" bash "$HOME/.claude/bin/memory-self-profile.sh" 2>/dev/null
+CLAUDE_MEMORY_DIR="$PC_MEM" bash "$BIN_DIR/memory-self-profile.sh" 2>/dev/null
 PC_OUT="$PC_MEM/self-profile.md"
 
 assert "v0.8.1 — self-profile reports ambient activations separately" \
@@ -3379,7 +3387,7 @@ EOF
 touch "$RS_MEM/.wal"
 
 # Run session-stop without a marker so only lifecycle_rotate fires
-CLAUDE_MEMORY_DIR="$RS_MEM" bash "$HOME/.claude/hooks/memory-stop.sh" 2>/dev/null || true
+CLAUDE_MEMORY_DIR="$RS_MEM" bash "$HOOKS_DIR/memory-stop.sh" 2>/dev/null || true
 
 assert "v0.8.1 — rotation-summary NOT written when no activity" \
   '! grep -q "|rotation-summary|" "$RS_MEM/.wal"'

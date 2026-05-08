@@ -13,7 +13,7 @@ GO_FILES := $(shell find . -name '*.go' -not -path './vendor/*')
 # compilable. modernc.org/sqlite is pure Go, so this works.
 GO_BUILD := CGO_ENABLED=0 go build -trimpath -ldflags="-s -w"
 
-.PHONY: all build test test-go test-go-cover test-hooks test-fixtures parity bench-gate replay install clean help
+.PHONY: all build test test-go test-go-cover test-hooks test-uninstalled test-fixtures parity bench-gate replay install clean help
 
 all: build test
 
@@ -52,6 +52,17 @@ test-go-cover:
 
 test-hooks:
 	bash hooks/test-memory-hooks.sh
+
+# Like test-hooks, but exercises the in-repo $REPO/hooks/ and
+# $REPO/bin/ scripts directly instead of the installed copy under
+# $HOME/.claude/. Useful for contributors running the suite against a
+# fresh checkout without polluting their personal install. The helper
+# script materialises a throwaway symlink directory mirroring
+# install.sh's _rename_dest layout (memory-session-start.sh →
+# session-start.sh etc.) and points HYPOMNEMA_HOOKS_DIR /
+# HYPOMNEMA_BIN_DIR at it.
+test-uninstalled: build
+	bash scripts/run-uninstalled-tests.sh
 
 # Snapshot tests against synthetic corpora in fixtures/corpora/. Each
 # fixture has an expected.json written SPEC-first; the harness diffs
@@ -99,7 +110,8 @@ help:
 	@echo "  test-go     — just the Go test suite"
 	@echo "  test-go-cover — Go tests + cmd/memoryctl subprocess coverage report"
 	@echo "  bench-gate  — perf-regression gate against docs/measurements/baselines.json"
-	@echo "  test-hooks  — just the bash hooks smoke test"
+	@echo "  test-hooks  — bash hooks smoke test against installed copy ($$HOME/.claude/{hooks,bin}/)"
+	@echo "  test-uninstalled — bash hooks smoke test against in-repo \$$REPO/{hooks,bin}/ (no install required)"
 	@echo "  test-fixtures — snapshot tests against fixtures/corpora/synthetic-*"
 	@echo "  parity      — bash vs Go shadow pass comparison"
 	@echo "  replay      — synthetic corpus replay, retrieval metrics"
