@@ -610,3 +610,96 @@ func TestEvidence_LearnNoTranscriptsExitsOne(t *testing.T) {
 		t.Errorf("stderr should explain, got %q", stderr)
 	}
 }
+
+// --- audit invariants ---
+
+// makeAuditFixtureRepo creates a synthetic hypomnema-shaped repo
+// for the audit tests. Returns the repo root path. Tests can
+// override individual files (e.g. write a hook with `set -e` to
+// trigger the I5 checker).
+func makeAuditFixtureRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	for _, sub := range []string{"internal/foo", "hooks"} {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+func TestAudit_NoSubcommand(t *testing.T) {
+	_, stderr, code := run(t, nil, "audit")
+	if code != 2 {
+		t.Errorf("expected exit 2, got %d", code)
+	}
+	if !strings.Contains(stderr, "missing subcommand") {
+		t.Errorf("stderr mismatch: %s", stderr)
+	}
+}
+
+func TestAudit_UnknownSubcommand(t *testing.T) {
+	_, stderr, code := run(t, nil, "audit", "garbage")
+	if code != 2 {
+		t.Errorf("expected exit 2, got %d", code)
+	}
+	if !strings.Contains(stderr, "unknown audit subcommand") {
+		t.Errorf("stderr mismatch: %s", stderr)
+	}
+}
+
+func TestAuditInvariants_CleanRepoExitsZero(t *testing.T) {
+	dir := makeAuditFixtureRepo(t)
+	// Clean fixture: no os.WriteFile, no `set -e` hooks.
+	stdout, _, code := run(t, nil, "audit", "invariants", "--repo", dir)
+	if code != 0 {
+		t.Errorf("clean repo: expected exit 0, got %d\nstdout=%s", code, stdout)
+	}
+	if !strings.Contains(stdout, "violations: 0") {
+		t.Errorf("clean repo stdout should report 0 violations: %s", stdout)
+	}
+}
+
+func TestAuditInvariants_DirtyRepoExitsOne(t *testing.T) {
+	dir := makeAuditFixtureRepo(t)
+	// Plant one I3 violation and one I5 violation.
+	if err := os.WriteFile(filepath.Join(dir, "internal/foo/foo.go"),
+		[]byte(`package foo
+import "os"
+func Bad() error { return os.WriteFile("x", []byte{}, 0o644) }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "hooks/bad.sh"),
+		[]byte("#!/bin/bash\nset -e\necho ok\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stdout, _, code := run(t, nil, "audit", "invariants", "--repo", dir)
+	if code != 1 {
+		t.Errorf("dirty repo: expected exit 1, got %d\nstdout=%s", code, stdout)
+	}
+	if !strings.Contains(stdout, "[I3]") || !strings.Contains(stdout, "[I5]") {
+		t.Errorf("stdout should mention both I3 and I5 violations: %s", stdout)
+	}
+}
+
+func TestAuditInvariants_RepoWithoutHookDirExitsTwo(t *testing.T) {
+	dir := t.TempDir() // no internal/, no hooks/
+	_, stderr, code := run(t, nil, "audit", "invariants", "--repo", dir)
+	if code != 2 {
+		t.Errorf("non-repo: expected exit 2, got %d", code)
+	}
+	if !strings.Contains(stderr, "missing") {
+		t.Errorf("stderr should explain: %s", stderr)
+	}
+}
+
+func TestAuditInvariants_UnknownFlag(t *testing.T) {
+	_, stderr, code := run(t, nil, "audit", "invariants", "--bogus")
+	if code != 2 {
+		t.Errorf("unknown flag: expected exit 2, got %d", code)
+	}
+	if !strings.Contains(stderr, "unknown flag") {
+		t.Errorf("stderr mismatch: %s", stderr)
+	}
+}
