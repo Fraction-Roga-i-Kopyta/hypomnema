@@ -90,6 +90,12 @@ Usage:
       inject spread, last-inject age, strategy-used count. JSON output
       for fixture-harness assertions and one-off debugging. Does not
       mutate state.
+  memoryctl wal validate
+      Scan $CLAUDE_MEMORY_DIR/.wal for grammar violations against the
+      four-column invariant from FORMAT.md § 5: column count, date
+      format, event name, slug sanitisation, non-empty session.
+      Exit 0 = clean, 1 = at least one row failed, 2 = WAL missing or
+      command misuse.
 
 Environment:
   CLAUDE_MEMORY_DIR       Memory root (default: ~/.claude/memory).
@@ -160,6 +166,8 @@ func main() {
 		runEvidence(os.Args[2:])
 	case "scoring-probe":
 		runScoringProbe(os.Args[2:])
+	case "wal":
+		runWal(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "memoryctl: unknown command %q\n", os.Args[1])
 		os.Exit(2)

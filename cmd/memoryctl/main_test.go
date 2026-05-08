@@ -522,6 +522,66 @@ func TestEvidence_LearnMissingTargetFile(t *testing.T) {
 	}
 }
 
+// --- wal validate -------------------------------------------------------
+
+func TestWalValidate_CleanWALExitsZero(t *testing.T) {
+	mem := t.TempDir()
+	if err := os.WriteFile(filepath.Join(mem, ".wal"),
+		[]byte("2026-04-01|inject|foo|sess1\n2026-04-02|trigger-useful|foo|sess1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stdout, _, code := run(t, map[string]string{"CLAUDE_MEMORY_DIR": mem}, "wal", "validate")
+	if code != 0 {
+		t.Errorf("clean WAL: expected exit 0, got %d", code)
+	}
+	if !strings.Contains(stdout, "passing:  2") || !strings.Contains(stdout, "failures: 0") {
+		t.Errorf("clean WAL stdout mismatch: %s", stdout)
+	}
+}
+
+func TestWalValidate_BrokenWALExitsOne(t *testing.T) {
+	mem := t.TempDir()
+	// Mix one good row with one broken (5 columns) and one with empty session.
+	content := "2026-04-01|inject|foo|sess1\n2026-04-02|broken|extra|cols|here\n2026-04-03|outcome-positive|foo|\n"
+	if err := os.WriteFile(filepath.Join(mem, ".wal"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stdout, _, code := run(t, map[string]string{"CLAUDE_MEMORY_DIR": mem}, "wal", "validate")
+	if code != 1 {
+		t.Errorf("broken WAL: expected exit 1, got %d", code)
+	}
+	if !strings.Contains(stdout, "failures: 2") {
+		t.Errorf("broken WAL stdout should report 2 failures, got: %s", stdout)
+	}
+	if !strings.Contains(stdout, "column count = 5") {
+		t.Errorf("broken WAL should mention column count failure: %s", stdout)
+	}
+	if !strings.Contains(stdout, "session is empty") {
+		t.Errorf("broken WAL should mention empty session failure: %s", stdout)
+	}
+}
+
+func TestWalValidate_MissingWALExitsTwo(t *testing.T) {
+	mem := t.TempDir() // empty, no .wal
+	_, stderr, code := run(t, map[string]string{"CLAUDE_MEMORY_DIR": mem}, "wal", "validate")
+	if code != 2 {
+		t.Errorf("missing WAL: expected exit 2, got %d", code)
+	}
+	if !strings.Contains(stderr, "does not exist") {
+		t.Errorf("missing WAL stderr should say 'does not exist': %s", stderr)
+	}
+}
+
+func TestWalValidate_UnknownSubcommand(t *testing.T) {
+	_, stderr, code := run(t, nil, "wal", "garbage")
+	if code != 2 {
+		t.Errorf("unknown subcommand: expected exit 2, got %d", code)
+	}
+	if !strings.Contains(stderr, "unknown wal subcommand") {
+		t.Errorf("stderr mismatch: %s", stderr)
+	}
+}
+
 // End-to-end dry-run smoke: target file exists, transcripts absent,
 // should exit 1 (no transcripts) — exercises the happy-path
 // dispatch without requiring a fixture JSONL tree.
