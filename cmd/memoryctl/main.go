@@ -96,6 +96,12 @@ Usage:
       format, event name, slug sanitisation, non-empty session.
       Exit 0 = clean, 1 = at least one row failed, 2 = WAL missing or
       command misuse.
+  memoryctl audit invariants [--repo PATH]
+      Run every automated invariant check from internal/invariants
+      against the repo at PATH (default: current working directory).
+      Catalog in docs/INVARIANTS.md; automated coverage at v1.x is
+      I3 (atomic writes) and I5 (hook fail-safe). Exit 0 = clean,
+      1 = violations, 2 = command misuse or repo not detected.
 
 Environment:
   CLAUDE_MEMORY_DIR       Memory root (default: ~/.claude/memory).
@@ -168,6 +174,8 @@ func main() {
 		runScoringProbe(os.Args[2:])
 	case "wal":
 		runWal(os.Args[2:])
+	case "audit":
+		runAudit(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "memoryctl: unknown command %q\n", os.Args[1])
 		os.Exit(2)
