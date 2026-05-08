@@ -24,16 +24,12 @@ if [ ! -f "$HOME/.claude/hooks/lib/wal-lock.sh" ]; then
   exit 2
 fi
 
-_run_case() {
-  local name="$1" prompt="$2"; shift 2
-  local injected="${1:-}"
-
-  local TMP
-  TMP=$(mktemp -d)
-  local MEM="$TMP/memory"
-  mkdir -p "$MEM"/{mistakes,feedback,strategies,knowledge,notes,seeds,.runtime}
-
-  cat > "$MEM/mistakes/sed-bsd-gnu.md" <<EOF
+# _seed_default_fixture: the canonical fixture used by the original four
+# parity cases — two markdown files (a portability mistake + a feedback
+# rule) under $1=memdir.
+_seed_default_fixture() {
+  local MEM="$1"
+  cat > "$MEM/mistakes/sed-bsd-gnu.md" <<'EOF'
 ---
 type: mistake
 status: active
@@ -41,26 +37,101 @@ severity: major
 ---
 BSD sed behaves differently from GNU sed on 1,/pat/ range addresses.
 EOF
-  cat > "$MEM/feedback/portability-rule.md" <<EOF
+  cat > "$MEM/feedback/portability-rule.md" <<'EOF'
 ---
 type: feedback
 status: active
 ---
 Always test shell scripts under both BSD and GNU coreutils before release.
 EOF
+}
+
+# _seed_edge_slug_pipe_fixture: legitimate slugs alongside one whose
+# basename includes characters the WAL grammar treats as separators
+# (`|` and `\n`). Post-v1.0.1, `pathutil.SlugFromPath` replaces those
+# with `_` before WAL emission; this fixture verifies bash and Go agree
+# on the sanitised slug. The actual filename on disk uses safe ASCII —
+# we synthesise the hostile path by writing a file whose stem looks
+# malicious; bash and Go must both swap the separator chars out before
+# the slug reaches `.wal`.
+_seed_edge_slug_pipe_fixture() {
+  local MEM="$1"
+  _seed_default_fixture "$MEM"
+  # Create a file whose stem contains chars that would break WAL grammar
+  # if not sanitised. Filesystem allows `|` in names on macOS/Linux.
+  cat > "$MEM/mistakes/foo|outcome-positive|bar.md" <<'EOF'
+---
+type: mistake
+status: active
+severity: major
+---
+Hostile slug — pretends to inject a fake outcome-positive event via
+filename. Sanitiser must replace `|` with `_` before WAL write.
+EOF
+}
+
+# _seed_large_wal_fixture: pre-fill WAL with > 256 KiB of historical
+# events. The dedup tail-cap (`internal/wal/append.go::dedupTailBytes`)
+# only scans the trailing 256 KiB; bash side scans the whole WAL.
+# Parity holds because the tail-cap optimisation is observationally
+# equivalent in this fixture: the duplicate would-be-emit lives inside
+# the tail window, so both implementations correctly suppress it.
+_seed_large_wal_fixture() {
+  local MEM="$1"
+  _seed_default_fixture "$MEM"
+  # ~260 KiB of synthetic but valid WAL events (slug rotation across
+  # five existing fixture filenames so dedup keys vary).
+  local i=0 lines=()
+  while [ "$i" -lt 4000 ]; do
+    lines+=("2026-04-01|inject|sed-bsd-gnu|sess-pad-${i}")
+    i=$((i + 1))
+  done
+  printf '%s\n' "${lines[@]}" > "$MEM/.wal"
+}
+
+_run_case() {
+  local name="$1" prompt="$2"; shift 2
+  local injected="${1:-}"
+  local seed_fn="${2:-_seed_default_fixture}"
+
+  local TMP
+  TMP=$(mktemp -d)
+  local MEM="$TMP/memory"
+  mkdir -p "$MEM"/{mistakes,feedback,strategies,knowledge,notes,seeds,.runtime}
+
+  "$seed_fn" "$MEM"
+
+  # Snapshot any pre-seeded .wal so Go runs against the same starting
+  # state as bash (not against bash's post-run mutations). Fixtures
+  # that don't pre-fill .wal get an empty INITIAL_WAL_SNAPSHOT and the
+  # original behaviour is preserved.
+  local INITIAL_WAL_SNAPSHOT="$TMP/.wal.initial"
+  [ -f "$MEM/.wal" ] && cp "$MEM/.wal" "$INITIAL_WAL_SNAPSHOT" || : > "$INITIAL_WAL_SNAPSHOT"
 
   # Bash run — capture stderr so diagnostic output is available on mismatch.
   local BASH_ERR="$TMP/bash.err"
   CLAUDE_MEMORY_DIR="$MEM" bash "$BASH_SHADOW" "$prompt" "parity-$name" "$injected" >/dev/null 2>"$BASH_ERR"
   local BASH_WAL="$TMP/bash.wal"
-  sort "$MEM/.wal" > "$BASH_WAL" 2>/dev/null || true
+  # diff bash-emitted events only, not the pre-seeded prefix — otherwise
+  # large-WAL fixtures swamp the signal in identical filler.
+  if [ -s "$INITIAL_WAL_SNAPSHOT" ]; then
+    diff <(sort "$INITIAL_WAL_SNAPSHOT") <(sort "$MEM/.wal") | grep '^>' | sed 's/^> //' | sort > "$BASH_WAL" 2>/dev/null || true
+  else
+    sort "$MEM/.wal" > "$BASH_WAL" 2>/dev/null || true
+  fi
   rm -f "$MEM/.wal" "$MEM/index.db"
+  # Restore initial state so Go runs against the same starting WAL.
+  cp "$INITIAL_WAL_SNAPSHOT" "$MEM/.wal"
 
   # Go run on the same fixture tree.
   local GO_ERR="$TMP/go.err"
   CLAUDE_MEMORY_DIR="$MEM" "$GO_SHADOW" fts shadow "$prompt" "parity-$name" "$injected" >/dev/null 2>"$GO_ERR"
   local GO_WAL="$TMP/go.wal"
-  sort "$MEM/.wal" > "$GO_WAL" 2>/dev/null || true
+  if [ -s "$INITIAL_WAL_SNAPSHOT" ]; then
+    diff <(sort "$INITIAL_WAL_SNAPSHOT") <(sort "$MEM/.wal") | grep '^>' | sed 's/^> //' | sort > "$GO_WAL" 2>/dev/null || true
+  else
+    sort "$MEM/.wal" > "$GO_WAL" 2>/dev/null || true
+  fi
 
   if diff -q "$BASH_WAL" "$GO_WAL" >/dev/null; then
     echo "  ✓ $name"
@@ -91,6 +162,8 @@ _run_case "portability-query"       "help me with GNU sed portability"  ""
 _run_case "cyrillic-query"          "помоги с портативностью sed"       ""
 _run_case "dedup-injected-skipped"  "portability test"                  "sed-bsd-gnu"
 _run_case "empty-prompt"            ""                                  ""
+_run_case "edge-slug-pipe"          "hostile slug test query"           "" "_seed_edge_slug_pipe_fixture"
+_run_case "large-wal-256k-prefilled" "shadow query against tail-cap"    "" "_seed_large_wal_fixture"
 
 # --- self-profile parity -------------------------------------------------
 # Verifies bin/memory-self-profile.sh and `memoryctl self-profile` produce
