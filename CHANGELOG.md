@@ -1,5 +1,45 @@
 # Changelog
 
+## [1.0.1] - 2026-05-08
+
+Hardening patch addressing three findings from an external review of
+v1.0.0. All three are defensive fixes — none corresponds to an
+observed in-the-wild incident — but each closes a contract gap that
+would matter under hostile filenames or partial-failure conditions.
+
+### Fixed
+
+- **`pathutil.SlugFromPath` sanitises WAL-grammar-breaking characters.**
+  Slugs are written into the WAL as one of four pipe-delimited
+  columns; a basename like `foo|outcome-positive|other-slug|sess.md`
+  used to round-trip into the WAL verbatim, fooling 4-column readers
+  and faking `outcome-positive` events for unrelated slugs. Bash side
+  already enforced this (audit-2026-04-16 marker S6); the Go pilot
+  drifted. `|`, `\n`, `\r` now replaced with `_` defensively. Unit
+  test `TestSlugFromPath_DropsControlChars` covers all three control
+  characters plus a sanity case (plain slug unchanged).
+- **`profile.Generate` writes `self-profile.md` atomically via
+  `os.CreateTemp` + `os.Rename`.** The previous `os.WriteFile` would
+  truncate the existing file before writing the replacement; a crash
+  mid-write left a half-rendered profile on disk. The pattern matches
+  `tfidf.Rebuild` and `evidence.AppendToFrontmatter` — every
+  multi-line writer in `internal/` now uses tmp+rename. Post-condition
+  `TestGenerate_NoOrphanTmpOnSuccess` locks the invariant.
+- **`dedup.Run` rejects `targetPath` outside `MemoryDir`.** Without
+  the boundary check, a caller (or a malformed hook) could feed dedup
+  any path on disk; on a 100 % similarity match dedup would enter the
+  posttool merge path, delete the outside file, and write a
+  `dedup-merged` WAL event for content that never belonged in the
+  memory directory. Failure mode is `Allow` (silent no-op), matching
+  the package's "dedup must never break a legitimate write" contract.
+  Test `TestRun_RejectsTargetOutsideMemoryDir` reproduces the exploit
+  pre-fix and locks rejection post-fix.
+
+### Verification
+
+- `go test -race ./...` clean across all 12 internal packages.
+- 3 new tests added; 0 existing tests touched.
+
 ## [1.0.0] - 2026-05-07
 
 Format v1 → v2 bump — first breaking grammar change since v0.3 —

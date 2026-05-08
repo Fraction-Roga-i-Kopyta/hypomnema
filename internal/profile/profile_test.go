@@ -218,6 +218,29 @@ func TestGenerateEmptyCorpus(t *testing.T) {
 	mustContain(t, got, "_not enough data for calibration_")
 }
 
+// TestGenerate_NoOrphanTmpOnSuccess locks the post-condition for the
+// atomic write path (external review 2026-05-08, finding E2): after
+// Generate exits cleanly, the only file in memoryDir matching the
+// `.self-profile.*.tmp` glob must be zero (i.e. the temp file is
+// either renamed into self-profile.md or cleaned up by the deferred
+// remove). Without this guard, a silently-orphaned tmp file would
+// accumulate across runs and contaminate `find -size -512k`-based
+// scans.
+func TestGenerate_NoOrphanTmpOnSuccess(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, ".wal"), "")
+	if err := Generate(dir); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, ".self-profile.*.tmp"))
+	if err != nil {
+		t.Fatalf("glob: %v", err)
+	}
+	if len(matches) != 0 {
+		t.Errorf("expected zero orphan tmp files, found: %v", matches)
+	}
+}
+
 // --- fixtures ------------------------------------------------------------
 
 const walFixture = `2026-04-01|session-metrics|backend,testing|error_count:3,tool_calls:20,duration:120s
