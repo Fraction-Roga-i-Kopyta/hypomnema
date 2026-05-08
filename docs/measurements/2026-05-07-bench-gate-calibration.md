@@ -134,3 +134,38 @@ local 3-run capture spread `1901 / 2912 / 4929 ms` (max/min ratio
 multi-run data shows the real distribution holds < `1.5×`
 spread, gating the scenario would flake on the high tail. Revisit
 once the baseline JSON has a documented multi-run mean.
+
+## Same-day re-calibration (round 3, 2026-05-08): bash hot-paths bumped again
+
+PR #10 (a docs-only removal of two markdown files; zero hot-path
+code touched) hit two flakes on darwin within two consecutive runs:
+
+| Sample            | session-start | user-prompt-submit (no-match) |
+| ----------------- | ------------: | ----------------------------: |
+| Run 1 (`bj6lir5fu`) |       1981 ms |                       8349 ms |
+| Run 2 (rerun)     |       1575 ms |                       passed  |
+
+Run 1 broke both gated bash-heavy hot-paths; run 2 broke only
+session-start (1.57× of the 1500 ms ceiling). Code identical between
+runs — pure hosted-runner variance, same shape as round 1 / round 2
+documented above. The post-round-2 ceilings (1500 / 7500 ms) sit
+*at the centroid* of the observed range, not above it; round 3
+moves the centroid up so the ceiling sits above the worst observed
+sample with headroom.
+
+| Scenario                              | Round-2 darwin baseline | Round-3 darwin baseline | New ceiling | Worst observed |
+| ------------------------------------- | ----------------------: | ----------------------: | ----------: | -------------: |
+| session-start                         |                 1000 ms |                 1500 ms |     2250 ms |        1981 ms |
+| user-prompt-submit (no-match)         |                 5000 ms |                 6000 ms |     9000 ms |        8349 ms |
+
+Tolerance stays 1.5×. Headroom: session-start 269 ms (~14 %),
+user-prompt-submit 651 ms (~7 %). Linux numbers untouched — they
+sit comfortably below their already-generous ceilings.
+
+This is the third re-calibration in 36 h on the same hot-paths.
+The pattern — local M-series numbers ~50 % of CI, run-to-run CI
+variance ~2× even minutes apart — is now documented across three
+data points. If round 4 follows the same template (gate fails on
+darwin, code didn't change), the right move is no longer baseline
+bumping but switching to ratio-vs-main comparison or sampling >3
+runs to smooth the tail. Park as v1.x followup if it recurs.
