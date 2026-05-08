@@ -69,6 +69,12 @@ while IFS=$'\t' read -r _path _score; do
     *) continue ;;
   esac
   _slug="${_path##*/}"; _slug="${_slug%.md}"
+  # Sanitise WAL-grammar-breaking characters (parity with Go
+  # pathutil.SlugFromPath; parity-check `edge-slug-pipe` fixture
+  # exercises this). Audit-2026-04-16 marker S6 enforces this on the
+  # writer side; the reader side could see a hostile filename here
+  # and was the lone unsanitised path.
+  _slug=$(printf '%s' "$_slug" | tr '|\n\r' '_')
 
   # Skip records already in the injected set.
   case "$INJECTED_SET" in *" ${_slug} "*) continue ;; esac
