@@ -71,7 +71,38 @@ func Generate(memoryDir string) error {
 	ts := now()
 	out := renderProfile(ts, sig, weaknesses, strengths, calibration)
 
-	return os.WriteFile(filepath.Join(memoryDir, "self-profile.md"), []byte(out), 0o644)
+	return atomicWriteSelfProfile(memoryDir, out)
+}
+
+// atomicWriteSelfProfile mirrors the tmp+rename pattern in
+// tfidf.Rebuild — defensive against crash-mid-write leaving a
+// half-rendered self-profile.md. See external review 2026-05-08
+// finding E2 for the rationale.
+func atomicWriteSelfProfile(memoryDir, content string) error {
+	target := filepath.Join(memoryDir, "self-profile.md")
+	tmp, err := os.CreateTemp(memoryDir, ".self-profile.*.tmp")
+	if err != nil {
+		return fmt.Errorf("profile: create tmp: %w", err)
+	}
+	tmpPath := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if _, err := tmp.WriteString(content); err != nil {
+		tmp.Close()
+		return fmt.Errorf("profile: write tmp: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("profile: close tmp: %w", err)
+	}
+	if err := os.Rename(tmpPath, target); err != nil {
+		return fmt.Errorf("profile: rename to %s: %w", target, err)
+	}
+	cleanup = false
+	return nil
 }
 
 // envIntDefault reads an integer env var, falling back to def when the

@@ -84,6 +84,26 @@ func Run(targetPath string, opts Options) (Decision, error) {
 		opts.Out = io.Discard
 	}
 
+	// Boundary check: targetPath must live inside MemoryDir. Without
+	// this, a caller could feed an arbitrary path; dedup would read its
+	// root-cause and on a 100% match enter the merge path — deleting
+	// the outside file and writing a dedup-merged WAL event for
+	// content that never belonged in the memory directory. Failure
+	// mode is Allow (silent no-op) per the package's "dedup must never
+	// break a legitimate write" contract. External review 2026-05-08
+	// finding E3.
+	absTarget, err := filepath.Abs(targetPath)
+	if err != nil {
+		return Allow, nil
+	}
+	absMem, err := filepath.Abs(opts.MemoryDir)
+	if err != nil {
+		return Allow, nil
+	}
+	if !strings.HasPrefix(absTarget, absMem+string(filepath.Separator)) {
+		return Allow, nil
+	}
+
 	pretool := !fileExists(targetPath)
 
 	newRC, err := resolveRootCause(targetPath, pretool, opts.Stdin)
