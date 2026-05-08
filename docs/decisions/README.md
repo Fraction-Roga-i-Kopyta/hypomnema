@@ -30,3 +30,4 @@ Conventions:
 7. [substring-triggers-with-negation](substring-triggers-with-negation.md) — reactive injection matches substrings with a ±40-character negation window.
 8. [precision-class-ambient](precision-class-ambient.md) — rules that shape behaviour without being cited are excluded from the measurable-precision denominator.
 9. [intuition-milestone](intuition-milestone.md) — when `silent_applied / trigger_useful > 1.0` sustained over a 30-day window, the system has crossed the intuition tier; observational milestone, not a release.
+10. [wal-header-v2-marker](wal-header-v2-marker.md) — optional first-line `# hypomnema-wal v2` marker; readers MUST tolerate absence, MAY warn on absence; writer enablement deferred to v1.2+.
