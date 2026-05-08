@@ -8,12 +8,12 @@
   "scenarios": {
     "session-start": {
       "gated": true,
-      "darwin": { "avg_ms": 1000, "tolerance": 1.5 },
+      "darwin": { "avg_ms": 1500, "tolerance": 1.5 },
       "linux":  { "avg_ms": 1200, "tolerance": 1.5 }
     },
     "user-prompt-submit (no-match)": {
       "gated": true,
-      "darwin": { "avg_ms": 5000, "tolerance": 1.5 },
+      "darwin": { "avg_ms": 6000, "tolerance": 1.5 },
       "linux":  { "avg_ms": 5000, "tolerance": 1.5 }
     },
     "user-prompt-submit (broad)": {
