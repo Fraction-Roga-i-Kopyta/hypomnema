@@ -60,11 +60,20 @@ func evaluateMetric(t Trigger, slug string, snap Snapshot) Result {
 
 	fired := compare(value, t.Operator, t.Threshold)
 	if fired {
+		// Direction = "above" → positive milestone; everything else
+		// (legacy / explicit "below") → degradation signal.
+		status := StatusPressure
+		marker := ""
+		if t.Direction == "above" {
+			status = StatusReached
+			marker = "✓ reached: "
+		}
 		return Result{
 			Slug:    slug,
 			Trigger: t,
-			Status:  StatusPressure,
-			Message: fmt.Sprintf("%s = %s %s %s",
+			Status:  status,
+			Message: fmt.Sprintf("%s%s = %s %s %s",
+				marker,
 				t.Metric,
 				formatMetric(value),
 				t.Operator,

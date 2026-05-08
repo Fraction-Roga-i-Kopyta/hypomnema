@@ -33,6 +33,18 @@ type Trigger struct {
 	Threshold float64 // numeric threshold — mistakes/ recurrence is count, treated as float for operator uniformity
 	Source    string  // "self-profile" | "wal" | "file"
 	After     string  // YYYY-MM-DD for calendar triggers (mutually exclusive with the metric fields)
+
+	// Direction marks the semantics of the firing condition:
+	//   "" or "below" — crossing is degradation; emits StatusPressure
+	//                   (the original behaviour, preserved by leaving
+	//                   Direction empty in pre-existing ADRs).
+	//   "above"       — crossing is a positive milestone; emits
+	//                   StatusReached. Used by ADRs whose review-trigger
+	//                   marks a goal being met, not a regression
+	//                   (e.g. intuition-milestone). Set Direction
+	//                   intentionally — defaulting unknown to "below"
+	//                   preserves backward compatibility.
+	Direction string // "above" | "below" | ""
 }
 
 // IsCalendar returns true when this is an `after:`-only trigger.
@@ -45,8 +57,10 @@ type Status int
 const (
 	// StatusOK — the trigger did not fire. No action.
 	StatusOK Status = iota
-	// StatusPressure — the metric crossed its threshold. Author should
-	// re-read the ADR's "When to revisit" section.
+	// StatusPressure — the metric crossed its threshold and the
+	// crossing is a degradation signal (Direction = "below" or
+	// unset). Author should re-read the ADR's "When to revisit"
+	// section.
 	StatusPressure
 	// StatusOverdue — a calendar `after:` date has passed.
 	StatusOverdue
@@ -54,6 +68,12 @@ const (
 	// self-profile format, field renamed, etc.). Emits a WAL event but
 	// does not fail the review.
 	StatusSkipped
+	// StatusReached — the metric crossed its threshold and the
+	// crossing is a goal being met (Direction = "above"). Distinct
+	// from StatusPressure so positive milestones (intuition-milestone,
+	// future "corpus matured" markers) read correctly in `decisions
+	// review` output and don't trip degradation-flavoured alerting.
+	StatusReached
 )
 
 // String renders status for CLI output and tests.
@@ -67,6 +87,8 @@ func (s Status) String() string {
 		return "overdue"
 	case StatusSkipped:
 		return "skipped"
+	case StatusReached:
+		return "reached"
 	}
 	return "?"
 }
