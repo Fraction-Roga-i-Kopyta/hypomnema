@@ -104,9 +104,14 @@ Five Claude Code hook events, one script each:
 
 Two scoring pipelines: **SessionStart** uses a composite recall-oriented score (keyword × 3 + WAL spaced-repetition + TF-IDF − noise penalty); **UserPromptSubmit** uses a deterministic precision-oriented priority key. They solve different problems and must not be conflated.
 
-Heavy logic lives in 8 pure-function libraries under `hooks/lib/` (≈1k lines total). Hot paths — FTS5 BM25 retrieval, fuzzy dedup, single-pass WAL aggregation — are additionally implemented in Go under `internal/` and exposed via the optional `memoryctl` binary; bash fallbacks exist for everything except dedup, with byte-for-byte parity enforced by `scripts/parity-check.sh`.
+Heavy logic lives in 8 pure-function libraries under `hooks/lib/` (≈1k lines total). Hot paths — FTS5 BM25 retrieval, fuzzy dedup, single-pass WAL aggregation — are additionally implemented in Go under `internal/` and exposed via the optional `memoryctl` binary; bash fallbacks exist for everything except dedup, with byte-for-byte parity enforced by `scripts/parity-check.sh` (8 fixtures, including hostile-input cases).
 
-Full architectural map with end-to-end data flow, scoring formulas, library purposes, WAL event taxonomy, and invariants: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
+`memoryctl` ships drop-in replacements for hot bash paths (`fts shadow`, `dedup check`, `tfidf rebuild`, `self-profile`, `doctor`, `decisions review`, `evidence learn`, `scoring-probe`), plus standalone inspection subcommands:
+
+- **`memoryctl wal validate`** — scans `.wal` for grammar violations against the four-column invariant; CI-friendly exit codes.
+- **`memoryctl audit invariants`** — runs every automated invariant checker from `internal/invariants/` against the repo (currently I3 atomic writes and I5 hook fail-safe; soft invariants remain human-judgment items).
+
+Full architectural map with end-to-end data flow, scoring formulas, library purposes, WAL event taxonomy: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**. Per-event normative registry (producer/consumer matrix, first-seen version, soft-close membership): **[docs/EVENTS.md](docs/EVENTS.md)**. Project-level invariants the codebase upholds (4-column WAL grammar, slug sanitisation symmetry, atomic writes, fail-safe hooks, …): **[docs/INVARIANTS.md](docs/INVARIANTS.md)**.
 
 ## What gets remembered
 
@@ -343,9 +348,10 @@ The system aggregates WAL signals into a derived view of itself. No manual bookk
 
 ### `memory/self-profile.md` — auto-generated
 
-Regenerated on every Stop hook from WAL + mistakes/ + strategies/. Four sections:
+Regenerated on every Stop hook from WAL + mistakes/ + strategies/. Five sections:
 
 - **Meta-signals** — counts: total sessions logged, clean sessions (0 errors), `outcome-positive` (mistake injected but not repeated), `outcome-negative` (mistake repeated anyway), `strategy-used`, `strategy-gap` (clean session but no strategy injected), `trigger-useful` vs `trigger-silent`.
+- **Intuition signal** (v1.1) — windowed `silent_applied_30d / trigger_useful_30d` ratio plus a one-line interpretation. The crossing point `> 1.0` sustained over 30 days is the operational definition of the v1.0 «Интуиция» tier (rules applied silently more often than they are cited explicitly). See `docs/decisions/intuition-milestone.md`.
 - **Strengths** — top strategies ranked by `success_count` (synced from WAL `strategy-used` by `bin/memory-strategy-score.sh`).
 - **Weaknesses** — top mistakes by `recurrence`. Entries with `scope: universal` get a 🔴 marker — these are systemic tendencies, not project-specific quirks.
 - **Calibration** — domains sorted by average error rate per session, derived from `session-metrics` WAL events.
