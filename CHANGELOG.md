@@ -1,5 +1,39 @@
 # Changelog
 
+## [1.1.2] - 2026-05-17
+
+Docs-only release. Cross-tabbed static frontmatter signals against
+per-slug WAL outcomes (n=49 slugs with measurable triggers) and
+found two clean authoring-side sweet spots. The five scoring
+weights survived the audit — the finding is about how to *write*
+memory files, not how to rank them. Recorded as a Calibration
+history entry in the existing scoring-weights ADR, with sizing
+heuristics surfaced in `CLAUDE.md` and the four authoring templates.
+
+### Documentation
+
+- **`docs/decisions/scoring-weights.md`** — new Calibration history
+  entry (2026-05-17): cross-tab table with sweet spots, author-side
+  actions taken, and one parked open question. Top empirical signal:
+  4-6 triggers hit 85 % useful-rate vs 12 % for 1-3 triggers (narrow
+  enough to miss user phrasing, keyword-poor enough to also miss
+  the keyword fallback); evidence ≤5 phrases keeps ~83 % useful
+  vs 14 % for 6-12 phrases (long lists rarely match verbatim).
+- **`CLAUDE.md § How injection ranks files`** — two sizing paragraphs
+  added under `triggers:` and `evidence:` referencing the calibration
+  history entry so future authors see the heuristics inline.
+- **`templates/{feedback,mistake,knowledge,strategy}.md`** — sizing
+  comments next to the `triggers:` and `evidence:` example blocks,
+  pointing at CLAUDE.md for the rationale.
+
+### Parked (not in this release)
+
+- `wal_spaced_repetition` over-weights ambient rules (high spread ×
+  decay × neutral 1.0 effectiveness). Either cap the wal-component
+  for `precision_class: ambient` slugs or leave it because ambient
+  files are already filtered out of the precision denominator. n=49
+  too small to choose — re-evaluate at n≥150.
+
 ## [1.1.1] - 2026-05-17
 
 Patch release. `memoryctl doctor`'s `corpus_frontmatter_quality` check
