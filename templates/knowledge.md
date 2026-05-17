@@ -9,6 +9,7 @@ keywords: [kw1, kw2]             # tokens for SessionStart keyword-match scoring
 triggers:                        # phrases a user would type to ask about this topic.
   - "replace this placeholder with a real user phrase"   # substring-matched, case-insensitive
   - "delete examples you do not need — keep at least one real phrase"
+                                 # 4-6 phrases is the empirical sweet spot — see CLAUDE.md.
 # related: [other-slug, third:reinforces]   # UNCOMMENT to cluster-link. `:type` annotates the relationship.
 ---
 

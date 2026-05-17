@@ -13,6 +13,8 @@ keywords: [kw1, kw2]       # tokens used for SessionStart keyword-match scoring
 triggers:                  # phrases the user would type when this mistake is relevant.
   - "replace this placeholder with a real user phrase"   # substring-matched, case-insensitive
   - "delete examples you do not need — keep at least one real phrase"
+                           # 4-6 phrases is the empirical sweet spot (~85% useful-rate at 4-6,
+                           # only ~12% at 1-3 because they match too narrowly). See CLAUDE.md.
 # scope: narrow            # UNCOMMENT to restrict injection to explicit keyword match only
 ---
 
