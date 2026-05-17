@@ -12,6 +12,7 @@ trigger: "one situational cue that should make Claude reach for this"
 # triggers:                # UNCOMMENT for multiple cues (delete the single `trigger:` above).
 #   - "first phrasing users type when this applies"
 #   - "second phrasing"
+                           # 4-6 phrases is the empirical sweet spot — see CLAUDE.md.
 ---
 
 # Short name

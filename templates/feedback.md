@@ -9,12 +9,15 @@ keywords: []
 evidence:                        # phrases that signal the rule was applied, for trigger-useful events
   - "phrase Claude would write when following the rule"
   - "another giveaway phrase"
+                                 # ≤5 phrases scores best — long lists rarely match verbatim
+                                 # and end up classified silent. See CLAUDE.md § evidence sizing.
 # precision_class: ambient       # UNCOMMENT for rules that shape behaviour silently
                                  # (tone, language preference, security baseline). Excludes the
                                  # file from the measurable-precision denominator so it doesn't
                                  # drag the metric down as false noise. See README § Precision.
 # triggers:                      # UNCOMMENT for reactive injection on matching user prompts.
 #   - "prompt phrasing that should remind Claude of this rule"
+                                 # 4-6 phrases is the empirical sweet spot — 1-3 underperform.
 ---
 
 One-sentence rule statement.

@@ -133,6 +133,45 @@ correct: if `shadow_miss_ratio` still exceeds 0.50 after a 14-day
 post-patch window, the gap is genuine and weight tuning is
 warranted.
 
+**2026-05-17 — score-distribution baseline (n=49 with measurable
+outcomes).** Cross-tabbed static frontmatter signals (keyword count,
+trigger count, evidence count, ref_count, success_count, body
+words) against per-slug aggregate WAL outcomes (`trigger-useful` /
+`trigger-silent` rate). The five formula weights survived; the
+finding was about authoring practice, not weight magnitudes:
+
+| Signal | Pattern | Implication |
+|---|---|---|
+| Trigger count | 4-6 → 85 % useful-rate (n=12); 1-3 → 12 % (n=7); 0 or 7+ → ~64 % | 1-3 triggers under-perform — too narrow to match user phrasing, too keyword-poor to fall back to keyword pipeline. Sweet spot: 4-6. |
+| Evidence count | 0 → 83 %; 6-12 → 14 %; 13+ → 21 % | Long evidence lists pile on specific wordings that rarely match assistant text verbatim. Cap at ~5. |
+| ref_count | 0 → 100 %, 1-9 → 65 %, 50-99 → 54 %, 100+ → 50 % | Top ref_count is dominated by ambient rules — they get high `spread` but neutral effectiveness. WAL-spaced-repetition is *probably* over-weighting noise on ambient slugs; needs a follow-up before any formula change. See "Open question" below. |
+| Strategy bonus | strategies type → 90.5 % useful-rate (best) | `min(success_count × 2, 6)` cap is well-positioned. |
+| Project boost | global 60.6 % vs project-scoped 64.3 % (n=32 vs 17) | Difference within noise band on this sample. The ×1 weight is symbolic — fine, it is documented as a tie-breaker. |
+| Type rate | strategies 90 %, knowledge 86 %, mistakes 60 %, feedback 37 % | Feedback's low rate is consistent with evidence-overload finding above. |
+
+**Author-side actions taken instead of weight changes:**
+- Templates updated (`templates/{feedback,mistake,knowledge,strategy}.md`)
+  with sizing comments referencing this section.
+- `CLAUDE.md § How injection ranks files` got two sizing paragraphs
+  (under `triggers:` and `evidence:`) recording the 4-6 / ≤5 heuristics.
+
+**Open question (not actioned):** `wal_spaced_repetition` formula
+`spread × decay × Bayesian_eff` gives ambient rules a high score
+(high spread × decay × neutral 1.0 effectiveness) even though they
+do not benefit from being "remembered more often" — they are always
+relevant by design. A future calibration pass could either (a) cap
+the wal-component for files with `precision_class: ambient`, or
+(b) leave it because ambient files are already filtered out of the
+precision denominator and the over-weighting only affects ranking
+*within* the ambient set. Decision deferred — n=49 is too small to
+choose. Re-evaluate when measurable corpus reaches n≥150.
+
+**Sample caveat.** n=49 is a starting baseline, not a verdict.
+Author's corpus only. Re-running the cross-tab in 30 days (target
+n≥80) will tell whether the patterns above hold. Script lived in
+`/tmp` during the analysis — if it needs to recur, formalise it
+as `bin/memoryctl analyze score-distribution`.
+
 ## Implementation note
 
 The weights live in `hooks/session-start.sh:328-380` (awk-generated
