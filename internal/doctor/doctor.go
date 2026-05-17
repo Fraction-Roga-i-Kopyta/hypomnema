@@ -358,9 +358,12 @@ func checkCorpus(memoryDir string) Check {
 // fmFacts captures the narrow frontmatter properties checkCorpusQuality
 // needs. No general-purpose parse; just the flags we actually inspect.
 type fmFacts struct {
-	hasStatus   bool
-	statusValue string
-	hasTriggers bool
+	hasStatus      bool
+	statusValue    string
+	hasTriggers    bool
+	hasEvidence    bool
+	ambient        bool
+	supersededFlag bool
 }
 
 // readFMQuick reads the first YAML frontmatter block and returns the
@@ -397,6 +400,23 @@ func readFMQuick(path string) fmFacts {
 		if strings.HasPrefix(line, "triggers:") || strings.HasPrefix(line, "trigger:") {
 			facts.hasTriggers = true
 		}
+		if strings.HasPrefix(line, "evidence:") {
+			facts.hasEvidence = true
+		}
+		if strings.HasPrefix(line, "precision_class:") {
+			v := strings.TrimSpace(strings.TrimPrefix(line, "precision_class:"))
+			v = strings.Trim(v, `"'`)
+			if v == "ambient" {
+				facts.ambient = true
+			}
+		}
+		if strings.HasPrefix(line, "status:") {
+			v := strings.TrimSpace(strings.TrimPrefix(line, "status:"))
+			v = strings.Trim(v, `"'`)
+			if v == "superseded" || v == "archived" {
+				facts.supersededFlag = true
+			}
+		}
 	}
 	return facts
 }
@@ -406,6 +426,14 @@ func readFMQuick(path string) fmFacts {
 //   - `status:` present but empty → filter drops the file silently
 //   - feedback / knowledge without `triggers:` → reactive injection
 //     cannot fire (the keyword pipeline still works from SessionStart)
+//
+// Skipped (no WARN) when a file is one of:
+//   - `precision_class: ambient` — silent rule by design, doesn't need
+//     reactive triggers
+//   - has `evidence:` — session-stop classifier picks it up reactively
+//     even without substring triggers
+//   - `status: superseded` / `status: archived` — historical record,
+//     not expected to fire
 //
 // Always WARN-level — these are nudges, never hard failures, per round
 // 2 decision on `triggers:` remaining optional.
@@ -427,7 +455,8 @@ func checkCorpusQuality(memoryDir string) Check {
 			if fm.hasStatus && fm.statusValue == "" {
 				emptyStatus = append(emptyStatus, t+"/"+e.Name())
 			}
-			if (t == "feedback" || t == "knowledge") && !fm.hasTriggers {
+			if (t == "feedback" || t == "knowledge") && !fm.hasTriggers &&
+				!fm.ambient && !fm.hasEvidence && !fm.supersededFlag {
 				missingTriggers = append(missingTriggers, t+"/"+e.Name())
 			}
 		}
@@ -449,7 +478,7 @@ func checkCorpusQuality(memoryDir string) Check {
 	detail := "all files have valid frontmatter"
 	if len(parts) > 0 {
 		detail = strings.Join(parts, ", ")
-		hint = "set status: to 'active' (or remove the line); feedback/knowledge without triggers: won't fire reactively — see CLAUDE.md § When to write feedback"
+		hint = "set status: to 'active' (or remove the line); feedback/knowledge without triggers: won't fire reactively — add `triggers:`, `evidence:`, or `precision_class: ambient` (see CLAUDE.md § When to write feedback)"
 	}
 
 	extra := map[string]interface{}{
