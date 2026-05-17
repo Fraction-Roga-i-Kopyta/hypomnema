@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.1.1] - 2026-05-17
+
+Patch release. `memoryctl doctor`'s `corpus_frontmatter_quality` check
+was flagging files that, by design, do not need substring triggers —
+producing false-positive WARNs on mature corpora where ambient rules
+and evidence-only feedback are normal. The check now understands the
+three legitimate escape hatches and only flags files that are actually
+unreachable through any reactive path.
+
+### Fixed
+
+- `memoryctl doctor` `corpus_frontmatter_quality` no longer flags
+  feedback/knowledge files that are reachable through one of:
+  `precision_class: ambient` (silent rule by design), `evidence:`
+  (session-stop classifier picks them up), or
+  `status: superseded` / `status: archived` (historical record, not
+  expected to fire). Pure absence of `triggers:` remains a WARN.
+  Hint text updated to enumerate the three escape hatches.
+
+### Internal
+
+- Two new doctor unit tests cover the escape-hatch paths and the
+  no-escape-hatch baseline.
+
 ## [1.1.0] - 2026-05-08
 
 Minor release covering the v1.1 work cycle that landed across eight

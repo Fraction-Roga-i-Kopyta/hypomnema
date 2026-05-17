@@ -165,6 +165,45 @@ func TestRun_CorpusWithFilesReportsCounts(t *testing.T) {
 	}
 }
 
+func TestCorpusQuality_TriggersEvidenceAmbientAllPass(t *testing.T) {
+	claude, mem := newFixture(t)
+	mk := func(sub, slug, body string) {
+		path := filepath.Join(mem, sub, slug+".md")
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Each of the three escape hatches must satisfy the check.
+	mk("feedback", "has-triggers",
+		"---\ntype: feedback\nstatus: active\ntriggers:\n  - \"foo\"\n---\nBody.\n")
+	mk("feedback", "has-evidence",
+		"---\ntype: feedback\nstatus: active\nevidence:\n  - \"bar\"\n---\nBody.\n")
+	mk("feedback", "is-ambient",
+		"---\ntype: feedback\nstatus: active\nprecision_class: ambient\n---\nBody.\n")
+	mk("feedback", "is-superseded",
+		"---\ntype: feedback\nstatus: superseded\n---\nBody.\n")
+	mk("knowledge", "k-with-triggers",
+		"---\ntype: knowledge\nstatus: active\ntriggers:\n  - \"baz\"\n---\nBody.\n")
+	r := Run(claude, mem)
+	c := mustFindCheck(t, r, "corpus_frontmatter_quality", OK)
+	if !strings.Contains(c.Detail, "all files have valid frontmatter") {
+		t.Errorf("expected clean detail, got %q", c.Detail)
+	}
+}
+
+func TestCorpusQuality_BareFeedbackWithoutAnythingWarns(t *testing.T) {
+	claude, mem := newFixture(t)
+	body := "---\ntype: feedback\nstatus: active\n---\nBody only, no triggers, no evidence, not ambient.\n"
+	if err := os.WriteFile(filepath.Join(mem, "feedback", "bare.md"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := Run(claude, mem)
+	c := mustFindCheck(t, r, "corpus_frontmatter_quality", WARN)
+	if !strings.Contains(c.Detail, "1 feedback/knowledge without triggers:") {
+		t.Errorf("expected bare-file warning, got %q", c.Detail)
+	}
+}
+
 func TestDecisionsPressure_NoDirectoryIsOK(t *testing.T) {
 	claude, mem := newFixture(t)
 	r := Run(claude, mem)
