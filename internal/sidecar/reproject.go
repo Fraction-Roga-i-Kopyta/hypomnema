@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
@@ -66,9 +67,9 @@ func readWALAgg(walPath string) map[string]*agg {
 	}
 	defer f.Close()
 	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	sc.Buffer(make([]byte, 0, 1<<16), 1<<20)
 	for sc.Scan() {
-		date, event, slug, ok := parseWALLine(sc.Text())
+		date, event, slug, field4, ok := parseWALLine(sc.Text())
 		if !ok {
 			continue
 		}
@@ -78,8 +79,19 @@ func readWALAgg(walPath string) map[string]*agg {
 			out[slug] = a
 		}
 		switch event {
-		case "inject", "inject-agg":
+		case "inject":
 			a.injects++
+			if date > a.lastInject {
+				a.lastInject = date
+			}
+		case "inject-agg":
+			// field4 is the aggregated inject count, not a session id
+			// (hooks/wal-compact.sh writes DATE|inject-agg|SLUG|<count>).
+			n, err := strconv.Atoi(field4)
+			if err != nil || n < 1 {
+				n = 1
+			}
+			a.injects += n
 			if date > a.lastInject {
 				a.lastInject = date
 			}
@@ -92,6 +104,9 @@ func readWALAgg(walPath string) map[string]*agg {
 			a.created = date
 		}
 	}
+	// sc.Err() is intentionally ignored: a partial/truncated WAL read yields
+	// partial history, which is acceptable (the WAL is the audit source of
+	// truth; the sidecar is a rebuildable projection).
 	return out
 }
 
@@ -102,32 +117,37 @@ func replayOutcomes(s *Store, walPath string) error {
 	}
 	defer f.Close()
 	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	sc.Buffer(make([]byte, 0, 1<<16), 1<<20)
 	for sc.Scan() {
-		date, event, slug, ok := parseWALLine(sc.Text())
+		date, event, slug, _, ok := parseWALLine(sc.Text())
 		if !ok {
 			continue
 		}
 		if event == "outcome-positive" || event == "outcome-negative" {
 			if _, err := s.db.Exec(`INSERT INTO outcome (slug, ts, kind) VALUES (?,?,?)`,
 				slug, date, strings.TrimPrefix(event, "outcome-")); err != nil {
-				return err
+				return fmt.Errorf("sidecar.replayOutcomes: insert %s: %w", slug, err)
 			}
 		}
+	}
+	if err := sc.Err(); err != nil {
+		return fmt.Errorf("sidecar.replayOutcomes: scan: %w", err)
 	}
 	return nil
 }
 
-// parseWALLine splits a 4-column WAL line "DATE|EVENT|SLUG|SESSION". The bool
-// is false for blank lines, comments, or malformed rows.
-func parseWALLine(line string) (date, event, slug string, ok bool) {
+// parseWALLine splits a 4-column WAL line "DATE|EVENT|SLUG|FIELD4". FIELD4 is
+// the session id for most events, but for inject-agg it is the aggregated
+// inject count (see hooks/wal-compact.sh). The bool is false for blank lines,
+// comments, or rows with fewer than 4 columns.
+func parseWALLine(line string) (date, event, slug, field4 string, ok bool) {
 	line = strings.TrimRight(line, "\r")
 	if line == "" || strings.HasPrefix(line, "#") {
-		return "", "", "", false
+		return "", "", "", "", false
 	}
 	parts := strings.SplitN(line, "|", 4)
 	if len(parts) != 4 {
-		return "", "", "", false
+		return "", "", "", "", false
 	}
-	return parts[0], parts[1], parts[2], true
+	return parts[0], parts[1], parts[2], parts[3], true
 }
