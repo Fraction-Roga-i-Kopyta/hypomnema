@@ -3,6 +3,7 @@ package native
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -63,6 +64,18 @@ func TestList_ToleratesBOMAndCRLFAndQuotes(t *testing.T) {
 	}
 }
 
+func TestList_TrailingWhitespaceClosingFence(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "tw.md", "---\nname: Y\ntype: reference\n---  \nbody\n")
+	files, err := List(dir)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(files) != 1 || files[0].Name != "Y" || files[0].Body != "body" {
+		t.Fatalf("trailing-space closing fence not parsed: %+v", files)
+	}
+}
+
 func TestList_UnterminatedFrontmatterIsSkippedNotFatal(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "good.md", "---\nname: G\ntype: reference\n---\nok\n")
@@ -71,13 +84,24 @@ func TestList_UnterminatedFrontmatterIsSkippedNotFatal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List should not error on a bad file: %v", err)
 	}
-	var haveGood bool
-	for _, f := range files {
-		if f.Slug == "good.md" && f.Name == "G" {
-			haveGood = true
-		}
+	if len(files) != 2 {
+		t.Fatalf("expected 2 files (unterminated returned as body), got %d: %+v", len(files), files)
 	}
-	if !haveGood {
-		t.Fatalf("good.md missing from %+v", files)
+	bySlug := map[string]MemFile{}
+	for _, f := range files {
+		bySlug[f.Slug] = f
+	}
+	if bySlug["good.md"].Name != "G" {
+		t.Errorf("good.md Name = %q, want G", bySlug["good.md"].Name)
+	}
+	bad, ok := bySlug["bad.md"]
+	if !ok {
+		t.Fatal("bad.md missing — unterminated frontmatter must not drop the file")
+	}
+	if bad.Name != "" {
+		t.Errorf("bad.md Name = %q, want empty (unterminated frontmatter)", bad.Name)
+	}
+	if !strings.Contains(bad.Body, "never closed") {
+		t.Errorf("bad.md Body should contain raw content, got %q", bad.Body)
 	}
 }

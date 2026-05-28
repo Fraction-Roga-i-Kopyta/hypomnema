@@ -15,7 +15,7 @@ type MemFile struct {
 	Path        string // absolute path
 	Name        string // frontmatter: name
 	Description string // frontmatter: description
-	Type        string // frontmatter: type (user|feedback|project|reference)
+	Type        string // frontmatter: type — native bucket (non-exhaustive); fine-grained type lives in the sidecar
 	ContentSHA  string // sha256 of full file bytes — rename/edit detection
 	Body        string // markdown body, frontmatter stripped
 }
@@ -66,9 +66,9 @@ func parseFile(path string) (MemFile, error) {
 
 // splitFrontmatter parses a leading `---`-fenced YAML-ish block into a flat
 // key->value map and returns the trimmed body. Tolerates a UTF-8 BOM, CRLF
-// line endings, and quoted scalars — matching the existing bash parser's
-// tolerances. An unterminated fence yields an empty map + the whole content
-// as body.
+// endings, quoted scalars, and trailing whitespace on the closing fence —
+// matching the existing bash parser's tolerances. An unterminated fence yields
+// an empty map + the whole content as body.
 func splitFrontmatter(s string) (map[string]string, string) {
 	fm := map[string]string{}
 	s = strings.TrimPrefix(s, "\xef\xbb\xbf")
@@ -78,7 +78,7 @@ func splitFrontmatter(s string) (map[string]string, string) {
 	lines := strings.Split(s, "\n")
 	end := -1
 	for i := 1; i < len(lines); i++ {
-		if strings.TrimRight(lines[i], "\r") == "---" {
+		if strings.TrimRight(lines[i], " \t\r") == "---" {
 			end = i
 			break
 		}
