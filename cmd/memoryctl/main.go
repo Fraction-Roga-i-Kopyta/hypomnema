@@ -102,9 +102,19 @@ Usage:
       Catalog in docs/INVARIANTS.md; automated coverage at v1.x is
       I3 (atomic writes) and I5 (hook fail-safe). Exit 0 = clean,
       1 = violations, 2 = command misuse or repo not detected.
+  memoryctl sidecar rebuild
+      Rebuild the SQLite sidecar projection from native memory + WAL
+      ($CLAUDE_HOME/<project>/memory + ~/.claude/memory/.wal). Writes
+      ~/.claude/memory/.sidecar.db atomically. Run after bulk imports
+      or when the projection is suspected stale.
+  memoryctl sidecar show
+      Print sidecar memory records (slug, type, ref_count, effectiveness).
+      Reads the existing .sidecar.db; run "sidecar rebuild" first if the
+      file is absent or stale.
 
 Environment:
   CLAUDE_MEMORY_DIR       Memory root (default: ~/.claude/memory).
+  CLAUDE_PROJECT_CWD      Working dir for per-project native memory; defaults to cwd.
   HYPOMNEMA_TODAY         Freeze "today" in YYYY-MM-DD (for tests/replay).
   HYPOMNEMA_NOW           Freeze self-profile "generated:" stamp (YYYY-MM-DD HH:MM).
   HYPOMNEMA_SESSION_ID    Session id stamped into WAL entries.
