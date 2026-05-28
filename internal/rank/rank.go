@@ -28,7 +28,7 @@ type Candidate struct {
 
 // Query carries the relevance signal for one ranking call.
 type Query struct {
-	Terms   []string
+	Terms   []string // caller uses these to populate each Candidate.Overlap; Rank itself does not read Terms
 	Project string
 	Domains []string
 	Today   string // YYYY-MM-DD; drives recency decay
@@ -51,13 +51,16 @@ const (
 
 // Rank scores every eligible candidate and returns the top k (k<=0 = all),
 // sorted by score descending, ties broken by slug ascending for
-// determinism. Candidates with status stale/deleted, or failing the domain
+// determinism. Candidates not in the status allowlist, or failing the domain
 // filter, are excluded.
 func Rank(q Query, cands []Candidate, k int) []Scored {
 	today := parseDay(q.Today)
 	out := make([]Scored, 0, len(cands))
 	for _, c := range cands {
-		if c.Status == "stale" || c.Status == "deleted" {
+		// Allowlist: only active/pinned are injectable. Everything else
+		// (stale, deleted, archived, superseded, unknown) is excluded —
+		// matches the shell pipeline's status guard.
+		if c.Status != "active" && c.Status != "pinned" {
 			continue
 		}
 		if !domainOK(q.Domains, c.Domains) {
@@ -66,6 +69,7 @@ func Rank(q Query, cands []Candidate, k int) []Scored {
 		out = append(out, Scored{Candidate: c, Score: score(q, c, today)})
 	}
 	sort.SliceStable(out, func(i, j int) bool {
+		// scores for identical inputs are bit-identical; a NaN score (caller error) sinks to the bottom
 		if out[i].Score != out[j].Score {
 			return out[i].Score > out[j].Score
 		}
@@ -90,6 +94,7 @@ func score(q Query, c Candidate, today time.Time) float64 {
 
 // recency decays from 1.0 (today) toward 0 with a 30-day scale, using
 // LastInjected (fallback Created). Unknown/zero date → 0 contribution.
+// LastInjected reflects actual use; Created is the novelty fallback (a calibration choice Phase 2b may revisit).
 func recency(c Candidate, today time.Time) float64 {
 	d := c.LastInjected
 	if d == "" {
