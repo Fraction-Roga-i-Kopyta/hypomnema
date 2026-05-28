@@ -111,6 +111,40 @@ func TestReproject_IsDeterministic(t *testing.T) {
 	}
 }
 
+func TestReproject_MarksDeletedOrphans(t *testing.T) {
+	dir := t.TempDir()
+	walPath := filepath.Join(dir, ".wal")
+	if err := os.WriteFile(walPath, []byte("2026-04-01|inject|a.md|s1\n2026-04-01|inject|b.md|s1\n"), 0o644); err != nil {
+		t.Fatalf("write wal: %v", err)
+	}
+	s, err := Open(filepath.Join(dir, ".sidecar.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	// First rebuild: both a.md and b.md present.
+	if err := Reproject(s, []native.MemFile{{Slug: "a.md", ContentSHA: "a"}, {Slug: "b.md", ContentSHA: "b"}}, walPath); err != nil {
+		t.Fatalf("reproject 1: %v", err)
+	}
+	// Second rebuild: b.md is gone (no longer in files).
+	if err := Reproject(s, []native.MemFile{{Slug: "a.md", ContentSHA: "a"}}, walPath); err != nil {
+		t.Fatalf("reproject 2: %v", err)
+	}
+
+	a, _, _ := s.Get("a.md")
+	if a.Status != "active" {
+		t.Errorf("a.md status = %q, want active", a.Status)
+	}
+	b, ok, _ := s.Get("b.md")
+	if !ok {
+		t.Fatal("b.md row must be KEPT (history preserved), not removed")
+	}
+	if b.Status != "deleted" {
+		t.Errorf("b.md status = %q, want deleted (orphan)", b.Status)
+	}
+}
+
 func reprojectInto(t *testing.T, dbPath string, files []native.MemFile, walPath string) Record {
 	t.Helper()
 	s, err := Open(dbPath)

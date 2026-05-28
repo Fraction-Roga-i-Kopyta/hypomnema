@@ -22,7 +22,11 @@ type agg struct {
 // files and the WAL at walPath. Existing rows are upserted (idempotent).
 // Native files with no WAL history are inserted with ref_count 0 and the
 // neutral effectiveness prior, so freshly-written facts are injectable
-// immediately. The keyword table is left untouched (a later phase owns it).
+// immediately. Orphan rows — memory rows whose native file is no longer in
+// files — are marked status='deleted' (the row and its outcome history are
+// kept so WAL replay remains correct; deleted rows are excluded from
+// injection) — spec §5. The keyword table is left untouched (a later phase
+// owns it).
 func Reproject(s *Store, files []native.MemFile, walPath string) error {
 	aggs := readWALAgg(walPath)
 
@@ -50,6 +54,25 @@ func Reproject(s *Store, files []native.MemFile, walPath string) error {
 		}
 		if err := s.Upsert(rec); err != nil {
 			return fmt.Errorf("sidecar.Reproject: upsert %s: %w", f.Slug, err)
+		}
+	}
+
+	// Reconcile deletions: any memory row whose native file is no longer in
+	// `files` is marked status='deleted' (the row + its outcome history are
+	// kept; it is simply excluded from injection) — spec §5.
+	keep := make(map[string]bool, len(files))
+	for _, f := range files {
+		keep[f.Slug] = true
+	}
+	existing, err := s.All()
+	if err != nil {
+		return fmt.Errorf("sidecar.Reproject: reconcile list: %w", err)
+	}
+	for _, r := range existing {
+		if !keep[r.Slug] && r.Status != "deleted" {
+			if _, err := s.db.Exec(`UPDATE memory SET status='deleted' WHERE slug=?`, r.Slug); err != nil {
+				return fmt.Errorf("sidecar.Reproject: mark deleted %s: %w", r.Slug, err)
+			}
 		}
 	}
 

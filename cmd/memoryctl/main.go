@@ -104,9 +104,9 @@ Usage:
       1 = violations, 2 = command misuse or repo not detected.
   memoryctl sidecar rebuild
       Rebuild the SQLite sidecar projection from native memory + WAL
-      ($CLAUDE_HOME/<project>/memory + ~/.claude/memory/.wal). Writes
-      ~/.claude/memory/.sidecar.db atomically. Run after bulk imports
-      or when the projection is suspected stale.
+      ($CLAUDE_HOME/projects/<slug>/memory + ~/.claude/memory/.wal). Writes
+      ~/.claude/memory/.sidecar.db. Run after bulk imports or when the
+      projection is suspected stale.
   memoryctl sidecar show
       Print sidecar memory records (slug, type, ref_count, effectiveness).
       Reads the existing .sidecar.db; run "sidecar rebuild" first if the
