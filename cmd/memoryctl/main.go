@@ -200,6 +200,8 @@ func main() {
 			fmt.Fprintf(os.Stderr, "memoryctl: unknown sidecar subcommand %q\n", os.Args[2])
 			os.Exit(2)
 		}
+	case "rank":
+		runRank(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "memoryctl: unknown command %q\n", os.Args[1])
 		os.Exit(2)
