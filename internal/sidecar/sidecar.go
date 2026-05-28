@@ -14,8 +14,7 @@ import (
 
 // Store wraps the SQLite handle.
 type Store struct {
-	db   *sql.DB
-	path string
+	db *sql.DB
 }
 
 // Record is one row of the memory table — a native file plus hypomnema's
@@ -50,7 +49,11 @@ func Open(dbPath string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("sidecar.Open: schema: %w", err)
 	}
-	return &Store{db: db, path: dbPath}, nil
+	if _, err := db.Exec(`INSERT OR IGNORE INTO meta (k, v) VALUES ('schema_version', '1')`); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("sidecar.Open: seed meta: %w", err)
+	}
+	return &Store{db: db}, nil
 }
 
 // Close releases the database handle.
