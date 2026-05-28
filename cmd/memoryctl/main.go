@@ -176,6 +176,20 @@ func main() {
 		runWal(os.Args[2:])
 	case "audit":
 		runAudit(os.Args[2:])
+	case "sidecar":
+		if len(os.Args) < 3 {
+			fmt.Fprint(os.Stderr, usage)
+			os.Exit(2)
+		}
+		switch os.Args[2] {
+		case "rebuild":
+			runSidecarRebuild(os.Args[3:])
+		case "show":
+			runSidecarShow(os.Args[3:])
+		default:
+			fmt.Fprintf(os.Stderr, "memoryctl: unknown sidecar subcommand %q\n", os.Args[2])
+			os.Exit(2)
+		}
 	default:
 		fmt.Fprintf(os.Stderr, "memoryctl: unknown command %q\n", os.Args[1])
 		os.Exit(2)
