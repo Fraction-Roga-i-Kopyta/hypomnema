@@ -32,3 +32,42 @@ func TestOpenIsIdempotent(t *testing.T) {
 	}
 	s2.Close()
 }
+
+func TestUpsertInsertsAndUpdates(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), ".sidecar.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	rec := Record{Slug: "m.md", Type: "mistake", Name: "M", RefCount: 3,
+		Status: "active", Effectiveness: 0.8, ContentSHA: "sha1"}
+	if err := s.Upsert(rec); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	got, ok, err := s.Get("m.md")
+	if err != nil || !ok {
+		t.Fatalf("Get after insert: ok=%v err=%v", ok, err)
+	}
+	if got.RefCount != 3 || got.Type != "mistake" || got.Effectiveness != 0.8 {
+		t.Errorf("inserted record wrong: %+v", got)
+	}
+
+	rec.RefCount = 5
+	rec.ContentSHA = "sha2"
+	if err := s.Upsert(rec); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	got, _, _ = s.Get("m.md")
+	if got.RefCount != 5 || got.ContentSHA != "sha2" {
+		t.Errorf("updated record wrong: %+v", got)
+	}
+
+	all, err := s.All()
+	if err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	if len(all) != 1 {
+		t.Errorf("All len = %d, want 1 (upsert must not duplicate)", len(all))
+	}
+}
