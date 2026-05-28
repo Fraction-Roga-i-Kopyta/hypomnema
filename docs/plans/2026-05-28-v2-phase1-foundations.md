@@ -8,7 +8,7 @@
 
 **Tech Stack:** Go 1.25, `modernc.org/sqlite` (pure-Go, CGO_ENABLED=0), stdlib `testing` (table-driven, `t.TempDir()`). Module path `github.com/Fraction-Roga-i-Kopyta/hypomnema`.
 
-**Scope boundary (this phase):** Reproject populates the `memory` and `outcome` tables. The `keyword` table is created but left empty — population belongs to Phase 2 (ranker), which owns tokenization. `inject-agg` events count as 1 toward ref_count (exact count-reconstruction is a Phase 6 / migration concern).
+**Scope boundary (this phase):** Reproject populates the `memory` and `outcome` tables. The `keyword` table is created but left empty — population belongs to Phase 2 (ranker), which owns tokenization. `inject-agg` events are counted by their aggregated 4th-column value (verified against the real WAL: `DATE|inject-agg|SLUG|<count>`, e.g. `code-approach|141`), so ref_count is correct on compacted WALs — Task 5 implements this. (Note: `docs/EVENTS.md:48` documents this column as `$3 = <slug>,<count>` comma-delimited, which is doc drift — the real format is `$4 = <count>` pipe-delimited; flagged for the Phase 7 docs pass.)
 
 ---
 
