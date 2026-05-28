@@ -60,12 +60,48 @@ func TestReproject(t *testing.T) {
 	if fresh.RefCount != 0 || fresh.Effectiveness != 0.5 {
 		t.Errorf("fresh.md = %+v, want ref_count 0 / effectiveness 0.5", fresh)
 	}
+
+	n, ok, _ := s.Get("n.md")
+	if !ok {
+		t.Fatal("n.md missing")
+	}
+	if n.RefCount != 1 || n.Created != "2026-04-01" || n.LastInjected != "2026-04-01" {
+		t.Errorf("n.md = %+v, want ref_count 1 / created+last 2026-04-01", n)
+	}
+}
+
+func TestReproject_InjectAggCount(t *testing.T) {
+	dir := t.TempDir()
+	walPath := filepath.Join(dir, ".wal")
+	// one plain inject (=1) + one aggregated inject-agg of 20 -> ref_count 21
+	wal := "2026-04-01|inject|x.md|s1\n2026-04-02|inject-agg|x.md|20\n"
+	if err := os.WriteFile(walPath, []byte(wal), 0o644); err != nil {
+		t.Fatalf("write wal: %v", err)
+	}
+	files := []native.MemFile{{Slug: "x.md", ContentSHA: "x"}}
+	s, err := Open(filepath.Join(dir, ".sidecar.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+	if err := Reproject(s, files, walPath); err != nil {
+		t.Fatalf("Reproject: %v", err)
+	}
+	r, _, _ := s.Get("x.md")
+	if r.RefCount != 21 {
+		t.Errorf("ref_count = %d, want 21 (1 inject + inject-agg of 20)", r.RefCount)
+	}
+	if r.LastInjected != "2026-04-02" {
+		t.Errorf("last_injected = %q, want 2026-04-02", r.LastInjected)
+	}
 }
 
 func TestReproject_IsDeterministic(t *testing.T) {
 	dir := t.TempDir()
 	walPath := filepath.Join(dir, ".wal")
-	os.WriteFile(walPath, []byte("2026-04-01|inject|m.md|s1\n"), 0o644)
+	if err := os.WriteFile(walPath, []byte("2026-04-01|inject|m.md|s1\n"), 0o644); err != nil {
+		t.Fatalf("write wal: %v", err)
+	}
 	files := []native.MemFile{{Slug: "m.md", ContentSHA: "x"}}
 
 	first := reprojectInto(t, filepath.Join(dir, "a.db"), files, walPath)
