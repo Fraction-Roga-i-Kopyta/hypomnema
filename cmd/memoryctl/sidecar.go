@@ -26,13 +26,16 @@ func projectCWD() string {
 // collectNative lists native files from both the per-project dir and the
 // hypomnema-owned global dir (native lacks a global store).
 func collectNative() ([]native.MemFile, error) {
-	claude := claudeDir()        // <home>/.claude
-	home := filepath.Dir(claude) // <home>
-	projFiles, err := native.List(native.ProjectMemoryDir(home, projectCWD()))
+	// claudeDir() honours $CLAUDE_HOME (needed for test fixtures), so derive
+	// the OS home from it rather than calling os.UserHomeDir() directly —
+	// keeps the per-project + global dir resolution overridable in tests.
+	claudeHome := claudeDir()            // <home>/.claude
+	osHome := filepath.Dir(claudeHome)   // <home>
+	projFiles, err := native.List(native.ProjectMemoryDir(osHome, projectCWD()))
 	if err != nil {
 		return nil, err
 	}
-	globalFiles, err := native.List(native.GlobalMemoryDir(home))
+	globalFiles, err := native.List(native.GlobalMemoryDir(osHome))
 	if err != nil {
 		return nil, err
 	}

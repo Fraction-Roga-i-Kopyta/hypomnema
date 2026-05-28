@@ -17,10 +17,14 @@ func TestSidecarRebuildAndShow(t *testing.T) {
 	if err := os.MkdirAll(memDir, 0o755); err != nil {
 		t.Fatalf("mkdir mem: %v", err)
 	}
-	os.WriteFile(filepath.Join(projDir, "feedback_x.md"),
-		[]byte("---\nname: Rule X\ndescription: do X\ntype: feedback\n---\nbody\n"), 0o644)
-	os.WriteFile(filepath.Join(memDir, ".wal"),
-		[]byte("2026-04-01|inject|feedback_x.md|s1\n2026-04-02|inject|feedback_x.md|s2\n2026-04-02|outcome-positive|feedback_x.md|s2\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(projDir, "feedback_x.md"),
+		[]byte("---\nname: Rule X\ndescription: do X\ntype: feedback\n---\nbody\n"), 0o644); err != nil {
+		t.Fatalf("write feedback_x.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(memDir, ".wal"),
+		[]byte("2026-04-01|inject|feedback_x.md|s1\n2026-04-02|inject|feedback_x.md|s2\n2026-04-02|outcome-positive|feedback_x.md|s2\n"), 0o644); err != nil {
+		t.Fatalf("write wal: %v", err)
+	}
 
 	env := map[string]string{
 		"CLAUDE_HOME":        filepath.Join(home, ".claude"),
@@ -32,7 +36,7 @@ func TestSidecarRebuildAndShow(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("rebuild exit=%d stderr=%s", code, errOut)
 	}
-	if !strings.Contains(out, "1 file") && !strings.Contains(out, "rebuilt") {
+	if !strings.Contains(out, "1 file") || !strings.Contains(out, "rebuilt") {
 		t.Errorf("rebuild summary unexpected: %q", out)
 	}
 
@@ -42,5 +46,24 @@ func TestSidecarRebuildAndShow(t *testing.T) {
 	}
 	if !strings.Contains(out, "feedback_x.md") || !strings.Contains(out, "ref=2") {
 		t.Errorf("show output missing slug/ref: %q", out)
+	}
+}
+
+func TestSidecarShowEmptyDB(t *testing.T) {
+	home := t.TempDir()
+	memDir := filepath.Join(home, ".claude", "memory")
+	if err := os.MkdirAll(memDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{
+		"CLAUDE_HOME":       filepath.Join(home, ".claude"),
+		"CLAUDE_MEMORY_DIR": memDir,
+	}
+	out, errOut, code := run(t, env, "sidecar", "show")
+	if code != 0 {
+		t.Fatalf("show on empty DB exit=%d stderr=%s", code, errOut)
+	}
+	if strings.TrimSpace(out) != "" {
+		t.Errorf("show on empty DB should print nothing, got %q", out)
 	}
 }
