@@ -1,0 +1,70 @@
+package sidecar
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/tokenize"
+)
+
+// PopulateKeywords clears and rebuilds the keyword table from the supplied
+// files: name + description + body are tokenized; weight is term frequency.
+// Called from Reproject so a rebuild keeps keywords in sync.
+func (s *Store) PopulateKeywords(files []native.MemFile) error {
+	if _, err := s.db.Exec(`DELETE FROM keyword`); err != nil {
+		return fmt.Errorf("sidecar.PopulateKeywords: clear: %w", err)
+	}
+	for _, f := range files {
+		text := f.Name + " " + f.Description + " " + f.Body
+		freq := map[string]int{}
+		for _, tok := range tokenize.Tokenize(text, nil) {
+			freq[tok]++
+		}
+		for term, n := range freq {
+			if _, err := s.db.Exec(`INSERT INTO keyword (slug, term, weight) VALUES (?,?,?)`,
+				f.Slug, term, float64(n)); err != nil {
+				return fmt.Errorf("sidecar.PopulateKeywords: insert %s/%s: %w", f.Slug, term, err)
+			}
+		}
+	}
+	return nil
+}
+
+// OverlapScores returns, per slug, the count of DISTINCT query terms that
+// appear in that slug's keyword set. Empty query → empty map.
+func (s *Store) OverlapScores(queryTerms []string) (map[string]int, error) {
+	out := map[string]int{}
+	seen := map[string]bool{}
+	var uniq []string
+	for _, t := range queryTerms {
+		if t != "" && !seen[t] {
+			seen[t] = true
+			uniq = append(uniq, t)
+		}
+	}
+	if len(uniq) == 0 {
+		return out, nil
+	}
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(uniq)), ",")
+	args := make([]any, len(uniq))
+	for i, t := range uniq {
+		args[i] = t
+	}
+	rows, err := s.db.Query(
+		`SELECT slug, COUNT(DISTINCT term) FROM keyword WHERE term IN (`+placeholders+`) GROUP BY slug`,
+		args...)
+	if err != nil {
+		return nil, fmt.Errorf("sidecar.OverlapScores: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var slug string
+		var n int
+		if err := rows.Scan(&slug, &n); err != nil {
+			return nil, fmt.Errorf("sidecar.OverlapScores: scan: %w", err)
+		}
+		out[slug] = n
+	}
+	return out, rows.Err()
+}
