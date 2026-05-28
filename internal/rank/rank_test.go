@@ -33,34 +33,45 @@ func TestRank_MonotonicInRefCountAndEffectiveness(t *testing.T) {
 	}
 }
 
-func TestRank_ExcludesStaleAndDeleted(t *testing.T) {
+func TestRank_StatusAllowlist(t *testing.T) {
 	q := Query{Today: "2026-05-29"}
-	act := base()
-	act.Slug = "active"
-	st := base()
-	st.Slug = "stale"
-	st.Status = "stale"
-	del := base()
-	del.Slug = "deleted"
-	del.Status = "deleted"
-	got := Rank(q, []Candidate{act, st, del}, 0)
-	if len(got) != 1 || got[0].Slug != "active" {
-		t.Errorf("stale/deleted must be excluded; got %v", slugs(got))
+	mk := func(slug, status string) Candidate {
+		c := base()
+		c.Slug = slug
+		c.Status = status
+		return c
+	}
+	got := Rank(q, []Candidate{
+		mk("active", "active"),
+		mk("pinned", "pinned"),
+		mk("stale", "stale"),
+		mk("deleted", "deleted"),
+		mk("archived", "archived"),
+	}, 0)
+	if !has(got, "active") || !has(got, "pinned") {
+		t.Error("active and pinned must be injectable")
+	}
+	for _, bad := range []string{"stale", "deleted", "archived"} {
+		if has(got, bad) {
+			t.Errorf("%s must be excluded (allowlist)", bad)
+		}
 	}
 }
 
 func TestRank_ZeroSafe_NewFactStillRanks(t *testing.T) {
 	q := Query{Today: "2026-05-29"}
-	fresh := base()
-	fresh.Slug = "fresh"
-	fresh.Created = ""
-	fresh.LastInjected = ""
-	got := Rank(q, []Candidate{fresh}, 0)
+	// Fully-zero signal: overlap 0, ref 0, effectiveness 0, no dates.
+	zero := base()
+	zero.Slug = "zero"
+	zero.Effectiveness = 0
+	zero.Created = ""
+	zero.LastInjected = ""
+	got := Rank(q, []Candidate{zero}, 0)
 	if len(got) != 1 {
-		t.Fatalf("zero-signal fresh fact must still be rankable, got %d", len(got))
+		t.Fatalf("zero-signal fact must still be rankable, got %d", len(got))
 	}
 	if got[0].Score < 0 {
-		t.Errorf("score must not be negative for a zero-signal fact, got %v", got[0].Score)
+		t.Errorf("score must be >= 0 for a zero-signal fact, got %v", got[0].Score)
 	}
 }
 
@@ -124,6 +135,34 @@ func TestRank_DeterministicTieBreak(t *testing.T) {
 	got := Rank(q, []Candidate{a, c}, 0)
 	if got[0].Slug != "a" {
 		t.Errorf("tie must break by slug asc; got %v", slugs(got))
+	}
+}
+
+func TestRank_MonotonicInEffectiveness(t *testing.T) {
+	q := Query{Today: "2026-05-29"}
+	lo := base()
+	lo.Slug = "lo"
+	lo.Effectiveness = 0.2
+	hi := base()
+	hi.Slug = "hi"
+	hi.Effectiveness = 0.9
+	got := Rank(q, []Candidate{lo, hi}, 0)
+	if got[0].Slug != "hi" {
+		t.Errorf("higher effectiveness should rank first; got %v", slugs(got))
+	}
+}
+
+func TestRank_RecencyOrdering(t *testing.T) {
+	q := Query{Today: "2026-05-29"}
+	recent := base()
+	recent.Slug = "recent"
+	recent.LastInjected = "2026-05-28"
+	old := base()
+	old.Slug = "old"
+	old.LastInjected = "2026-01-01"
+	got := Rank(q, []Candidate{old, recent}, 0)
+	if got[0].Slug != "recent" {
+		t.Errorf("more recently injected should rank first; got %v", slugs(got))
 	}
 }
 
