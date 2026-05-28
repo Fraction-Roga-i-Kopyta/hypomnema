@@ -79,6 +79,9 @@ func Reproject(s *Store, files []native.MemFile, walPath string) error {
 	if err := replayOutcomes(s, walPath); err != nil {
 		return fmt.Errorf("sidecar.Reproject: outcomes: %w", err)
 	}
+	if err := s.PopulateKeywords(files); err != nil {
+		return fmt.Errorf("sidecar.Reproject: keywords: %w", err)
+	}
 	return nil
 }
 
