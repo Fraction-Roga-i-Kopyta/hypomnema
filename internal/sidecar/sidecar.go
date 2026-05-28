@@ -74,3 +74,48 @@ func (s *Store) Get(slug string) (Record, bool, error) {
 	}
 	return r, true, nil
 }
+
+// Upsert inserts or replaces the memory row keyed by slug.
+func (s *Store) Upsert(r Record) error {
+	if r.Status == "" {
+		r.Status = "active"
+	}
+	_, err := s.db.Exec(`
+INSERT INTO memory (slug, content_sha, type, name, description, project,
+	domains, created, last_injected, ref_count, status, effectiveness)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+ON CONFLICT(slug) DO UPDATE SET
+	content_sha=excluded.content_sha, type=excluded.type, name=excluded.name,
+	description=excluded.description, project=excluded.project,
+	domains=excluded.domains, created=excluded.created,
+	last_injected=excluded.last_injected, ref_count=excluded.ref_count,
+	status=excluded.status, effectiveness=excluded.effectiveness`,
+		r.Slug, r.ContentSHA, r.Type, r.Name, r.Description, r.Project,
+		r.Domains, r.Created, r.LastInjected, r.RefCount, r.Status, r.Effectiveness)
+	if err != nil {
+		return fmt.Errorf("sidecar.Upsert: %w", err)
+	}
+	return nil
+}
+
+// All returns every memory row, ordered by slug for stable output.
+func (s *Store) All() ([]Record, error) {
+	rows, err := s.db.Query(`SELECT slug, content_sha, type, name, description,
+		project, domains, created, last_injected, ref_count, status, effectiveness
+		FROM memory ORDER BY slug`)
+	if err != nil {
+		return nil, fmt.Errorf("sidecar.All: %w", err)
+	}
+	defer rows.Close()
+	var out []Record
+	for rows.Next() {
+		var r Record
+		if err := rows.Scan(&r.Slug, &r.ContentSHA, &r.Type, &r.Name,
+			&r.Description, &r.Project, &r.Domains, &r.Created, &r.LastInjected,
+			&r.RefCount, &r.Status, &r.Effectiveness); err != nil {
+			return nil, fmt.Errorf("sidecar.All: scan: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
