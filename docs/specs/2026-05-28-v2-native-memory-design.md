@@ -228,8 +228,8 @@ install/upgrade проверяет: `claude --version` ≥ 2.1.59 **И** auto-me
 ### 7.4. Новый юзер (fresh v2)
 Нет v1-стора. install: гейт (§7.1) → Go-бинарь + 4 шима → регистрация шимов → пустой sidecar + глобальный стор-дир → конверсия `seeds/` в native-формат и раскладка. `seeds/` теперь поставляются в native-формате.
 
-### 7.5. Доки и артефакты
-`docs/MIGRATION.md` +раздел «v1.x → v2.0» (гейт, шаги, rollback). `README.md` — переписать ложную премису «starts every session from zero» (native стартует не с нуля) на framing «governance-over-native». Обновить `install.sh` / `uninstall.sh` / `Makefile` / `CHANGELOG.md`. v1.x остаётся на своём теге/ветке.
+### 7.5. Доки, артефакты и релиз
+`docs/MIGRATION.md` +раздел «v1.x → v2.0» (гейт, шаги, rollback). `README.md` — переписать ложную премису «starts every session from zero» (native стартует не с нуля) на framing «governance-over-native». **`CLAUDE.md` (и проектная памятка) — переписать под v2:** native+sidecar модель, новые команды/шимы, удалённые фичи (TF-IDF/shadow/cold-start/два пайплайна), глобальный стор. Обновить `install.sh` / `uninstall.sh` / `Makefile` / `CHANGELOG.md`. **Релиз:** тег `v2.0.0` + GitHub release через skill `/release` (полный test-gate + CHANGELOG + GH release notes). v1.x остаётся на своём теге/ветке.
 
 ---
 
@@ -289,5 +289,6 @@ install/upgrade проверяет: `claude --version` ≥ 2.1.59 **И** auto-me
 - [ ] Rollback восстанавливает v1-состояние из backup
 - [ ] Fresh-install нового юзера поднимает v2 с native-seeds
 - [ ] README больше не утверждает «starts every session from zero»; MIGRATION.md покрывает v1.x → v2.0
+- [ ] README + CLAUDE.md описывают v2 (native+sidecar), не v1; CHANGELOG обновлён; GitHub-релиз `v2.0.0` опубликован через `/release`
 ```
 
