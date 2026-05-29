@@ -169,14 +169,28 @@ func TestDedup_UnknownSubcommand(t *testing.T) {
 
 // --- doctor subcommand ---
 
+// doctorFixtureCWD is the working directory the doctor fixture pretends the
+// project lives in. native.Collect encodes it into the per-project slug
+// ("/" → "-"); the test exports it via CLAUDE_PROJECT_CWD so runDoctor
+// resolves the same project.
+const doctorFixtureCWD = "/work/proj"
+
+// newDoctorFixture builds a v2 native install under tmp. The claude dir is
+// <tmp>/.claude (its parent is the synthetic home, which native.Collect
+// derives via filepath.Dir(claudeDir)). It returns that claude dir. Tests
+// set CLAUDE_HOME to it and CLAUDE_PROJECT_CWD to doctorFixtureCWD.
 func newDoctorFixture(t *testing.T) string {
 	t.Helper()
-	claude := t.TempDir()
-	for _, sub := range []string{
-		"hooks", "bin", "memory/mistakes", "memory/strategies",
-		"memory/feedback", "memory/knowledge",
+	claude := filepath.Join(t.TempDir(), ".claude")
+	slug := strings.ReplaceAll(doctorFixtureCWD, "/", "-")
+	for _, dir := range []string{
+		filepath.Join(claude, "hooks"),
+		filepath.Join(claude, "bin"),
+		filepath.Join(claude, "memory"),
+		filepath.Join(claude, "projects", slug, "memory"),
+		filepath.Join(claude, "memory-global"),
 	} {
-		if err := os.MkdirAll(filepath.Join(claude, sub), 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -203,9 +217,26 @@ func newDoctorFixture(t *testing.T) string {
 
 func TestDoctor_CleanFixtureExitsZero(t *testing.T) {
 	claude := newDoctorFixture(t)
+	// Seed the v2 native corpus (per-project + global, flat files with
+	// singular `type:` frontmatter) so the corpus check reports counts
+	// instead of warning on an empty corpus.
+	slug := strings.ReplaceAll(doctorFixtureCWD, "/", "-")
+	proj := filepath.Join(claude, "projects", slug, "memory")
+	glob := filepath.Join(claude, "memory-global")
+	writeNativeFile := func(dir, name, typ string) {
+		body := "---\ntype: " + typ + "\nstatus: active\n---\nBody.\n"
+		if err := os.WriteFile(filepath.Join(dir, name+".md"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeNativeFile(proj, "m-one", "mistake")
+	writeNativeFile(proj, "m-two", "mistake")
+	writeNativeFile(glob, "s-one", "strategy")
+
 	env := map[string]string{
-		"CLAUDE_HOME":       claude,
-		"CLAUDE_MEMORY_DIR": filepath.Join(claude, "memory"),
+		"CLAUDE_HOME":        claude,
+		"CLAUDE_MEMORY_DIR":  filepath.Join(claude, "memory"),
+		"CLAUDE_PROJECT_CWD": doctorFixtureCWD,
 	}
 	stdout, _, code := run(t, env, "doctor")
 	if code != 0 {
@@ -217,13 +248,20 @@ func TestDoctor_CleanFixtureExitsZero(t *testing.T) {
 	if !strings.Contains(stdout, "Summary:") {
 		t.Errorf("missing summary line, got %q", stdout)
 	}
+	// v2 reports singular type counts, merged across project + global.
+	for _, frag := range []string{"3 total", "mistake:2", "strategy:1"} {
+		if !strings.Contains(stdout, frag) {
+			t.Errorf("expected %q in corpus detail, got:\n%s", frag, stdout)
+		}
+	}
 }
 
 func TestDoctor_JSONOutputParses(t *testing.T) {
 	claude := newDoctorFixture(t)
 	env := map[string]string{
-		"CLAUDE_HOME":       claude,
-		"CLAUDE_MEMORY_DIR": filepath.Join(claude, "memory"),
+		"CLAUDE_HOME":        claude,
+		"CLAUDE_MEMORY_DIR":  filepath.Join(claude, "memory"),
+		"CLAUDE_PROJECT_CWD": doctorFixtureCWD,
 	}
 	stdout, _, code := run(t, env, "doctor", "--json")
 	if code != 0 {
@@ -239,10 +277,11 @@ func TestDoctor_JSONOutputParses(t *testing.T) {
 }
 
 func TestDoctor_MissingMemoryDirFails(t *testing.T) {
-	claude := t.TempDir()
+	claude := filepath.Join(t.TempDir(), ".claude")
 	env := map[string]string{
-		"CLAUDE_HOME":       claude,
-		"CLAUDE_MEMORY_DIR": filepath.Join(claude, "memory-does-not-exist"),
+		"CLAUDE_HOME":        claude,
+		"CLAUDE_MEMORY_DIR":  filepath.Join(claude, "memory-does-not-exist"),
+		"CLAUDE_PROJECT_CWD": doctorFixtureCWD,
 	}
 	_, _, code := run(t, env, "doctor")
 	if code != 1 {
