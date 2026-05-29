@@ -10,6 +10,12 @@ review-triggers:
   - after: "2027-04-15"
 ---
 
+> **Superseded (v2.0): merged into one relevance ranker (`internal/rank`).**
+> The two-pipeline split is removed; `memoryctl inject` runs a single
+> ranked pass for both SessionStart and UserPromptSubmit events. See
+> `docs/decisions/go-primary-bash-shims.md` and
+> `docs/specs/2026-05-28-v2-native-memory-design.md` §1.1.
+
 ## What
 
 Two independent ranking algorithms live side by side:
