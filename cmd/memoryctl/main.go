@@ -200,6 +200,8 @@ func main() {
 			fmt.Fprintf(os.Stderr, "memoryctl: unknown sidecar subcommand %q\n", os.Args[2])
 			os.Exit(2)
 		}
+	case "close":
+		runClose(os.Args[2:])
 	case "inject":
 		runInject(os.Args[2:])
 	case "rank":
