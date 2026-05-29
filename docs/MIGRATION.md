@@ -151,3 +151,171 @@ Three patch releases in a single day, all backward-compatible bug fixes and docu
 - **v0.10.3 → main** (as of 2026-04-23) — `memoryctl doctor` subcommand (on-demand install health check), `install.sh` stale-symlink sweep (auto-cleans legacy `memory-dedup.py` on upgrade), dedup posttool WAL lock (close read-modify-write race), `format_version: >1` forward-compat gate in UserPromptSubmit, `install.sh` registration of PreToolUse / PostToolUse / PreCompact (three hooks that were never actually wired up in prior versions despite being symlinked), `LICENSE` file with real copyright.
 
 If you're on v0.10.0 or v0.10.1 and see `install.sh` silently not registering some hooks, or a dangling `memory-dedup.py` symlink, upgrade to the current `main` — these issues are explicitly addressed.
+
+## v1.x → v2.0
+
+**MAJOR — breaking substrate change.** v2.0 repositions hypomnema as a
+governance + ranking layer over Claude Code's native memory. The v1
+self-managed `~/.claude/memory/` tree is no longer the primary store.
+This migration is guided and reversible, not silent.
+
+### Compatibility gate
+
+Before upgrading, verify two prerequisites:
+
+```bash
+claude --version   # must be ≥ 2.1.59
+```
+
+Also confirm that auto-memory is not disabled (`autoMemoryEnabled` is
+not `false` in Claude Code settings, and `CLAUDE_CODE_DISABLE_AUTO_MEMORY`
+is not set in your environment).
+
+**If either check fails:** stay on the v1.x tag — it remains fully
+functional, receives no back-ports, but does not require native memory.
+
+```bash
+# Stay on v1 (no upgrade needed):
+cd /path/to/hypomnema
+git checkout v1.1.2
+./install.sh
+```
+
+### Upgrade flow
+
+**Step 1 — dry run: review the migration plan**
+
+```bash
+memoryctl migrate --dry-run
+```
+
+This prints a plan showing which files will be:
+- **kept** — converted to native format, routed to project-native or
+  global store.
+- **pruned** — `ref_count == 0` and `status != pinned` and no outcome
+  events and `created` older than 30 days. Pruning is the natural GC
+  that a one-shot migration provides.
+- **stale-archived** — already stale by type-threshold; moved to backup,
+  not converted.
+
+**If the plan lists a `WARNING: global-fallback` for any project:** it
+means files tagged with that project slug have no corresponding entry
+in `projects.json`, so they would route to the global store instead.
+Add those projects to `projects.json` before proceeding to preserve
+correct project-scoped routing.
+
+**Step 2 — execute**
+
+```bash
+memoryctl migrate --execute
+```
+
+This:
+1. Creates `~/.claude/memory.v1-backup-<YYYY-MM-DD>/` — a full copy
+   of the v1 store. **Nothing is deleted from the original tree** until
+   you explicitly remove the backup.
+2. Converts and writes native-format files to
+   `~/.claude/projects/<slug>/memory/` (project-scoped) and
+   `~/.claude/memory-global/` (global).
+3. Seeds the SQLite sidecar and WAL from your existing WAL — preserving
+   ref_count, effectiveness history, and created dates.
+4. Prints a summary: migrated / pruned / routed to global vs project.
+
+For non-interactive environments, pass `--auto` to skip the confirmation
+prompt.
+
+**Step 3 — re-run install.sh**
+
+```bash
+./install.sh
+```
+
+This registers the four v2 shims (`session-start.sh`,
+`user-prompt-submit.sh`, `pre-tool-write.sh`, `session-stop.sh`) in
+`settings.json` and removes the v1 hook registrations. The edit is
+surgical — only hypomnema-owned entries are changed; foreign hooks are
+untouched.
+
+**Step 4 — verify**
+
+```bash
+memoryctl doctor
+```
+
+Doctor confirms sidecar integrity, global store visibility, and that
+injection returns results. A parity check (`≥70% recall overlap vs v1
+behaviour on representative keywords`) is run automatically and printed
+in the report.
+
+### Rollback
+
+If anything looks wrong after migration:
+
+```bash
+memoryctl migrate --rollback
+```
+
+This restores `~/.claude/memory.v1-backup-<date>/` to
+`~/.claude/memory/`, re-registers the v1 hooks in `settings.json`, and
+removes the v2 shim registrations. The native-format files written
+during migration are left in place (they don't conflict with v1
+operation) but the v1 hooks won't read them.
+
+Alternatively, a clean rollback to a known state:
+
+```bash
+cd /path/to/hypomnema
+git checkout v1.1.2
+./install.sh
+```
+
+Memory files and WAL are unaffected by a hook-level rollback.
+
+### What changed in v2.0
+
+**Storage:** the v1 `~/.claude/memory/` nine-directory tree is replaced
+by native memory dirs (`~/.claude/projects/<slug>/memory/`) for
+project-scoped facts and `~/.claude/memory-global/` for global facts
+(type: global). The native frontmatter schema is minimal
+(name / description / type); the full hypomnema schema lives in the
+SQLite sidecar.
+
+**Metadata:** the SQLite sidecar (`~/.claude/memory/.hypomnema.db` in
+v1, per-project in v2) is now the authoritative index for ref_count,
+effectiveness, decay status, and keyword terms. It is derived and
+rebuildable; the WAL remains the event source of truth.
+
+**Hook implementation:** four bash hooks (session-start, user-prompt-submit,
+pre-tool-write, session-stop) are now ~10-line exec shims. All logic
+lives in the `memoryctl` Go binary. `make build` is a hard requirement;
+pure-bash installs are no longer supported.
+
+**Injection pipeline:** the two v1 pipelines (SessionStart composite
+score and UserPromptSubmit substring triggers with negation) are merged
+into one relevance ranker (`internal/rank`). Substring triggers and
+negation windows are removed. Prompt tokens are treated as keyword
+signals, not pattern-match gates.
+
+**Dropped features:**
+- TF-IDF body scoring (removed; Unicode tokeniser reused in ranker).
+- FTS5 shadow retrieval (`index.db`, `memory-fts-shadow.sh`, `memoryctl fts`).
+- Cold-start gates (Bayesian dormancy, TF-IDF vocab gate).
+- Two-pipeline scoring (SessionStart composite + UserPromptSubmit priority key).
+- Substring triggers + negation (`triggers:` / `trigger:` frontmatter fields).
+- `decision-review-triggers` metric evaluation (feature deferred to a future release).
+- `scripts/parity-check.sh` (no bash reference path to check against).
+
+**Added:**
+- Global store (`~/.claude/memory-global/`) for cross-project facts.
+- `memoryctl ab` — A/B null-hypothesis harness (ranking beats random
+  8–20×, n=49; see `docs/measurements/2026-05-29-v2-ranker-ab.md`).
+- Guided migration with dry-run, backup, rollback, and parity
+  verification.
+- Degraded-ranker mode: sidecar absent or corrupt → inject continues
+  with overlap + recency only (ref_count / effectiveness neutral);
+  exit 0 always.
+
+**Frontmatter compatibility:** `triggers:` / `trigger:` / `evidence:`
+fields in existing memory files are ignored (not an error). The ranker
+uses keyword overlap against name/description/body; those frontmatter
+fields provide no lift and do not need to be removed.

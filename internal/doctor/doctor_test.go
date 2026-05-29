@@ -27,11 +27,11 @@ func newFixture(t *testing.T) (string, string) {
 			t.Fatal(err)
 		}
 	}
-	// A minimal settings.json that lists every hypomnema hook install.sh
+	// A minimal settings.json that lists every hypomnema v2 hook install.sh
 	// registers, so checkSettings is happy out of the box.
 	var hookLines []string
 	for _, cmd := range requiredHookCommands {
-		hookLines = append(hookLines, `"command": "~/.claude/hooks/`+cmd+`"`)
+		hookLines = append(hookLines, `"command": "~/.claude/hooks/v2/`+cmd+`"`)
 	}
 	settings := `{"hooks":{"_stub":[` + strings.Join(hookLines, ",") + `]}}`
 	if err := os.WriteFile(filepath.Join(claude, "settings.json"), []byte(settings), 0o644); err != nil {
@@ -67,14 +67,14 @@ func TestRun_MissingMemoryDirFails(t *testing.T) {
 
 func TestRun_SettingsMissingHookCommandFails(t *testing.T) {
 	claude, mem := newFixture(t)
-	// Rewrite settings.json to omit memory-dedup.sh — reproduces the exact
-	// pre-061c3e6 install.sh bug this whole subcommand exists to catch.
+	// Rewrite settings.json to omit session-stop.sh — verifies that a
+	// missing v2 shim is caught by checkSettings.
 	var lines []string
 	for _, cmd := range requiredHookCommands {
-		if cmd == "memory-dedup.sh" {
+		if cmd == "session-stop.sh" {
 			continue
 		}
-		lines = append(lines, `"command": "~/.claude/hooks/`+cmd+`"`)
+		lines = append(lines, `"command": "~/.claude/hooks/v2/`+cmd+`"`)
 	}
 	broken := `{"hooks":{"_stub":[` + strings.Join(lines, ",") + `]}}`
 	if err := os.WriteFile(filepath.Join(claude, "settings.json"), []byte(broken), 0o644); err != nil {
@@ -82,7 +82,7 @@ func TestRun_SettingsMissingHookCommandFails(t *testing.T) {
 	}
 	r := Run(claude, mem)
 	c := mustFindCheck(t, r, "settings_hooks_registered", FAIL)
-	if !strings.Contains(c.Detail, "memory-dedup.sh") {
+	if !strings.Contains(c.Detail, "session-stop.sh") {
 		t.Errorf("expected detail to name the missing hook, got %q", c.Detail)
 	}
 }
@@ -204,50 +204,6 @@ func TestCorpusQuality_BareFeedbackWithoutAnythingWarns(t *testing.T) {
 	}
 }
 
-func TestDecisionsPressure_NoDirectoryIsOK(t *testing.T) {
-	claude, mem := newFixture(t)
-	r := Run(claude, mem)
-	c := mustFindCheck(t, r, "decisions_review", OK)
-	if !strings.Contains(c.Detail, "no personal decisions") {
-		t.Errorf("detail should mention missing dir, got %q", c.Detail)
-	}
-}
-
-func TestDecisionsPressure_CleanADRsAreOK(t *testing.T) {
-	claude, mem := newFixture(t)
-	if err := os.MkdirAll(filepath.Join(mem, "decisions"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// ADR with future calendar → all ok.
-	body := "---\ntype: decision\nstatus: active\nreview-triggers:\n  - after: \"2099-01-01\"\n---\nBody.\n"
-	if err := os.WriteFile(filepath.Join(mem, "decisions", "future.md"),
-		[]byte(body), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	r := Run(claude, mem)
-	c := mustFindCheck(t, r, "decisions_review", OK)
-	if !strings.Contains(c.Detail, "no pressure") {
-		t.Errorf("detail should confirm no pressure, got %q", c.Detail)
-	}
-}
-
-func TestDecisionsPressure_OverdueWarns(t *testing.T) {
-	claude, mem := newFixture(t)
-	if err := os.MkdirAll(filepath.Join(mem, "decisions"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	body := "---\ntype: decision\nstatus: active\nreview-triggers:\n  - after: \"2020-01-01\"\n---\nBody.\n"
-	if err := os.WriteFile(filepath.Join(mem, "decisions", "overdue-one.md"),
-		[]byte(body), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	r := Run(claude, mem)
-	c := mustFindCheck(t, r, "decisions_review", WARN)
-	if !strings.Contains(c.Detail, "overdue-one") {
-		t.Errorf("detail should name the overdue slug, got %q", c.Detail)
-	}
-}
-
 func TestOpenQuanta_AllClosedIsOK(t *testing.T) {
 	claude, mem := newFixture(t)
 	today := time.Now().Format("2006-01-02")
@@ -347,10 +303,9 @@ func TestRequiredHookCommands_MatchInstallScript(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read %s: %v", installPath, err)
 	}
-	// Match every register_hook line that references ~/.claude/hooks/<name>.sh.
-	// register_hook lines follow the shape:
-	//   register_hook <event> <matcher> "~/.claude/hooks/memory-X.sh" <pri> "<msg>"
-	re := regexp.MustCompile(`~/\.claude/hooks/(memory-[a-z0-9-]+\.sh)`)
+	// Match every register_hook line that references the v2 shim directory.
+	// install.sh uses $HOME/.claude/hooks/v2/<name>.sh in register_hook calls.
+	re := regexp.MustCompile(`(?:~|\$HOME)/\.claude/hooks/v2/([a-z0-9-]+\.sh)`)
 	matches := re.FindAllStringSubmatch(string(data), -1)
 
 	fromInstall := map[string]struct{}{}
