@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/sidecar"
 )
 
 // Status is the three-level health grade for each check.
@@ -135,7 +136,7 @@ func Run(claudeDir, memoryDir, cwd string) Report {
 		checkBrokenSymlinks(filepath.Join(claudeDir, "hooks"), "hooks"),
 		checkBrokenSymlinks(filepath.Join(claudeDir, "bin"), "bin"),
 		checkMemoryctl(claudeDir),
-		checkCorpus(claudeDir, cwd),
+		checkCorpus(claudeDir, memoryDir, cwd),
 		checkWALErrors(filepath.Join(memoryDir, ".wal"), now),
 		checkOpenQuanta(filepath.Join(memoryDir, ".wal"), now),
 		checkSidecar(memoryDir, now),
@@ -282,9 +283,16 @@ func checkMemoryctl(claudeDir string) Check {
 // checkCorpus enumerates the v2 native corpus (per-project + global, merged
 // by native.Collect) and reports counts by logical type. The type is the
 // singular `type:` frontmatter value (mistake, strategy, …), not a directory.
-// Pinned/stale totals come from each file's status: line.
-func checkCorpus(claudeDir, cwd string) Check {
+//
+// Native files carry NO status: in v2 status lives only in the sidecar, so
+// pinned/stale totals are looked up from the sidecar (.sidecar.db) by slug.
+// A native file with no matching sidecar row defaults to "active". The lookup
+// is fully graceful: a missing or unreadable sidecar yields 0 pinned / 0 stale
+// and never fails the check. Sidecar rows whose status is "deleted" are
+// orphans (no live native file) and contribute nothing to the corpus counts.
+func checkCorpus(claudeDir, memoryDir, cwd string) Check {
 	files := native.Collect(claudeDir, cwd)
+	statusBySlug := sidecarStatusMap(memoryDir)
 	counts := map[string]int{}
 	pinned, stale := 0, 0
 	for _, f := range files {
@@ -293,7 +301,11 @@ func checkCorpus(claudeDir, cwd string) Check {
 			typ = "untyped"
 		}
 		counts[typ]++
-		switch quickReadStatus(f.Path) {
+		status := statusBySlug[f.Slug]
+		if status == "" {
+			status = "active"
+		}
+		switch status {
 		case "pinned":
 			pinned++
 		case "stale":
@@ -320,10 +332,40 @@ func checkCorpus(claudeDir, cwd string) Check {
 	return Check{Name: "corpus_counts", Status: status, Detail: detail}
 }
 
+// sidecarStatusMap opens the sidecar at memoryDir/.sidecar.db and returns a
+// slug→status map for every live row. Rows with status "deleted" are skipped
+// (orphans whose native file is gone). Fully graceful: a missing or unreadable
+// sidecar returns an empty (non-nil) map so the caller can default every native
+// file to "active" without crashing or failing the check.
+func sidecarStatusMap(memoryDir string) map[string]string {
+	out := map[string]string{}
+	dbPath := filepath.Join(memoryDir, ".sidecar.db")
+	// doctor is strictly read-only — do not let sidecar.Open create an empty
+	// DB as a side effect when none exists. Treat absence as "no statuses".
+	if _, err := os.Stat(dbPath); err != nil {
+		return out
+	}
+	s, err := sidecar.Open(dbPath)
+	if err != nil {
+		return out
+	}
+	defer s.Close()
+	recs, err := s.All()
+	if err != nil {
+		return out
+	}
+	for _, r := range recs {
+		if r.Status == "deleted" {
+			continue
+		}
+		out[r.Slug] = r.Status
+	}
+	return out
+}
+
 // fmStatus reports whether the first frontmatter block declares a `status:`
 // key and, if so, its (possibly empty) value. Distinguishing "absent" from
-// "present but empty" is the whole point — quickReadStatus collapses both to
-// "". Stops at the second `---` sentinel.
+// "present but empty" is the whole point. Stops at the second `---` sentinel.
 func fmStatus(path string) (present bool, value string) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -405,27 +447,6 @@ func checkCorpusQuality(claudeDir, cwd string) Check {
 		Detail: detail,
 		Extra:  extra,
 	}
-}
-
-// quickReadStatus scans at most the first ~40 lines of a file for a
-// status: line. Full-file parse is unnecessary here.
-func quickReadStatus(path string) string {
-	f, err := os.Open(path)
-	if err != nil {
-		return ""
-	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 8*1024), 64*1024)
-	for i := 0; sc.Scan() && i < 40; i++ {
-		line := sc.Text()
-		if strings.HasPrefix(line, "status:") {
-			v := strings.TrimSpace(strings.TrimPrefix(line, "status:"))
-			v = strings.Trim(v, `"'`)
-			return v
-		}
-	}
-	return ""
 }
 
 // walErrorEvents lists WAL event types that signal corpus-health trouble.

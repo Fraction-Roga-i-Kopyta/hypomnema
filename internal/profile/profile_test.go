@@ -5,7 +5,31 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 )
+
+// nativeFile materialises a native MemFile from a slug + content. The content
+// is written to disk under dir so f.Path is real (ambient detection re-reads
+// the file), and parsed exactly the way native.List would so f.Type / f.Body
+// match production.
+func nativeFile(t *testing.T, dir, slug, content string) native.MemFile {
+	t.Helper()
+	mustMkdir(t, dir)
+	path := filepath.Join(dir, slug+".md")
+	mustWrite(t, path, content)
+	files, err := native.List(dir)
+	if err != nil {
+		t.Fatalf("native.List(%s): %v", dir, err)
+	}
+	for _, f := range files {
+		if f.Slug == slug+".md" {
+			return f
+		}
+	}
+	t.Fatalf("native.List(%s): slug %q not found", dir, slug)
+	return native.MemFile{}
+}
 
 // TestGenerate walks a representative fixture end-to-end: WAL with every
 // event type the script counts, an ambient-classified feedback file, two
@@ -14,18 +38,22 @@ import (
 // points at the specific feature.
 func TestGenerate(t *testing.T) {
 	dir := t.TempDir()
-	mustMkdir(t, filepath.Join(dir, "mistakes"))
-	mustMkdir(t, filepath.Join(dir, "strategies"))
 
 	mustWrite(t, filepath.Join(dir, ".wal"), walFixture)
-	mustWrite(t, filepath.Join(dir, "ambient-rule.md"), ambientFile)
-	mustWrite(t, filepath.Join(dir, "mistakes/bar-mistake.md"), mistakeUniversal)
-	mustWrite(t, filepath.Join(dir, "mistakes/foo-mistake.md"), mistakeDomain)
-	mustWrite(t, filepath.Join(dir, "strategies/s1.md"), strategy4)
-	mustWrite(t, filepath.Join(dir, "strategies/s2.md"), strategy1)
+	// v2: content comes from native MemFiles, not memoryDir subdirs. The WAL
+	// and the output file still live in memoryDir (dir). Native source files
+	// are materialised under a separate native dir.
+	nat := filepath.Join(dir, "native")
+	files := []native.MemFile{
+		nativeFile(t, nat, "ambient-rule", ambientFile),
+		nativeFile(t, nat, "bar-mistake", mistakeUniversal),
+		nativeFile(t, nat, "foo-mistake", mistakeDomain),
+		nativeFile(t, nat, "s1", strategy4),
+		nativeFile(t, nat, "s2", strategy1),
+	}
 
 	t.Setenv("HYPOMNEMA_NOW", "2026-04-22 12:34")
-	if err := Generate(dir); err != nil {
+	if err := Generate(dir, files); err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
 
@@ -159,16 +187,13 @@ func TestSplitSessionMetrics(t *testing.T) {
 // reconcile both shapes in one pass.
 func TestGenerateMixedV1V2WAL(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "mistakes"), 0o755); err != nil {
-		t.Fatal(err)
-	}
 	mixed := `2026-04-01|session-metrics|backend|error_count:5,tool_calls:10,duration:60s
 2026-04-02|session-metrics|domains:backend,error_count:3,tool_calls:20,duration:120s|sess-v2-a
 2026-04-03|session-metrics|frontend,testing|error_count:0,tool_calls:8,duration:45s
 2026-04-04|session-metrics|domains:frontend,testing,error_count:2,tool_calls:15,duration:90s|sess-v2-b
 `
 	mustWrite(t, filepath.Join(dir, ".wal"), mixed)
-	if err := Generate(dir); err != nil {
+	if err := Generate(dir, nil); err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
 	got, err := os.ReadFile(filepath.Join(dir, "self-profile.md"))
@@ -190,7 +215,7 @@ func TestGenerateNoWAL(t *testing.T) {
 	// Mirrors bash `[ -f "$WAL_FILE" ] || exit 0` — no .wal means no-op,
 	// no self-profile.md written.
 	dir := t.TempDir()
-	if err := Generate(dir); err != nil {
+	if err := Generate(dir, nil); err != nil {
 		t.Fatalf("Generate without WAL should be no-op, got: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "self-profile.md")); !os.IsNotExist(err) {
@@ -204,7 +229,7 @@ func TestGenerateEmptyCorpus(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, ".wal"), "")
 
-	if err := Generate(dir); err != nil {
+	if err := Generate(dir, nil); err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
 	out, err := os.ReadFile(filepath.Join(dir, "self-profile.md"))
@@ -229,7 +254,7 @@ func TestGenerateEmptyCorpus(t *testing.T) {
 func TestGenerate_NoOrphanTmpOnSuccess(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, ".wal"), "")
-	if err := Generate(dir); err != nil {
+	if err := Generate(dir, nil); err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
 	matches, err := filepath.Glob(filepath.Join(dir, ".self-profile.*.tmp"))

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/sidecar"
 )
 
 // fixtureCWD is the working directory every fixture pretends the project
@@ -75,6 +77,23 @@ func writeNative(t *testing.T, dir, slug, typ, status string) {
 	body := "---\ntype: " + typ + "\nstatus: " + status + "\n---\nBody.\n"
 	if err := os.WriteFile(filepath.Join(dir, slug+".md"), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// seedSidecar creates a real .sidecar.db in mem and upserts one row per
+// (slug → status) pair. Status in v2 lives ONLY in the sidecar, so the
+// doctor's pinned/stale counts must come from here, not file frontmatter.
+func seedSidecar(t *testing.T, mem string, statusBySlug map[string]string) {
+	t.Helper()
+	s, err := sidecar.Open(filepath.Join(mem, ".sidecar.db"))
+	if err != nil {
+		t.Fatalf("seedSidecar: open: %v", err)
+	}
+	defer s.Close()
+	for slug, status := range statusBySlug {
+		if err := s.Upsert(sidecar.Record{Slug: slug, Status: status}); err != nil {
+			t.Fatalf("seedSidecar: upsert %q: %v", slug, err)
+		}
 	}
 }
 
@@ -185,12 +204,63 @@ func TestRun_CorpusWithFilesReportsCounts(t *testing.T) {
 	glob := globalDir(claude)
 	// v2 native layout: flat files with singular `type:` frontmatter, split
 	// across the per-project and global stores. native.Collect merges both.
+	// Native files carry NO status — pinned/stale live ONLY in the sidecar,
+	// so we seed a real .sidecar.db with statuses keyed by native slug.
 	writeNative(t, proj, "m-one", "mistake", "active")
 	writeNative(t, proj, "m-two", "mistake", "pinned")
 	writeNative(t, glob, "s-one", "strategy", "stale")
+	seedSidecar(t, mem, map[string]string{
+		"m-one.md": "active",
+		"m-two.md": "pinned",
+		"s-one.md": "stale",
+	})
 	r := Run(claude, mem, cwd)
 	c := mustFindCheck(t, r, "corpus_counts", OK)
 	for _, fragment := range []string{"3 total", "mistake:2", "strategy:1", "1 pinned", "1 stale"} {
+		if !strings.Contains(c.Detail, fragment) {
+			t.Errorf("expected %q in detail, got %q", fragment, c.Detail)
+		}
+	}
+}
+
+// TestRun_CorpusWithoutSidecarReportsZeroStatusCounts verifies the graceful
+// path: native files present but no sidecar at all → pinned/stale default to
+// 0 (status is sidecar-sourced), and the check still reports total/per-type
+// counts as OK rather than failing.
+func TestRun_CorpusWithoutSidecarReportsZeroStatusCounts(t *testing.T) {
+	claude, mem, cwd := newFixture(t)
+	proj := projDir(claude, cwd)
+	writeNative(t, proj, "m-one", "mistake", "active")
+	writeNative(t, proj, "m-two", "mistake", "active")
+	// No .sidecar.db seeded.
+	r := Run(claude, mem, cwd)
+	c := mustFindCheck(t, r, "corpus_counts", OK)
+	for _, fragment := range []string{"2 total", "mistake:2", "0 pinned", "0 stale"} {
+		if !strings.Contains(c.Detail, fragment) {
+			t.Errorf("expected %q in detail, got %q", fragment, c.Detail)
+		}
+	}
+}
+
+// TestRun_CorpusIgnoresDeletedSidecarRows verifies that a sidecar row with
+// status "deleted" (an orphan whose native file is gone) is not counted as
+// live corpus, and that a native file with no matching sidecar row defaults
+// to active (not pinned/stale).
+func TestRun_CorpusIgnoresDeletedSidecarRows(t *testing.T) {
+	claude, mem, cwd := newFixture(t)
+	proj := projDir(claude, cwd)
+	writeNative(t, proj, "m-one", "mistake", "active")
+	writeNative(t, proj, "m-two", "mistake", "active")
+	seedSidecar(t, mem, map[string]string{
+		"m-one.md":   "pinned",
+		"gone.md":    "deleted", // orphan — no native file; must not be counted
+		"orphan2.md": "stale",   // also no native file; must not be counted
+	})
+	r := Run(claude, mem, cwd)
+	c := mustFindCheck(t, r, "corpus_counts", OK)
+	// 2 native files; m-one pinned (from sidecar), m-two defaults active.
+	// Deleted/orphan sidecar rows contribute nothing to the live counts.
+	for _, fragment := range []string{"2 total", "mistake:2", "1 pinned", "0 stale"} {
 		if !strings.Contains(c.Detail, fragment) {
 			t.Errorf("expected %q in detail, got %q", fragment, c.Detail)
 		}

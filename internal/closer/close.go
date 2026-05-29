@@ -57,9 +57,9 @@ func Run(in Input) (Result, error) {
 	wal.Append(in.MemoryDir, metrics, "")
 	wal.Append(in.MemoryDir, fmt.Sprintf("%s|session-close|%s|%s", in.Today, sid, sid), "")
 
+	nativeFiles := collectNative(in.ClaudeHome, in.CWD)
 	if s, err := sidecar.Open(filepath.Join(in.MemoryDir, ".sidecar.db")); err == nil {
-		files := collectNative(in.ClaudeHome, in.CWD)
-		_ = sidecar.Reproject(s, files, filepath.Join(in.MemoryDir, ".wal"))
+		_ = sidecar.Reproject(s, nativeFiles, filepath.Join(in.MemoryDir, ".wal"))
 		if n, derr := s.MarkStale(in.Today); derr == nil {
 			res.Staled = n
 		}
@@ -74,7 +74,7 @@ func Run(in Input) (Result, error) {
 		_ = memindex.Write(projDir, memindex.Render(projFiles, memindex.DefaultMaxBytes))
 	}
 
-	_ = profile.Generate(in.MemoryDir)
+	_ = profile.Generate(in.MemoryDir, nativeFiles)
 
 	return res, nil
 }

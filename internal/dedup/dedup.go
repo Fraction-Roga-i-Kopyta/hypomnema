@@ -1,7 +1,7 @@
 // Package dedup reimplements bin/memory-dedup.py's pretool/posttool
 // orchestration in Go. It consumes the candidate file path (plus stdin
-// content for pretool invocations), scans ~/.claude/memory/mistakes/,
-// and returns a Decision the CLI translates into exit codes and WAL events.
+// content for pretool invocations), scans the native mistake corpus, and
+// returns a Decision the CLI translates into exit codes and WAL events.
 //
 // Identical semantics to the Python version:
 //   - Pretool mode (file does not exist yet): read stdin for content,
@@ -11,6 +11,11 @@
 //   - Posttool mode (file already on disk): read file directly. On
 //     high-similarity hit, increment recurrence on the existing file,
 //     delete the new file, write `dedup-merged`, exit 1.
+//
+// v2 change: the comparison corpus is the native memory store (mistake-typed
+// files passed in Options.Files), not the retired memoryDir/mistakes/ subdir.
+// Only the file SOURCE changed — the similarity logic, thresholds, exit codes,
+// and WAL event shapes are identical to the v1 implementation.
 package dedup
 
 import (
@@ -25,6 +30,7 @@ import (
 	"time"
 
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/fuzzy"
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/pathutil"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/wal"
 )
@@ -52,8 +58,14 @@ const (
 
 // Options controls Run behaviour.
 type Options struct {
-	// MemoryDir is the memory root (default: ~/.claude/memory via CLI).
+	// MemoryDir is the metadata root (.wal, .sidecar.db) — default
+	// ~/.claude/memory via CLI. In v2 it no longer holds mistake content.
 	MemoryDir string
+	// Files is the native memory corpus to compare against (merged per-project
+	// + global, as native.Collect returns). Run filters it to mistake-typed
+	// files. The native mistake files are the dedup comparison source — there
+	// is no MemoryDir/mistakes/ subdir in v2.
+	Files []native.MemFile
 	// SessionID is passed through to WAL entries for traceability.
 	SessionID string
 	// Stdin is the content source when the target file does not yet
@@ -84,23 +96,23 @@ func Run(targetPath string, opts Options) (Decision, error) {
 		opts.Out = io.Discard
 	}
 
-	// Boundary check: targetPath must live inside MemoryDir. Without
-	// this, a caller could feed an arbitrary path; dedup would read its
-	// root-cause and on a 100% match enter the merge path — deleting
-	// the outside file and writing a dedup-merged WAL event for
-	// content that never belonged in the memory directory. Failure
-	// mode is Allow (silent no-op) per the package's "dedup must never
-	// break a legitimate write" contract. External review 2026-05-08
-	// finding E3.
+	// Boundary check (v2): in v1 the target had to live inside MemoryDir. v2
+	// mistake content lives in the native store, not MemoryDir, so that test no
+	// longer applies. The safety property it protected still does: a caller
+	// must not be able to feed an arbitrary outside path and, on a 100% match,
+	// have dedup delete that file (posttool merge path). We therefore require
+	// the target's parent directory to be one of the directories the native
+	// mistake corpus actually lives in (derived from Options.Files). A target
+	// whose parent is not a known native dir is rejected with Allow (silent
+	// no-op) per the package's "dedup must never break a legitimate write"
+	// contract. With no native files there is nothing to compare against, so
+	// the scan below short-circuits to Allow anyway. External review
+	// 2026-05-08 finding E3 (security property preserved, source re-pointed).
 	absTarget, err := filepath.Abs(targetPath)
 	if err != nil {
 		return Allow, nil
 	}
-	absMem, err := filepath.Abs(opts.MemoryDir)
-	if err != nil {
-		return Allow, nil
-	}
-	if !strings.HasPrefix(absTarget, absMem+string(filepath.Separator)) {
+	if !targetInNativeDirs(absTarget, opts.Files) {
 		return Allow, nil
 	}
 
@@ -111,8 +123,7 @@ func Run(targetPath string, opts Options) (Decision, error) {
 		return Allow, nil
 	}
 
-	mistakesDir := filepath.Join(opts.MemoryDir, "mistakes")
-	bestScore, bestFile, err := scanMistakes(mistakesDir, targetPath, newRC)
+	bestScore, bestFile, err := scanMistakes(opts.Files, targetPath, newRC)
 	if err != nil {
 		return Allow, nil
 	}
@@ -214,45 +225,57 @@ func resolveRootCause(path string, pretool bool, stdin io.Reader) (string, error
 	return val, nil
 }
 
-// scanMistakes walks mistakesDir for *.md files, extracts their root-cause
-// lines, and returns the highest-scoring existing file. Ties broken by
-// lexicographic path — stable between runs. Files that can't be read or
-// don't have a root-cause are skipped silently (same policy as Python).
-func scanMistakes(mistakesDir, targetPath, newRC string) (float64, string, error) {
-	entries, err := os.ReadDir(mistakesDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return 0, "", nil
+// targetInNativeDirs reports whether absTarget sits directly inside one of the
+// directories the native mistake corpus lives in (the parent dir of any file in
+// files). This is the v2 boundary guard: it admits the legitimate native memory
+// directories (per-project + global) without hard-coding their paths, and
+// rejects an arbitrary outside path the same way the old MemoryDir-prefix check
+// did. Returns false when files is empty (nothing to compare against anyway).
+func targetInNativeDirs(absTarget string, files []native.MemFile) bool {
+	targetDir := filepath.Dir(absTarget)
+	for _, f := range files {
+		absP, err := filepath.Abs(f.Path)
+		if err != nil {
+			continue
 		}
-		return 0, "", err
+		if filepath.Dir(absP) == targetDir {
+			return true
+		}
 	}
+	return false
+}
 
+// scanMistakes iterates the native corpus (filtered to mistake-typed files),
+// extracts each file's root-cause line, and returns the highest-scoring
+// existing file. Ties broken by first-seen order over files (callers pass a
+// stable, slug-ordered slice). The target itself is skipped by absolute path
+// (posttool: the new file is already on disk and may be in the corpus). Files
+// that can't be read or don't have a root-cause are skipped silently (same
+// policy as the Python implementation). The similarity logic and thresholds
+// are unchanged — only the file source moved from a dir read to Options.Files.
+func scanMistakes(files []native.MemFile, targetPath, newRC string) (float64, string, error) {
 	bestScore := 0.0
 	bestFile := ""
 
 	absTarget, _ := filepath.Abs(targetPath)
 
-	for _, e := range entries {
-		if e.IsDir() {
+	for _, f := range files {
+		if f.Type != "mistake" {
 			continue
 		}
-		if !strings.HasSuffix(e.Name(), ".md") {
-			continue
-		}
-		p := filepath.Join(mistakesDir, e.Name())
-		absP, _ := filepath.Abs(p)
+		absP, _ := filepath.Abs(f.Path)
 		if absP == absTarget {
 			continue
 		}
 
-		existingRC, err := readRootCauseFromFile(p)
+		existingRC, err := readRootCauseFromFile(f.Path)
 		if err != nil || existingRC == "" {
 			continue
 		}
 		score := fuzzy.TokenSetRatio(newRC, existingRC)
 		if score > bestScore {
 			bestScore = score
-			bestFile = p
+			bestFile = f.Path
 		}
 	}
 	return bestScore, bestFile, nil

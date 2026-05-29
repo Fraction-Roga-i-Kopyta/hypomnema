@@ -17,7 +17,6 @@ import (
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/wal"
 )
 
-
 const usage = `memoryctl — hypomnema memory CLI
 
 Usage:
@@ -151,7 +150,15 @@ func runSelfProfile(_ []string) {
 	// regen entirely. Release is a no-op on a nil handle.
 	defer lock.Release()
 
-	if err := profile.Generate(memoryDir()); err != nil {
+	// v2: content (mistakes/strategies/ambient) comes from native memory, not
+	// memoryDir subdirs. Resolve the merged per-project + global corpus and
+	// pass it to Generate; the WAL + output file still live in memoryDir.
+	files, err := collectNative()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "memoryctl self-profile: %v\n", err)
+		os.Exit(1)
+	}
+	if err := profile.Generate(memoryDir(), files); err != nil {
 		// Non-zero exit would get swallowed by session-stop's `2>/dev/null &`
 		// anyway; still, propagate for tests that call the binary directly.
 		fmt.Fprintf(os.Stderr, "memoryctl self-profile: %v\n", err)
@@ -208,10 +215,11 @@ func runDoctor(args []string) {
 // runDedupCheck implements `memoryctl dedup check <file-path>`. The exit
 // code protocol matches bin/memory-dedup.py and the contract hooks/
 // memory-dedup.sh expects:
-//   0 — allow (default), also used for medium-similarity warning
-//   1 — posttool merge happened (legacy Python behaviour; shell wrapper
-//       treats non-zero non-2 exits as "not blocking")
-//   2 — pretool block; wrapper propagates stderr message to Claude
+//
+//	0 — allow (default), also used for medium-similarity warning
+//	1 — posttool merge happened (legacy Python behaviour; shell wrapper
+//	    treats non-zero non-2 exits as "not blocking")
+//	2 — pretool block; wrapper propagates stderr message to Claude
 func runDedupCheck(args []string) {
 	if len(args) < 1 {
 		os.Exit(0) // graceful no-op; matches Python policy
@@ -222,8 +230,13 @@ func runDedupCheck(args []string) {
 	// on stderr for exit 2), and candidate warnings are informational —
 	// stderr keeps stdout clean for any future scripted consumer of this
 	// subcommand.
+	// v2: the dedup comparison corpus is the native mistake store, not a
+	// MemoryDir/mistakes/ subdir. Resolve the merged per-project + global
+	// native corpus; on failure pass nil (dedup degrades to Allow).
+	files, _ := collectNative()
 	opts := dedup.Options{
 		MemoryDir: memoryDir(),
+		Files:     files,
 		SessionID: os.Getenv("HYPOMNEMA_SESSION_ID"),
 		Today:     os.Getenv("HYPOMNEMA_TODAY"),
 		Stdin:     os.Stdin,
@@ -245,4 +258,3 @@ func runDedupCheck(args []string) {
 		os.Exit(0)
 	}
 }
-
