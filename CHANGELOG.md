@@ -1,6 +1,6 @@
 # Changelog
 
-## [2.0.0] — unreleased
+## [2.0.0] — 2026-05-29
 
 MAJOR. Repositions hypomnema as a governance + ranking layer over
 Claude Code's native file memory (v2.1.59+). The self-managed
