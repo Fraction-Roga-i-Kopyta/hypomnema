@@ -202,6 +202,8 @@ func main() {
 		}
 	case "rank":
 		runRank(os.Args[2:])
+	case "ab":
+		runAB(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "memoryctl: unknown command %q\n", os.Args[1])
 		os.Exit(2)
