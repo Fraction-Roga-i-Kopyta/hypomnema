@@ -70,6 +70,27 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
+// runStdin is like run() but feeds `stdin` to the process.
+func runStdin(t *testing.T, env map[string]string, stdin string, args ...string) (stdout, stderr string, exit int) {
+	t.Helper()
+	cmd := exec.Command(binPath, args...)
+	cmd.Stdin = strings.NewReader(stdin)
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+	cmd.Env = append(os.Environ(), "GOCOVERDIR="+coverDir)
+	for k, v := range env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	err := cmd.Run()
+	if ee, ok := err.(*exec.ExitError); ok {
+		exit = ee.ExitCode()
+	} else if err != nil {
+		t.Fatalf("runStdin: %v\nstderr: %s", err, errBuf.String())
+	}
+	return outBuf.String(), errBuf.String(), exit
+}
+
 // run invokes the built binary with `args` and optional env overrides.
 // Returns stdout, stderr, exit code. GOCOVERDIR points at the shared
 // TestMain-level coverdir so subprocess coverage accumulates across
@@ -127,47 +148,6 @@ func TestMain_UnknownCommand(t *testing.T) {
 	}
 }
 
-// --- fts subcommand ---
-
-func TestFts_NoSubcommand(t *testing.T) {
-	_, _, code := run(t, nil, "fts")
-	if code != 2 {
-		t.Errorf("expected exit 2, got %d", code)
-	}
-}
-
-func TestFts_UnknownSubcommand(t *testing.T) {
-	_, stderr, code := run(t, nil, "fts", "bogus")
-	if code != 2 {
-		t.Errorf("expected exit 2, got %d", code)
-	}
-	if !strings.Contains(stderr, "unknown fts subcommand") {
-		t.Errorf("stderr should identify unknown fts subcommand, got %q", stderr)
-	}
-}
-
-// TestFts_QueryInvalidLimit pins the v0.10.3 fix: non-integer or
-// zero/negative limit must exit 2 with an actionable message rather
-// than silently running with a degraded value.
-func TestFts_QueryInvalidLimit(t *testing.T) {
-	for _, bad := range []string{"abc", "0", "-5"} {
-		_, stderr, code := run(t, nil, "fts", "query", "prompt", bad)
-		if code != 2 {
-			t.Errorf("limit=%q: expected exit 2, got %d", bad, code)
-		}
-		if !strings.Contains(stderr, "invalid limit") {
-			t.Errorf("limit=%q: stderr should say invalid limit, got %q", bad, stderr)
-		}
-	}
-}
-
-func TestFts_QueryNoArgs(t *testing.T) {
-	_, _, code := run(t, nil, "fts", "query")
-	if code != 2 {
-		t.Errorf("expected exit 2, got %d", code)
-	}
-}
-
 // --- dedup subcommand ---
 
 func TestDedup_NoSubcommand(t *testing.T) {
@@ -187,53 +167,6 @@ func TestDedup_UnknownSubcommand(t *testing.T) {
 	}
 }
 
-// --- tfidf subcommand ---
-
-func TestTfidf_UnknownSubcommand(t *testing.T) {
-	_, stderr, code := run(t, nil, "tfidf", "bogus")
-	if code != 2 {
-		t.Errorf("expected exit 2, got %d", code)
-	}
-	if !strings.Contains(stderr, "unknown tfidf subcommand") {
-		t.Errorf("stderr should identify unknown tfidf subcommand, got %q", stderr)
-	}
-}
-
-func TestTfidf_RebuildBuildsIndex(t *testing.T) {
-	mem := t.TempDir()
-	for _, sub := range []string{"mistakes", "feedback", "knowledge", "strategies", "notes"} {
-		if err := os.MkdirAll(filepath.Join(mem, sub), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for i, body := range []string{
-		"alpha beta gamma delta epsilon",
-		"alpha beta foxtrot",
-		"unique tokens here onlyone",
-	} {
-		name := []string{"a.md", "b.md", "c.md"}[i]
-		frontmatter := "---\ntype: mistake\n---\n" + body + "\n"
-		if err := os.WriteFile(filepath.Join(mem, "mistakes", name),
-			[]byte(frontmatter), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	_, stderr, code := run(t, map[string]string{"CLAUDE_MEMORY_DIR": mem},
-		"tfidf", "rebuild")
-	if code != 0 {
-		t.Fatalf("tfidf rebuild: exit %d, stderr=%q", code, stderr)
-	}
-	idxPath := filepath.Join(mem, ".tfidf-index")
-	data, err := os.ReadFile(idxPath)
-	if err != nil {
-		t.Fatalf(".tfidf-index should exist: %v", err)
-	}
-	if !strings.Contains(string(data), "foxtrot") {
-		t.Errorf("index should include a token unique to b.md ('foxtrot'), got:\n%s", data)
-	}
-}
-
 // --- doctor subcommand ---
 
 func newDoctorFixture(t *testing.T) string {
@@ -247,16 +180,14 @@ func newDoctorFixture(t *testing.T) string {
 			t.Fatal(err)
 		}
 	}
-	// settings.json with all required hypomnema hook commands (v0.14: 8).
+	// settings.json with all required hypomnema v2 hook shims (v2: 4).
 	hooks := []string{
-		"memory-session-start.sh", "memory-stop.sh",
-		"memory-user-prompt-submit.sh", "memory-dedup.sh",
-		"memory-outcome.sh", "memory-error-detect.sh",
-		"memory-precompact.sh", "memory-secrets-detect.sh",
+		"session-start.sh", "user-prompt-submit.sh",
+		"pre-tool-write.sh", "session-stop.sh",
 	}
 	lines := make([]string, 0, len(hooks))
 	for _, h := range hooks {
-		lines = append(lines, `"command": "~/.claude/hooks/`+h+`"`)
+		lines = append(lines, `"command": "~/.claude/hooks/v2/`+h+`"`)
 	}
 	settings := `{"hooks":{"_stub":[` + strings.Join(lines, ",") + `]}}`
 	if err := os.WriteFile(filepath.Join(claude, "settings.json"),
@@ -329,199 +260,6 @@ func TestDoctor_UnknownFlagFails(t *testing.T) {
 	}
 }
 
-// --- decisions subcommand ---
-
-func TestDecisions_UnknownSubcommand(t *testing.T) {
-	_, stderr, code := run(t, nil, "decisions", "bogus")
-	if code != 2 {
-		t.Errorf("expected exit 2, got %d", code)
-	}
-	if !strings.Contains(stderr, "unknown decisions subcommand") {
-		t.Errorf("stderr should identify unknown decisions subcommand, got %q", stderr)
-	}
-}
-
-// writeADR seeds a decisions/*.md with given frontmatter lines
-// (review-triggers: included inline).
-func writeADR(t *testing.T, dir, slug, frontmatter string) {
-	t.Helper()
-	body := "---\ntype: decision\nstatus: active\n" + frontmatter + "---\nBody.\n"
-	p := filepath.Join(dir, slug+".md")
-	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestDecisions_ReviewAllOK(t *testing.T) {
-	adrDir := t.TempDir()
-	mem := t.TempDir()
-	// Two ADRs: one calendar in the future, one without triggers.
-	writeADR(t, adrDir, "future-calendar", "review-triggers:\n  - after: \"2099-01-01\"\n")
-	writeADR(t, adrDir, "no-triggers", "")
-
-	env := map[string]string{
-		"HYPOMNEMA_TODAY":   "2026-04-23",
-		"CLAUDE_MEMORY_DIR": mem,
-	}
-	stdout, _, code := run(t, env, "decisions", "review", "--dir", adrDir)
-	if code != 0 {
-		t.Errorf("expected exit 0, got %d\n%s", code, stdout)
-	}
-	if !strings.Contains(stdout, "[ok] future-calendar") {
-		t.Errorf("stdout missing future-calendar ok line:\n%s", stdout)
-	}
-}
-
-func TestDecisions_ReviewPressureExitsOne(t *testing.T) {
-	adrDir := t.TempDir()
-	mem := t.TempDir()
-	// Self-profile with low precision — triggers our fixture ADR.
-	profile := "## Metrics\n- measurable precision: 30% (3/10)\n"
-	if err := os.WriteFile(filepath.Join(mem, "self-profile.md"),
-		[]byte(profile), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	writeADR(t, adrDir, "under-pressure",
-		"review-triggers:\n  - metric: measurable_precision\n    operator: \"<\"\n    threshold: 0.40\n    source: self-profile\n")
-
-	env := map[string]string{
-		"HYPOMNEMA_TODAY":   "2026-04-23",
-		"CLAUDE_MEMORY_DIR": mem,
-	}
-	stdout, _, code := run(t, env, "decisions", "review", "--dir", adrDir)
-	if code != 1 {
-		t.Errorf("expected exit 1 on pressure, got %d\n%s", code, stdout)
-	}
-	if !strings.Contains(stdout, "[pressure] under-pressure") {
-		t.Errorf("stdout missing pressure line:\n%s", stdout)
-	}
-	if !strings.Contains(stdout, "0.30") || !strings.Contains(stdout, "0.40") {
-		t.Errorf("pressure message should show value + threshold, got:\n%s", stdout)
-	}
-}
-
-func TestDecisions_ReviewOverdueExitsOne(t *testing.T) {
-	adrDir := t.TempDir()
-	mem := t.TempDir()
-	writeADR(t, adrDir, "overdue-cal",
-		"review-triggers:\n  - after: \"2020-01-01\"\n")
-
-	env := map[string]string{
-		"HYPOMNEMA_TODAY":   "2026-04-23",
-		"CLAUDE_MEMORY_DIR": mem,
-	}
-	stdout, _, code := run(t, env, "decisions", "review", "--dir", adrDir)
-	if code != 1 {
-		t.Errorf("expected exit 1 on overdue, got %d", code)
-	}
-	if !strings.Contains(stdout, "[overdue] overdue-cal") {
-		t.Errorf("stdout missing overdue line:\n%s", stdout)
-	}
-	if !strings.Contains(stdout, "passed") {
-		t.Errorf("overdue message should say 'passed', got:\n%s", stdout)
-	}
-}
-
-func TestDecisions_ReviewJSONOutputValid(t *testing.T) {
-	adrDir := t.TempDir()
-	mem := t.TempDir()
-	writeADR(t, adrDir, "calendar-future",
-		"review-triggers:\n  - after: \"2099-01-01\"\n")
-
-	env := map[string]string{
-		"HYPOMNEMA_TODAY":   "2026-04-23",
-		"CLAUDE_MEMORY_DIR": mem,
-	}
-	stdout, _, code := run(t, env, "decisions", "review", "--dir", adrDir, "--json")
-	if code != 0 {
-		t.Errorf("expected exit 0, got %d", code)
-	}
-	var decoded map[string]any
-	if err := json.Unmarshal([]byte(stdout), &decoded); err != nil {
-		t.Fatalf("--json output not valid JSON: %v\n%s", err, stdout)
-	}
-	if _, ok := decoded["results"]; !ok {
-		t.Errorf("JSON missing 'results' key")
-	}
-}
-
-func TestDecisions_ReviewUnknownFlagFails(t *testing.T) {
-	_, stderr, code := run(t, nil, "decisions", "review", "--bogus")
-	if code != 2 {
-		t.Errorf("unknown flag: expected exit 2, got %d", code)
-	}
-	if !strings.Contains(stderr, "unknown flag") {
-		t.Errorf("stderr should mention unknown flag, got %q", stderr)
-	}
-}
-
-func TestDecisions_ReviewMissingDirFails(t *testing.T) {
-	_, _, code := run(t, nil, "decisions", "review",
-		"--dir", "/nonexistent/decisions-path")
-	if code != 2 {
-		t.Errorf("missing dir: expected exit 2, got %d", code)
-	}
-}
-
-// --- evidence subcommand ---
-
-func TestEvidence_UnknownSubcommand(t *testing.T) {
-	_, stderr, code := run(t, nil, "evidence", "bogus")
-	if code != 2 {
-		t.Errorf("expected exit 2, got %d", code)
-	}
-	if !strings.Contains(stderr, "unknown evidence subcommand") {
-		t.Errorf("stderr should name the problem, got %q", stderr)
-	}
-}
-
-func TestEvidence_LearnWithoutTargetFails(t *testing.T) {
-	_, stderr, code := run(t, nil, "evidence", "learn")
-	if code != 2 {
-		t.Errorf("expected exit 2, got %d", code)
-	}
-	if !strings.Contains(stderr, "--target") {
-		t.Errorf("stderr should flag missing --target, got %q", stderr)
-	}
-}
-
-func TestEvidence_LearnInvalidSessionsFlag(t *testing.T) {
-	_, stderr, code := run(t, nil, "evidence", "learn",
-		"--target", "some-slug", "--sessions", "abc")
-	if code != 2 {
-		t.Errorf("expected exit 2 on non-integer --sessions, got %d", code)
-	}
-	if !strings.Contains(stderr, "--sessions") {
-		t.Errorf("stderr should name the flag, got %q", stderr)
-	}
-}
-
-func TestEvidence_LearnUnknownFlag(t *testing.T) {
-	_, stderr, code := run(t, nil, "evidence", "learn", "--bogus")
-	if code != 2 {
-		t.Errorf("expected exit 2, got %d", code)
-	}
-	if !strings.Contains(stderr, "unknown flag") {
-		t.Errorf("stderr should mention unknown flag, got %q", stderr)
-	}
-}
-
-func TestEvidence_LearnMissingTargetFile(t *testing.T) {
-	mem := t.TempDir()
-	// Seed the dir structure but not the file.
-	for _, sub := range []string{"mistakes", "feedback", "knowledge", "strategies"} {
-		_ = os.MkdirAll(filepath.Join(mem, sub), 0o755)
-	}
-	env := map[string]string{"CLAUDE_MEMORY_DIR": mem}
-	_, stderr, code := run(t, env, "evidence", "learn", "--target", "nonexistent-slug")
-	if code != 2 {
-		t.Errorf("missing target file: expected exit 2, got %d", code)
-	}
-	if !strings.Contains(stderr, "not found") {
-		t.Errorf("stderr should say 'not found', got %q", stderr)
-	}
-}
-
 // --- wal validate -------------------------------------------------------
 
 func TestWalValidate_CleanWALExitsZero(t *testing.T) {
@@ -579,35 +317,6 @@ func TestWalValidate_UnknownSubcommand(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "unknown wal subcommand") {
 		t.Errorf("stderr mismatch: %s", stderr)
-	}
-}
-
-// End-to-end dry-run smoke: target file exists, transcripts absent,
-// should exit 1 (no transcripts) — exercises the happy-path
-// dispatch without requiring a fixture JSONL tree.
-func TestEvidence_LearnNoTranscriptsExitsOne(t *testing.T) {
-	mem := t.TempDir()
-	fakeHome := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(fakeHome, ".claude", "projects"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(mem, "mistakes"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(mem, "mistakes", "test-rule.md"),
-		[]byte("---\ntype: mistake\nstatus: active\n---\nbody\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	env := map[string]string{
-		"CLAUDE_MEMORY_DIR": mem,
-		"HOME":              fakeHome,
-	}
-	_, stderr, code := run(t, env, "evidence", "learn", "--target", "test-rule", "--dry-run")
-	if code != 1 {
-		t.Errorf("no-transcripts: expected exit 1, got %d\nstderr=%s", code, stderr)
-	}
-	if !strings.Contains(stderr, "no session transcripts") {
-		t.Errorf("stderr should explain, got %q", stderr)
 	}
 }
 
