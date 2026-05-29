@@ -32,6 +32,9 @@ func runInject(args []string) {
 			os.Exit(2)
 		}
 	}
+	if event != "SessionStart" && event != "UserPromptSubmit" {
+		event = "SessionStart"
+	}
 	raw, _ := io.ReadAll(os.Stdin)
 	var in hookStdin
 	if err := json.Unmarshal(raw, &in); err != nil {
@@ -53,9 +56,10 @@ func runInject(args []string) {
 
 func persistInjected(slugs []string, sessionID string) {
 	day := today()
+	sid := wal.SanitizeField(sessionID)
 	for _, slug := range slugs {
-		line := fmt.Sprintf("%s|inject|%s|%s", day, slug, sessionID)
-		wal.Append(memoryDir(), line, line)
+		line := fmt.Sprintf("%s|inject|%s|%s", day, wal.SanitizeField(slug), sid)
+		wal.Append(memoryDir(), line, "")
 	}
 	runtimeDir := filepath.Join(memoryDir(), ".runtime")
 	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {

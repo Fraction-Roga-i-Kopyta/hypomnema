@@ -51,6 +51,28 @@ func TestInjectVerb(t *testing.T) {
 	}
 }
 
+func TestInjectVerb_InjectNotDeduped(t *testing.T) {
+	home := t.TempDir()
+	memDir := filepath.Join(home, ".claude", "memory")
+	projDir := filepath.Join(home, ".claude", "projects", "-tmp-proj", "memory")
+	os.MkdirAll(projDir, 0o755)
+	os.MkdirAll(memDir, 0o755)
+	os.WriteFile(filepath.Join(projDir, "docker.md"),
+		[]byte("---\nname: Docker\ntype: mistake\n---\ndocker cache\n"), 0o644)
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
+	env := map[string]string{
+		"CLAUDE_HOME": filepath.Join(home, ".claude"), "CLAUDE_MEMORY_DIR": memDir,
+		"HYPOMNEMA_TODAY": "2026-05-29",
+	}
+	stdin := `{"session_id":"s1","cwd":"/tmp/proj","prompt":"docker"}`
+	runStdin(t, env, stdin, "inject", "--event=UserPromptSubmit")
+	runStdin(t, env, stdin, "inject", "--event=UserPromptSubmit")
+	walBytes, _ := os.ReadFile(filepath.Join(memDir, ".wal"))
+	if n := strings.Count(string(walBytes), "|inject|docker.md|s1"); n != 2 {
+		t.Errorf("expected 2 inject events (not deduped), got %d:\n%s", n, walBytes)
+	}
+}
+
 func TestInjectVerb_FailSafeOnBadStdin(t *testing.T) {
 	home := t.TempDir()
 	memDir := filepath.Join(home, ".claude", "memory")
