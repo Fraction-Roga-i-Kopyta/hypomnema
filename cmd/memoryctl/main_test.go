@@ -70,6 +70,27 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
+// runStdin is like run() but feeds `stdin` to the process.
+func runStdin(t *testing.T, env map[string]string, stdin string, args ...string) (stdout, stderr string, exit int) {
+	t.Helper()
+	cmd := exec.Command(binPath, args...)
+	cmd.Stdin = strings.NewReader(stdin)
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+	cmd.Env = append(os.Environ(), "GOCOVERDIR="+coverDir)
+	for k, v := range env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	err := cmd.Run()
+	if ee, ok := err.(*exec.ExitError); ok {
+		exit = ee.ExitCode()
+	} else if err != nil {
+		t.Fatalf("runStdin: %v\nstderr: %s", err, errBuf.String())
+	}
+	return outBuf.String(), errBuf.String(), exit
+}
+
 // run invokes the built binary with `args` and optional env overrides.
 // Returns stdout, stderr, exit code. GOCOVERDIR points at the shared
 // TestMain-level coverdir so subprocess coverage accumulates across
