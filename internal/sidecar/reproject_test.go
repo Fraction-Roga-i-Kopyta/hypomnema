@@ -145,6 +145,27 @@ func TestReproject_MarksDeletedOrphans(t *testing.T) {
 	}
 }
 
+func TestReproject_MatchesV1SlugsWithoutMdSuffix(t *testing.T) {
+	dir := t.TempDir()
+	walPath := filepath.Join(dir, ".wal")
+	// v1-style WAL: slug has NO .md suffix.
+	os.WriteFile(walPath, []byte("2026-04-01|inject|code-approach|s1\n2026-04-02|inject|code-approach|s2\n2026-04-02|outcome-positive|code-approach|s2\n"), 0o644)
+	s, _ := Open(filepath.Join(dir, ".sidecar.db"))
+	defer s.Close()
+	// native file slug DOES have .md.
+	files := []native.MemFile{{Slug: "code-approach.md", ContentSHA: "x"}}
+	if err := Reproject(s, files, walPath); err != nil {
+		t.Fatal(err)
+	}
+	r, ok, _ := s.Get("code-approach.md")
+	if !ok || r.RefCount != 2 {
+		t.Errorf("v1 WAL (no .md) must seed the .md native file: ref_count=%d ok=%v, want 2", r.RefCount, ok)
+	}
+	if r.Created != "2026-04-01" {
+		t.Errorf("created should seed from v1 WAL, got %q", r.Created)
+	}
+}
+
 func reprojectInto(t *testing.T, dbPath string, files []native.MemFile, walPath string) Record {
 	t.Helper()
 	s, err := Open(dbPath)

@@ -35,7 +35,8 @@ func Reproject(s *Store, files []native.MemFile, walPath string) error {
 	}
 
 	for _, f := range files {
-		a := aggs[f.Slug]
+		// Look up by bare slug so v1 WAL (no .md) matches v2 native files (.md).
+		a := aggs[strings.TrimSuffix(f.Slug, ".md")]
 		if a == nil {
 			a = &agg{}
 		}
@@ -99,6 +100,9 @@ func readWALAgg(walPath string) map[string]*agg {
 		if !ok {
 			continue
 		}
+		// Normalise slug to bare form so v1 WAL entries (no .md suffix) and
+		// v2 WAL entries (with .md suffix) aggregate to the same key.
+		slug = strings.TrimSuffix(slug, ".md")
 		a := out[slug]
 		if a == nil {
 			a = &agg{}

@@ -4,6 +4,7 @@
 package migrate
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,12 +21,14 @@ type Opts struct {
 	OSHome    string            // ~ (for native ProjectMemoryDir)
 	Projects  map[string]string // abs-cwd → project-name (projects.json)
 	Today     string            // YYYY-MM-DD
+	WALPath   string            // path to .wal (for WAL-aware prune; empty → no WAL check)
 }
 
 // FileConv is the planned disposition of one v1 file.
 type FileConv struct {
 	OldPath   string
 	Slug      string
+	Sub       string // source subdir (e.g. "projects", "continuity")
 	Action    string // "keep" | "prune"
 	Reason    string
 	TargetDir string // native dest dir ("" if prune)
@@ -36,9 +39,10 @@ type FileConv struct {
 
 // Plan is the full migration plan.
 type Plan struct {
-	Convs  []FileConv
-	Kept   int
-	Pruned int
+	Convs           []FileConv
+	Kept            int
+	Pruned          int
+	GlobalFallbacks map[string]int // project-name → count routed to global (not in projects.json)
 }
 
 var v1Subdirs = []string{"mistakes", "strategies", "feedback", "knowledge", "decisions", "notes", "projects", "continuity"}
@@ -52,7 +56,13 @@ func BuildPlan(o Opts) (Plan, error) {
 	for cwd, name := range o.Projects {
 		nameToCWD[name] = cwd
 	}
+	// Build WAL-active set (I2): slugs with any inject/outcome activity.
+	walActive := readWALActive(o.WALPath)
+
 	var p Plan
+	p.GlobalFallbacks = map[string]int{}
+	seen := map[string]bool{} // targetDir|slug → already allocated
+
 	for _, sub := range v1Subdirs {
 		dir := filepath.Join(o.V1Dir, sub)
 		entries, err := os.ReadDir(dir)
@@ -70,26 +80,48 @@ func BuildPlan(o Opts) (Plan, error) {
 			}
 			fm, body := splitV1(string(raw))
 			conv := FileConv{
-				OldPath: path, Slug: e.Name(),
-				Type: orDefault(fm["type"], sub), Project: orDefault(fm["project"], "global"),
+				OldPath: path,
+				Slug:    e.Name(),
+				Sub:     sub,
+				Type:    orDefault(fm["type"], sub),
+				Project: orDefault(fm["project"], "global"),
 			}
-			if shouldPrune(fm, t0, parseDay(o.Today)) {
+			if shouldPrune(e.Name(), fm, t0, walActive) {
 				conv.Action = "prune"
-				conv.Reason = "ref_count=0, not pinned, >30d"
+				conv.Reason = "ref_count=0, not pinned, >30d, no WAL activity"
 				p.Pruned++
 			} else {
 				conv.Action = "keep"
 				conv.TargetDir = routeDir(conv.Project, o, nameToCWD)
+				// Track global fallbacks (I1): non-global projects not in projects.json.
+				if conv.Project != "" && conv.Project != "global" {
+					if _, known := nameToCWD[conv.Project]; !known {
+						p.GlobalFallbacks[conv.Project]++
+					}
+				}
+				// Detect and resolve slug collisions (C1): two files from different
+				// subdirs that would land in the same targetDir/slug. Walk order
+				// puts projects before continuity, so project keeps the clean slug.
+				k := conv.TargetDir + "|" + conv.Slug
+				if seen[k] {
+					conv.Slug = sub + "-" + conv.Slug
+					k = conv.TargetDir + "|" + conv.Slug
+					conv.Reason += " (renamed to avoid collision)"
+				}
+				seen[k] = true
 				conv.Native = toNative(conv.Slug, conv.Type, fm, body)
 				p.Kept++
 			}
 			p.Convs = append(p.Convs, conv)
 		}
 	}
+	if len(p.GlobalFallbacks) == 0 {
+		p.GlobalFallbacks = nil
+	}
 	return p, nil
 }
 
-func shouldPrune(fm map[string]string, today, _ day) bool {
+func shouldPrune(filename string, fm map[string]string, today day, walActive map[string]bool) bool {
 	if fm["status"] == "pinned" {
 		return false
 	}
@@ -101,7 +133,47 @@ func shouldPrune(fm map[string]string, today, _ day) bool {
 	if c.zero {
 		return false // unknown age → keep, don't prune blindly
 	}
-	return today.sub(c) > 30
+	if today.sub(c) <= 30 {
+		return false
+	}
+	// I2: honour WAL activity — don't prune a slug with any inject/outcome events.
+	bareSlug := strings.TrimSuffix(filename, ".md")
+	if walActive[bareSlug] {
+		return false
+	}
+	return true
+}
+
+// readWALActive reads the WAL and returns a set of bare slugs that have any
+// inject or outcome event (spec §4.3.2: do not prune if WAL-active).
+func readWALActive(walPath string) map[string]bool {
+	active := map[string]bool{}
+	if walPath == "" {
+		return active
+	}
+	f, err := os.Open(walPath)
+	if err != nil {
+		return active // missing WAL → empty set, fine
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 1<<16), 1<<20)
+	for sc.Scan() {
+		line := strings.TrimRight(sc.Text(), "\r")
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "|", 4)
+		if len(parts) != 4 {
+			continue
+		}
+		event := parts[1]
+		switch event {
+		case "inject", "inject-agg", "outcome-positive", "outcome-negative", "trigger-useful":
+			active[strings.TrimSuffix(parts[2], ".md")] = true
+		}
+	}
+	return active
 }
 
 func routeDir(project string, o Opts, nameToCWD map[string]string) string {
@@ -135,7 +207,13 @@ func toNative(slug, fineType string, fm map[string]string, body string) string {
 	}
 	nb.WriteString(body)
 	return fmt.Sprintf("---\nname: %s\ndescription: %s\ntype: %s\n---\n%s\n",
-		name, desc, fineType, strings.TrimSpace(nb.String()))
+		q(name), q(desc), fineType, strings.TrimSpace(nb.String()))
+}
+
+// q quotes a YAML scalar value, escaping inner double-quotes as single-quotes.
+// This prevents values containing `:` from breaking frontmatter parsing.
+func q(s string) string {
+	return "\"" + strings.ReplaceAll(s, "\"", "'") + "\""
 }
 
 func humanize(slug string) string {
@@ -151,8 +229,8 @@ func firstLine(body string) string {
 		ln = strings.TrimSpace(strings.TrimLeft(ln, "#"))
 		ln = strings.TrimSpace(ln)
 		if ln != "" {
-			if len(ln) > 100 {
-				return ln[:100]
+			if r := []rune(ln); len(r) > 100 {
+				return string(r[:100])
 			}
 			return ln
 		}
