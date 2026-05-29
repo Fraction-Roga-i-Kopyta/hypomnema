@@ -84,10 +84,14 @@ func candidates(in Input, files []native.MemFile, terms []string) []rank.Candida
 		defer s.Close()
 		recs, lerr := s.All()
 		if lerr == nil && len(recs) == 0 {
-			_ = sidecar.Reproject(s, files, walPath)
-			recs, lerr = s.All()
+			if rerr := sidecar.Reproject(s, files, walPath); rerr == nil {
+				recs, lerr = s.All()
+			}
 		}
-		if lerr == nil {
+		// Use the sidecar ONLY if it yielded rows. An empty sidecar (failed or
+		// empty reproject) must NOT shadow the native corpus — fall through to
+		// the degraded native-only rank. Spec §5: injection still happens.
+		if lerr == nil && len(recs) > 0 {
 			overlap, _ := s.OverlapScores(terms)
 			out := make([]rank.Candidate, 0, len(recs))
 			for _, r := range recs {

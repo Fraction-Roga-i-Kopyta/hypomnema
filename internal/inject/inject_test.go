@@ -74,6 +74,27 @@ func TestRun_EmptyCorpus(t *testing.T) {
 	}
 }
 
+func TestRun_DegradedWhenSidecarUnusable(t *testing.T) {
+	memDir, projDir, home := setup(t)
+	os.WriteFile(filepath.Join(projDir, "docker.md"),
+		[]byte("---\nname: Docker\ntype: mistake\n---\ndocker cache\n"), 0o644)
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
+	// .sidecar.db is a NON-EMPTY directory → Open fails, Remove fails → degraded path.
+	if err := os.MkdirAll(filepath.Join(memDir, ".sidecar.db", "x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Run(Input{
+		Event: "UserPromptSubmit", SessionID: "s1", CWD: "/tmp/proj", Prompt: "docker",
+		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir, Today: "2026-05-29", MaxK: 5,
+	})
+	if err != nil {
+		t.Fatalf("Run must not error when sidecar is unusable: %v", err)
+	}
+	if !strings.Contains(res.Markdown, "docker") {
+		t.Errorf("degraded fallback must still inject docker, got:\n%s", res.Markdown)
+	}
+}
+
 func TestRun_DegradedOnCorruptSidecar(t *testing.T) {
 	memDir, projDir, home := setup(t)
 	os.WriteFile(filepath.Join(projDir, "docker.md"),
