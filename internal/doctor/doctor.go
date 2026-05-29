@@ -179,19 +179,13 @@ func checkMemoryDir(dir string) Check {
 }
 
 // requiredHookCommands is the set install.sh wires up on a fresh install,
-// in suffix form so we don't care whether the command string uses
-// ~/.claude/... or an absolute path. Kept in one place so the list stays
-// in lockstep with install.sh.
+// as the suffix of the v2 shim path "hooks/v2/<name>". Kept in one place
+// so the list stays in lockstep with install.sh.
 var requiredHookCommands = []string{
-	"memory-session-start.sh",
-	"memory-stop.sh",
-	"memory-user-prompt-submit.sh",
-	"memory-dedup.sh",
-	"memory-outcome.sh",
-	"memory-error-detect.sh",
-	"memory-precompact.sh",
-	// v0.13 addition — install.sh registers this on PreToolUse:Write|Edit.
-	"memory-secrets-detect.sh",
+	"session-start.sh",
+	"user-prompt-submit.sh",
+	"pre-tool-write.sh",
+	"session-stop.sh",
 }
 
 func checkSettings(path string) Check {
@@ -204,13 +198,13 @@ func checkSettings(path string) Check {
 		}
 	}
 	// Rather than parsing the full schema (Claude Code owns it and can
-	// extend it between releases), substring-match each required command
-	// across the whole settings.json. Positive matches are enough because
-	// install.sh always emits the suffixes literally.
+	// extend it between releases), substring-match each required v2 shim
+	// path across the whole settings.json. install.sh registers them as
+	// "~/.claude/hooks/v2/<name>" so match against "hooks/v2/<name>".
 	text := string(data)
 	missing := []string{}
 	for _, cmd := range requiredHookCommands {
-		if !strings.Contains(text, cmd) {
+		if !strings.Contains(text, "hooks/v2/"+cmd) {
 			missing = append(missing, cmd)
 		}
 	}

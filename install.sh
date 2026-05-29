@@ -1,6 +1,6 @@
 #!/bin/bash
-# Hypomnema — persistent memory system for Claude Code
-# Install script: creates directory structure, copies hooks, patches settings.json
+# Hypomnema v2 — persistent memory system for Claude Code
+# Install script: creates directory structure, installs v2 shims, patches settings.json
 set -eo pipefail
 
 # --- Pre-flight: required tools and platform ---
@@ -10,23 +10,11 @@ command -v jq   >/dev/null 2>&1 || _die "jq is required (brew install jq | apt-g
 command -v perl >/dev/null 2>&1 || _die "perl is required (preinstalled on macOS/Linux; install via package manager if missing)"
 command -v awk  >/dev/null 2>&1 || _die "awk is required"
 
-# sqlite3 with FTS5: required by bin/memory-fts-{sync,query,shadow}.sh.
-# The Android SDK ships a cut-down sqlite3 without FTS5 and GitHub's macOS
-# runners put it ahead of /usr/bin — a source of silent shadow failures.
-# Check the module is available (not just the binary).
-if command -v sqlite3 >/dev/null 2>&1; then
-  if ! printf "CREATE VIRTUAL TABLE t USING fts5(x);\n" | sqlite3 :memory: >/dev/null 2>&1; then
-    _die "sqlite3 at $(command -v sqlite3) lacks FTS5 (check: 'sqlite3 :memory: \"CREATE VIRTUAL TABLE t USING fts5(x)\"'). Fix your PATH or install a build with FTS5 (macOS: /usr/bin/sqlite3; Linux: 'sudo apt-get install sqlite3')."
-  fi
-else
-  _die "sqlite3 is required (brew install sqlite | apt-get install sqlite3) — must support FTS5"
-fi
-
 if [ "${BASH_VERSINFO[0]:-0}" -lt 3 ]; then
   _die "bash 3.2+ required, got ${BASH_VERSION:-unknown}"
 fi
 
-if [ ! -d "$HOME/.claude" ]; then
+if [ ! -d "${CLAUDE_DIR:-$HOME/.claude}" ]; then
   _die "~/.claude not found — install Claude Code first (https://docs.anthropic.com/en/docs/claude-code)"
 fi
 # --- /Pre-flight ---
@@ -47,13 +35,13 @@ while [ $# -gt 0 ]; do
       cat <<EOF
 Usage: ./install.sh [OPTIONS]
 
-Without options: standard install (creates ~/.claude/memory/, symlinks hooks,
-patches settings.json). Idempotent — safe to re-run after upgrades.
+Without options: standard install (creates ~/.claude/memory-global/, installs
+v2 shims into ~/.claude/hooks/v2/, registers them in settings.json, symlinks
+memoryctl into ~/.claude/bin/). Idempotent — safe to re-run after upgrades.
 
 Options:
   --discover         Interactive wizard: scan ~/Development, ~/code,
-                     ~/projects, ~/src for git repos and add selected
-                     ones to ~/.claude/memory/projects.json.
+                     ~/projects, ~/src for git repos and register them.
   --patch-claude-md  Append a four-line memory section to ~/.claude/CLAUDE.md
                      (idempotent — checks for existing marker).
   --dry-run          Print what would happen; make no changes.
@@ -72,10 +60,6 @@ EOF
   esac
 done
 
-# S7 (audit-2026-04-16): _run no longer eval's its arguments. The single
-# call site needed a redirection, so we pass through the arguments as a
-# normal command. If future call sites need redirection, write them
-# inline with a DRY_RUN guard instead of reaching for eval.
 _run() {
   if [ "$DRY_RUN" -eq 1 ]; then
     echo "[dry-run] $*"
@@ -86,94 +70,63 @@ _run() {
 # --- /Flag parsing ---
 
 CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
-MEMORY_DIR="${CLAUDE_DIR}/memory"
+MEMORY_GLOBAL_DIR="${CLAUDE_DIR}/memory-global"
 HOOKS_DIR="${CLAUDE_DIR}/hooks"
+BIN_DIR="${CLAUDE_DIR}/bin"
 SETTINGS="${CLAUDE_DIR}/settings.json"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 if [ "$SKIP_BASE" -eq 0 ]; then
 
-echo "=== Hypomnema installer ==="
+echo "=== Hypomnema v2 installer ==="
 echo "Claude dir: $CLAUDE_DIR"
-echo "Memory dir: $MEMORY_DIR"
+echo "Memory dir: $MEMORY_GLOBAL_DIR"
 [ "$DRY_RUN" -eq 1 ] && echo "(dry-run mode — no changes will be made)"
 echo ""
 
-# --- Create directory structure ---
-echo "[1/4] Creating memory directories..."
-for dir in mistakes feedback knowledge strategies projects notes journal continuity seeds; do
-  mkdir -p "$MEMORY_DIR/$dir"
-done
-echo "  Created: mistakes/ feedback/ knowledge/ strategies/ projects/ notes/ journal/ continuity/ seeds/"
+# --- [1/4] Create native global store directory ---
+echo "[1/4] Creating global memory store..."
+_run mkdir -p "$MEMORY_GLOBAL_DIR"
+_run mkdir -p "$BIN_DIR"
+echo "  Created: $MEMORY_GLOBAL_DIR"
 
-# Populate seeds/ on first install only (empty target = fresh install).
-# Skip if user already has seeds to preserve their edits/additions.
-if [ -d "$SCRIPT_DIR/seeds" ] && [ -z "$(ls -A "$MEMORY_DIR/seeds" 2>/dev/null)" ]; then
-  cp "$SCRIPT_DIR/seeds/"*.md "$MEMORY_DIR/seeds/" 2>/dev/null
-  echo "  Seeded seeds/ with starter patterns (dormant hints, activate on prompt triggers)"
+# --- [2/4] Install memoryctl binary ---
+echo "[2/4] Installing memoryctl..."
+if [ -x "$SCRIPT_DIR/bin/memoryctl" ]; then
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] would symlink $SCRIPT_DIR/bin/memoryctl -> $BIN_DIR/memoryctl"
+  else
+    ln -sf "$SCRIPT_DIR/bin/memoryctl" "$BIN_DIR/memoryctl"
+    echo "  Linked memoryctl -> $BIN_DIR/memoryctl"
+  fi
+else
+  echo ""
+  echo "ERROR: bin/memoryctl not found." >&2
+  echo "  Run 'make build' first, then re-run install.sh." >&2
+  exit 1
 fi
 
-# --- Symlink hooks ---
-# Enumerate hooks/ and bin/ so a newly added script gets linked without
-# editing install.sh. Three lifecycle hooks need a memory- prefix at the
-# destination (settings.json looks for them by that name); everything
-# else keeps its on-disk filename. Declaring the rename pairs as a plain
-# array keeps this bash 3.2-safe (no `declare -A`).
-_rename_dest() {
-  case "$1" in
-    session-start.sh)      printf 'memory-session-start.sh' ;;
-    session-stop.sh)       printf 'memory-stop.sh' ;;
-    user-prompt-submit.sh) printf 'memory-user-prompt-submit.sh' ;;
-    consolidate.sh)        printf 'memory-consolidate.sh' ;;
-    *)                     printf '%s' "$1" ;;
-  esac
-}
-
-echo "[2/4] Installing hooks (symlinks)..."
-mkdir -p "$HOOKS_DIR"
-linked_hooks=0
-for src in "$SCRIPT_DIR"/hooks/*.sh; do
-  [ -f "$src" ] || continue
-  base=$(basename "$src")
-  dest=$(_rename_dest "$base")
-  ln -sf "$src" "$HOOKS_DIR/$dest"
-  linked_hooks=$((linked_hooks + 1))
-done
-# Shared library (wal-lock.sh, sourced by hooks at runtime)
-ln -sfn "$SCRIPT_DIR/hooks/lib" "$HOOKS_DIR/lib"
-echo "  Linked $linked_hooks hook script(s) + lib/ into $HOOKS_DIR"
-
-# --- Symlink utilities ---
-echo "[3/4] Installing utilities (symlinks)..."
-mkdir -p "$CLAUDE_DIR/bin"
-linked_bin=0
-for src in "$SCRIPT_DIR"/bin/*.sh "$SCRIPT_DIR"/bin/*.py; do
-  [ -f "$src" ] || continue
-  base=$(basename "$src")
-  dest=$(_rename_dest "$base")
-  ln -sf "$src" "$CLAUDE_DIR/bin/$dest"
-  linked_bin=$((linked_bin + 1))
-done
-echo "  Linked $linked_bin utility script(s) into $CLAUDE_DIR/bin"
-
-# Optional: pick up the compiled Go binary if the user ran `make build`.
-# memoryctl is a drop-in replacement for selected shell utilities (fts shadow
-# today; more to come). It's not required — bash hooks stay authoritative.
-if [ -x "$SCRIPT_DIR/bin/memoryctl" ]; then
-  ln -sf "$SCRIPT_DIR/bin/memoryctl" "$CLAUDE_DIR/bin/memoryctl"
-  echo "  Linked memoryctl (Go) into $CLAUDE_DIR/bin"
+# --- [3/4] Install v2 shims ---
+echo "[3/4] Installing v2 hook shims..."
+V2_HOOKS_DIR="$HOOKS_DIR/v2"
+if [ "$DRY_RUN" -eq 1 ]; then
+  echo "[dry-run] would create $V2_HOOKS_DIR"
+  echo "[dry-run] would copy 4 shims from $SCRIPT_DIR/hooks/v2/ to $V2_HOOKS_DIR"
+else
+  mkdir -p "$V2_HOOKS_DIR"
+  for shim in session-start.sh user-prompt-submit.sh pre-tool-write.sh session-stop.sh; do
+    src="$SCRIPT_DIR/hooks/v2/$shim"
+    if [ -f "$src" ]; then
+      cp "$src" "$V2_HOOKS_DIR/$shim"
+      chmod +x "$V2_HOOKS_DIR/$shim"
+    else
+      echo "WARNING: shim not found: $src" >&2
+    fi
+  done
+  echo "  Installed 4 shims into $V2_HOOKS_DIR"
 fi
 
 # --- Sweep stale symlinks left by earlier versions ---
-# ln -sf only overwrites links whose destination name still exists in the
-# repo. When a past release removed a file (v0.10.0 dropped all
-# memory-*.py Python entry points, for instance), its ~/.claude/bin and
-# ~/.claude/hooks symlinks keep pointing at a path inside $SCRIPT_DIR
-# that no longer resolves. Directory-driven sweep: for every symlink in
-# our two install dirs, if its target points into $SCRIPT_DIR and the
-# target doesn't exist, drop the symlink. User-owned symlinks pointing
-# elsewhere are untouched. Mirrors uninstall.sh's `_remove_our_symlinks`
-# predicate, restricted to broken targets so a fresh install is a no-op.
 _sweep_stale_links() {
   local dir="$1" swept=0 path target
   [ -d "$dir" ] || { echo 0; return; }
@@ -184,7 +137,6 @@ _sweep_stale_links() {
       "$SCRIPT_DIR"/*) ;;
       *) continue ;;
     esac
-    # target inside our repo AND doesn't exist => legacy leftover.
     [ -e "$target" ] && continue
     _run rm "$path"
     swept=$((swept + 1))
@@ -192,14 +144,40 @@ _sweep_stale_links() {
   echo "$swept"
 }
 stale_hooks=$(_sweep_stale_links "$HOOKS_DIR")
-stale_bin=$(_sweep_stale_links "$CLAUDE_DIR/bin")
+stale_bin=$(_sweep_stale_links "$BIN_DIR")
 stale_total=$((stale_hooks + stale_bin))
 if [ "$stale_total" -gt 0 ]; then
   echo "  Swept $stale_total stale symlink(s) left by previous versions"
 fi
 
-# --- Patch settings.json ---
+# --- [4/4] Claude Code version gate + settings.json ---
 echo "[4/4] Patching settings.json..."
+
+# CC-version gate (best-effort)
+if command -v claude >/dev/null 2>&1; then
+  _cc_ver=$(claude --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+  if [ -n "$_cc_ver" ]; then
+    _cc_major=$(echo "$_cc_ver" | cut -d. -f1)
+    _cc_minor=$(echo "$_cc_ver" | cut -d. -f2)
+    _cc_patch=$(echo "$_cc_ver" | cut -d. -f3)
+    # Require >= 2.1.59
+    _needs_upgrade=0
+    if [ "$_cc_major" -lt 2 ]; then _needs_upgrade=1
+    elif [ "$_cc_major" -eq 2 ] && [ "$_cc_minor" -lt 1 ]; then _needs_upgrade=1
+    elif [ "$_cc_major" -eq 2 ] && [ "$_cc_minor" -eq 1 ] && [ "$_cc_patch" -lt 59 ]; then _needs_upgrade=1
+    fi
+    if [ "$_needs_upgrade" -eq 1 ]; then
+      echo "" >&2
+      echo "ERROR: hypomnema v2 requires Claude Code v2.1.59+ (native memory)." >&2
+      echo "  You have $_cc_ver. Upgrade Claude Code, or use hypomnema v1.x (git checkout v1.1.2)." >&2
+      exit 1
+    fi
+    echo "  Claude Code version: $_cc_ver (>= 2.1.59 OK)"
+  fi
+else
+  echo "  WARNING: could not verify Claude Code version; v2 needs v2.1.59+"
+fi
+
 if [ ! -f "$SETTINGS" ]; then
   if [ "$DRY_RUN" -eq 1 ]; then
     echo "[dry-run] would create $SETTINGS with empty object"
@@ -208,19 +186,10 @@ if [ ! -f "$SETTINGS" ]; then
   fi
 fi
 
-# Backup (P2.9). Before v0.15 every install re-overwrote a single file
-# ($SETTINGS.backup-hypomnema), so a sequence of upgrades silently
-# discarded the original pre-hypomnema settings. Now each install
-# writes a timestamped backup and leaves older ones in place —
-# if the user wants to reclaim disk they can `ls $SETTINGS.backup-*`
-# and delete, but the oldest (genuine pre-install) snapshot is never
-# destroyed by the installer itself.
+# Backup settings.json
 if [ -f "$SETTINGS" ]; then
   BACKUP_TS=$(date +%Y%m%d-%H%M%S)
   _run cp "$SETTINGS" "${SETTINGS}.backup-hypomnema-${BACKUP_TS}"
-  # Keep the legacy symlink name for operators who scripted against it.
-  # If the unversioned file already exists leave it alone (the first
-  # install's snapshot); otherwise link it to this run's backup.
   if [ ! -e "${SETTINGS}.backup-hypomnema" ] && [ "$DRY_RUN" -eq 0 ]; then
     ln -s "$(basename "${SETTINGS}.backup-hypomnema-${BACKUP_TS}")" \
           "${SETTINGS}.backup-hypomnema" 2>/dev/null || \
@@ -228,16 +197,8 @@ if [ -f "$SETTINGS" ]; then
   fi
 fi
 
-# Register one hypomnema hook entry. Idempotent by command string: if any
-# entry under .hooks.<event> already invokes the same command, we skip.
-# This lets users keep their own unrelated entries under the same event
-# (PreToolUse, PostToolUse) alongside ours without being overwritten —
-# the earlier "if key exists skip everything" logic was wrong for events
-# where users routinely have their own hooks.
-#
+# Register one hypomnema hook entry. Idempotent by command string.
 # Args: event matcher command timeout label
-#   matcher="" for events that don't take one (SessionStart / Stop /
-#   UserPromptSubmit / PreCompact). PreToolUse / PostToolUse require it.
 register_hook() {
   local event="$1" matcher="$2" command="$3" timeout="$4" label="$5"
   if [ ! -f "$SETTINGS" ]; then
@@ -268,55 +229,26 @@ register_hook() {
   echo "  Added $label"
 }
 
-register_hook SessionStart     ""           "~/.claude/hooks/memory-session-start.sh"      15 "SessionStart hook"
-register_hook Stop             ""           "~/.claude/hooks/memory-stop.sh"               10 "Stop hook"
-register_hook UserPromptSubmit ""           "~/.claude/hooks/memory-user-prompt-submit.sh" 10 "UserPromptSubmit hook (v0.5 context triggers)"
-register_hook PreToolUse       "Write"      "~/.claude/hooks/memory-dedup.sh"              10 "PreToolUse hook (fuzzy dedup for mistakes/*.md)"
-register_hook PreToolUse       "Write|Edit" "~/.claude/hooks/memory-secrets-detect.sh"     5  "PreToolUse hook (block plaintext secrets in memory writes)"
-register_hook PostToolUse      "Write|Edit" "~/.claude/hooks/memory-outcome.sh"            10 "PostToolUse hook (outcome-new + cascade signals)"
-register_hook PostToolUse      "Bash"       "~/.claude/hooks/memory-error-detect.sh"       10 "PostToolUse hook (Bash error-pattern detect)"
-register_hook PreCompact       ""           "~/.claude/hooks/memory-precompact.sh"          5 "PreCompact hook (checkpoint reminder)"
+register_hook SessionStart     ""      "$HOME/.claude/hooks/v2/session-start.sh"      15 "SessionStart (hypomnema v2)"
+register_hook UserPromptSubmit ""      "$HOME/.claude/hooks/v2/user-prompt-submit.sh" 10 "UserPromptSubmit (hypomnema v2)"
+register_hook PreToolUse       "Write" "$HOME/.claude/hooks/v2/pre-tool-write.sh"     10 "PreToolUse secrets gate (hypomnema v2)"
+register_hook Stop             ""      "$HOME/.claude/hooks/v2/session-stop.sh"       10 "Stop (hypomnema v2)"
 
-# --- Create projects.json if missing ---
-if [ ! -f "$MEMORY_DIR/projects.json" ]; then
-  echo '{}' > "$MEMORY_DIR/projects.json"
-  echo "  Created empty projects.json (see templates/projects.json.example)"
-fi
-if [ ! -f "$MEMORY_DIR/projects-domains.json" ]; then
-  echo '{}' > "$MEMORY_DIR/projects-domains.json"
-  echo "  Created empty projects-domains.json"
-fi
-if [ ! -f "$MEMORY_DIR/.stopwords" ] && [ -f "$SCRIPT_DIR/hooks/.stopwords" ]; then
-  cp "$SCRIPT_DIR/hooks/.stopwords" "$MEMORY_DIR/.stopwords"
-  echo "  Copied default .stopwords"
-fi
-if [ ! -f "$MEMORY_DIR/.confidence-excludes" ] && [ -f "$SCRIPT_DIR/hooks/.confidence-excludes" ]; then
-  cp "$SCRIPT_DIR/hooks/.confidence-excludes" "$MEMORY_DIR/.confidence-excludes"
-  echo "  Copied default .confidence-excludes"
-fi
-# v0.8: copy .config.sh.example to .config.sh on fresh install
-if [ ! -f "$MEMORY_DIR/.config.sh" ] && [ -f "$SCRIPT_DIR/templates/.config.sh.example" ]; then
-  cp "$SCRIPT_DIR/templates/.config.sh.example" "$MEMORY_DIR/.config.sh"
-  echo "  Copied default .config.sh (edit to override caps/limits)"
-fi
-
-# v0.14: .secretsignore.default — whitelist for memory-secrets-detect.
-# Overwritten on every install so maintainer-side updates propagate.
-# User overrides go in .secretsignore (never touched by install.sh).
-if [ -f "$SCRIPT_DIR/templates/.secretsignore.default" ]; then
-  cp "$SCRIPT_DIR/templates/.secretsignore.default" "$MEMORY_DIR/.secretsignore.default"
-  echo "  Copied .secretsignore.default (secrets-detect whitelist; add your own patterns to .secretsignore)"
+# Upgrade hint: existing v1 store
+if [ -d "$HOME/.claude/memory" ]; then
+  echo ""
+  echo "  NOTE: Existing v1 store detected at ~/.claude/memory/."
+  echo "  Run 'memoryctl migrate --dry-run' to preview the v1->v2 migration"
+  echo "  (see docs/MIGRATION.md for details)."
 fi
 
 echo ""
 echo "=== Done ==="
 echo ""
 echo "Next steps:"
-echo "  1. Add project mappings to $MEMORY_DIR/projects.json"
-echo "     (or run: ./install.sh --discover for an interactive wizard)"
-echo "  2. Add memory section to ~/.claude/CLAUDE.md"
-echo "     (or run: ./install.sh --patch-claude-md)"
-echo "  3. Restart Claude Code"
+echo "  1. Restart Claude Code (hooks take effect on next launch)"
+echo "  2. Run: memoryctl status"
+[ -d "$HOME/.claude/memory" ] && echo "  3. When ready: memoryctl migrate  (to move v1 -> v2 store)"
 echo ""
 echo "Backup saved: ${SETTINGS}.backup-hypomnema"
 
@@ -366,26 +298,27 @@ discover_projects() {
     return 0
   fi
 
-  local projects_json="$MEMORY_DIR/projects.json"
-  if [ ! -f "$projects_json" ]; then
-    if [ "$DRY_RUN" -eq 1 ]; then
-      echo "[dry-run] would seed empty projects.json at $projects_json"
-    else
-      printf '%s\n' '{}' > "$projects_json"
-    fi
+  # Register with memoryctl if available, otherwise print instructions
+  if command -v memoryctl >/dev/null 2>&1 || [ -x "$BIN_DIR/memoryctl" ]; then
+    local mc="${HYPOMNEMA_MEMORYCTL:-$BIN_DIR/memoryctl}"
+    for entry in "${accepted[@]}"; do
+      local path="${entry%:*}"
+      local slug="${entry##*:}"
+      if [ "$DRY_RUN" -eq 1 ]; then
+        echo "[dry-run] would register project: $path (slug: $slug)"
+      else
+        "$mc" project add --path "$path" --slug "$slug" 2>/dev/null || \
+          echo "  (could not register $slug via memoryctl — add manually)"
+      fi
+    done
+  else
+    echo "memoryctl not found — add these projects manually:"
+    for entry in "${accepted[@]}"; do
+      echo "  memoryctl project add --path '${entry%:*}' --slug '${entry##*:}'"
+    done
   fi
-  for entry in "${accepted[@]}"; do
-    local path="${entry%:*}"
-    local slug="${entry##*:}"
-    if [ "$DRY_RUN" -eq 1 ]; then
-      echo "[dry-run] would map $path → $slug"
-    else
-      jq --arg p "$path" --arg s "$slug" '. + {($p): $s}' "$projects_json" > "$projects_json.tmp" \
-        && mv "$projects_json.tmp" "$projects_json"
-    fi
-  done
   echo ""
-  echo "Added ${#accepted[@]} project(s) to $projects_json."
+  echo "Registered ${#accepted[@]} project(s)."
 }
 
 # ---------- Optional: --patch-claude-md ----------
@@ -403,7 +336,7 @@ patch_claude_md() {
 
 <!-- hypomnema-section -->
 ## Memory (hypomnema)
-- Storage: `~/.claude/memory/` — read schema in the hypomnema repo `CLAUDE.md`.
+- Storage: `~/.claude/memory-global/` — read schema in the hypomnema repo `CLAUDE.md`.
 - SessionStart hook auto-injects relevant mistakes, strategies, feedback.
 - When you learn something durable: write to `mistakes/`, `strategies/`, or `feedback/` per the protocol.
 <!-- /hypomnema-section -->

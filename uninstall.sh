@@ -1,7 +1,7 @@
 #!/bin/bash
-# Hypomnema — uninstaller
-# Removes hooks/utility symlinks, strips our entries from settings.json.
-# User memory in ~/.claude/memory/ is preserved by default — pass
+# Hypomnema v2 — uninstaller
+# Removes v2 shims/symlinks, strips our entries from settings.json.
+# User memory in ~/.claude/memory-global/ is preserved by default — pass
 # --purge-memory --yes to delete it.
 set -eo pipefail
 
@@ -23,19 +23,19 @@ while [ $# -gt 0 ]; do
       cat <<EOF
 Usage: ./uninstall.sh [OPTIONS]
 
-Removes symlinks installed by install.sh and strips hypomnema entries
-from ~/.claude/settings.json.
+Removes v2 shims and memoryctl symlink installed by install.sh, and strips
+hypomnema entries from ~/.claude/settings.json.
 
-By default, ~/.claude/memory/ (your memory files) is preserved.
+By default, ~/.claude/memory-global/ (your memory files) is preserved.
 
 Options:
   --dry-run       Print what would happen; make no changes.
-  --purge-memory  Also delete ~/.claude/memory/ (requires --yes).
+  --purge-memory  Also delete ~/.claude/memory-global/ (requires --yes).
   --yes, -y       Skip confirmation prompts.
   --help          Show this message.
 
 Examples:
-  ./uninstall.sh                          # remove symlinks, keep memory
+  ./uninstall.sh                          # remove shims, keep memory
   ./uninstall.sh --dry-run                # preview
   ./uninstall.sh --purge-memory --yes     # wipe everything, no prompts
 EOF
@@ -46,8 +46,9 @@ EOF
 done
 
 CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
-MEMORY_DIR="$CLAUDE_DIR/memory"
+MEMORY_GLOBAL_DIR="$CLAUDE_DIR/memory-global"
 HOOKS_DIR="$CLAUDE_DIR/hooks"
+V2_HOOKS_DIR="$HOOKS_DIR/v2"
 BIN_DIR="$CLAUDE_DIR/bin"
 SETTINGS="$CLAUDE_DIR/settings.json"
 
@@ -59,7 +60,7 @@ _run() {
   fi
 }
 
-echo "=== Hypomnema uninstaller ==="
+echo "=== Hypomnema v2 uninstaller ==="
 echo "Claude dir: $CLAUDE_DIR"
 [ "$DRY_RUN" -eq 1 ] && echo "(dry-run mode — no changes will be made)"
 echo ""
@@ -67,18 +68,26 @@ echo ""
 # --- Refuse if ~/.claude does not exist ---
 [ -d "$CLAUDE_DIR" ] || { echo "Nothing to uninstall: $CLAUDE_DIR does not exist."; exit 0; }
 
-# SCRIPT_DIR is this uninstaller's directory — the hypomnema repo root. Used
-# to identify symlinks that point into our tree (vs. a user's own scripts
-# that happen to live in the same install dirs).
 SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
 
-# --- Directory-driven symlink removal ---
-# Enumerate everything under the target directory and remove any symlink
-# whose target points into $SCRIPT_DIR (our repo). Leaves regular files and
-# third-party symlinks untouched. Replaces the hand-rolled HOOK_LINKS /
-# BIN_LINKS arrays that fell out of sync with install.sh's own directory-
-# driven enumeration — v0.10.1 had three symlinks uninstall didn't know
-# about (memory-error-detect.sh, memory-precompact.sh, memoryctl).
+# --- [1/3] Remove v2 shim files from ~/.claude/hooks/v2/ ---
+echo "[1/3] Removing v2 hook shims from $V2_HOOKS_DIR..."
+removed_shims=0
+for shim in session-start.sh user-prompt-submit.sh pre-tool-write.sh session-stop.sh; do
+  target="$V2_HOOKS_DIR/$shim"
+  if [ -f "$target" ] || [ -L "$target" ]; then
+    _run rm "$target"
+    removed_shims=$((removed_shims + 1))
+  fi
+done
+# Remove v2 dir if now empty
+if [ "$DRY_RUN" -eq 0 ] && [ -d "$V2_HOOKS_DIR" ] && [ -z "$(ls -A "$V2_HOOKS_DIR" 2>/dev/null)" ]; then
+  rmdir "$V2_HOOKS_DIR" 2>/dev/null || true
+fi
+echo "  Removed $removed_shims shim(s)."
+
+# --- [2/3] Remove memoryctl symlink from ~/.claude/bin/ ---
+echo "[2/3] Removing memoryctl from $BIN_DIR..."
 _remove_our_symlinks() {
   local dir="$1" removed=0 path target
   [ -d "$dir" ] || { echo 0; return; }
@@ -94,31 +103,18 @@ _remove_our_symlinks() {
   done < <(find "$dir" -mindepth 1 -maxdepth 1 2>/dev/null)
   echo "$removed"
 }
-
-echo "[1/3] Removing hook symlinks from $HOOKS_DIR..."
-removed_hooks=$(_remove_our_symlinks "$HOOKS_DIR")
-echo "  Removed $removed_hooks hook symlink(s)."
-
-echo "[2/3] Removing utility symlinks from $BIN_DIR..."
 removed_bin=$(_remove_our_symlinks "$BIN_DIR")
-echo "  Removed $removed_bin utility symlink(s)."
+echo "  Removed $removed_bin symlink(s) from $BIN_DIR."
 
-# --- Strip our hooks from settings.json ---
-# Do NOT blindly restore $SETTINGS.backup-hypomnema: a user may have
-# added unrelated hooks after install, and the backup would wipe them.
-# Instead, walk every hook event and drop entries whose `.command`
-# references a `memory-*.sh` script — matches what install.sh installs
-# regardless of the number of hooks. The previous hard-coded pair list
-# missed v0.11-v0.13 additions (memory-dedup, memory-outcome,
-# memory-error-detect, memory-precompact, memory-secrets-detect) and
-# left them as ghost entries after uninstall.
-echo "[3/3] Stripping hypomnema entries from $SETTINGS..."
+# --- [3/3] Strip v2 hypomnema hook entries from settings.json ---
+# Matches the 4 v2 shim paths registered by install.sh.
+echo "[3/3] Stripping hypomnema v2 entries from $SETTINGS..."
 if [ -f "$SETTINGS" ]; then
   if [ "$DRY_RUN" -eq 1 ]; then
     affected=$(jq '[.hooks // {} | to_entries[] | .value[]?.hooks[]?
-                    | select((.command // "") | test("memory-[a-z0-9-]+\\.sh"))] | length' \
+                    | select((.command // "") | test("hooks/v2/.*\\.sh"))] | length' \
                   "$SETTINGS" 2>/dev/null || echo 0)
-    echo "[dry-run] would strip $affected hypomnema entry(ies) across all hook events"
+    echo "[dry-run] would strip $affected hypomnema v2 entry(ies) across all hook events"
   else
     tmp="$SETTINGS.tmp.$$"
     jq '
@@ -129,7 +125,7 @@ if [ -f "$SETTINGS" ]; then
             .value |= (
               map(
                 .hooks = ((.hooks // []) | map(select(
-                  (.command // "") | test("memory-[a-z0-9-]+\\.sh") | not
+                  (.command // "") | test("hooks/v2/.*\\.sh") | not
                 )))
               )
               | map(select(((.hooks // []) | length) > 0))
@@ -140,7 +136,7 @@ if [ -f "$SETTINGS" ]; then
         | if (.hooks // {}) == {} then del(.hooks) else . end
       end
     ' "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS"
-    echo "  settings.json updated (all memory-*.sh entries removed)."
+    echo "  settings.json updated (all hooks/v2/*.sh entries removed)."
   fi
 else
   echo "  $SETTINGS not found — skipping."
@@ -149,25 +145,25 @@ fi
 # --- Memory directory (user data) ---
 echo ""
 if [ "$PURGE_MEMORY" -eq 1 ]; then
-  if [ -d "$MEMORY_DIR" ]; then
+  if [ -d "$MEMORY_GLOBAL_DIR" ]; then
     if [ "$ASSUME_YES" -ne 1 ]; then
-      printf "Delete memory directory '%s' and all its contents? [y/N]: " "$MEMORY_DIR"
+      printf "Delete memory directory '%s' and all its contents? [y/N]: " "$MEMORY_GLOBAL_DIR"
       read -r ans </dev/tty || ans="n"
       case "$ans" in
         y|Y|yes) ;;
-        *) echo "Skipped memory purge."; MEMORY_DIR=""; ;;
+        *) echo "Skipped memory purge."; MEMORY_GLOBAL_DIR=""; ;;
       esac
     fi
-    if [ -n "$MEMORY_DIR" ] && [ -d "$MEMORY_DIR" ]; then
-      _run rm -rf "$MEMORY_DIR"
+    if [ -n "$MEMORY_GLOBAL_DIR" ] && [ -d "$MEMORY_GLOBAL_DIR" ]; then
+      _run rm -rf "$MEMORY_GLOBAL_DIR"
       echo "Memory directory removed."
     fi
   else
     echo "Memory directory not found — nothing to purge."
   fi
 else
-  [ -d "$MEMORY_DIR" ] && echo "Memory directory preserved: $MEMORY_DIR"
-  [ -d "$MEMORY_DIR" ] && echo "  (pass --purge-memory --yes to delete it)"
+  [ -d "$MEMORY_GLOBAL_DIR" ] && echo "Memory directory preserved: $MEMORY_GLOBAL_DIR"
+  [ -d "$MEMORY_GLOBAL_DIR" ] && echo "  (pass --purge-memory --yes to delete it)"
 fi
 
 echo ""
