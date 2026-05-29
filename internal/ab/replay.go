@@ -32,6 +32,10 @@ func Replay(events []Event, ks []int, seed int64) []Result {
 			continue
 		}
 		sig := SignalsBefore(events, s.Date)
+		// Project/Domains left empty: the WAL carries no per-slug project or
+		// domain metadata, so project-boost and domain-filtering are inert in
+		// this replay. Results therefore UNDERESTIMATE the ranker's lift for
+		// same-project candidates — a floor, not a ceiling.
 		cands := make([]rank.Candidate, 0, len(pool))
 		for _, slug := range pool {
 			g := sig[slug]
@@ -73,6 +77,7 @@ func topSlugs(scored []rank.Scored) []string {
 
 // randomPick returns up to k distinct slugs from pool using rng (Fisher-Yates
 // on a copy so the source pool order is preserved across sessions).
+// When k >= len(pool), the full (shuffled) pool is returned.
 func randomPick(pool []string, k int, rng *rand.Rand) []string {
 	cp := make([]string, len(pool))
 	copy(cp, pool)
