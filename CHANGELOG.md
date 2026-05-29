@@ -1,5 +1,103 @@
 # Changelog
 
+## [2.0.0] — unreleased
+
+MAJOR. Repositions hypomnema as a governance + ranking layer over
+Claude Code's native file memory (v2.1.59+). The self-managed
+`~/.claude/memory/` tree is no longer the primary content store.
+Existing users on older Claude Code should stay on the v1.1.x tag.
+
+### Breaking changes
+
+- **Native memory required.** Claude Code ≥ 2.1.59 with auto-memory
+  enabled is a hard prerequisite. `./install.sh` fails fast with an
+  actionable message on older versions; no legacy-store fallback mode.
+- **Pure-bash install removed.** `make build` (Go ≥ 1.22) is now
+  required. Four thin bash shims replace the hook scripts; all logic
+  lives in the `memoryctl` binary.
+- **Substring triggers removed.** `triggers:` / `trigger:` frontmatter
+  fields are ignored. The ranker uses keyword-overlap over name /
+  description / body; prompt tokens are signals, not pattern-match gates.
+  Existing files with trigger frontmatter continue to load without error.
+- **Two-pipeline scoring removed.** SessionStart and UserPromptSubmit
+  now run the same `internal/rank` relevance ranker. The lexicographic
+  priority key is gone.
+- **FTS5 infrastructure removed.** `index.db`, `memory-fts-shadow.sh`,
+  and `memoryctl fts {shadow,sync,query}` are deleted. The Unicode
+  tokeniser from `internal/tfidf` is preserved inside `internal/rank`.
+- **Cold-start gates removed.** Bayesian effectiveness and the TF-IDF
+  vocab gate are gone. Effectiveness is always live; the A/B harness
+  validates ranking quality directly.
+- **`decision-review-triggers` evaluation removed.** Feature deferred;
+  the `review-triggers:` frontmatter fields are parsed but not evaluated.
+  `memoryctl decisions review` is not available in v2.0.
+
+### Added
+
+- **`memoryctl inject`** — unified ranked injection for both SessionStart
+  and UserPromptSubmit events. `internal/rank` is a pure function
+  (no I/O) combining overlap, `log10(1+ref_count)`, recency, and
+  Bayesian effectiveness signals. Zero-safe: a new fact with ref_count=0
+  is injectable from day one.
+- **`memoryctl close`** — outcome attribution, WAL append, decay
+  recompute, self-profile regeneration, continuity write.
+- **`memoryctl guard`** — secrets-gate + dedup check (PreToolUse:Write).
+  Secrets detection ported from bash to Go; fail-open on scanner error.
+- **`memoryctl migrate`** — guided one-shot conversion from the v1 store
+  to native format. Flags: `--dry-run` (review plan), `--execute`
+  (backup + convert + seed sidecar), `--rollback` (restore backup +
+  re-register v1 hooks), `--auto` (non-interactive).
+- **`memoryctl ab`** — A/B null-hypothesis harness. Replays historical
+  WAL sessions, compares ranked top-K recall against random selection.
+  Result on maintainer corpus (n=49 sessions): ranked recall is 8–20×
+  random at every budget tested (K=3,5,8,12), on static signals alone
+  (keyword-overlap component not exercised historically). See
+  `docs/measurements/2026-05-29-v2-ranker-ab.md` for the full report.
+- **Global store** (`~/.claude/memory-global/`, configurable). Fills
+  native's per-project-only gap. Global facts (e.g. `language-always-russian`)
+  are injected in every project session. The sidecar tracks both global
+  and project-scoped candidates.
+- **SQLite sidecar** — derived projection keyed on native file slugs.
+  Stores ref_count, effectiveness, decay status, keyword index, and
+  outcome history. Rebuildable from WAL + native frontmatter scan at
+  any time. Degraded-ranker mode activates automatically when the
+  sidecar is absent or corrupt: injection continues with overlap +
+  recency; exit 0 always.
+- **Four thin bash shims** (~10 lines each): `session-start.sh`,
+  `user-prompt-submit.sh`, `pre-tool-write.sh`, `session-stop.sh`.
+  Each marshals env/stdin → `memoryctl <verb>` and relays stdout/exit.
+  Zero logic in shell.
+
+### Changed
+
+- **Storage substrate.** Content moves from `~/.claude/memory/<type>/`
+  to `~/.claude/projects/<slug>/memory/` (project-scoped) and
+  `~/.claude/memory-global/` (global). Native frontmatter schema
+  (name / description / type) is the content surface; the full
+  hypomnema schema lives in the sidecar.
+- **WAL** — four-column invariant and event grammar preserved unchanged.
+  Existing WAL carries over intact; `migrate --execute` seeds the v2
+  sidecar from it.
+- **`memoryctl doctor`** — updated for v2: sidecar health, global store
+  visibility, parity check vs prior injection behaviour.
+- **`memoryctl profile`** — self-profile no longer includes TF-IDF or
+  cold-start dormancy sections.
+- **ADRs superseded or retired** (six total):
+  `bash-go-gradual-port` (superseded by `go-primary-bash-shims`),
+  `two-scoring-pipelines` (superseded — merged),
+  `substring-triggers-with-negation` (superseded — removed),
+  `fts5-shadow-retrieval` (retired — FTS5 removed),
+  `cold-start-scoring` (retired — gates removed),
+  `scoring-weights` (revised — new v2 formula, A/B-calibrated).
+  Two new ADRs added: `native-primary-sidecar`, `go-primary-bash-shims`.
+
+### Migration
+
+See `docs/MIGRATION.md § v1.x → v2.0` for the full guided upgrade,
+compatibility gate, and rollback procedure.
+
+---
+
 ## [1.1.2] - 2026-05-17
 
 Docs-only release. Cross-tabbed static frontmatter signals against
