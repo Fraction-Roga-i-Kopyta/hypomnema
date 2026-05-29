@@ -30,7 +30,8 @@ func runMigrate(args []string) {
 	}
 	osHome := filepath.Dir(claudeDir())
 	v1 := memoryDir()
-	backup := filepath.Join(claudeDir(), "memory.v1-backup")
+	t := today()
+	backup := filepath.Join(claudeDir(), "memory.v1-backup-"+t)
 	exec := migrate.ExecOpts{V1Dir: v1, BackupDir: backup, MemoryDir: v1}
 
 	if mode == "--rollback" {
@@ -44,7 +45,8 @@ func runMigrate(args []string) {
 
 	p, err := migrate.BuildPlan(migrate.Opts{
 		V1Dir: v1, GlobalDir: filepath.Join(osHome, ".claude", "memory-global"),
-		OSHome: osHome, Projects: loadProjects(v1), Today: today(),
+		OSHome: osHome, Projects: loadProjects(v1), Today: t,
+		WALPath: filepath.Join(v1, ".wal"),
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "migrate: plan: %v\n", err)
@@ -53,6 +55,12 @@ func runMigrate(args []string) {
 	fmt.Printf("Migration plan: %d keep, %d prune (backup → %s)\n", p.Kept, p.Pruned, backup)
 	for _, c := range p.Convs {
 		fmt.Printf("  %-6s %-40s %s\n", c.Action, c.Slug, c.Reason)
+	}
+	if len(p.GlobalFallbacks) > 0 {
+		fmt.Fprintln(os.Stderr, "WARNING: some projects routed to global (not in projects.json):")
+		for proj, n := range p.GlobalFallbacks {
+			fmt.Fprintf(os.Stderr, "  project %q: %d file(s) → global (add to projects.json before --execute to preserve project scoping)\n", proj, n)
+		}
 	}
 	if mode == "--dry-run" {
 		fmt.Println("(dry-run — nothing written)")
