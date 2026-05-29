@@ -19,6 +19,15 @@ review-triggers:
   - after: "2026-10-24"
 ---
 
+> **Retired (v2.0): cold-start gates removed; the A/B harness
+> (`memoryctl ab`) validates ranking directly.** TF-IDF body scoring and
+> Bayesian cold-start gating are dropped. Effectiveness (`(pos+1)/(pos+neg+2)`)
+> remains a ranker signal in `internal/rank` — always live, never gated.
+> Ranking quality is now validated empirically via `memoryctl ab` rather
+> than inferred from dormancy flags. See
+> `docs/measurements/2026-05-29-v2-ranker-ab.md` and
+> `docs/specs/2026-05-28-v2-native-memory-design.md` §1.1 (DROP).
+
 ## Status history
 
 - 2026-04-24 — proposed (drafted from external review round 2).

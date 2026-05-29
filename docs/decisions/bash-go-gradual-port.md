@@ -11,6 +11,10 @@ review-triggers:
   - after: "2027-04-22"
 ---
 
+> **Superseded by `go-primary-bash-shims.md` (v2.0).** Go is now the
+> primary implementation; bash is reduced to four thin exec shims. See
+> `docs/specs/2026-05-28-v2-native-memory-design.md` §1.
+
 ## What
 
 Hook scripts, context assembly, WAL append, and orchestration remain

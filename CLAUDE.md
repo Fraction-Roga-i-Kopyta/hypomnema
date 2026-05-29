@@ -1,56 +1,60 @@
 # Hypomnema — Agent Protocol
 
-You are working inside the hypomnema project: a file-based long-term memory system for Claude Code agents. This file teaches you how memory is structured, how it gets injected into your sessions, and when to write to it.
+You are working inside the hypomnema project: a governance + ranking layer for Claude Code's native file memory. This file teaches you how memory is structured, how it gets injected into your sessions, and when to write to it.
 
 ## What hypomnema does
 
-At session start, a hook reads `~/.claude/memory/`, ranks files by relevance (keywords + WAL spaced repetition + TF-IDF), and injects a curated subset into your context. At session stop, another hook reminds you to record what you learned. Other hooks dedupe, track outcomes, and decay stale entries.
+Claude Code v2.1.59+ ships native file memory: the harness stores markdown files in `~/.claude/projects/<slug>/memory/` and injects only a `MEMORY.md` index. Hypomnema adds what native lacks:
 
-The point: you remember things across sessions without a database, embeddings, or cloud.
+- **Ranked auto-injection** — `memoryctl inject` (SessionStart + UserPromptSubmit shims) ranks native facts by relevance and injects the top-K via `additionalContext`, not just a table of contents.
+- **Effectiveness measurement** — WAL tracks `trigger-useful`/`trigger-silent` per session; Bayesian effectiveness feeds back into ranking.
+- **Decay + lifecycle** — `memoryctl close` (Stop shim) down-ranks stale facts in the sidecar; content is never mutated by hooks.
+- **Secrets gate** — `memoryctl guard` (PreToolUse:Write shim) blocks credential patterns before they land in a memory file.
+- **Global store** — `~/.claude/memory-global/` for facts that apply across every project (native memory is per-project only).
+
+The point: you remember things across sessions, and the things most likely to matter surface first.
 
 ## Memory layout
 
-`~/.claude/memory/` contains nine subdirectories. Decay column shows **stale → archive** in days: files flip `status: active → stale` at the stale threshold and move to `archive/` at the archive threshold.
+Native memory files live in `~/.claude/projects/<slug>/memory/` (project-local) and `~/.claude/memory-global/` (global). There are no fixed subdirectories — type is encoded in the file's `type:` frontmatter field. The **sidecar** (`memory.db`, SQLite, rebuildable from WAL + frontmatter) holds metadata: ref_count, effectiveness, status, keywords, domains. The **WAL** (`.wal`, append-only text) is the source of truth for all events.
 
-| Directory | Contents | Injected at start | Stale → Archive |
+Logical types and their per-session injection caps:
+
+| Type | Contents | Injected | Cap |
 |---|---|:-:|---|
-| `mistakes/` | Bugs you should not repeat | yes (3 global + 3 per project) | 60 → 180 |
-| `strategies/` | Proven approaches that worked | yes (cap 4) | 90 → 180 |
-| `feedback/` | Behavioral rules from the user | yes (cap 6) | 45 → 120 |
-| `knowledge/` | Domain facts, API docs | yes (cap 4) | 90 → 365 |
-| `decisions/` | Architecture & technology choices | yes (cap 3) | 90 → 365 |
-| `notes/` | Long-form references | yes (cap 2) | 30 → 90 |
-| `projects/` | Project descriptions | yes (current only) | no rotation |
-| `continuity/` | "Where we left off" last session | yes (current only) | auto-generated, not rotated |
-| `journal/` | Session logs | no | 30 → 90 |
+| `mistake` | Bugs you should not repeat | yes | 3 global + 3 per project |
+| `strategy` | Proven approaches that worked | yes | adaptive |
+| `feedback` | Behavioral rules from the user | yes | adaptive |
+| `knowledge` | Domain facts, API docs | yes | adaptive |
+| `decision` | Architecture & technology choices | yes | adaptive |
+| `note` | Long-form references | yes | adaptive |
+| `project` | Project description | yes | 1 (current) |
+| `continuity` | "Where we left off" last session | yes | 1 (current) |
 
-`feedback/`, `knowledge/`, `strategies/`, `decisions/`, `notes/` share an adaptive 12-slot pool — if one type has fewer relevant files, the budget flows to others. The pool shrinks to 8 or 10 slots when keyword signal is strong (≥10 or ≥5 keywords respectively), so noise does not dilute high-confidence matches.
+Strategy, feedback, knowledge, decision, and note share an adaptive 12-slot pool — budget flows toward whichever types are most relevant.
 
-## Frontmatter schema (universal)
+## Frontmatter schema
 
-Every memory file is a markdown document with YAML frontmatter. Fields marked **auto** are managed by hooks; set everything else yourself.
+Every memory file is a markdown document with YAML frontmatter. Native-required fields (`name`, `description`, `type`) plus hypomnema-specific fields you write:
 
 ```yaml
 ---
-type: mistake | strategy | feedback | knowledge | project | continuity | decision | note
-project: global | <project-slug>
-created: YYYY-MM-DD          # you set — used by recency-boost ranking
-injected: YYYY-MM-DD          # auto — first-injected timestamp, SessionStart writes it
-referenced: YYYY-MM-DD        # auto — SessionStart refreshes it on every inject
-ref_count: 0                  # auto — SessionStart increments on every inject
-status: active | pinned | stale | archived
-description: <one-line description>   # used in MEMORY.md index
-keywords: [tag1, tag2, tag3]
-domains: [domain1, domain2]            # use kebab-case for multi-word
+type: mistake | strategy | feedback | knowledge | decision | project | continuity | note
+name: "short-slug"           # sidecar key; kebab-case
+description: "one-liner"     # shown in MEMORY.md index and injection headers
+created: YYYY-MM-DD          # you set — recency signal for ranking
+status: active | pinned      # stale is sidecar-managed, not hand-set
+keywords: [tag1, tag2, tag3] # primary ranking signal
+domains: [domain1, domain2]  # domain filter — use kebab-case for multi-word
 ---
 ```
 
-`ref_count` feeds the `log₁₀(ref_count)` bucket of the priority key (see "How injection ranks files"). New templates ship with `ref_count: 0` so the field exists for the auto-increment pass to find.
+`ref_count` and `effectiveness` are sidecar-managed — `memoryctl` reads and updates them. Do not set them manually.
 
 **Tolerated syntax variants** (parser normalises them):
 - Tab after a key (`status:\tactive`) works the same as a space
 - Quoted scalars (`status: "active"`) are unquoted on read
-- Block-style arrays (`keywords:\n  - api\n  - auth`) collapse into a single list the same way as inline `[api, auth]`
+- Block-style arrays collapse into a single list the same way as inline `[api, auth]`
 - Multi-line block scalars (`root-cause: |`) are **not** supported — use a single-line scalar or put the prose in the body
 
 ## Type-specific fields
@@ -66,47 +70,27 @@ prevention: "..."
 
 **strategy** (additional):
 ```yaml
-trigger: "..."             # one situation cue (substring-matched against prompt)
-# — OR — block-style array for multiple triggers:
-triggers:
-  - "situation cue A"
-  - "situation cue B"
 success_count: <integer>
 ```
-
-Both singular `trigger:` (legacy) and `triggers:` (array) are accepted; UserPromptSubmit merges them into a single phrase list.
-
-**Sizing — empirical sweet spot:** 4-6 trigger phrases give the highest measurable useful-rate (~85% on the maintainer's corpus, n=12). 1-3 triggers under-perform (~12%) because they are too narrow to match user phrasing yet too keyword-poor to fall back to the SessionStart keyword pipeline. 7+ triggers do not hurt but show no additional lift. See `docs/decisions/scoring-weights-v1-baseline.md` for the supporting cross-tab.
 
 **feedback** (additional):
 ```yaml
 evidence:                  # phrases that signal the rule applies (case-insensitive)
   - "phrase one"
   - "phrase two"
-precision_class: ambient   # optional (v0.8.1+) — excludes file from precision denominator
+precision_class: ambient   # optional — excludes file from precision denominator
 ```
 
-`evidence:` is listed here because feedback files use it most, but the field is type-agnostic — the session-stop feedback detector reads it from any injected memory file (mistake, strategy, knowledge, …). If body mining would give ambiguous tokens for a given rule, add explicit `evidence:` regardless of type.
+`evidence:` is type-agnostic — the close hook reads it from any injected memory file (mistake, strategy, knowledge, …). If body mining would give ambiguous tokens for a given rule, add explicit `evidence:` regardless of type.
 
-**Sizing — keep it short.** ≤5 carefully-chosen phrases score best (~83% useful-rate when evidence is absent and body mining handles it, vs ~14% on files with 6-12 evidence phrases). Long evidence lists pile on specific wordings that rarely appear verbatim in assistant text, so the classifier ends up marking the file silent. Pick phrases the assistant would actually write when applying the rule, not exhaustive paraphrases.
+**Sizing — keep it short.** ≤5 carefully-chosen phrases score best. Long evidence lists pile on specific wordings that rarely appear verbatim in assistant text, so the classifier ends up marking the file silent. Pick phrases the assistant would actually write when applying the rule, not exhaustive paraphrases.
 
-`precision_class: ambient` marks rules that shape behaviour silently and cannot produce `trigger-useful` events by design (e.g. language preference, security baseline, meta-philosophy). Such files continue to be injected and ranked normally; they are simply excluded from the self-profile precision denominator so they do not drag the ratio down as false noise. Use it only when the rule is applied without being referenced in text — not to mask genuinely noisy triggers.
+`precision_class: ambient` marks rules that shape behaviour silently (e.g. language preference, security baseline, meta-philosophy). These files continue to be injected and ranked normally; they are excluded from the self-profile precision denominator so they don't drag the ratio down.
 
 **knowledge / decision / note** (additional):
 ```yaml
 related: [other-slug-1, other-slug-2]   # optional cluster links
 ```
-
-**decision** (v0.11+ optional):
-```yaml
-review-triggers:
-  - metric: measurable_precision       # metric: + operator: + threshold: + source:
-    operator: "<"                      # or `after: YYYY-MM-DD` for calendar
-    threshold: 0.40
-    source: self-profile               # self-profile | wal | file
-```
-
-`review-triggers:` is the structured counterpart to an ADR's `## When to revisit` prose. `memoryctl decisions review` evaluates every trigger against the current `self-profile.md` + WAL snapshot and reports `pressure` / `overdue` when a condition fires. `memoryctl self-profile` appends a `## Decisions under pressure` section; `memoryctl doctor` surfaces a one-line summary. Prose-only ADRs (no `review-triggers:`) continue to work as advisory documentation.
 
 ## Writing protocol
 
@@ -117,6 +101,8 @@ You (or a similar agent) made a bug, took a wrong approach, or repeated an error
 ```markdown
 ---
 type: mistake
+name: "api-auth-skipped"
+description: "Built API client without reading auth docs first"
 project: global
 created: 2026-04-15
 status: pinned
@@ -141,15 +127,16 @@ First read auth/security section. List required headers, signing scheme, token l
 
 ### When to write a `strategy`
 
-You discovered an approach that worked for a class of problems. `trigger` should be the situation cue that should make a future agent reach for this strategy.
+You discovered an approach that worked for a class of problems. Keywords should reflect the situation that should trigger retrieval of this strategy.
 
 ```markdown
 ---
 type: strategy
+name: "flaky-test-ci-local"
+description: "Diagnose tests that pass locally but fail on CI"
 project: global
 created: 2026-04-15
 status: active
-trigger: "flaky test in CI but passes locally"
 success_count: 1
 keywords: [testing, ci, flaky, async, race]
 domains: [testing]
@@ -171,6 +158,8 @@ The user corrected your approach OR validated a non-obvious choice. Record the r
 ```markdown
 ---
 type: feedback
+name: "real-db-in-tests"
+description: "Integration tests must hit a real database, not a mock"
 project: global
 created: 2026-04-15
 status: pinned
@@ -191,7 +180,7 @@ Integration tests must hit a real database, not a mock.
 
 ### Feedback-as-mistake: blurry boundary
 
-A behaviour rule given by the user that corrects a **repeated** agent mistake is a valid projection of both types. Write it as `feedback` (shorter, evidence-based, fires reactively via `triggers:`); do NOT also write a separate `mistake` file for the same rule — that duplicates signal and confuses Bayesian effectiveness scoring. If doctor later prints a HINT suggesting you promote an N-times-fired feedback to a mistake, that is a suggestion, not a mandate.
+A behaviour rule given by the user that corrects a **repeated** agent mistake is a valid projection of both types. Write it as `feedback` (shorter, evidence-based); do NOT also write a separate `mistake` file for the same rule — that duplicates signal and confuses Bayesian effectiveness scoring.
 
 ### When to write `knowledge`
 
@@ -199,11 +188,11 @@ Domain facts, API specifics, infrastructure details that future sessions need to
 
 ### When to write `decision`
 
-An architecture or technology choice you want future sessions to defer to rather than re-litigate. Capture the alternatives considered and the specific trade-offs that made you pick this one — future-you will challenge the choice again without this, and the second round will cost more than writing the decision once. Prefer ADR-style (`What` / `Why` / `Trade-off accepted` / `When to revisit`). Optional `review-triggers:` metric+threshold blocks let `memoryctl decisions review` flag the choice for re-examination when the underlying assumption changes.
+An architecture or technology choice you want future sessions to defer to rather than re-litigate. Capture the alternatives considered and the specific trade-offs that made you pick this one. Prefer ADR-style (`What` / `Why` / `Trade-off accepted` / `When to revisit`).
 
 ### When to write `continuity`
 
-At session end, if you stopped mid-task. Three lines max: what you were doing, current status, next step. File path: `continuity/{project-slug}.md`.
+At session end, if you stopped mid-task. Three lines max: what you were doing, current status, next step. File path: `continuity/{project-slug}.md` inside native memory.
 
 ## When NOT to write
 
@@ -215,95 +204,60 @@ At session end, if you stopped mid-task. Three lines max: what you were doing, c
 
 ## Lifecycle
 
-The Stop hook rotates files using the two-stage thresholds from the memory-layout table:
-- `status: active` files older than the type's **stale** threshold → `status: stale` (still on disk, still injected if nothing fresher matches).
-- `status: stale` files older than the **archive** threshold → moved to `~/.claude/memory/archive/<type>/` (not injected).
+`memoryctl close` runs after every session:
+- Recomputes effectiveness from WAL (`(pos+1)/(pos+neg+2)`).
+- Down-ranks facts older than their stale threshold in the sidecar (no native content mutation).
+- Archiving (physical move to `archive/`) happens only on explicit `memoryctl gc`.
 - `status: pinned` files never decay automatically.
-- Archived files are kept indefinitely; manually move one back and set `status: active` to revive it.
-- `continuity/` and `projects/` are exempt from rotation — they represent per-project state, not decay-able records.
+- `continuity/` and `project` facts are exempt from rotation.
 
 ## How injection ranks files
 
-Two call sites use two different rankings — keep them straight:
-
-**UserPromptSubmit** (trigger match → priority key). Higher wins, ties broken left-to-right:
-
-1. **Project** — current project > `global` > other project.
-2. **Status** — `pinned` > `active`.
-3. **Severity** — `critical` > `major` > `minor` > unset.
-4. **Recency (by `created`)** — ≤7d > ≤30d > ≤90d > older.
-5. **log₁₀(`ref_count`)** — diminishing-returns bucket (0, 1, 2, 3+).
-6. **`recurrence`** — higher wins.
-7. **`ref_count`** — raw value as last tiebreaker.
-
-**SessionStart** (context assembly) uses a composite **score**, not a pure priority key:
+A single relevance ranker (v2 merged the two v1 pipelines into one):
 
 ```
-score = keyword_hits × 3
-      + project_boost × 1              (file.project == current project)
-      + wal_spaced_repetition (0–10)   (files that proved useful recur faster)
-      + strategy_bonus (min(success_count × 2, 6))
-      + tfidf_body_match × 2 (capped)  (only for records with no keywords)
-      − 3 if record matches no active signals (noise penalty)
+score = overlap(session_keywords, file_keywords)
+      × log10(1 + ref_count)           # diminishing-returns on overused records
+      × recency_weight(created)        # ≤7d → 1.0, ≤30d → 0.8, ≤90d → 0.6, older → 0.4
+      × effectiveness                  # Bayesian (pos+1)/(pos+neg+2); neutral 1.0 until signal lands
 ```
 
-Filter first (project ∈ {current, global}; status ∈ {active, pinned}; domains intersect current; recurrence ≥ threshold), then score, then apply adaptive quotas (3+3 mistakes; 12/10/8-slot flex pool depending on keyword signal strength).
+**Zero-safe:** a new fact with `ref_count=0` and no outcomes gets neutral priors, not a zero score — it is injectable from day one.
 
-You do NOT need to set ranks manually. Write good frontmatter, let the hooks do the rest.
+Status filter: `active` and `pinned` only (sidecar-managed `stale` is excluded). Domain filter: file `domains` must intersect active session domains. Per-type quotas apply after ranking.
 
-## Scoring cold-start (v0.14)
+`session_keywords` at SessionStart come from git context (branch name, diff filenames, recent commits, CWD basename). At UserPromptSubmit, prompt tokens are added to keywords (reactive re-rank).
 
-The five scoring components listed above are not all live from day one. When a fresh install has no outcome signal and almost no body vocabulary, the complex components would emit noise instead of rank. Two of them are gated:
+**What changed from v1:** the old substring-trigger mechanism and negation-window logic are gone. The ranker treats all tokens as relevance signal. The two v1 pipelines (composite-score SessionStart + deterministic UserPromptSubmit) are now one. TF-IDF body scoring, FTS5 shadow retrieval, and cold-start gates are retired.
 
-- **Bayesian effectiveness** stays at neutral 1.0 until ≥ `HYPOMNEMA_BAYESIAN_MIN_SAMPLES` (default 5) `outcome-*` events land within `HYPOMNEMA_OUTCOME_WINDOW_DAYS` (default 14). No `outcome-positive` / `outcome-negative` = component dormant, keyword/project/recency carry the rank.
-- **TF-IDF body match** stays suppressed until the index holds ≥ `HYPOMNEMA_TFIDF_MIN_VOCAB` (default 100) unique terms.
+You do NOT need to set ranks manually. Write good `keywords` and `domains`, let `memoryctl inject` handle the rest.
 
-`memoryctl doctor` prints `scoring_components_active: N/5` alongside each dormant component's reason. `measurable precision` below ~5 % on first weeks of a fresh install is **not** a bug — it reflects the Bayesian gate being dormant, not rules being bad. The ADR in `docs/decisions/cold-start-scoring.md` holds the full reasoning.
+## Secrets detection
 
-## Secrets detection (v0.13)
+`memoryctl guard` is the PreToolUse:Write gate on memory paths. It blocks writes whose body contains a recognised credential pattern (`api_key` / `secret` / `password` / `token` / AWS key variants) outside fenced code blocks with value length ≥ 8. Blocked writes exit 2 with a stderr message naming the file and line.
 
-`hooks/memory-secrets-detect.sh` is a PreToolUse:Write|Edit gate on `$CLAUDE_MEMORY_DIR/*`. It blocks writes whose body contains a recognised credential pattern (`api_key` / `secret` / `password` / `token` / AWS access or secret key variants) outside fenced code blocks with value length ≥ 8. Blocked writes exit 2 and surface a message on stderr pointing at the offending line.
+Escape hatches:
+- Whitelist a path permanently: add its glob to `~/.claude/memory-global/.secretsignore`.
+- Override for a single invocation: `HYPOMNEMA_ALLOW_SECRETS=1`.
 
-Two escape hatches:
-
-- Whitelist a path permanently: add its glob to `~/.claude/memory/.secretsignore` (one pattern per line, `.gitignore`-subset syntax). Maintainer-supplied allowances live in `.secretsignore.default` and are overwritten on upgrade.
-- Override for a single invocation: prefix the tool call with `HYPOMNEMA_ALLOW_SECRETS=1`. Use only when you intentionally want to record a string that looks like a secret (e.g. documenting a `seeds/` hazard).
-
-If you get unexpectedly blocked, read the stderr message — it names the file and the line. Do not route around the gate by stripping the value; either whitelist the path or rewrite the text to make the value clearly a placeholder.
-
-## Retroactive silent classification (v0.13)
-
-`trigger-silent-retro` is a posthumous event: if a session injects some slug but emits no closing event (`clean-session`, `session-close`, `outcome-*`, `trigger-useful`, `trigger-silent`, `outcome-new`, `trigger-silent-retro`) within 24 h, `hooks/wal-retro-silent.sh` classifies each orphan inject as silent in retrospect. The date column is the retro-emission date, not the original inject date, so downstream analysis can separate retros from natural `trigger-silent` events.
-
-v0.14 added **soft-close semantics** — `session-close` is written alongside `session-metrics` whenever the Stop hook finishes (regardless of error count), and both that and `outcome-new` are now in the closing set. This fixes the previous false-positive where any session with errors >0 had no closing event at all and got retroactively silenced despite running normally.
-
-See `docs/FORMAT.md § 5.2 Closing events` for the canonical list.
-
-## Shadow retrieval signal (v0.8)
-
-Parallel to the substring-trigger pipeline, a background pass runs FTS5/BM25 search over memory body content for every user prompt. Files the shadow pass surfaces but the primary pipeline never triggered are logged as `shadow-miss|<slug>|<session_id>` WAL events — a recall signal for trigger tuning.
-
-What this means for you as an agent:
-
-- **Do not edit `~/.claude/memory/index.db`** — it is a derivative SQLite FTS5 store, rebuilt automatically on drift by `bin/memory-fts-sync.sh`. Delete it and it will regenerate from markdown content on next query.
-- **`shadow-miss` events are diagnostic, not prescriptive** — they do not appear in your context, they only accumulate in the WAL. When you see many `shadow-miss` hits for the same slug in `.wal` during analysis, it means that file's `triggers:` are too narrow and should be expanded to match how users actually phrase the problem.
-- **The shadow pass is fail-safe** — any error inside `memory-fts-shadow.sh` exits silently. It never blocks the main hook or changes what gets injected. Treat it as observational instrumentation.
+Do not route around the gate by stripping the value; either whitelist the path or rewrite the text to use a clearly placeholder value.
 
 ## Reading what was injected
 
-Look at the start of your context for `# Memory Context` and `## Active Mistakes` / `## Feedback` / etc. sections. Files marked `[PRIORITY]` are flagged as contradicting another active record — read both before acting.
+Look at the start of your context for `# Memory Context` and `## Active Mistakes` / `## Feedback` / etc. sections.
 
 ## Subagent context
 
-If you spawn a subagent, point it at `~/.claude/memory/_agent_context.md` — it is an auto-generated compact summary regenerated each Stop hook.
+If you spawn a subagent, point it at `~/.claude/memory/_agent_context.md` — an auto-generated compact summary regenerated by `memoryctl close` each session.
 
 ## Source of truth
 
-- Schema, scoring, full hook reference — `README.md`
-- Hook implementations — `hooks/`
+- v2 architecture spec — `docs/specs/2026-05-28-v2-native-memory-design.md`
+- A/B ranker evidence — `docs/measurements/2026-05-29-v2-ranker-ab.md`
+- Full schema, hook reference, ADRs — `README.md` and `docs/`
+- `memoryctl` implementation — `cmd/memoryctl/` + `internal/`
 - Templates for each type — `templates/`
-- Seed examples (starter mistakes) — `seeds/`
+- Seed examples (in native format) — `seeds/`
 - Onboarding — `docs/QUICKSTART.md`
 - Common issues — `docs/TROUBLESHOOTING.md`
-- Cross-machine sync, upgrades — `docs/FAQ.md`
-- Version migration — `docs/MIGRATION.md`
+- v1.x → v2.0 migration — `docs/MIGRATION.md`
