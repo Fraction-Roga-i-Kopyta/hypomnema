@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/jsonl"
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/memindex"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/profile"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/sidecar"
@@ -64,6 +65,15 @@ func Run(in Input) (Result, error) {
 		}
 		s.Close()
 	}
+	// Regenerate the native MEMORY.md index for this project (best-effort).
+	// v2 owns this file; v1 left an orphan with ../../../ links. Project scope
+	// only — the global store surfaces via the ranked injection.
+	osHome := filepath.Dir(in.ClaudeHome)
+	projDir := native.ProjectMemoryDir(osHome, in.CWD)
+	if projFiles, lerr := native.List(projDir); lerr == nil && len(projFiles) > 0 {
+		_ = memindex.Write(projDir, memindex.Render(projFiles, memindex.DefaultMaxBytes))
+	}
+
 	_ = profile.Generate(in.MemoryDir)
 
 	return res, nil

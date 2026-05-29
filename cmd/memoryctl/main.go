@@ -33,8 +33,8 @@ Usage:
   memoryctl doctor [--json]
       On-demand health check of the install: claude_dir, hook registrations
       in settings.json, broken symlinks in hooks/ and bin/, memoryctl
-      availability, corpus counts, WAL-error events in the last 7 days,
-      derived-index freshness. Exit 0 on OK/WARN only, 1 on any FAIL.
+      availability, native corpus counts, WAL-error events in the last 7
+      days, sidecar freshness. Exit 0 on OK/WARN only, 1 on any FAIL.
   memoryctl wal validate
       Scan $CLAUDE_MEMORY_DIR/.wal for grammar violations against the
       four-column invariant from FORMAT.md § 5: column count, date
@@ -56,6 +56,11 @@ Usage:
       Print sidecar memory records (slug, type, ref_count, effectiveness).
       Reads the existing .sidecar.db; run "sidecar rebuild" first if the
       file is absent or stale.
+  memoryctl reindex
+      Regenerate <project>/memory/MEMORY.md from native files with sibling
+      links, bounded under the harness size limit. v2 owns this index; the
+      Stop hook regenerates it each session, this is the on-demand path.
+      Resolves the project from CLAUDE_PROJECT_CWD, else the working dir.
 
 Environment:
   CLAUDE_MEMORY_DIR       Memory root (default: ~/.claude/memory).
@@ -122,6 +127,8 @@ func main() {
 		runAB(os.Args[2:])
 	case "guard":
 		runGuard(os.Args[2:])
+	case "reindex":
+		runReindex(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "memoryctl: unknown command %q\n", os.Args[1])
 		os.Exit(2)
@@ -189,7 +196,7 @@ func runDoctor(args []string) {
 			os.Exit(2)
 		}
 	}
-	report := doctor.Run(claudeDir(), memoryDir())
+	report := doctor.Run(claudeDir(), memoryDir(), projectCWD())
 	if jsonOut {
 		report.PrintJSON(os.Stdout)
 	} else {

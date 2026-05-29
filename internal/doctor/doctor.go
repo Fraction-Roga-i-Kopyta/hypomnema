@@ -2,7 +2,7 @@
 // install. It complements the SessionStart health-check block (which runs
 // only at session start and only for three conditions) with a broader
 // inspection an operator can invoke any time: installation sanity, corpus
-// counts, recent WAL errors, derived-index freshness.
+// counts, recent WAL errors, sidecar freshness.
 //
 // The package deliberately does NOT touch memory files or WAL state — it
 // is read-only. The Run function returns a Report the caller renders as
@@ -18,9 +18,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 )
 
 // Status is the three-level health grade for each check.
@@ -48,10 +49,10 @@ func (s Status) String() string {
 }
 
 // Check is a single diagnostic result. Extra carries structured
-// context that shells can parse (see `scoring_components_active`,
-// which exposes active/total/dormant lists instead of packing them
-// into Detail); omitted when empty to keep the JSON output stable
-// for checks that don't need it.
+// context that shells can parse (see `corpus_frontmatter_quality`,
+// which exposes empty-status counts and sample filenames instead of
+// packing them into Detail); omitted when empty to keep the JSON output
+// stable for checks that don't need it.
 type Check struct {
 	Name   string                 `json:"name"`
 	Status Status                 `json:"status"`
@@ -119,7 +120,12 @@ func (r Report) PrintJSON(w io.Writer) {
 // Run gathers every diagnostic in order and returns a combined Report.
 // All checks are defensive: individual read failures are rendered as WARN
 // or FAIL in the relevant check, never panic.
-func Run(claudeDir, memoryDir string) Report {
+//
+// cwd is the project working directory: the corpus checks enumerate the
+// per-project native store derived from it (plus the global store), via
+// native.Collect. In v2 the memory content lives in native files, not under
+// memoryDir — memoryDir is only the metadata root (.wal, .sidecar.db).
+func Run(claudeDir, memoryDir, cwd string) Report {
 	now := resolveDoctorNow()
 	r := Report{ClaudeDir: claudeDir, MemoryDir: memoryDir, Now: now}
 	r.Checks = append(r.Checks,
@@ -129,12 +135,11 @@ func Run(claudeDir, memoryDir string) Report {
 		checkBrokenSymlinks(filepath.Join(claudeDir, "hooks"), "hooks"),
 		checkBrokenSymlinks(filepath.Join(claudeDir, "bin"), "bin"),
 		checkMemoryctl(claudeDir),
-		checkCorpus(memoryDir),
+		checkCorpus(claudeDir, cwd),
 		checkWALErrors(filepath.Join(memoryDir, ".wal"), now),
 		checkOpenQuanta(filepath.Join(memoryDir, ".wal"), now),
-		checkIndices(memoryDir, now),
-		checkScoringComponents(memoryDir, now),
-		checkCorpusQuality(memoryDir),
+		checkSidecar(memoryDir, now),
+		checkCorpusQuality(claudeDir, cwd),
 	)
 	return r
 }
@@ -153,6 +158,10 @@ func checkClaudeDir(dir string) Check {
 	}
 }
 
+// checkMemoryDir verifies the v2 metadata root exists. In v2 this directory
+// holds only metadata (.wal, .sidecar.db) — memory content lives in native
+// files elsewhere, so there are no required subdirectories. A missing .wal
+// on a fresh install is normal and is merely noted, never a failure.
 func checkMemoryDir(dir string) Check {
 	info, err := os.Stat(dir)
 	if err != nil || !info.IsDir() {
@@ -162,20 +171,13 @@ func checkMemoryDir(dir string) Check {
 			Detail: fmt.Sprintf("%s missing — run install.sh", dir),
 		}
 	}
-	missing := []string{}
-	for _, sub := range []string{"mistakes", "strategies", "feedback", "knowledge"} {
-		if _, err := os.Stat(filepath.Join(dir, sub)); err != nil {
-			missing = append(missing, sub)
-		}
+	detail := dir
+	if _, err := os.Stat(filepath.Join(dir, ".wal")); err == nil {
+		detail += " (.wal present)"
+	} else {
+		detail += " (no .wal yet — fresh install)"
 	}
-	if len(missing) > 0 {
-		return Check{
-			Name:   "memory_dir_exists",
-			Status: WARN,
-			Detail: fmt.Sprintf("%s present but subdirs missing: %s", dir, strings.Join(missing, ",")),
-		}
-	}
-	return Check{Name: "memory_dir_exists", Status: OK, Detail: dir}
+	return Check{Name: "memory_dir_exists", Status: OK, Detail: detail}
 }
 
 // requiredHookCommands is the set install.sh wires up on a fresh install,
@@ -277,56 +279,28 @@ func checkMemoryctl(claudeDir string) Check {
 	}
 }
 
-// memoryTypes enumerates the directories checkCorpus reports on, in the
-// order they appear in docs/FORMAT.md §2.
-var memoryTypes = []string{
-	"mistakes", "strategies", "feedback", "knowledge",
-	"decisions", "notes", "projects", "continuity",
-}
-
-func checkCorpus(memoryDir string) Check {
+// checkCorpus enumerates the v2 native corpus (per-project + global, merged
+// by native.Collect) and reports counts by logical type. The type is the
+// singular `type:` frontmatter value (mistake, strategy, …), not a directory.
+// Pinned/stale totals come from each file's status: line.
+func checkCorpus(claudeDir, cwd string) Check {
+	files := native.Collect(claudeDir, cwd)
 	counts := map[string]int{}
-	pinned, stale, archived := 0, 0, 0
-	total := 0
-	for _, t := range memoryTypes {
-		dir := filepath.Join(memoryDir, t)
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			continue
+	pinned, stale := 0, 0
+	for _, f := range files {
+		typ := f.Type
+		if typ == "" {
+			typ = "untyped"
 		}
-		for _, e := range entries {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-				continue
-			}
-			counts[t]++
-			total++
-			status := quickReadStatus(filepath.Join(dir, e.Name()))
-			switch status {
-			case "pinned":
-				pinned++
-			case "stale":
-				stale++
-			}
+		counts[typ]++
+		switch quickReadStatus(f.Path) {
+		case "pinned":
+			pinned++
+		case "stale":
+			stale++
 		}
 	}
-	// archive/ has a nested layout (archive/<type>/*.md).
-	archDir := filepath.Join(memoryDir, "archive")
-	if entries, err := os.ReadDir(archDir); err == nil {
-		for _, e := range entries {
-			if !e.IsDir() {
-				continue
-			}
-			sub, err := os.ReadDir(filepath.Join(archDir, e.Name()))
-			if err != nil {
-				continue
-			}
-			for _, f := range sub {
-				if !f.IsDir() && strings.HasSuffix(f.Name(), ".md") {
-					archived++
-				}
-			}
-		}
-	}
+	total := len(files)
 	keys := make([]string, 0, len(counts))
 	for k := range counts {
 		keys = append(keys, k)
@@ -336,8 +310,8 @@ func checkCorpus(memoryDir string) Check {
 	for _, k := range keys {
 		parts = append(parts, fmt.Sprintf("%s:%d", k, counts[k]))
 	}
-	detail := fmt.Sprintf("%d total (%s); %d pinned, %d stale, %d archived",
-		total, strings.Join(parts, " "), pinned, stale, archived)
+	detail := fmt.Sprintf("%d total (%s); %d pinned, %d stale",
+		total, strings.Join(parts, " "), pinned, stale)
 	status := OK
 	if total == 0 {
 		status = WARN
@@ -346,25 +320,14 @@ func checkCorpus(memoryDir string) Check {
 	return Check{Name: "corpus_counts", Status: status, Detail: detail}
 }
 
-// fmFacts captures the narrow frontmatter properties checkCorpusQuality
-// needs. No general-purpose parse; just the flags we actually inspect.
-type fmFacts struct {
-	hasStatus      bool
-	statusValue    string
-	hasTriggers    bool
-	hasEvidence    bool
-	ambient        bool
-	supersededFlag bool
-}
-
-// readFMQuick reads the first YAML frontmatter block and returns the
-// subset of fields checkCorpusQuality cares about. Stops at the second
-// `---` sentinel.
-func readFMQuick(path string) fmFacts {
-	var facts fmFacts
+// fmStatus reports whether the first frontmatter block declares a `status:`
+// key and, if so, its (possibly empty) value. Distinguishing "absent" from
+// "present but empty" is the whole point — quickReadStatus collapses both to
+// "". Stops at the second `---` sentinel.
+func fmStatus(path string) (present bool, value string) {
 	f, err := os.Open(path)
 	if err != nil {
-		return facts
+		return false, ""
 	}
 	defer f.Close()
 	sc := bufio.NewScanner(f)
@@ -372,7 +335,7 @@ func readFMQuick(path string) fmFacts {
 	fmCount := 0
 	for sc.Scan() {
 		line := sc.Text()
-		if line == "---" {
+		if strings.TrimRight(line, " \t\r") == "---" {
 			fmCount++
 			if fmCount >= 2 {
 				break
@@ -383,98 +346,44 @@ func readFMQuick(path string) fmFacts {
 			continue
 		}
 		if strings.HasPrefix(line, "status:") {
-			facts.hasStatus = true
 			v := strings.TrimSpace(strings.TrimPrefix(line, "status:"))
 			v = strings.Trim(v, `"'`)
-			facts.statusValue = v
-		}
-		if strings.HasPrefix(line, "triggers:") || strings.HasPrefix(line, "trigger:") {
-			facts.hasTriggers = true
-		}
-		if strings.HasPrefix(line, "evidence:") {
-			facts.hasEvidence = true
-		}
-		if strings.HasPrefix(line, "precision_class:") {
-			v := strings.TrimSpace(strings.TrimPrefix(line, "precision_class:"))
-			v = strings.Trim(v, `"'`)
-			if v == "ambient" {
-				facts.ambient = true
-			}
-		}
-		if strings.HasPrefix(line, "status:") {
-			v := strings.TrimSpace(strings.TrimPrefix(line, "status:"))
-			v = strings.Trim(v, `"'`)
-			if v == "superseded" || v == "archived" {
-				facts.supersededFlag = true
-			}
+			return true, v
 		}
 	}
-	return facts
+	return false, ""
 }
 
-// checkCorpusQuality surfaces frontmatter issues the ranking pipeline
-// cannot act on but the user probably didn't mean:
-//   - `status:` present but empty → filter drops the file silently
-//   - feedback / knowledge without `triggers:` → reactive injection
-//     cannot fire (the keyword pipeline still works from SessionStart)
+// checkCorpusQuality surfaces frontmatter issues the ranking pipeline cannot
+// act on but the user probably didn't mean. In v2 the only such issue is a
+// `status:` line present but empty — the status filter then drops the file
+// silently. (The v1 "feedback/knowledge without triggers:" nudge is gone:
+// triggers are retired in v2; the ranker treats all tokens as relevance
+// signal, so there is no reactive-trigger requirement to warn about.)
 //
-// Skipped (no WARN) when a file is one of:
-//   - `precision_class: ambient` — silent rule by design, doesn't need
-//     reactive triggers
-//   - has `evidence:` — session-stop classifier picks it up reactively
-//     even without substring triggers
-//   - `status: superseded` / `status: archived` — historical record,
-//     not expected to fire
-//
-// Always WARN-level — these are nudges, never hard failures, per round
-// 2 decision on `triggers:` remaining optional.
-func checkCorpusQuality(memoryDir string) Check {
+// Always WARN-level — a nudge, never a hard failure.
+func checkCorpusQuality(claudeDir, cwd string) Check {
 	const name = "corpus_frontmatter_quality"
-	var emptyStatus, missingTriggers []string
-	for _, t := range memoryTypes {
-		dir := filepath.Join(memoryDir, t)
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			continue
-		}
-		for _, e := range entries {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-				continue
-			}
-			path := filepath.Join(dir, e.Name())
-			fm := readFMQuick(path)
-			if fm.hasStatus && fm.statusValue == "" {
-				emptyStatus = append(emptyStatus, t+"/"+e.Name())
-			}
-			if (t == "feedback" || t == "knowledge") && !fm.hasTriggers &&
-				!fm.ambient && !fm.hasEvidence && !fm.supersededFlag {
-				missingTriggers = append(missingTriggers, t+"/"+e.Name())
-			}
+	var emptyStatus []string
+	for _, f := range native.Collect(claudeDir, cwd) {
+		present, value := fmStatus(f.Path)
+		if present && value == "" {
+			emptyStatus = append(emptyStatus, f.Slug)
 		}
 	}
 	sort.Strings(emptyStatus)
-	sort.Strings(missingTriggers)
 
 	status := OK
-	var parts []string
+	detail := "all files have valid frontmatter"
 	hint := ""
 	if len(emptyStatus) > 0 {
 		status = WARN
-		parts = append(parts, fmt.Sprintf("%d with empty status:", len(emptyStatus)))
-	}
-	if len(missingTriggers) > 0 {
-		status = WARN
-		parts = append(parts, fmt.Sprintf("%d feedback/knowledge without triggers:", len(missingTriggers)))
-	}
-	detail := "all files have valid frontmatter"
-	if len(parts) > 0 {
-		detail = strings.Join(parts, ", ")
-		hint = "set status: to 'active' (or remove the line); feedback/knowledge without triggers: won't fire reactively — add `triggers:`, `evidence:`, or `precision_class: ambient` (see CLAUDE.md § When to write feedback)"
+		detail = fmt.Sprintf("%d with empty status:", len(emptyStatus))
+		hint = "set status: to 'active' (or remove the line) — an empty status: drops the file from injection"
 	}
 
 	extra := map[string]interface{}{
-		"empty_status_count":     len(emptyStatus),
-		"missing_triggers_count": len(missingTriggers),
+		"empty_status_count": len(emptyStatus),
 	}
 	if hint != "" {
 		extra["hint"] = hint
@@ -487,13 +396,6 @@ func checkCorpusQuality(memoryDir string) Check {
 			extra["empty_status_sample"] = emptyStatus[:sampleCap]
 		} else {
 			extra["empty_status_sample"] = emptyStatus
-		}
-	}
-	if len(missingTriggers) > 0 {
-		if len(missingTriggers) > sampleCap {
-			extra["missing_triggers_sample"] = missingTriggers[:sampleCap]
-		} else {
-			extra["missing_triggers_sample"] = missingTriggers
 		}
 	}
 
@@ -595,53 +497,50 @@ func checkWALErrors(walPath string, now time.Time) Check {
 	}
 }
 
-// indexAgeThresholdDays defines how old a derived index can get before
-// doctor nags the operator. Picked to match memory-analytics' weekly
-// cadence plus some slack.
-const indexAgeThresholdDays = 14
+// checkSidecar reports on the SQLite metadata sidecar (.sidecar.db). The
+// sidecar is rebuildable from the WAL + native frontmatter, so its absence
+// is only a problem once there is a WAL to rebuild from:
+//   - absent, no .wal      → OK (fresh install, nothing to rebuild yet)
+//   - absent, .wal present → WARN (run `memoryctl sidecar rebuild`)
+//   - present but older than .wal (by mtime) → WARN (stale vs WAL)
+//   - present and at least as new as .wal    → OK
+//
+// v2 has no FTS / TF-IDF / analytics derived indices, so none are checked.
+func checkSidecar(memoryDir string, now time.Time) Check {
+	const name = "sidecar"
+	sidecarPath := filepath.Join(memoryDir, ".sidecar.db")
+	walPath := filepath.Join(memoryDir, ".wal")
 
-func checkIndices(memoryDir string, now time.Time) Check {
-	type item struct {
-		path, label string
-		required    bool
-	}
-	items := []item{
-		{filepath.Join(memoryDir, "index.db"), "fts", false},
-		{filepath.Join(memoryDir, ".tfidf-index"), "tfidf", false},
-		{filepath.Join(memoryDir, ".analytics-report"), "analytics", false},
-	}
-	parts := []string{}
-	missing := []string{}
-	stale := []string{}
-	for _, it := range items {
-		info, err := os.Stat(it.path)
-		if err != nil {
-			missing = append(missing, it.label)
-			continue
+	walInfo, walErr := os.Stat(walPath)
+	sidecarInfo, sidecarErr := os.Stat(sidecarPath)
+
+	if sidecarErr != nil {
+		if walErr != nil {
+			return Check{
+				Name:   name,
+				Status: OK,
+				Detail: "no .sidecar.db yet (fresh install — nothing to rebuild)",
+			}
 		}
-		days := int(now.Sub(info.ModTime()).Hours() / 24)
-		parts = append(parts, fmt.Sprintf("%s:%dd", it.label, days))
-		if days > indexAgeThresholdDays {
-			stale = append(stale, fmt.Sprintf("%s(%dd)", it.label, days))
+		return Check{
+			Name:   name,
+			Status: WARN,
+			Detail: ".sidecar.db missing but .wal exists — run `memoryctl sidecar rebuild`",
 		}
 	}
-	// Derived indices are regenerated on demand — absence is expected on
-	// a brand-new install, so treat missing as OK but surface it.
-	status := OK
-	detail := ""
-	switch {
-	case len(parts) == 0:
-		detail = "no derived indices yet (fresh install? they'll build on first session)"
-	case len(stale) > 0:
-		status = WARN
-		detail = fmt.Sprintf("ages %s; stale: %s", strings.Join(parts, " "), strings.Join(stale, ","))
-	default:
-		detail = "ages " + strings.Join(parts, " ")
-		if len(missing) > 0 {
-			detail += "; missing " + strings.Join(missing, ",")
+
+	if walErr == nil && sidecarInfo.ModTime().Before(walInfo.ModTime()) {
+		return Check{
+			Name:   name,
+			Status: WARN,
+			Detail: "sidecar stale vs WAL — run `memoryctl sidecar rebuild`",
 		}
 	}
-	return Check{Name: "derived_indices", Status: status, Detail: detail}
+	return Check{
+		Name:   name,
+		Status: OK,
+		Detail: fmt.Sprintf(".sidecar.db present (mtime %s)", sidecarInfo.ModTime().Format("2006-01-02 15:04")),
+	}
 }
 
 // closingEvents are the WAL event types that signal "Stop hook reached a
@@ -733,103 +632,6 @@ func checkOpenQuanta(walPath string, now time.Time) Check {
 	return Check{Name: name, Status: status, Detail: detail}
 }
 
-// checkScoringComponents reports how many of the five SessionStart
-// scoring components are active vs dormant under the cold-start gates
-// from `docs/decisions/cold-start-scoring.md`.
-//
-// Active components: keyword_hits, project_boost, recency — always live.
-// Dormant when thresholds unmet: wal_spaced_repetition (Bayesian),
-// tfidf_body_match.
-//
-// Thresholds mirror the ENV variables the hook scripts read:
-//   - HYPOMNEMA_BAYESIAN_MIN_SAMPLES (default 5)
-//   - HYPOMNEMA_OUTCOME_WINDOW_DAYS  (default 14)
-//   - HYPOMNEMA_TFIDF_MIN_VOCAB      (default 100)
-//
-// The check always returns OK status — it's an INFO-level report on
-// scoring-pipeline state, not a health problem. Extra carries the
-// machine-readable breakdown so shells (and the fixture harness) can
-// assert against specific fields.
-func checkScoringComponents(memoryDir string, now time.Time) Check {
-	const name = "scoring_components_active"
-	minSamples := envInt("HYPOMNEMA_BAYESIAN_MIN_SAMPLES", 5)
-	windowDays := envInt("HYPOMNEMA_OUTCOME_WINDOW_DAYS", 14)
-	minVocab := envInt("HYPOMNEMA_TFIDF_MIN_VOCAB", 100)
-
-	walPath := filepath.Join(memoryDir, ".wal")
-	tfidfPath := filepath.Join(memoryDir, ".tfidf-index")
-
-	cutoff := now.AddDate(0, 0, -windowDays).Format("2006-01-02")
-	outcomeCount := countOutcomeEventsAfter(walPath, cutoff)
-	vocabSize := countFileLines(tfidfPath)
-
-	type dormantEntry struct {
-		Component string `json:"component"`
-		Reason    string `json:"reason"`
-	}
-
-	total := 5
-	active := total
-	var dormant []dormantEntry
-	var dormantNames []string
-
-	if outcomeCount < minSamples {
-		active--
-		dormant = append(dormant, dormantEntry{
-			Component: "bayesian",
-			Reason:    fmt.Sprintf("need >=%d outcomes in %dd, have %d", minSamples, windowDays, outcomeCount),
-		})
-		dormantNames = append(dormantNames, "bayesian")
-	}
-	if vocabSize < minVocab {
-		active--
-		dormant = append(dormant, dormantEntry{
-			Component: "tfidf",
-			Reason:    fmt.Sprintf("vocab <%d, have %d", minVocab, vocabSize),
-		})
-		dormantNames = append(dormantNames, "tfidf")
-	}
-
-	detail := fmt.Sprintf("%d/%d active", active, total)
-	if len(dormant) > 0 {
-		var parts []string
-		for _, d := range dormant {
-			parts = append(parts, fmt.Sprintf("%s (%s)", d.Component, d.Reason))
-		}
-		detail = fmt.Sprintf("%d/%d active; dormant: %s", active, total, strings.Join(parts, ", "))
-	}
-
-	// Explicit non-nil slices so JSON emits [] instead of null when the
-	// corpus has all components active — stable shape for downstream jq.
-	if dormant == nil {
-		dormant = []dormantEntry{}
-	}
-	if dormantNames == nil {
-		dormantNames = []string{}
-	}
-
-	return Check{
-		Name:   name,
-		Status: OK,
-		Detail: detail,
-		Extra: map[string]interface{}{
-			"active":             active,
-			"total":              total,
-			"dormant":            dormant,
-			"dormant_components": dormantNames,
-			"thresholds": map[string]interface{}{
-				"min_outcome_samples": minSamples,
-				"outcome_window_days": windowDays,
-				"min_tfidf_vocab":     minVocab,
-			},
-			"observed": map[string]interface{}{
-				"outcome_events_in_window": outcomeCount,
-				"tfidf_vocab_size":         vocabSize,
-			},
-		},
-	}
-}
-
 // resolveDoctorNow mirrors the HYPOMNEMA_TODAY / HYPOMNEMA_NOW
 // precedence used by internal/profile so doctor's WAL-window cutoffs
 // freeze with the rest of the system in tests and fixture snapshots.
@@ -846,65 +648,4 @@ func resolveDoctorNow() time.Time {
 		}
 	}
 	return time.Now()
-}
-
-func envInt(key string, def int) int {
-	v := strings.TrimSpace(os.Getenv(key))
-	if v == "" {
-		return def
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil || n < 0 {
-		return def
-	}
-	return n
-}
-
-// countOutcomeEventsAfter counts outcome-positive + outcome-negative
-// events whose WAL date column is >= cutoff (lexicographic compare on
-// YYYY-MM-DD works for 4-column canonical WAL lines).
-func countOutcomeEventsAfter(walPath, cutoff string) int {
-	f, err := os.Open(walPath)
-	if err != nil {
-		return 0
-	}
-	defer f.Close()
-	s := bufio.NewScanner(f)
-	s.Buffer(make([]byte, 64*1024), 1024*1024)
-	count := 0
-	for s.Scan() {
-		line := s.Text()
-		if line == "" {
-			continue
-		}
-		fields := strings.Split(line, "|")
-		if len(fields) != 4 {
-			continue
-		}
-		if fields[0] < cutoff {
-			continue
-		}
-		if fields[1] == "outcome-positive" || fields[1] == "outcome-negative" {
-			count++
-		}
-	}
-	return count
-}
-
-// countFileLines returns the number of newline-terminated lines in
-// path, or 0 if the file can't be opened. Used for TF-IDF vocab size
-// (one term per line in .tfidf-index).
-func countFileLines(path string) int {
-	f, err := os.Open(path)
-	if err != nil {
-		return 0
-	}
-	defer f.Close()
-	s := bufio.NewScanner(f)
-	s.Buffer(make([]byte, 64*1024), 1024*1024)
-	n := 0
-	for s.Scan() {
-		n++
-	}
-	return n
 }

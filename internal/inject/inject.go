@@ -5,12 +5,20 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/rank"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/sidecar"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/tokenize"
 )
+
+// maxBodyBytes bounds each injected record body. Bodies range from ~500B to
+// 100KB+ (e.g. avatar-unified-analysis.md); without a cap a single large note
+// dominates the context window. ~2.5KB ≈ a full mistake's root-cause +
+// prevention, or ~1.2K Cyrillic chars. With MaxK records the injection is
+// bounded at roughly MaxK × this.
+const maxBodyBytes = 2500
 
 // Input is everything Run needs (parsed by the memoryctl inject verb).
 type Input struct {
@@ -56,7 +64,7 @@ func Run(in Input) (Result, error) {
 	for _, sc := range ranked {
 		injected = append(injected, sc.Slug)
 	}
-	return Result{Markdown: render(ranked, bySlug), Injected: injected}, nil
+	return Result{Markdown: render(ranked, bySlug, maxBodyBytes), Injected: injected}, nil
 }
 
 func collectNative(osHome, cwd string) ([]native.MemFile, error) {
@@ -139,7 +147,7 @@ func splitCSV(s string) []string {
 	return strings.Split(s, ",")
 }
 
-func render(ranked []rank.Scored, bySlug map[string]native.MemFile) string {
+func render(ranked []rank.Scored, bySlug map[string]native.MemFile, maxBody int) string {
 	if len(ranked) == 0 {
 		return ""
 	}
@@ -153,9 +161,23 @@ func render(ranked []rank.Scored, bySlug map[string]native.MemFile) string {
 		}
 		fmt.Fprintf(&b, "\n## %s\n", title)
 		if f.Body != "" {
-			b.WriteString(f.Body)
+			b.WriteString(capBody(f.Body, maxBody))
 			b.WriteString("\n")
 		}
 	}
 	return b.String()
+}
+
+// capBody bounds a single record's body to maxBytes (a byte budget), backing
+// up to a UTF-8 rune boundary so multi-byte text never splits, and appends a
+// visible marker so a truncated hint reads as truncated.
+func capBody(body string, maxBytes int) string {
+	if maxBytes <= 0 || len(body) <= maxBytes {
+		return body
+	}
+	cut := maxBytes
+	for cut > 0 && !utf8.RuneStart(body[cut]) {
+		cut--
+	}
+	return strings.TrimRight(body[:cut], " \n") + "\n\n…(truncated)"
 }
