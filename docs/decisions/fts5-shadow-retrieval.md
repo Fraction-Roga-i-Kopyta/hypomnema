@@ -15,6 +15,13 @@ review-triggers:
   - after: "2027-04-20"
 ---
 
+> **Retired (v2.0): FTS5 shadow pass removed.** Substring triggers and
+> the shadow observability layer are both gone; the unified relevance
+> ranker in `internal/rank` makes the shadow diagnostic unnecessary.
+> The Unicode tokeniser from `internal/tfidf` is preserved in `rank`
+> for keyword overlap scoring. See
+> `docs/specs/2026-05-28-v2-native-memory-design.md` §1.1 (DROP).
+
 ## What
 
 `hooks/user-prompt-submit.sh` spawns `memory-fts-shadow.sh` (or

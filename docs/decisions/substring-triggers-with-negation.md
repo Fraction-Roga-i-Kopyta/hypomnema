@@ -15,6 +15,12 @@ review-triggers:
   - after: "2027-04-12"
 ---
 
+> **Superseded (v2.0): replaced by relevance-ranked injection; substring
+> triggers + negation removed.** `memoryctl inject` uses a keyword-overlap
+> ranker; prompt tokens are signals, not pattern-match gates. Negation
+> windows are gone. See `docs/specs/2026-05-28-v2-native-memory-design.md`
+> §1.1 (MERGE) and `docs/decisions/go-primary-bash-shims.md`.
+
 ## What
 
 `hooks/user-prompt-submit.sh` compares the current prompt (lowercased)
