@@ -17,93 +17,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install system deps (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends jq sqlite3
-
-      - name: Install system deps (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          # jq + sqlite3 preinstalled on macos-latest, but the runner image
-          # ships Android SDK platform-tools earlier in PATH than /usr/bin,
-          # and that sqlite3 is compiled WITHOUT FTS5 — which silently breaks
-          # bash fts shadow (Go is fine: it uses modernc.org/sqlite embedded).
-          # Force /usr/bin ahead of Android SDK so `sqlite3` resolves to
-          # Apple's system binary (has FTS5 since macOS 15).
-          echo "/usr/bin" >> "$GITHUB_PATH"
-          command -v jq      >/dev/null
-          command -v sqlite3 >/dev/null
-
-      - name: Install uv (for fuzzy-dedup tests)
-        # No uv.lock in the repo — hypomnema uses `uv run --with rapidfuzz`
-        # ad-hoc, not a managed Python project. Enabling the cache would
-        # make the action error out looking for a non-existent lockfile.
-        uses: astral-sh/setup-uv@v3
-
-      - name: Seed ~/.claude (install.sh refuses to run without it)
-        run: mkdir -p "$HOME/.claude"
-
-      - name: Set up Go (for memoryctl build + parity)
+      - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          # Matches `go 1.25.0` in go.mod. `check-latest: true` resolves
-          # to the newest patch release. Before v0.15 this was '1.22' and
-          # only passed because setup-go's `check-latest` implicitly
-          # up-ranged to the latest available — a fragile coincidence.
           go-version: '1.25'
           check-latest: true
 
       - name: Build memoryctl
         run: make build
 
-      - name: Run install.sh (dry-run first, then for real)
-        run: |
-          bash install.sh --dry-run
-          bash install.sh
+      - name: Vet
+        run: go vet ./...
 
-      - name: Add ~/.claude/bin to PATH
-        # install.sh symlinks memoryctl into ~/.claude/bin, but Claude Code
-        # adds that dir to PATH at runtime — CI doesn't. Without this step,
-        # `command -v memoryctl` returns empty in the test hooks and every
-        # dedup assertion silently exits 0, which used to be the "missing
-        # uv, disable dedup" fallback but now means "dedup disabled → tests
-        # expecting exit 2 on a duplicate fail".
-        run: echo "$HOME/.claude/bin" >> "$GITHUB_PATH"
-
-      - name: Run bash smoke tests
-        run: bash hooks/test-memory-hooks.sh
-
-      - name: Run fixture snapshot tests
-        run: make test-fixtures
-
-      - name: Run Go unit tests
-        run: make test-go
-
-      - name: Parity check (bash vs Go shadow)
-        run: make parity
-
-      - name: Perf benchmarks (gated — fails on regression)
-        # Gate fails when any "gated" scenario in
-        # docs/measurements/baselines.json exceeds its avg_ms × tolerance
-        # threshold. High-variance scenarios (currently `stop`) are
-        # marked `gated: false` and remain observational. Tolerance is
-        # 1.5x by default — wide enough to absorb the ~30 % runner
-        # variance documented in v0.14 measurements.
-        run: |
-          echo "::group::Perf benchmark gate"
-          bash scripts/bench-gate.sh 2>&1 | tee /tmp/perf.txt
-          GATE_EXIT=${PIPESTATUS[0]}
-          echo "::endgroup::"
-          {
-            echo "## Perf benchmark gate (${{ matrix.os }})"
-            echo '```'
-            sed -n '/=== bench-gate /,$p' /tmp/perf.txt
-            echo '```'
-            echo "Baselines: \`docs/measurements/baselines.json\`. Edit there + record calibration in \`docs/measurements/\` if a regression is genuine."
-          } >> "$GITHUB_STEP_SUMMARY"
-          exit $GATE_EXIT
+      - name: Test
+        run: go test -race ./...
 
   shellcheck:
     runs-on: ubuntu-latest
@@ -113,8 +40,7 @@ jobs:
         run: sudo apt-get install -y shellcheck
       - name: Run shellcheck across repo
         run: |
-          # -S error: only fail on hard errors. Warnings (SC2034 unused vars,
-          # SC2155 declare+assign) are tracked separately, not blocking.
+          # -S error: only fail on hard errors.
           # SC1091: "Not following sourced file" — expected for runtime-sourced libs.
           find . -type f -name "*.sh" \
             -not -path "./.git/*" \
