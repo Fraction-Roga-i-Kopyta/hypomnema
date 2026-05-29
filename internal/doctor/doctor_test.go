@@ -10,20 +10,36 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/sidecar"
 )
 
-// newFixture builds a complete "healthy" claude+memory pair under tmp.
-// Returns claudeDir, memoryDir. Individual tests degrade specific parts
-// to exercise each failure mode.
-func newFixture(t *testing.T) (string, string) {
+// fixtureCWD is the working directory every fixture pretends the project
+// lives in. native.Collect encodes it into the per-project slug ("/" → "-"),
+// so the project memory dir is <home>/.claude/projects/-work-proj/memory.
+const fixtureCWD = "/work/proj"
+
+// newFixture builds a complete "healthy" v2 native install under tmp.
+// The claude dir is <tmp>/.claude (its parent is the synthetic home, which
+// native.Collect derives via filepath.Dir(claudeDir)). Returns claudeDir,
+// memoryDir, cwd. Individual tests degrade specific parts to exercise each
+// failure mode, or write native files into the project/global dirs.
+func newFixture(t *testing.T) (claude, mem, cwd string) {
 	t.Helper()
-	claude := t.TempDir()
-	mem := filepath.Join(claude, "memory")
-	for _, sub := range []string{
-		"hooks", "bin", "memory/mistakes", "memory/strategies",
-		"memory/feedback", "memory/knowledge",
+	home := t.TempDir()
+	claude = filepath.Join(home, ".claude")
+	mem = filepath.Join(claude, "memory")
+	cwd = fixtureCWD
+	// v2 layout: metadata root (memory/), per-project native dir, global
+	// native dir, plus the install scaffolding (hooks/, bin/).
+	for _, dir := range []string{
+		filepath.Join(claude, "hooks"),
+		filepath.Join(claude, "bin"),
+		mem,
+		filepath.Join(claude, "projects", strings.ReplaceAll(cwd, "/", "-"), "memory"),
+		filepath.Join(claude, "memory-global"),
 	} {
-		if err := os.MkdirAll(filepath.Join(claude, sub), 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -41,12 +57,49 @@ func newFixture(t *testing.T) (string, string) {
 	if err := os.WriteFile(filepath.Join(claude, "bin", "memoryctl"), []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	return claude, mem
+	return claude, mem, cwd
+}
+
+// projDir returns the per-project native memory dir inside the fixture.
+func projDir(claude, cwd string) string {
+	return filepath.Join(claude, "projects", strings.ReplaceAll(cwd, "/", "-"), "memory")
+}
+
+// globalDir returns the global native memory dir inside the fixture.
+func globalDir(claude string) string {
+	return filepath.Join(claude, "memory-global")
+}
+
+// writeNative writes a flat native memory file with the given type/status
+// frontmatter into dir.
+func writeNative(t *testing.T, dir, slug, typ, status string) {
+	t.Helper()
+	body := "---\ntype: " + typ + "\nstatus: " + status + "\n---\nBody.\n"
+	if err := os.WriteFile(filepath.Join(dir, slug+".md"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// seedSidecar creates a real .sidecar.db in mem and upserts one row per
+// (slug → status) pair. Status in v2 lives ONLY in the sidecar, so the
+// doctor's pinned/stale counts must come from here, not file frontmatter.
+func seedSidecar(t *testing.T, mem string, statusBySlug map[string]string) {
+	t.Helper()
+	s, err := sidecar.Open(filepath.Join(mem, ".sidecar.db"))
+	if err != nil {
+		t.Fatalf("seedSidecar: open: %v", err)
+	}
+	defer s.Close()
+	for slug, status := range statusBySlug {
+		if err := s.Upsert(sidecar.Record{Slug: slug, Status: status}); err != nil {
+			t.Fatalf("seedSidecar: upsert %q: %v", slug, err)
+		}
+	}
 }
 
 func TestRun_CleanFixtureNoFails(t *testing.T) {
-	claude, mem := newFixture(t)
-	r := Run(claude, mem)
+	claude, mem, cwd := newFixture(t)
+	r := Run(claude, mem, cwd)
 	_, _, fail := r.Counts()
 	if fail != 0 {
 		var buf bytes.Buffer
@@ -59,14 +112,14 @@ func TestRun_CleanFixtureNoFails(t *testing.T) {
 }
 
 func TestRun_MissingMemoryDirFails(t *testing.T) {
-	claude := t.TempDir()
+	claude := filepath.Join(t.TempDir(), ".claude")
 	// No memory dir created.
-	r := Run(claude, filepath.Join(claude, "memory"))
+	r := Run(claude, filepath.Join(claude, "memory"), fixtureCWD)
 	mustFindCheck(t, r, "memory_dir_exists", FAIL)
 }
 
 func TestRun_SettingsMissingHookCommandFails(t *testing.T) {
-	claude, mem := newFixture(t)
+	claude, mem, cwd := newFixture(t)
 	// Rewrite settings.json to omit session-stop.sh — verifies that a
 	// missing v2 shim is caught by checkSettings.
 	var lines []string
@@ -80,7 +133,7 @@ func TestRun_SettingsMissingHookCommandFails(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(claude, "settings.json"), []byte(broken), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	r := Run(claude, mem)
+	r := Run(claude, mem, cwd)
 	c := mustFindCheck(t, r, "settings_hooks_registered", FAIL)
 	if !strings.Contains(c.Detail, "session-stop.sh") {
 		t.Errorf("expected detail to name the missing hook, got %q", c.Detail)
@@ -88,13 +141,13 @@ func TestRun_SettingsMissingHookCommandFails(t *testing.T) {
 }
 
 func TestRun_BrokenSymlinkFails(t *testing.T) {
-	claude, mem := newFixture(t)
+	claude, mem, cwd := newFixture(t)
 	// Point a symlink at a nonexistent target — mirrors the left-over
 	// memory-dedup.py we caught on the author's own install.
 	if err := os.Symlink("/nonexistent/target.sh", filepath.Join(claude, "hooks", "stale-link.sh")); err != nil {
 		t.Fatal(err)
 	}
-	r := Run(claude, mem)
+	r := Run(claude, mem, cwd)
 	c := mustFindCheck(t, r, "no_broken_symlinks_hooks", FAIL)
 	if !strings.Contains(c.Detail, "stale-link.sh") {
 		t.Errorf("expected detail to name the broken symlink, got %q", c.Detail)
@@ -102,7 +155,7 @@ func TestRun_BrokenSymlinkFails(t *testing.T) {
 }
 
 func TestRun_WALErrorsInLast7Days(t *testing.T) {
-	claude, mem := newFixture(t)
+	claude, mem, cwd := newFixture(t)
 	// Seed WAL: one schema-error today, one format-unsupported yesterday,
 	// one stale evidence-missing from 30 days ago (MUST be excluded by
 	// the 7d window).
@@ -120,7 +173,7 @@ func TestRun_WALErrorsInLast7Days(t *testing.T) {
 		[]byte(strings.Join(walLines, "\n")+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	r := Run(claude, mem)
+	r := Run(claude, mem, cwd)
 	c := mustFindCheck(t, r, "wal_errors_last_7d", WARN)
 	// Two events in window (schema-error + format-unsupported), not three.
 	if !strings.Contains(c.Detail, "2 events") {
@@ -132,80 +185,180 @@ func TestRun_WALErrorsInLast7Days(t *testing.T) {
 }
 
 func TestRun_WALMissingIsOK(t *testing.T) {
-	claude, mem := newFixture(t)
+	claude, mem, cwd := newFixture(t)
 	// No .wal file — typical on a fresh install.
-	r := Run(claude, mem)
+	r := Run(claude, mem, cwd)
 	mustFindCheck(t, r, "wal_errors_last_7d", OK)
 }
 
 func TestRun_CorpusEmptyWarns(t *testing.T) {
-	claude, mem := newFixture(t)
-	r := Run(claude, mem)
+	claude, mem, cwd := newFixture(t)
+	// No native files in project or global dir.
+	r := Run(claude, mem, cwd)
 	mustFindCheck(t, r, "corpus_counts", WARN)
 }
 
 func TestRun_CorpusWithFilesReportsCounts(t *testing.T) {
-	claude, mem := newFixture(t)
-	mk := func(sub, slug, status string) {
-		path := filepath.Join(mem, sub, slug+".md")
-		body := "---\ntype: " + sub + "\nstatus: " + status + "\n---\nBody.\n"
-		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	mk("mistakes", "m-one", "active")
-	mk("mistakes", "m-two", "pinned")
-	mk("strategies", "s-one", "stale")
-	r := Run(claude, mem)
+	claude, mem, cwd := newFixture(t)
+	proj := projDir(claude, cwd)
+	glob := globalDir(claude)
+	// v2 native layout: flat files with singular `type:` frontmatter, split
+	// across the per-project and global stores. native.Collect merges both.
+	// Native files carry NO status — pinned/stale live ONLY in the sidecar,
+	// so we seed a real .sidecar.db with statuses keyed by native slug.
+	writeNative(t, proj, "m-one", "mistake", "active")
+	writeNative(t, proj, "m-two", "mistake", "pinned")
+	writeNative(t, glob, "s-one", "strategy", "stale")
+	seedSidecar(t, mem, map[string]string{
+		"m-one.md": "active",
+		"m-two.md": "pinned",
+		"s-one.md": "stale",
+	})
+	r := Run(claude, mem, cwd)
 	c := mustFindCheck(t, r, "corpus_counts", OK)
-	for _, fragment := range []string{"3 total", "mistakes:2", "strategies:1", "1 pinned", "1 stale"} {
+	for _, fragment := range []string{"3 total", "mistake:2", "strategy:1", "1 pinned", "1 stale"} {
 		if !strings.Contains(c.Detail, fragment) {
 			t.Errorf("expected %q in detail, got %q", fragment, c.Detail)
 		}
 	}
 }
 
-func TestCorpusQuality_TriggersEvidenceAmbientAllPass(t *testing.T) {
-	claude, mem := newFixture(t)
-	mk := func(sub, slug, body string) {
-		path := filepath.Join(mem, sub, slug+".md")
-		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-			t.Fatal(err)
+// TestRun_CorpusWithoutSidecarReportsZeroStatusCounts verifies the graceful
+// path: native files present but no sidecar at all → pinned/stale default to
+// 0 (status is sidecar-sourced), and the check still reports total/per-type
+// counts as OK rather than failing.
+func TestRun_CorpusWithoutSidecarReportsZeroStatusCounts(t *testing.T) {
+	claude, mem, cwd := newFixture(t)
+	proj := projDir(claude, cwd)
+	writeNative(t, proj, "m-one", "mistake", "active")
+	writeNative(t, proj, "m-two", "mistake", "active")
+	// No .sidecar.db seeded.
+	r := Run(claude, mem, cwd)
+	c := mustFindCheck(t, r, "corpus_counts", OK)
+	for _, fragment := range []string{"2 total", "mistake:2", "0 pinned", "0 stale"} {
+		if !strings.Contains(c.Detail, fragment) {
+			t.Errorf("expected %q in detail, got %q", fragment, c.Detail)
 		}
 	}
-	// Each of the three escape hatches must satisfy the check.
-	mk("feedback", "has-triggers",
-		"---\ntype: feedback\nstatus: active\ntriggers:\n  - \"foo\"\n---\nBody.\n")
-	mk("feedback", "has-evidence",
-		"---\ntype: feedback\nstatus: active\nevidence:\n  - \"bar\"\n---\nBody.\n")
-	mk("feedback", "is-ambient",
-		"---\ntype: feedback\nstatus: active\nprecision_class: ambient\n---\nBody.\n")
-	mk("feedback", "is-superseded",
-		"---\ntype: feedback\nstatus: superseded\n---\nBody.\n")
-	mk("knowledge", "k-with-triggers",
-		"---\ntype: knowledge\nstatus: active\ntriggers:\n  - \"baz\"\n---\nBody.\n")
-	r := Run(claude, mem)
+}
+
+// TestRun_CorpusIgnoresDeletedSidecarRows verifies that a sidecar row with
+// status "deleted" (an orphan whose native file is gone) is not counted as
+// live corpus, and that a native file with no matching sidecar row defaults
+// to active (not pinned/stale).
+func TestRun_CorpusIgnoresDeletedSidecarRows(t *testing.T) {
+	claude, mem, cwd := newFixture(t)
+	proj := projDir(claude, cwd)
+	writeNative(t, proj, "m-one", "mistake", "active")
+	writeNative(t, proj, "m-two", "mistake", "active")
+	seedSidecar(t, mem, map[string]string{
+		"m-one.md":   "pinned",
+		"gone.md":    "deleted", // orphan — no native file; must not be counted
+		"orphan2.md": "stale",   // also no native file; must not be counted
+	})
+	r := Run(claude, mem, cwd)
+	c := mustFindCheck(t, r, "corpus_counts", OK)
+	// 2 native files; m-one pinned (from sidecar), m-two defaults active.
+	// Deleted/orphan sidecar rows contribute nothing to the live counts.
+	for _, fragment := range []string{"2 total", "mistake:2", "1 pinned", "0 stale"} {
+		if !strings.Contains(c.Detail, fragment) {
+			t.Errorf("expected %q in detail, got %q", fragment, c.Detail)
+		}
+	}
+}
+
+func TestCorpusQuality_ValidFrontmatterPasses(t *testing.T) {
+	claude, mem, cwd := newFixture(t)
+	proj := projDir(claude, cwd)
+	glob := globalDir(claude)
+	// v2 has no triggers concept — any file with a non-empty status: is fine,
+	// regardless of type or presence of evidence/precision_class.
+	writeNative(t, proj, "fb-plain", "feedback", "active")
+	writeNative(t, proj, "kn-plain", "knowledge", "active")
+	writeNative(t, glob, "mi-pinned", "mistake", "pinned")
+	r := Run(claude, mem, cwd)
 	c := mustFindCheck(t, r, "corpus_frontmatter_quality", OK)
 	if !strings.Contains(c.Detail, "all files have valid frontmatter") {
 		t.Errorf("expected clean detail, got %q", c.Detail)
 	}
 }
 
-func TestCorpusQuality_BareFeedbackWithoutAnythingWarns(t *testing.T) {
-	claude, mem := newFixture(t)
-	body := "---\ntype: feedback\nstatus: active\n---\nBody only, no triggers, no evidence, not ambient.\n"
-	if err := os.WriteFile(filepath.Join(mem, "feedback", "bare.md"), []byte(body), 0o644); err != nil {
+func TestCorpusQuality_EmptyStatusWarns(t *testing.T) {
+	claude, mem, cwd := newFixture(t)
+	proj := projDir(claude, cwd)
+	// status: present but empty — the ranking filter would silently drop it.
+	body := "---\ntype: feedback\nstatus:\n---\nBody with a present-but-empty status.\n"
+	if err := os.WriteFile(filepath.Join(proj, "empty-status.md"), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	r := Run(claude, mem)
+	r := Run(claude, mem, cwd)
 	c := mustFindCheck(t, r, "corpus_frontmatter_quality", WARN)
-	if !strings.Contains(c.Detail, "1 feedback/knowledge without triggers:") {
-		t.Errorf("expected bare-file warning, got %q", c.Detail)
+	if !strings.Contains(c.Detail, "1 with empty status:") {
+		t.Errorf("expected empty-status warning, got %q", c.Detail)
 	}
 }
 
+func TestSidecar_AbsentOnFreshInstallIsOK(t *testing.T) {
+	claude, mem, cwd := newFixture(t)
+	// No .sidecar.db and no .wal — a brand-new install has nothing to rebuild.
+	r := Run(claude, mem, cwd)
+	mustFindCheck(t, r, "sidecar", OK)
+}
+
+func TestSidecar_AbsentWithWALWarns(t *testing.T) {
+	claude, mem, cwd := newFixture(t)
+	// A WAL exists but the sidecar does not — it needs rebuilding.
+	mustWriteWAL(t, mem, []string{
+		time.Now().Format("2006-01-02") + "|inject|slug-a|s1",
+	})
+	r := Run(claude, mem, cwd)
+	c := mustFindCheck(t, r, "sidecar", WARN)
+	if !strings.Contains(c.Detail, "rebuild") {
+		t.Errorf("expected rebuild hint, got %q", c.Detail)
+	}
+}
+
+func TestSidecar_StaleVsWALWarns(t *testing.T) {
+	claude, mem, cwd := newFixture(t)
+	// Write the sidecar first, then the WAL — so the WAL is newer (mtime).
+	sidecar := filepath.Join(mem, ".sidecar.db")
+	if err := os.WriteFile(sidecar, []byte("db"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(sidecar, old, old); err != nil {
+		t.Fatal(err)
+	}
+	mustWriteWAL(t, mem, []string{
+		time.Now().Format("2006-01-02") + "|inject|slug-a|s1",
+	})
+	r := Run(claude, mem, cwd)
+	c := mustFindCheck(t, r, "sidecar", WARN)
+	if !strings.Contains(c.Detail, "stale") {
+		t.Errorf("expected stale-vs-WAL warning, got %q", c.Detail)
+	}
+}
+
+func TestSidecar_FreshIsOK(t *testing.T) {
+	claude, mem, cwd := newFixture(t)
+	// WAL first, then the sidecar — sidecar is newer, so it is up to date.
+	mustWriteWAL(t, mem, []string{
+		time.Now().Format("2006-01-02") + "|inject|slug-a|s1",
+	})
+	sidecar := filepath.Join(mem, ".sidecar.db")
+	if err := os.WriteFile(sidecar, []byte("db"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Add(time.Hour)
+	if err := os.Chtimes(sidecar, now, now); err != nil {
+		t.Fatal(err)
+	}
+	r := Run(claude, mem, cwd)
+	mustFindCheck(t, r, "sidecar", OK)
+}
+
 func TestOpenQuanta_AllClosedIsOK(t *testing.T) {
-	claude, mem := newFixture(t)
+	claude, mem, cwd := newFixture(t)
 	today := time.Now().Format("2006-01-02")
 	// 3 sessions: each with an inject + a closing event.
 	lines := []string{
@@ -217,7 +370,7 @@ func TestOpenQuanta_AllClosedIsOK(t *testing.T) {
 		today + "|clean-session|_global_|s3",
 	}
 	mustWriteWAL(t, mem, lines)
-	r := Run(claude, mem)
+	r := Run(claude, mem, cwd)
 	c := mustFindCheck(t, r, "open_quanta_last_30d", OK)
 	if !strings.Contains(c.Detail, "0/3") {
 		t.Errorf("expected 0/3 open, got %q", c.Detail)
@@ -225,7 +378,7 @@ func TestOpenQuanta_AllClosedIsOK(t *testing.T) {
 }
 
 func TestOpenQuanta_MajorityOpenWarns(t *testing.T) {
-	claude, mem := newFixture(t)
+	claude, mem, cwd := newFixture(t)
 	today := time.Now().Format("2006-01-02")
 	// 4 sessions: only one has a closing event → 75% open.
 	lines := []string{
@@ -237,7 +390,7 @@ func TestOpenQuanta_MajorityOpenWarns(t *testing.T) {
 		today + "|inject|slug-d|s4",
 	}
 	mustWriteWAL(t, mem, lines)
-	r := Run(claude, mem)
+	r := Run(claude, mem, cwd)
 	c := mustFindCheck(t, r, "open_quanta_last_30d", WARN)
 	if !strings.Contains(c.Detail, "3/4") {
 		t.Errorf("expected 3/4 open, got %q", c.Detail)
@@ -248,14 +401,14 @@ func TestOpenQuanta_MajorityOpenWarns(t *testing.T) {
 }
 
 func TestOpenQuanta_ExcludesOldEntriesOutsideWindow(t *testing.T) {
-	claude, mem := newFixture(t)
+	claude, mem, cwd := newFixture(t)
 	old := time.Now().AddDate(0, 0, -60).Format("2006-01-02")
 	lines := []string{
 		// Old inject without closing — MUST be excluded from the 30d window.
 		old + "|inject|slug-old|s-old",
 	}
 	mustWriteWAL(t, mem, lines)
-	r := Run(claude, mem)
+	r := Run(claude, mem, cwd)
 	// Empty-window path returns OK with a clear message; no WARN.
 	c := mustFindCheck(t, r, "open_quanta_last_30d", OK)
 	if !strings.Contains(c.Detail, "no inject-carrying sessions") {
@@ -338,8 +491,8 @@ func TestRequiredHookCommands_MatchInstallScript(t *testing.T) {
 }
 
 func TestReport_PrintJSONRoundtrips(t *testing.T) {
-	claude, mem := newFixture(t)
-	r := Run(claude, mem)
+	claude, mem, cwd := newFixture(t)
+	r := Run(claude, mem, cwd)
 	var buf bytes.Buffer
 	r.PrintJSON(&buf)
 	// Decode into a map — we only assert structural shape here, not field

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/jsonl"
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/memindex"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/profile"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/sidecar"
@@ -56,15 +57,24 @@ func Run(in Input) (Result, error) {
 	wal.Append(in.MemoryDir, metrics, "")
 	wal.Append(in.MemoryDir, fmt.Sprintf("%s|session-close|%s|%s", in.Today, sid, sid), "")
 
+	nativeFiles := collectNative(in.ClaudeHome, in.CWD)
 	if s, err := sidecar.Open(filepath.Join(in.MemoryDir, ".sidecar.db")); err == nil {
-		files := collectNative(in.ClaudeHome, in.CWD)
-		_ = sidecar.Reproject(s, files, filepath.Join(in.MemoryDir, ".wal"))
+		_ = sidecar.Reproject(s, nativeFiles, filepath.Join(in.MemoryDir, ".wal"))
 		if n, derr := s.MarkStale(in.Today); derr == nil {
 			res.Staled = n
 		}
 		s.Close()
 	}
-	_ = profile.Generate(in.MemoryDir)
+	// Regenerate the native MEMORY.md index for this project (best-effort).
+	// v2 owns this file; v1 left an orphan with ../../../ links. Project scope
+	// only — the global store surfaces via the ranked injection.
+	osHome := filepath.Dir(in.ClaudeHome)
+	projDir := native.ProjectMemoryDir(osHome, in.CWD)
+	if projFiles, lerr := native.List(projDir); lerr == nil && len(projFiles) > 0 {
+		_ = memindex.Write(projDir, memindex.Render(projFiles, memindex.DefaultMaxBytes))
+	}
+
+	_ = profile.Generate(in.MemoryDir, nativeFiles)
 
 	return res, nil
 }

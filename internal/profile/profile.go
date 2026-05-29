@@ -14,29 +14,33 @@ package profile
 import (
 	"bufio"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 )
 
 // Generate writes memoryDir/self-profile.md. Errors are returned to the
 // caller; the CLI wrapper treats any error as a no-op per the hook
 // fail-safe contract (self-profile is observational, must not break
 // session-stop).
-func Generate(memoryDir string) error {
+//
+// In v2 the WAL and the output file stay under memoryDir, but all CONTENT
+// (mistakes, strategies, ambient classification, the Bayesian-gate denominator)
+// comes from the native memory files passed in `files` — there are no v1
+// memoryDir/{mistakes,strategies,...} subdirectories any more. files is the
+// merged per-project + global native corpus (native.Collect).
+func Generate(memoryDir string, files []native.MemFile) error {
 	walPath := filepath.Join(memoryDir, ".wal")
 	if _, err := os.Stat(walPath); err != nil {
 		return nil // WAL absent → quiet no-op, matches bash `[ -f ] || exit 0`
 	}
 
-	ambient, err := collectAmbientSlugs(memoryDir)
-	if err != nil {
-		return err
-	}
+	ambient := collectAmbientSlugs(files)
 
 	// Outcome cutoff for the per-slug Bayesian sampling window. Mirrors
 	// the constants `internal/doctor` uses for its scoring_components_active
@@ -57,19 +61,10 @@ func Generate(memoryDir string) error {
 
 	// Aggregate ADR review-trigger metrics.
 	computeAmbientFraction(sig)
-	if err := computeCorpusBayesianFraction(memoryDir, sig, minSamples); err != nil {
-		return err
-	}
+	computeCorpusBayesianFraction(files, sig, minSamples)
 
-	weaknesses, err := collectWeaknesses(filepath.Join(memoryDir, "mistakes"))
-	if err != nil {
-		return err
-	}
-
-	strengths, err := collectStrengths(filepath.Join(memoryDir, "strategies"))
-	if err != nil {
-		return err
-	}
+	weaknesses := collectWeaknesses(files)
+	strengths := collectStrengths(files)
 
 	calibration := summariseCalibration(sig.domainTotal, sig.domainErr)
 
@@ -164,37 +159,35 @@ func computeAmbientFraction(sig *walSignals) {
 	sig.ambientFractionDefined = true
 }
 
-// computeCorpusBayesianFraction walks every memory record (mistakes,
-// feedback, strategies, knowledge, notes, decisions) and counts how
-// many have ≥ minSamples outcome events inside the window already
-// loaded into sig.outcomesPerSlug. The fraction is what the cold-
-// start-scoring ADR's review-trigger watches for the corpus-level
-// "Bayesian gate is dormant for too many slugs" signal.
-func computeCorpusBayesianFraction(memoryDir string, sig *walSignals, minSamples int) error {
-	memoryTypes := []string{"mistakes", "feedback", "strategies", "knowledge", "notes", "decisions"}
+// bayesianCorpusTypes is the set of native `type:` values (singular) that
+// participate in the corpus-level Bayesian-gate denominator. Mirrors the v1
+// directory set (mistakes/feedback/strategies/knowledge/notes/decisions),
+// collapsed to the singular type names native files carry.
+var bayesianCorpusTypes = map[string]bool{
+	"mistake":   true,
+	"feedback":  true,
+	"strategy":  true,
+	"knowledge": true,
+	"note":      true,
+	"decision":  true,
+}
+
+// computeCorpusBayesianFraction counts every native memory record of a content
+// type (mistake, feedback, strategy, knowledge, note, decision) and how many
+// have ≥ minSamples outcome events inside the window already loaded into
+// sig.outcomesPerSlug. The fraction is what the cold-start-scoring ADR's
+// review-trigger watches for the corpus-level "Bayesian gate is dormant for
+// too many slugs" signal.
+func computeCorpusBayesianFraction(files []native.MemFile, sig *walSignals, minSamples int) {
 	var total, active int
-	for _, t := range memoryTypes {
-		dir := filepath.Join(memoryDir, t)
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return err
+	for _, f := range files {
+		if !bayesianCorpusTypes[f.Type] {
+			continue
 		}
-		for _, e := range entries {
-			if e.IsDir() {
-				continue
-			}
-			name := e.Name()
-			if !strings.HasSuffix(name, ".md") {
-				continue
-			}
-			slug := strings.TrimSuffix(name, ".md")
-			total++
-			if sig.outcomesPerSlug[slug] >= minSamples {
-				active++
-			}
+		slug := strings.TrimSuffix(f.Slug, ".md")
+		total++
+		if sig.outcomesPerSlug[slug] >= minSamples {
+			active++
 		}
 	}
 	sig.corpusBayesianTotal = total
@@ -203,7 +196,6 @@ func computeCorpusBayesianFraction(memoryDir string, sig *walSignals, minSamples
 		sig.corpusBayesianFraction = float64(active) / float64(total)
 		sig.corpusBayesianFractionDefined = true
 	}
-	return nil
 }
 
 // now returns the formatted timestamp. HYPOMNEMA_NOW overrides for tests
@@ -245,11 +237,11 @@ type walSignals struct {
 	// quota-pool). Fractions stay as 0 when denominator is 0 — we
 	// distinguish "fraction is 0" from "metric undefined" in the
 	// render layer via the separate `*Defined` flags.
-	ambientFraction              float64
-	ambientFractionDefined       bool
-	corpusBayesianActive         int
-	corpusBayesianTotal          int
-	corpusBayesianFraction       float64
+	ambientFraction               float64
+	ambientFractionDefined        bool
+	corpusBayesianActive          int
+	corpusBayesianTotal           int
+	corpusBayesianFraction        float64
 	corpusBayesianFractionDefined bool
 
 	// Intuition-milestone metric (ADR intuition-milestone.md, v1.1).
@@ -258,10 +250,10 @@ type walSignals struct {
 	// sustained over the window is the operational definition of the
 	// "intuition tier" — rules applied silently more often than they
 	// are cited explicitly.
-	silentAppliedRecent    int
+	silentAppliedRecent     int
 	triggerUsefulMeasRecent int
-	intuitionRatio         float64
-	intuitionRatioDefined  bool
+	intuitionRatio          float64
+	intuitionRatioDefined   bool
 
 	domainTotal map[string]int
 	domainErr   map[string]int
@@ -492,28 +484,19 @@ func isWordByte(b byte) bool {
 
 // --- Ambient set ----------------------------------------------------------
 
-// collectAmbientSlugs walks memoryDir for .md files that contain a literal
-// `precision_class: ambient` line (frontmatter or body — bash uses `grep`).
-func collectAmbientSlugs(memoryDir string) (map[string]bool, error) {
+// collectAmbientSlugs returns the set of native files that carry a literal
+// `precision_class: ambient` line. native strips frontmatter from f.Body, and
+// precision_class lives in frontmatter, so we re-read f.Path and grep the whole
+// file (frontmatter or body) — matching the bash `grep` semantics. Per-file
+// read errors are ignored (profile is observational).
+func collectAmbientSlugs(files []native.MemFile) map[string]bool {
 	out := map[string]bool{}
-	err := filepath.WalkDir(memoryDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d == nil {
-			// Ignore per-file errors: bash `grep -r` with redirection to
-			// /dev/null keeps going, so must we.
-			return nil
+	for _, f := range files {
+		if hasAmbientLine(f.Path) {
+			out[strings.TrimSuffix(f.Slug, ".md")] = true
 		}
-		if d.IsDir() || !strings.HasSuffix(d.Name(), ".md") {
-			return nil
-		}
-		if hasAmbientLine(path) {
-			out[strings.TrimSuffix(d.Name(), ".md")] = true
-		}
-		return nil
-	})
-	if err != nil {
-		return out, nil // non-fatal; profile is observational
 	}
-	return out, nil
+	return out
 }
 
 func hasAmbientLine(path string) bool {
@@ -540,24 +523,19 @@ type weakness struct {
 	scope      string
 }
 
-// collectWeaknesses scans mistakesDir for .md files; for each, parses the
-// frontmatter block between the first two `---` delimiters to extract
+// collectWeaknesses filters the native corpus to mistake-typed files; for each,
+// parses the frontmatter block between the first two `---` delimiters to extract
 // recurrence / scope / severity. Emits only mistakes with recurrence > 0.
 // Top 5 by recurrence descending, matches bash `sort -rn | head -5`.
-func collectWeaknesses(mistakesDir string) ([]weakness, error) {
-	entries, err := os.ReadDir(mistakesDir)
-	if err != nil {
-		// Bash tolerates missing directory silently.
-		return nil, nil
-	}
-	all := make([]weakness, 0, len(entries))
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+func collectWeaknesses(files []native.MemFile) []weakness {
+	all := make([]weakness, 0)
+	for _, f := range files {
+		if f.Type != "mistake" {
 			continue
 		}
-		w := parseWeakness(filepath.Join(mistakesDir, e.Name()))
+		w := parseWeakness(f.Path)
 		if w.recurrence > 0 {
-			w.slug = strings.TrimSuffix(e.Name(), ".md")
+			w.slug = strings.TrimSuffix(f.Slug, ".md")
 			all = append(all, w)
 		}
 	}
@@ -578,7 +556,7 @@ func collectWeaknesses(mistakesDir string) ([]weakness, error) {
 	if len(all) > 5 {
 		all = all[:5]
 	}
-	return all, nil
+	return all
 }
 
 func parseWeakness(path string) weakness {
@@ -623,18 +601,14 @@ type strength struct {
 	successCount int
 }
 
-func collectStrengths(strategiesDir string) ([]strength, error) {
-	entries, err := os.ReadDir(strategiesDir)
-	if err != nil {
-		return nil, nil
-	}
-	all := make([]strength, 0, len(entries))
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+func collectStrengths(files []native.MemFile) []strength {
+	all := make([]strength, 0)
+	for _, f := range files {
+		if f.Type != "strategy" {
 			continue
 		}
-		s := parseStrength(filepath.Join(strategiesDir, e.Name()))
-		s.slug = strings.TrimSuffix(e.Name(), ".md")
+		s := parseStrength(f.Path)
+		s.slug = strings.TrimSuffix(f.Slug, ".md")
 		all = append(all, s)
 	}
 	// Bash script sorts ALL strategies (including zero success_count), not
@@ -648,7 +622,7 @@ func collectStrengths(strategiesDir string) ([]strength, error) {
 	if len(all) > 5 {
 		all = all[:5]
 	}
-	return all, nil
+	return all
 }
 
 func parseStrength(path string) strength {
@@ -721,7 +695,7 @@ func renderProfile(ts string, sig *walSignals, weak []weakness, strong []strengt
 	fmt.Fprintf(&b, "---\n")
 	fmt.Fprintf(&b, "type: self-profile\n")
 	fmt.Fprintf(&b, "generated: %s\n", ts)
-	fmt.Fprintf(&b, "source: derived from .wal + mistakes/ + strategies/\n")
+	fmt.Fprintf(&b, "source: derived from .wal + native memory (mistakes + strategies)\n")
 	fmt.Fprintf(&b, "---\n\n")
 
 	fmt.Fprintf(&b, "# Self-Profile\n\n")

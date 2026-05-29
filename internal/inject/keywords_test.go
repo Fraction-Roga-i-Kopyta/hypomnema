@@ -1,6 +1,9 @@
 package inject
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"sort"
 	"testing"
 )
@@ -36,5 +39,59 @@ func TestKeywords_EmptyPrompt(t *testing.T) {
 	}
 	if !set["alpha"] && !set["svc"] {
 		t.Errorf("expected basename tokens from /tmp/alpha-svc, got %v", got)
+	}
+}
+
+func gitRun(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
+		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+func has(ss []string, want string) bool {
+	for _, s := range ss {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
+// At SessionStart the prompt is empty; the relevance signal should include the
+// project context — branch name and changed files — not just the cwd basename.
+func TestKeywords_IncludesGitBranchAndChangedFiles(t *testing.T) {
+	repo := t.TempDir()
+	gitRun(t, repo, "init", "-q")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "-q", "-m", "init")
+	gitRun(t, repo, "checkout", "-q", "-b", "loginflow")
+	if err := os.WriteFile(filepath.Join(repo, "payments.go"), []byte("package x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	kw := Keywords(repo, "")
+
+	if !has(kw, "loginflow") {
+		t.Errorf("expected branch token 'loginflow' in %v", kw)
+	}
+	if !has(kw, "payments") {
+		t.Errorf("expected changed-file token 'payments' in %v", kw)
+	}
+}
+
+// A non-git directory must not error — git enrichment is best-effort.
+func TestKeywords_NonGitDirIsSafe(t *testing.T) {
+	dir := t.TempDir()
+	kw := Keywords(dir, "deploy the cache")
+	if !has(kw, "deploy") || !has(kw, "cache") {
+		t.Errorf("prompt tokens must survive in non-git dir; got %v", kw)
 	}
 }
