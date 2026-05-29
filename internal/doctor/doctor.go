@@ -21,8 +21,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/decisions"
 )
 
 // Status is the three-level health grade for each check.
@@ -134,7 +132,6 @@ func Run(claudeDir, memoryDir string) Report {
 		checkCorpus(memoryDir),
 		checkWALErrors(filepath.Join(memoryDir, ".wal"), now),
 		checkOpenQuanta(filepath.Join(memoryDir, ".wal"), now),
-		checkDecisionsPressure(memoryDir, now),
 		checkIndices(memoryDir, now),
 		checkScoringComponents(memoryDir, now),
 		checkCorpusQuality(memoryDir),
@@ -182,19 +179,13 @@ func checkMemoryDir(dir string) Check {
 }
 
 // requiredHookCommands is the set install.sh wires up on a fresh install,
-// in suffix form so we don't care whether the command string uses
-// ~/.claude/... or an absolute path. Kept in one place so the list stays
-// in lockstep with install.sh.
+// as the suffix of the v2 shim path "hooks/v2/<name>". Kept in one place
+// so the list stays in lockstep with install.sh.
 var requiredHookCommands = []string{
-	"memory-session-start.sh",
-	"memory-stop.sh",
-	"memory-user-prompt-submit.sh",
-	"memory-dedup.sh",
-	"memory-outcome.sh",
-	"memory-error-detect.sh",
-	"memory-precompact.sh",
-	// v0.13 addition — install.sh registers this on PreToolUse:Write|Edit.
-	"memory-secrets-detect.sh",
+	"session-start.sh",
+	"user-prompt-submit.sh",
+	"pre-tool-write.sh",
+	"session-stop.sh",
 }
 
 func checkSettings(path string) Check {
@@ -207,13 +198,13 @@ func checkSettings(path string) Check {
 		}
 	}
 	// Rather than parsing the full schema (Claude Code owns it and can
-	// extend it between releases), substring-match each required command
-	// across the whole settings.json. Positive matches are enough because
-	// install.sh always emits the suffixes literally.
+	// extend it between releases), substring-match each required v2 shim
+	// path across the whole settings.json. install.sh registers them as
+	// "~/.claude/hooks/v2/<name>" so match against "hooks/v2/<name>".
 	text := string(data)
 	missing := []string{}
 	for _, cmd := range requiredHookCommands {
-		if !strings.Contains(text, cmd) {
+		if !strings.Contains(text, "hooks/v2/"+cmd) {
 			missing = append(missing, cmd)
 		}
 	}
@@ -740,80 +731,6 @@ func checkOpenQuanta(walPath string, now time.Time) Check {
 		detail += " — skews Bayesian `eff`; see docs/notes/measurement-bias.md"
 	}
 	return Check{Name: name, Status: status, Detail: detail}
-}
-
-// checkDecisionsPressure evaluates ADR review-triggers in
-// ~/.claude/memory/decisions/ (personal ADRs — project-level ADRs in
-// docs/decisions/ are outside this check's scope) against the current
-// snapshot, and WARNs if any trigger fires. Not FAIL — a pressured
-// decision is an advisory to the operator, not a broken install.
-func checkDecisionsPressure(memoryDir string, now time.Time) Check {
-	name := "decisions_review"
-	dir := filepath.Join(memoryDir, "decisions")
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return Check{Name: name, Status: OK, Detail: "no personal decisions/ directory"}
-		}
-		return Check{Name: name, Status: WARN, Detail: err.Error()}
-	}
-
-	snap, err := decisions.BuildSnapshot(memoryDir, now)
-	if err != nil {
-		return Check{Name: name, Status: WARN, Detail: "snapshot: " + err.Error()}
-	}
-
-	fired := 0
-	parseErrs := 0
-	adrCount := 0
-	var examples []string
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") || e.Name() == "README.md" {
-			continue
-		}
-		adrCount++
-		_, triggers, err := decisions.ReadADR(filepath.Join(dir, e.Name()))
-		if err != nil {
-			parseErrs++
-			continue
-		}
-		if len(triggers) == 0 {
-			continue
-		}
-		slug := strings.TrimSuffix(e.Name(), ".md")
-		for _, r := range decisions.Evaluate(triggers, slug, snap) {
-			if r.Status == decisions.StatusPressure || r.Status == decisions.StatusOverdue {
-				fired++
-				if len(examples) < 3 {
-					examples = append(examples, slug)
-				}
-			}
-		}
-	}
-
-	if adrCount == 0 {
-		return Check{Name: name, Status: OK, Detail: "0 personal ADRs"}
-	}
-	if parseErrs > 0 {
-		return Check{
-			Name:   name,
-			Status: WARN,
-			Detail: fmt.Sprintf("%d ADR(s) have malformed review-triggers (`memoryctl decisions review` shows details)", parseErrs),
-		}
-	}
-	if fired == 0 {
-		return Check{
-			Name:   name,
-			Status: OK,
-			Detail: fmt.Sprintf("%d ADR(s), no pressure", adrCount),
-		}
-	}
-	return Check{
-		Name:   name,
-		Status: WARN,
-		Detail: fmt.Sprintf("%d trigger(s) fired across %d ADR(s): %s; run `memoryctl decisions review` for detail",
-			fired, adrCount, strings.Join(examples, ", ")),
-	}
 }
 
 // checkScoringComponents reports how many of the five SessionStart

@@ -19,6 +19,14 @@ review-triggers:
   - after: "2027-04-24"
 ---
 
+> **Revised (v2.0): new ranker weights (overlap / ref_count / recency /
+> effectiveness); calibrated via `memoryctl ab`
+> (`docs/measurements/2026-05-29-v2-ranker-ab.md`).** The v1 five-component
+> formula (keyword ×3, project ×1, WAL 0–10, strategy +6 cap, TF-IDF ×2,
+> noise −3) is replaced by the v2 `internal/rank` formula. The historical
+> weight rationale below documents the v1 reasoning; the v2 weight
+> calibration record lives in the A/B measurement document.
+
 ## What
 
 SessionStart ranks candidate memory records with a weighted sum of

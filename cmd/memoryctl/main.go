@@ -1,54 +1,26 @@
-// memoryctl is the Go CLI for the hypomnema memory system. First subcommand
-// shipped: `fts shadow`, a drop-in replacement for bin/memory-fts-shadow.sh.
+// memoryctl is the Go CLI for the hypomnema memory system.
 //
 // The contract this binary obeys is docs/FORMAT.md + docs/hooks-contract.md.
 // Anything here is implementation detail and may change between releases, but
-// the on-disk layout (frontmatter, WAL, index.db schema) and the WAL events
-// this binary emits must match the reference bash implementation exactly.
+// the on-disk layout (frontmatter, WAL) and the WAL events this binary emits
+// must match the reference bash implementation exactly.
 package main
 
 import (
-	"context"
-	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
-	"time"
 
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/dedup"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/doctor"
-	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/fts"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/profile"
-	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/tfidf"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/wal"
 )
 
-// FTS-call timeouts (P1.6). Plain context.Background() calls could
-// stall arbitrarily long on busy SQLite — shadow pass is meant to be
-// observational and must never block UserPromptSubmit. Sync/query
-// are slightly more forgiving so migration-style rebuilds still
-// complete. All values are conservative defaults; they can be
-// relaxed later if a real workload hits the cap.
-const (
-	ftsShadowTimeout = 2 * time.Second
-	ftsSyncTimeout   = 10 * time.Second
-	ftsQueryTimeout  = 3 * time.Second
-)
 
 const usage = `memoryctl — hypomnema memory CLI
 
 Usage:
-  memoryctl fts shadow <prompt> <session-id> [injected-slugs]
-      Run the FTS5 recall-shadow pass. Drop-in replacement for
-      bin/memory-fts-shadow.sh. injected-slugs is a newline-separated string
-      of slugs already injected by the primary pipeline this prompt
-      (pass "" if nothing).
-  memoryctl fts sync
-      Bring ~/.claude/memory/index.db in sync with the markdown tree.
-  memoryctl fts query <prompt> [limit]
-      Free-form FTS5 search. TSV output: path<TAB>score, best-first.
   memoryctl dedup check <file-path>
       Fuzzy dedup for mistake files. Pretool (file absent) reads content
       from stdin; posttool (file present) reads it from disk. Exits 2 on
@@ -63,33 +35,6 @@ Usage:
       in settings.json, broken symlinks in hooks/ and bin/, memoryctl
       availability, corpus counts, WAL-error events in the last 7 days,
       derived-index freshness. Exit 0 on OK/WARN only, 1 on any FAIL.
-  memoryctl tfidf rebuild
-      Unicode-aware rebuild of ~/.claude/memory/.tfidf-index. Replaces
-      hooks/memory-index.sh's Latin-only awk tokenizer with
-      unicode.IsLetter, so Cyrillic / CJK / Greek / Arabic bodies
-      contribute real tokens. Writes atomically via tmp+rename.
-  memoryctl decisions review [--dir PATH] [--json]
-      Evaluate review-triggers: in ADR frontmatter against the current
-      self-profile.md + WAL snapshot. Prints one line per trigger —
-      [ok|pressure|overdue|skipped] slug — message. Exit 1 if any
-      pressure/overdue. ADR source defaults to ./docs/decisions/ when
-      present, else ~/.claude/memory/decisions/.
-  memoryctl evidence learn --target SLUG [--sessions N] [--dry-run] [--yes]
-      Mine candidate evidence: phrases from recent Claude Code session
-      transcripts (~/.claude/projects/*/*.jsonl). Uses trigger-silent
-      WAL events to identify silent sessions for the target rule, then
-      extracts 2/3-gram phrases that appear in ≥20% of silent sessions
-      but ≤10% of the noise baseline. Interactive approval REPL;
-      accepted phrases append to the rule's evidence: frontmatter
-      block. Rejected-pattern phrases persist in
-      ~/.claude/memory/.runtime/evidence-rejections/<slug>.list.
-  memoryctl scoring-probe <slug>
-      Read-only snapshot of a slug's ranking inputs as of the current
-      WAL + tfidf-index: Bayesian effectiveness (+ dormancy reason),
-      outcomes in the cold-start window, TF-IDF vocab size, 30-day
-      inject spread, last-inject age, strategy-used count. JSON output
-      for fixture-harness assertions and one-off debugging. Does not
-      mutate state.
   memoryctl wal validate
       Scan $CLAUDE_MEMORY_DIR/.wal for grammar violations against the
       four-column invariant from FORMAT.md § 5: column count, date
@@ -102,13 +47,22 @@ Usage:
       Catalog in docs/INVARIANTS.md; automated coverage at v1.x is
       I3 (atomic writes) and I5 (hook fail-safe). Exit 0 = clean,
       1 = violations, 2 = command misuse or repo not detected.
+  memoryctl sidecar rebuild
+      Rebuild the SQLite sidecar projection from native memory + WAL
+      ($CLAUDE_HOME/projects/<slug>/memory + ~/.claude/memory/.wal). Writes
+      ~/.claude/memory/.sidecar.db. Run after bulk imports or when the
+      projection is suspected stale.
+  memoryctl sidecar show
+      Print sidecar memory records (slug, type, ref_count, effectiveness).
+      Reads the existing .sidecar.db; run "sidecar rebuild" first if the
+      file is absent or stale.
 
 Environment:
   CLAUDE_MEMORY_DIR       Memory root (default: ~/.claude/memory).
+  CLAUDE_PROJECT_CWD      Working dir for per-project native memory; defaults to cwd.
   HYPOMNEMA_TODAY         Freeze "today" in YYYY-MM-DD (for tests/replay).
   HYPOMNEMA_NOW           Freeze self-profile "generated:" stamp (YYYY-MM-DD HH:MM).
   HYPOMNEMA_SESSION_ID    Session id stamped into WAL entries.
-  MEMORY_FTS_SHADOW_MAX   Cap shadow-miss events per pass (default 4).
 `
 
 func main() {
@@ -122,22 +76,6 @@ func main() {
 	case "-h", "--help":
 		fmt.Print(usage)
 		return
-	case "fts":
-		if len(os.Args) < 3 {
-			fmt.Fprint(os.Stderr, usage)
-			os.Exit(2)
-		}
-		switch os.Args[2] {
-		case "shadow":
-			runShadow(os.Args[3:])
-		case "sync":
-			runSync(os.Args[3:])
-		case "query":
-			runQuery(os.Args[3:])
-		default:
-			fmt.Fprintf(os.Stderr, "memoryctl: unknown fts subcommand %q\n", os.Args[2])
-			os.Exit(2)
-		}
 	case "dedup":
 		if len(os.Args) < 3 {
 			fmt.Fprint(os.Stderr, usage)
@@ -154,28 +92,36 @@ func main() {
 		runSelfProfile(os.Args[2:])
 	case "doctor":
 		runDoctor(os.Args[2:])
-	case "tfidf":
+	case "wal":
+		runWal(os.Args[2:])
+	case "audit":
+		runAudit(os.Args[2:])
+	case "sidecar":
 		if len(os.Args) < 3 {
 			fmt.Fprint(os.Stderr, usage)
 			os.Exit(2)
 		}
 		switch os.Args[2] {
 		case "rebuild":
-			runTfidfRebuild(os.Args[3:])
+			runSidecarRebuild(os.Args[3:])
+		case "show":
+			runSidecarShow(os.Args[3:])
 		default:
-			fmt.Fprintf(os.Stderr, "memoryctl: unknown tfidf subcommand %q\n", os.Args[2])
+			fmt.Fprintf(os.Stderr, "memoryctl: unknown sidecar subcommand %q\n", os.Args[2])
 			os.Exit(2)
 		}
-	case "decisions":
-		runDecisions(os.Args[2:])
-	case "evidence":
-		runEvidence(os.Args[2:])
-	case "scoring-probe":
-		runScoringProbe(os.Args[2:])
-	case "wal":
-		runWal(os.Args[2:])
-	case "audit":
-		runAudit(os.Args[2:])
+	case "migrate":
+		runMigrate(os.Args[2:])
+	case "close":
+		runClose(os.Args[2:])
+	case "inject":
+		runInject(os.Args[2:])
+	case "rank":
+		runRank(os.Args[2:])
+	case "ab":
+		runAB(os.Args[2:])
+	case "guard":
+		runGuard(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "memoryctl: unknown command %q\n", os.Args[1])
 		os.Exit(2)
@@ -187,13 +133,9 @@ func main() {
 // noise into the user's terminal — matches the bash script's `|| true`
 // posture.
 //
-// Generate + AppendDecisionsPressure are serialised under a single lock
-// (P2.12). Before v0.15 they ran back-to-back without a shared lock; a
-// concurrent SessionStart reading self-profile.md could observe the
-// Generate output before AppendDecisionsPressure had a chance to add
-// the pressure section, and two overlapping session-stops could
-// clobber each other's writes. The dedicated lock file is separate
-// from the WAL lock so profile regen cannot block WAL appends.
+// Generate is serialised under a dedicated lock (P2.12) so concurrent
+// session-stops cannot clobber each other's writes. The lock file is
+// separate from the WAL lock so profile regen cannot block WAL appends.
 func runSelfProfile(_ []string) {
 	lockPath := filepath.Join(memoryDir(), ".self-profile.lockd")
 	lock, _ := wal.AcquirePath(lockPath, wal.DefaultLockConfig)
@@ -207,14 +149,6 @@ func runSelfProfile(_ []string) {
 		// anyway; still, propagate for tests that call the binary directly.
 		fmt.Fprintf(os.Stderr, "memoryctl self-profile: %v\n", err)
 		os.Exit(1)
-	}
-	// v0.11: append "Decisions under pressure" section when any ADR
-	// review-trigger fires. No-op on installs without ~/.claude/memory/
-	// decisions/, preserving byte-for-byte parity with the bash script
-	// on fixtures that don't carry personal ADRs.
-	if err := profile.AppendDecisionsPressure(memoryDir()); err != nil {
-		fmt.Fprintf(os.Stderr, "memoryctl self-profile (decisions append): %v\n", err)
-		// Non-fatal — Generate already wrote the core profile.
 	}
 }
 
@@ -237,16 +171,6 @@ func claudeDir() string {
 	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".claude")
-}
-
-// runTfidfRebuild regenerates the TF-IDF index. Fail-safe: printed to
-// stderr and non-zero exit on error, but the calling bash hook treats
-// any non-zero as "fall back to the awk path" rather than aborting.
-func runTfidfRebuild(_ []string) {
-	if err := tfidf.Rebuild(memoryDir()); err != nil {
-		fmt.Fprintf(os.Stderr, "memoryctl tfidf rebuild: %v\n", err)
-		os.Exit(1)
-	}
 }
 
 // runDoctor runs the read-only health check and prints a summary. Exits 1
@@ -272,94 +196,6 @@ func runDoctor(args []string) {
 		report.Print(os.Stdout)
 	}
 	os.Exit(report.ExitCode())
-}
-
-// runShadow is the primary pilot subcommand — byte-for-byte equivalent output
-// to bin/memory-fts-shadow.sh (up to non-determinism in FTS5 tie-breaking).
-// Fail-safe: any error produces exit 0 with no stderr.
-func runShadow(args []string) {
-	if len(args) < 2 {
-		os.Exit(0) // guard matches bash; missing args = no-op
-	}
-	prompt := args[0]
-	sessionID := args[1]
-	var injected []string
-	if len(args) >= 3 && args[2] != "" {
-		injected = strings.Split(args[2], "\n")
-	}
-	var currentProject string
-	if len(args) >= 4 {
-		currentProject = args[3]
-	}
-
-	cfg := fts.ShadowConfig{
-		MaxShadow:      parseShadowMaxEnv(),
-		Today:          os.Getenv("HYPOMNEMA_TODAY"),
-		CurrentProject: currentProject,
-	}
-	// Shadow is observational — always exit 0 even if the call errored.
-	// Timeout covers the case where SQLite is busy and the busy_timeout
-	// gauntlet makes the pass stall; the whole point of shadow is that
-	// a single slow pass never blocks UserPromptSubmit latency.
-	ctx, cancel := context.WithTimeout(context.Background(), ftsShadowTimeout)
-	defer cancel()
-	_ = fts.Shadow(ctx, memoryDir(), prompt, sessionID, injected, cfg)
-	os.Exit(0)
-}
-
-func runSync(args []string) {
-	// flag set exists so future flags (timeout, etc.) plug in cleanly.
-	fs := flag.NewFlagSet("fts sync", flag.ExitOnError)
-	_ = fs.Parse(args)
-
-	dbPath := filepath.Join(memoryDir(), "index.db")
-	ix, err := fts.Open(dbPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "memoryctl fts sync: %v\n", err)
-		os.Exit(1)
-	}
-	defer ix.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), ftsSyncTimeout)
-	defer cancel()
-	if err := ix.Sync(ctx, memoryDir()); err != nil {
-		fmt.Fprintf(os.Stderr, "memoryctl fts sync: %v\n", err)
-		os.Exit(1)
-	}
-}
-
-func runQuery(args []string) {
-	if len(args) < 1 {
-		os.Exit(2)
-	}
-	limit := 10
-	if len(args) >= 2 {
-		parsed, err := strconv.Atoi(args[1])
-		if err != nil || parsed < 1 {
-			fmt.Fprintf(os.Stderr, "memoryctl fts query: invalid limit %q (want positive integer)\n", args[1])
-			os.Exit(2)
-		}
-		limit = parsed
-	}
-
-	dbPath := filepath.Join(memoryDir(), "index.db")
-	ix, err := fts.Open(dbPath)
-	if err != nil {
-		os.Exit(0) // graceful — no results
-	}
-	defer ix.Close()
-	syncCtx, syncCancel := context.WithTimeout(context.Background(), ftsSyncTimeout)
-	defer syncCancel()
-	_ = ix.Sync(syncCtx, memoryDir())
-
-	queryCtx, queryCancel := context.WithTimeout(context.Background(), ftsQueryTimeout)
-	defer queryCancel()
-	hits, err := ix.Query(queryCtx, args[0], limit)
-	if err != nil {
-		os.Exit(0)
-	}
-	for _, h := range hits {
-		fmt.Printf("%s\t%.3f\n", h.Path, h.Score)
-	}
 }
 
 // runDedupCheck implements `memoryctl dedup check <file-path>`. The exit
@@ -403,15 +239,3 @@ func runDedupCheck(args []string) {
 	}
 }
 
-func parseShadowMaxEnv() int {
-	v := os.Getenv("MEMORY_FTS_SHADOW_MAX")
-	if v == "" {
-		return 0 // let ShadowConfig default apply
-	}
-	var n int
-	_, err := fmt.Sscanf(v, "%d", &n)
-	if err != nil || n <= 0 {
-		return 0
-	}
-	return n
-}
