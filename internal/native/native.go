@@ -18,6 +18,7 @@ type MemFile struct {
 	Type        string // frontmatter: type — native bucket (non-exhaustive); fine-grained type lives in the sidecar
 	ContentSHA  string // sha256 of full file bytes — rename/edit detection
 	Body        string // markdown body, frontmatter stripped
+	Project     string // owning store: cwd slug or GlobalProject — set by Collect, not parsed from the file
 }
 
 // List enumerates *.md files directly under dir (non-recursive) and parses

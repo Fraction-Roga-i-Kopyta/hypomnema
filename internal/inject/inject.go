@@ -50,11 +50,7 @@ type Result struct {
 // top-K → Markdown. Recovers from a corrupt sidecar by rebuilding; falls
 // back to a native-only degraded rank if the sidecar is unusable.
 func Run(in Input) (Result, error) {
-	osHome := filepath.Dir(in.ClaudeHome)
-	files, err := collectNative(osHome, in.CWD)
-	if err != nil {
-		return Result{}, fmt.Errorf("inject.Run: native: %w", err)
-	}
+	files := native.Collect(in.ClaudeHome, in.CWD)
 	if len(files) == 0 {
 		return Result{}, nil
 	}
@@ -67,7 +63,9 @@ func Run(in Input) (Result, error) {
 	if in.MaxK <= 0 {
 		in.MaxK = 8
 	}
-	ranked := rank.Rank(rank.Query{Terms: terms, Today: in.Today}, cands, in.MaxK)
+	ranked := rank.Rank(rank.Query{
+		Terms: terms, Today: in.Today, Project: native.SlugFromCWD(in.CWD),
+	}, cands, in.MaxK)
 	if len(in.AlreadyInjected) > 0 {
 		seen := make(map[string]bool, len(in.AlreadyInjected))
 		for _, s := range in.AlreadyInjected {
@@ -89,21 +87,10 @@ func Run(in Input) (Result, error) {
 	return Result{Markdown: md, Injected: injected}, nil
 }
 
-func collectNative(osHome, cwd string) ([]native.MemFile, error) {
-	proj, err := native.List(native.ProjectMemoryDir(osHome, cwd))
-	if err != nil {
-		return nil, err
-	}
-	glob, err := native.List(native.GlobalMemoryDir(osHome))
-	if err != nil {
-		return nil, err
-	}
-	return append(proj, glob...), nil
-}
-
 func candidates(in Input, files []native.MemFile, terms []string) []rank.Candidate {
 	sidePath := filepath.Join(in.MemoryDir, ".sidecar.db")
 	walPath := filepath.Join(in.MemoryDir, ".wal")
+	projectSlug := native.SlugFromCWD(in.CWD)
 
 	s, err := sidecar.Open(sidePath)
 	if err != nil {
@@ -113,18 +100,25 @@ func candidates(in Input, files []native.MemFile, terms []string) []rank.Candida
 	if err == nil {
 		defer s.Close()
 		recs, lerr := s.All()
-		if lerr == nil && len(recs) == 0 {
-			if rerr := sidecar.Reproject(s, files, walPath); rerr == nil {
-				recs, lerr = s.All()
+		scoped := scopeRecords(recs, projectSlug)
+		// No rows for this project ∪ global means the sidecar has never seen
+		// this project (or is empty) — reproject from the files we just
+		// listed and retry. Self-heals a sidecar seeded by other projects.
+		if lerr == nil && len(scoped) == 0 && len(files) > 0 {
+			if rerr := sidecar.Reproject(s, files, walPath, native.Scope(in.CWD)); rerr == nil {
+				if recs, lerr = s.All(); lerr == nil {
+					scoped = scopeRecords(recs, projectSlug)
+				}
 			}
 		}
-		// Use the sidecar ONLY if it yielded rows. An empty sidecar (failed or
-		// empty reproject) must NOT shadow the native corpus — fall through to
-		// the degraded native-only rank. Spec §5: injection still happens.
-		if lerr == nil && len(recs) > 0 {
+		// Use the sidecar ONLY if it yielded rows for this scope. An empty
+		// result (failed or empty reproject) must NOT shadow the native
+		// corpus — fall through to the degraded native-only rank. Spec §5:
+		// injection still happens.
+		if lerr == nil && len(scoped) > 0 {
 			overlap, _ := s.OverlapScores(terms)
-			out := make([]rank.Candidate, 0, len(recs))
-			for _, r := range recs {
+			out := make([]rank.Candidate, 0, len(scoped))
+			for _, r := range scoped {
 				out = append(out, rank.Candidate{
 					Slug: r.Slug, Type: r.Type, Project: r.Project,
 					Domains: splitCSV(r.Domains), RefCount: r.RefCount,
@@ -137,6 +131,18 @@ func candidates(in Input, files []native.MemFile, terms []string) []rank.Candida
 		}
 	}
 	return degradedCandidates(files, terms)
+}
+
+// scopeRecords keeps only rows owned by this project or the global store —
+// the shared sidecar also carries every other project's rows.
+func scopeRecords(recs []sidecar.Record, projectSlug string) []sidecar.Record {
+	var out []sidecar.Record
+	for _, r := range recs {
+		if r.Project == projectSlug || r.Project == native.GlobalProject {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 func degradedCandidates(files []native.MemFile, terms []string) []rank.Candidate {
@@ -155,7 +161,7 @@ func degradedCandidates(files []native.MemFile, terms []string) []rank.Candidate
 			}
 		}
 		out = append(out, rank.Candidate{
-			Slug: f.Slug, Type: f.Type, Status: "active",
+			Slug: f.Slug, Type: f.Type, Project: f.Project, Status: "active",
 			Effectiveness: 0.5, Overlap: overlap,
 		})
 	}

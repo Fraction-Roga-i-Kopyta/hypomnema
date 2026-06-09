@@ -43,7 +43,9 @@ func Execute(p Plan, o ExecOpts) error {
 	files := allNative(p)
 	s, err := sidecar.Open(filepath.Join(o.MemoryDir, ".sidecar.db"))
 	if err == nil {
-		_ = sidecar.Reproject(s, files, filepath.Join(o.MemoryDir, ".wal"))
+		// nil scope: the reconciliation scope derives from the migrated files'
+		// own project tags — a one-shot migration owns everything it wrote.
+		_ = sidecar.Reproject(s, files, filepath.Join(o.MemoryDir, ".wal"), nil)
 		s.Close()
 	}
 	return nil
