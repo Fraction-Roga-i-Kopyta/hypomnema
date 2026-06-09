@@ -1,5 +1,26 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **Injection now fits the harness inline limit.** The rendered
+  `additionalContext` is capped at 8KB total (per-body cap unchanged at
+  2.5KB). Claude Code persists oversized hook output to a file with only
+  a ~2KB inline preview, so an uncapped 8×2.5KB payload never actually
+  reached the model. Facts cut by the budget are not booked as injected
+  and surface on a later prompt.
+- **A fact injects once per session.** `inject` now reads the session's
+  `.runtime/injected-<sid>.list` and skips already-injected slugs; the
+  list accumulates across SessionStart/UserPromptSubmit instead of being
+  overwritten by each call. `close` therefore classifies the whole
+  session's injected set, not just the last batch, and `ref_count` stops
+  growing by mere prompt count. Session lists older than 7 days are
+  pruned.
+- **Session ids are sanitised before filesystem use**
+  (`pathutil.SafeFileName`) — a hostile `session_id` can no longer
+  escape `.runtime/`.
+
 ## [2.0.0] — 2026-05-29
 
 MAJOR. Repositions hypomnema as a governance + ranking layer over

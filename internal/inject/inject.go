@@ -16,20 +16,28 @@ import (
 // maxBodyBytes bounds each injected record body. Bodies range from ~500B to
 // 100KB+ (e.g. avatar-unified-analysis.md); without a cap a single large note
 // dominates the context window. ~2.5KB ≈ a full mistake's root-cause +
-// prevention, or ~1.2K Cyrillic chars. With MaxK records the injection is
-// bounded at roughly MaxK × this.
+// prevention, or ~1.2K Cyrillic chars.
 const maxBodyBytes = 2500
+
+// maxTotalBytes bounds the whole rendered injection. Claude Code persists a
+// hook's additionalContext to a file (leaving only a ~2KB inline preview)
+// once it exceeds roughly 10KB, so an oversized injection never actually
+// reaches the model — the budget keeps the payload inline. Facts cut by the
+// budget are not recorded as injected and get their turn on a later prompt.
+const maxTotalBytes = 8000
 
 // Input is everything Run needs (parsed by the memoryctl inject verb).
 type Input struct {
-	Event      string
-	SessionID  string
-	CWD        string
-	Prompt     string
-	ClaudeHome string // <home>/.claude
-	MemoryDir  string
-	Today      string
-	MaxK       int
+	Event           string
+	SessionID       string
+	CWD             string
+	Prompt          string
+	ClaudeHome      string // <home>/.claude
+	MemoryDir       string
+	Today           string
+	MaxK            int
+	MaxBytes        int      // total render budget; <=0 → maxTotalBytes
+	AlreadyInjected []string // slugs already injected this session — never re-rendered
 }
 
 // Result is the rendered context plus the slugs injected.
@@ -60,11 +68,25 @@ func Run(in Input) (Result, error) {
 		in.MaxK = 8
 	}
 	ranked := rank.Rank(rank.Query{Terms: terms, Today: in.Today}, cands, in.MaxK)
-	injected := make([]string, 0, len(ranked))
-	for _, sc := range ranked {
-		injected = append(injected, sc.Slug)
+	if len(in.AlreadyInjected) > 0 {
+		seen := make(map[string]bool, len(in.AlreadyInjected))
+		for _, s := range in.AlreadyInjected {
+			seen[s] = true
+		}
+		fresh := ranked[:0]
+		for _, sc := range ranked {
+			if !seen[sc.Slug] {
+				fresh = append(fresh, sc)
+			}
+		}
+		ranked = fresh
 	}
-	return Result{Markdown: render(ranked, bySlug, maxBodyBytes), Injected: injected}, nil
+	maxTotal := in.MaxBytes
+	if maxTotal <= 0 {
+		maxTotal = maxTotalBytes
+	}
+	md, injected := render(ranked, bySlug, maxBodyBytes, maxTotal)
+	return Result{Markdown: md, Injected: injected}, nil
 }
 
 func collectNative(osHome, cwd string) ([]native.MemFile, error) {
@@ -147,25 +169,50 @@ func splitCSV(s string) []string {
 	return strings.Split(s, ",")
 }
 
-func render(ranked []rank.Scored, bySlug map[string]native.MemFile, maxBody int) string {
+// render writes ranked entries in order until the total budget is spent and
+// returns the markdown plus the slugs actually rendered — the injection
+// bookkeeping (WAL events, session set) must follow what the model can see,
+// not what the ranker picked. The top entry always lands, truncated to the
+// budget if it alone overflows.
+func render(ranked []rank.Scored, bySlug map[string]native.MemFile, maxBody, maxTotal int) (string, []string) {
 	if len(ranked) == 0 {
-		return ""
+		return "", nil
 	}
 	var b strings.Builder
 	b.WriteString("# Memory Context\n")
+	var injected []string
 	for _, sc := range ranked {
 		f := bySlug[sc.Slug]
 		title := f.Name
 		if title == "" {
 			title = sc.Slug
 		}
-		fmt.Fprintf(&b, "\n## %s\n", title)
+		head := fmt.Sprintf("\n## %s\n", title)
+		body := ""
 		if f.Body != "" {
-			b.WriteString(capBody(f.Body, maxBody))
-			b.WriteString("\n")
+			body = capBody(f.Body, maxBody) + "\n"
 		}
+		if maxTotal > 0 && b.Len()+len(head)+len(body) > maxTotal {
+			if len(injected) > 0 {
+				break
+			}
+			room := maxTotal - b.Len() - len(head) - 20 // marker + newline slack
+			if room <= 0 {
+				break
+			}
+			body = capBody(f.Body, room) + "\n"
+			if b.Len()+len(head)+len(body) > maxTotal {
+				break
+			}
+		}
+		b.WriteString(head)
+		b.WriteString(body)
+		injected = append(injected, sc.Slug)
 	}
-	return b.String()
+	if len(injected) == 0 {
+		return "", nil
+	}
+	return b.String(), injected
 }
 
 // capBody bounds a single record's body to maxBytes (a byte budget), backing
