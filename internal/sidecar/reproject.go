@@ -169,6 +169,14 @@ func readWALAgg(walPath string) map[string]*agg {
 			if date > a.lastInject {
 				a.lastInject = date
 			}
+		case "recall":
+			// Pull delivery (memoryctl recall) — counts as an injection for
+			// ref_count/recency, which is also what revives a stale row:
+			// Reproject resets status, MarkStale sees a fresh last_injected.
+			a.injects++
+			if date > a.lastInject {
+				a.lastInject = date
+			}
 		case "inject-agg":
 			// field4 is the aggregated inject count, not a session id
 			// (hooks/wal-compact.sh writes DATE|inject-agg|SLUG|<count>).

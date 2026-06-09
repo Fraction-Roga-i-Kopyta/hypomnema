@@ -365,3 +365,58 @@ func TestReproject_FrontmatterCreatedAndPinned(t *testing.T) {
 		t.Errorf("file without status stays active, got %q", plain.Status)
 	}
 }
+
+func TestReprojectRecallEvent(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, ".sidecar.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	wal := filepath.Join(dir, ".wal")
+	os.WriteFile(wal, []byte(
+		"2026-06-01|inject|fact.md|s1\n"+
+			"2026-06-10|recall|fact.md|s2\n"), 0o644)
+
+	files := []native.MemFile{{Slug: "fact.md", Name: "fact", Project: "proj", Created: "2026-05-01"}}
+	if err := Reproject(s, files, wal, []string{"proj"}); err != nil {
+		t.Fatal(err)
+	}
+
+	r, ok, err := s.Get("fact.md")
+	if err != nil || !ok {
+		t.Fatalf("get: %v ok=%v", err, ok)
+	}
+	if r.RefCount != 2 {
+		t.Errorf("recall must count toward ref_count: want 2, got %d", r.RefCount)
+	}
+	if r.LastInjected != "2026-06-10" {
+		t.Errorf("recall must advance last_injected: want 2026-06-10, got %q", r.LastInjected)
+	}
+}
+
+func TestRecallRevivesStale(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, ".sidecar.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	wal := filepath.Join(dir, ".wal")
+	os.WriteFile(wal, []byte(
+		"2025-01-01|inject|old.md|s1\n"+
+			"2026-06-10|recall|old.md|s2\n"), 0o644)
+	files := []native.MemFile{{Slug: "old.md", Name: "old", Project: "proj", Created: "2025-01-01"}}
+	if err := Reproject(s, files, wal, []string{"proj"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.MarkStale("2026-06-10"); err != nil {
+		t.Fatal(err)
+	}
+	r, _, _ := s.Get("old.md")
+	if r.Status != "active" {
+		t.Errorf("fresh recall must keep fact out of stale, got %q", r.Status)
+	}
+}
