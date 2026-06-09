@@ -112,6 +112,88 @@ func TestRecallKFlag(t *testing.T) {
 	}
 }
 
+func TestRecallRepeatSameDayDedup(t *testing.T) {
+	env, memDir, _ := recallFixture(t)
+	run(t, env, "recall", "docker", "cache")
+	run(t, env, "recall", "docker", "cache")
+	walB, _ := os.ReadFile(filepath.Join(memDir, ".wal"))
+	if n := strings.Count(string(walB), "|recall|docker.md|s9"); n != 1 {
+		t.Errorf("same-day repeat recall must dedup: want 1 event, got %d\n%s", n, walB)
+	}
+}
+
+func TestRecallSessionIDTraversal(t *testing.T) {
+	env, memDir, _ := recallFixture(t)
+	env["HYPOMNEMA_SESSION_ID"] = "../../evil"
+	_, _, code := run(t, env, "recall", "docker", "cache")
+	if code != 0 {
+		t.Fatalf("exit=%d", code)
+	}
+	home := filepath.Dir(filepath.Dir(memDir)) // <tmp> (dir above .claude)
+	for _, p := range []string{
+		filepath.Join(home, "evil"),
+		filepath.Join(home, ".claude", "evil"),
+	} {
+		if _, err := os.Stat(p); err == nil {
+			t.Errorf("session list escaped .runtime: %s exists", p)
+		}
+	}
+	entries, _ := os.ReadDir(filepath.Join(memDir, ".runtime"))
+	if len(entries) == 0 {
+		t.Error("sanitised session list missing from .runtime")
+	}
+}
+
+func TestRecallHostileQueryKeepsWALValid(t *testing.T) {
+	env, _, _ := recallFixture(t)
+	run(t, env, "recall", "docker|cache")
+	run(t, env, "recall", "docker", "cache")
+	_, errOut, code := run(t, env, "wal", "validate")
+	if code != 0 {
+		t.Errorf("wal validate failed after recall events: %s", errOut)
+	}
+}
+
+func TestRecallEmptyStore(t *testing.T) {
+	home := t.TempDir()
+	memDir := filepath.Join(home, ".claude", "memory")
+	os.MkdirAll(memDir, 0o755)
+	env := map[string]string{
+		"CLAUDE_HOME": filepath.Join(home, ".claude"), "CLAUDE_MEMORY_DIR": memDir,
+		"CLAUDE_PROJECT_CWD": "/tmp/proj", "HYPOMNEMA_TODAY": "2026-06-10",
+		"HYPOMNEMA_SESSION_ID": "s9", "CLAUDE_CODE_SESSION_ID": "",
+	}
+	out, _, code := run(t, env, "recall", "anything")
+	if code != 0 || !strings.Contains(out, "no matches") {
+		t.Errorf("empty store: want 'no matches' exit 0, got code=%d out=%q", code, out)
+	}
+}
+
+func TestRecallTruncatesLongBody(t *testing.T) {
+	env, _, projDir := recallFixture(t)
+	long := strings.Repeat("verylongbodytext ", 300) // ~5KB
+	if err := os.WriteFile(filepath.Join(projDir, "big.md"),
+		[]byte("---\nname: big-note\ntype: note\ndescription: big\nkeywords: [bignote]\n---\n"+long), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, _, code := run(t, env, "recall", "bignote")
+	if code != 0 {
+		t.Fatalf("exit=%d", code)
+	}
+	if !strings.Contains(out, "…(truncated)") {
+		t.Error("long body must carry the truncation marker")
+	}
+}
+
+func TestRecallGarbageToday(t *testing.T) {
+	env, _, _ := recallFixture(t)
+	env["HYPOMNEMA_TODAY"] = "not-a-date"
+	_, _, code := run(t, env, "recall", "docker", "cache")
+	if code != 0 {
+		t.Errorf("garbage HYPOMNEMA_TODAY must not crash recall, exit=%d", code)
+	}
+}
+
 func TestRecallStaleMarkerAndCliFallback(t *testing.T) {
 	env, memDir, _ := recallFixture(t)
 	// Age docker.md into stale: an old inject, then sidecar rebuild + decay.
