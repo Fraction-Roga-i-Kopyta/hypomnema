@@ -16,6 +16,35 @@ type agg struct {
 	neg        int
 	created    string // earliest WAL date for the slug
 	lastInject string // latest inject date
+	// sessions holds one classification per session id: true once the slug
+	// was trigger-useful in that session (useful wins over silent — close
+	// runs every turn, so a fact silent at turn 1 may be cited at turn 5).
+	sessions map[string]bool
+}
+
+func (a *agg) classify(session string, useful bool) {
+	if a.sessions == nil {
+		a.sessions = map[string]bool{}
+	}
+	if useful {
+		a.sessions[session] = true
+	} else if _, seen := a.sessions[session]; !seen {
+		a.sessions[session] = false
+	}
+}
+
+// outcomes folds the per-session trigger classifications into the legacy
+// outcome-positive/negative counters: pos+neg for the Bayesian effectiveness.
+func (a *agg) outcomes() (pos, neg int) {
+	pos, neg = a.pos, a.neg
+	for _, useful := range a.sessions {
+		if useful {
+			pos++
+		} else {
+			neg++
+		}
+	}
+	return pos, neg
 }
 
 // Reproject rebuilds the memory + outcome tables from the supplied native
@@ -45,7 +74,8 @@ func Reproject(s *Store, files []native.MemFile, walPath string, scope []string)
 		if a == nil {
 			a = &agg{}
 		}
-		eff := float64(a.pos+1) / float64(a.pos+a.neg+2)
+		pos, neg := a.outcomes()
+		eff := float64(pos+1) / float64(pos+neg+2)
 		rec := Record{
 			Slug:          f.Slug,
 			ContentSHA:    f.ContentSHA,
@@ -142,6 +172,13 @@ func readWALAgg(walPath string) map[string]*agg {
 			a.pos++
 		case "outcome-negative":
 			a.neg++
+		// The trigger events close writes are the live usefulness signal:
+		// cited-in-session → positive, injected-but-silent → negative.
+		// Deduped per session via classify (close fires on every turn).
+		case "trigger-useful":
+			a.classify(field4, true)
+		case "trigger-silent", "trigger-silent-retro":
+			a.classify(field4, false)
 		}
 		if a.created == "" || date < a.created {
 			a.created = date
