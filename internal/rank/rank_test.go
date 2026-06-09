@@ -174,6 +174,31 @@ func slugs(s []Scored) []string {
 	return out
 }
 
+func TestRankIncludeStale(t *testing.T) {
+	cands := []Candidate{
+		{Slug: "live.md", Status: "active", Overlap: 1},
+		{Slug: "old.md", Status: "stale", Overlap: 5},
+		{Slug: "gone.md", Status: "deleted", Overlap: 9},
+	}
+	q := Query{Today: "2026-06-10"}
+
+	got := Rank(q, cands, 0)
+	if len(got) != 1 || got[0].Slug != "live.md" {
+		t.Fatalf("default rank must exclude stale/deleted, got %+v", got)
+	}
+
+	q.IncludeStale = true
+	got = Rank(q, cands, 0)
+	if len(got) != 2 {
+		t.Fatalf("IncludeStale: want active+stale (2), got %+v", got)
+	}
+	for _, sc := range got {
+		if sc.Slug == "gone.md" {
+			t.Fatal("deleted must never rank, even with IncludeStale")
+		}
+	}
+}
+
 func has(s []Scored, slug string) bool {
 	for _, x := range s {
 		if x.Slug == slug {
