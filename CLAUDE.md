@@ -18,20 +18,25 @@ The point: you remember things across sessions, and the things most likely to ma
 
 Native memory files live in `~/.claude/projects/<slug>/memory/` (project-local) and `~/.claude/memory-global/` (global). There are no fixed subdirectories — type is encoded in the file's `type:` frontmatter field. The **sidecar** (`memory.db`, SQLite, rebuildable from WAL + frontmatter) holds metadata: ref_count, effectiveness, status, keywords, domains. The **WAL** (`.wal`, append-only text) is the source of truth for all events.
 
-Logical types and their per-session injection caps:
+Logical types:
 
-| Type | Contents | Injected | Cap |
-|---|---|:-:|---|
-| `mistake` | Bugs you should not repeat | yes | 3 global + 3 per project |
-| `strategy` | Proven approaches that worked | yes | adaptive |
-| `feedback` | Behavioral rules from the user | yes | adaptive |
-| `knowledge` | Domain facts, API docs | yes | adaptive |
-| `decision` | Architecture & technology choices | yes | adaptive |
-| `note` | Long-form references | yes | adaptive |
-| `project` | Project description | yes | 1 (current) |
-| `continuity` | "Where we left off" last session | yes | 1 (current) |
+| Type | Contents |
+|---|---|
+| `mistake` | Bugs you should not repeat |
+| `strategy` | Proven approaches that worked |
+| `feedback` | Behavioral rules from the user |
+| `knowledge` | Domain facts, API docs |
+| `decision` | Architecture & technology choices |
+| `note` | Long-form references |
+| `project` | Project description |
+| `continuity` | "Where we left off" last session |
 
-Strategy, feedback, knowledge, decision, and note share an adaptive 12-slot pool — budget flows toward whichever types are most relevant.
+Injection budget: a single ranked **top-8** across all types, capped at
+**2.5KB per body and 8KB total** (Claude Code diverts oversized hook output
+to a file the model never reads inline, so the budget is what keeps memory
+actually visible). A fact injects **once per session** — later prompts only
+add facts that newly enter the top-8. Per-type quotas are not implemented;
+type balance emerges from relevance.
 
 ## Frontmatter schema
 
@@ -204,29 +209,31 @@ At session end, if you stopped mid-task. Three lines max: what you were doing, c
 
 ## Lifecycle
 
-`memoryctl close` runs after every session:
-- Recomputes effectiveness from WAL (`(pos+1)/(pos+neg+2)`).
-- Down-ranks facts older than their stale threshold in the sidecar (no native content mutation).
-- Archiving (physical move to `archive/`) happens only on explicit `memoryctl gc`.
-- `status: pinned` files never decay automatically.
-- `continuity/` and `project` facts are exempt from rotation.
+`memoryctl close` runs after every turn (Claude Code fires Stop per turn):
+- Classifies the session's injected set as `trigger-useful` / `trigger-silent` (evidence phrases or slug/name citation in assistant text) and writes the events to the WAL.
+- Recomputes effectiveness from the WAL: `(pos+1)/(pos+neg+2)` over legacy `outcome-*` events **plus** one trigger observation per (slug, session) — useful wins over silent within a session.
+- Marks facts `stale` in the sidecar when unused past their type threshold — age counts from **last injection** (fallback `created`), so facts in rotation stay alive. No native content mutation.
+- Archiving (physical move out of the store) is planned but not shipped; stale facts simply stop injecting.
+- `status: pinned` files and `continuity`/`project` facts never decay.
 
 ## How injection ranks files
 
-A single relevance ranker (v2 merged the two v1 pipelines into one):
+A single relevance ranker (v2 merged the two v1 pipelines into one). The
+score is an additive blend — no single zero signal annihilates a candidate:
 
 ```
-score = overlap(session_keywords, file_keywords)
-      × log10(1 + ref_count)           # diminishing-returns on overused records
-      × recency_weight(created)        # ≤7d → 1.0, ≤30d → 0.8, ≤90d → 0.6, older → 0.4
-      × effectiveness                  # Bayesian (pos+1)/(pos+neg+2); neutral 1.0 until signal lands
+score = 3.0 × overlap(session_keywords, file keywords+name+description+body)
+      + 1.0 × log10(1 + ref_count)     # diminishing-returns on heavily-injected records
+      + 2.0 × recency                  # 1/(1 + days/30) from last injection (fallback created)
+      + 2.0 × effectiveness            # Bayesian (pos+1)/(pos+neg+2); neutral 0.5 until signal lands
+      + 1.0 if project-local           # project facts outrank global ones on ties
 ```
 
-**Zero-safe:** a new fact with `ref_count=0` and no outcomes gets neutral priors, not a zero score — it is injectable from day one.
+**Zero-safe:** a new fact with `ref_count=0` and no outcomes gets the neutral prior and its frontmatter `created` as recency — it is injectable from day one.
 
-Status filter: `active` and `pinned` only (sidecar-managed `stale` is excluded). Domain filter: file `domains` must intersect active session domains. Per-type quotas apply after ranking.
+Status filter: `active` and `pinned` only (sidecar-managed `stale` is excluded). Scope filter: only the current project's facts plus the global store — other projects' rows never inject. Result cap: top-8, 8KB total, once per session per fact.
 
-`session_keywords` at SessionStart come from git context (branch name, diff filenames, recent commits, CWD basename). At UserPromptSubmit, prompt tokens are added to keywords (reactive re-rank).
+`session_keywords` come from prompt tokens, CWD basename, and git context (branch name, changed filenames, recent commit subjects) on both SessionStart and UserPromptSubmit (reactive re-rank).
 
 **What changed from v1:** the old substring-trigger mechanism and negation-window logic are gone. The ranker treats all tokens as relevance signal. The two v1 pipelines (composite-score SessionStart + deterministic UserPromptSubmit) are now one. TF-IDF body scoring, FTS5 shadow retrieval, and cold-start gates are retired.
 
@@ -234,7 +241,7 @@ You do NOT need to set ranks manually. Write good `keywords` and `domains`, let 
 
 ## Secrets detection
 
-`memoryctl guard` is the PreToolUse:Write gate on memory paths. It blocks writes whose body contains a recognised credential pattern (`api_key` / `secret` / `password` / `token` / AWS key variants) outside fenced code blocks with value length ≥ 8. Blocked writes exit 2 with a stderr message naming the file and line.
+`memoryctl guard` is the PreToolUse gate (matcher `Write|Edit`) on memory paths — the legacy `~/.claude/memory` tree, every native `~/.claude/projects/<slug>/memory/` store, and `~/.claude/memory-global/`. It blocks writes whose body contains a recognised credential pattern (`api_key` / `secret` / `password` / `token` / AWS key variants) outside fenced code blocks with value length ≥ 8. Blocked writes exit 2 with a stderr message naming the file and line.
 
 Escape hatches:
 - Whitelist a path permanently: add its glob to `~/.claude/memory-global/.secretsignore`.
@@ -244,11 +251,11 @@ Do not route around the gate by stripping the value; either whitelist the path o
 
 ## Reading what was injected
 
-Look at the start of your context for `# Memory Context` and `## Active Mistakes` / `## Feedback` / etc. sections.
+Look at the start of your context for a `# Memory Context` block with one `## <name>` section per injected fact (large hook payloads may arrive as a persisted-output file reference — the 8KB budget exists precisely to avoid that).
 
 ## Subagent context
 
-If you spawn a subagent, point it at `~/.claude/memory/_agent_context.md` — an auto-generated compact summary regenerated by `memoryctl close` each session.
+There is no auto-generated subagent context file (`_agent_context.md` was retired with v1). When you spawn a subagent, pass the relevant facts inline in its prompt.
 
 ## Source of truth
 
