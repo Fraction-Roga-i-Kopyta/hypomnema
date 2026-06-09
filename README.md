@@ -43,7 +43,7 @@ Hypomnema adds:
 | Native injects only an index, not ranked content | `memoryctl inject` ranks native facts by relevance (keyword overlap + ref_count + recency + effectiveness) and injects the top-K via `additionalContext` — not just a table of contents |
 | No per-session effectiveness signal | WAL captures `trigger-useful`/`trigger-silent` per session; effectiveness feeds back into ranking |
 | No decay / lifecycle | `memoryctl close` down-ranks stale facts in the sidecar; nothing is deleted from disk |
-| No secrets gate | `memoryctl guard` (PreToolUse:Write|Edit) blocks credential patterns before they land in a memory file |
+| No secrets gate | `memoryctl guard` (PreToolUse:Write\|Edit) blocks credential patterns before they land in a memory file |
 | No global store | Native memory is per-project only; hypomnema owns `~/.claude/memory-global/` for facts that travel across every project (language rules, universal debugging patterns) |
 | No migration path | `memoryctl migrate` converts a v1.x hypomnema store to native format + sidecar in one shot |
 
@@ -52,18 +52,18 @@ A/B replay on the maintainer's corpus (n=49 sessions, temporal-holdout): ranked 
 ## Architecture at a glance
 
 ```
-┌─ Claude Code harness ──────────────────────────────────────┐
+┌─ Claude Code harness ───────────────────────────────────────┐
 │  native memory: ~/.claude/projects/<slug>/memory/*.md       │
 │  • content (minimal frontmatter: name/description/type)     │
 │  • MEMORY.md index — injected by harness                    │
-└───────────────▲───────────────────────────▲────────────────┘
+└───────────────▲───────────────────────────▲─────────────────┘
        read-only │ (content)       write-intercept │ (guard)
-┌────────────────┴───────────────────────────┴───────────────┐
+┌────────────────┴───────────────────────────┴────────────────┐
 │  hypomnema v2 — memoryctl (Go) + 4 thin bash shims          │
 │                                                             │
 │  inject ──► additionalContext (ranked top-K)                │
 │  close  ──► outcomes → WAL → effectiveness/decay → profile  │
-│  guard  ──► secrets gate + dedup (PreToolUse:Write|Edit)         │
+│  guard  ──► secrets gate + dedup (PreToolUse:Write|Edit)    │
 │  migrate──► one-shot v1 conversion + pruning                │
 │                                                             │
 │  WAL (append-only text) = source of truth for events        │
@@ -78,7 +78,7 @@ A/B replay on the maintainer's corpus (n=49 sessions, temporal-holdout): ranked 
 |---|---|---|
 | `SessionStart` | `session-start.sh` | Detect project + domains + keywords → rank native facts → inject top-K via `additionalContext` |
 | `UserPromptSubmit` | `user-prompt-submit.sh` | Re-rank with prompt tokens added to keywords → inject anything not yet in session |
-| `PreToolUse:Write|Edit` (memory path) | `pre-tool-write.sh` | `guard`: secrets scan → exit 2 on credential pattern; fuzzy dedup → warn |
+| `PreToolUse:Write\|Edit` (memory path) | `pre-tool-write.sh` | `guard`: secrets scan → exit 2 on credential pattern; fuzzy dedup → warn |
 | `Stop` | `session-stop.sh` | `close`: classify injected set (evidence/citation) → WAL → recompute effectiveness/decay → regenerate `MEMORY.md` index + self-profile |
 
 The project's native `MEMORY.md` index is regenerated from native files on close; the ranked facts arrive separately through `additionalContext` — we don't fight the harness for the index channel.
