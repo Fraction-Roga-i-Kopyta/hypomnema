@@ -23,3 +23,18 @@ func TestSlugFromPath_DropsControlChars(t *testing.T) {
 		})
 	}
 }
+
+func TestSafeFileName(t *testing.T) {
+	cases := map[string]string{
+		"abc-123_X.y":       "abc-123_X.y",
+		"../../etc/passwd":  ".._.._etc_passwd",
+		"a|b\nc":            "a_b_c",
+		"sess/with/slashes": "sess_with_slashes",
+		"":                  "_",
+	}
+	for in, want := range cases {
+		if got := SafeFileName(in); got != want {
+			t.Errorf("SafeFileName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

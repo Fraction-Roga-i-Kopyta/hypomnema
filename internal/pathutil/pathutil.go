@@ -32,3 +32,22 @@ func SlugFromPath(p string) string {
 	base := filepath.Base(p)
 	return slugUnsafe.Replace(strings.TrimSuffix(base, ".md"))
 }
+
+// SafeFileName maps an arbitrary string (e.g. a hook-supplied session id)
+// to a single path component: ASCII letters, digits, `.`, `_`, `-` pass
+// through, everything else becomes `_`. Guards the `.runtime/injected-*`
+// session files against separator/traversal injection. Empty input → "_".
+func SafeFileName(s string) string {
+	if s == "" {
+		return "_"
+	}
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '.', r == '_', r == '-':
+			return r
+		default:
+			return '_'
+		}
+	}, s)
+}

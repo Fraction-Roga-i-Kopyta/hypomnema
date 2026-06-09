@@ -9,6 +9,7 @@ import (
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/jsonl"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/memindex"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/pathutil"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/profile"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/sidecar"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/wal"
@@ -80,7 +81,8 @@ func Run(in Input) (Result, error) {
 }
 
 func readInjectedSet(memDir, sessionID string) []string {
-	b, err := os.ReadFile(filepath.Join(memDir, ".runtime", "injected-"+sessionID+".list"))
+	b, err := os.ReadFile(filepath.Join(memDir, ".runtime",
+		"injected-"+pathutil.SafeFileName(sessionID)+".list"))
 	if err != nil {
 		return nil
 	}
