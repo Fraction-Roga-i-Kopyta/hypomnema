@@ -375,9 +375,11 @@ func TestReprojectRecallEvent(t *testing.T) {
 	defer s.Close()
 
 	wal := filepath.Join(dir, ".wal")
-	os.WriteFile(wal, []byte(
+	if err := os.WriteFile(wal, []byte(
 		"2026-06-01|inject|fact.md|s1\n"+
-			"2026-06-10|recall|fact.md|s2\n"), 0o644)
+			"2026-06-10|recall|fact.md|s2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	files := []native.MemFile{{Slug: "fact.md", Name: "fact", Project: "proj", Created: "2026-05-01"}}
 	if err := Reproject(s, files, wal, []string{"proj"}); err != nil {
@@ -405,9 +407,11 @@ func TestRecallRevivesStale(t *testing.T) {
 	defer s.Close()
 
 	wal := filepath.Join(dir, ".wal")
-	os.WriteFile(wal, []byte(
+	if err := os.WriteFile(wal, []byte(
 		"2025-01-01|inject|old.md|s1\n"+
-			"2026-06-10|recall|old.md|s2\n"), 0o644)
+			"2026-06-10|recall|old.md|s2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	files := []native.MemFile{{Slug: "old.md", Name: "old", Project: "proj", Created: "2025-01-01"}}
 	if err := Reproject(s, files, wal, []string{"proj"}); err != nil {
 		t.Fatal(err)
@@ -415,7 +419,10 @@ func TestRecallRevivesStale(t *testing.T) {
 	if _, err := s.MarkStale("2026-06-10"); err != nil {
 		t.Fatal(err)
 	}
-	r, _, _ := s.Get("old.md")
+	r, ok, err := s.Get("old.md")
+	if err != nil || !ok {
+		t.Fatalf("get old.md: err=%v ok=%v", err, ok)
+	}
 	if r.Status != "active" {
 		t.Errorf("fresh recall must keep fact out of stale, got %q", r.Status)
 	}
