@@ -63,3 +63,25 @@ func TestMarkStale_UsesLastInjectedOverCreated(t *testing.T) {
 		t.Errorf("long-unused fact must go stale, got %q", r.Status)
 	}
 }
+
+// continuity/project facts are "where we left off" markers — they must
+// never rotate out by age (CLAUDE.md lifecycle contract).
+func TestMarkStale_ExemptsContinuityAndProject(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), ".sidecar.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	mustUpsert(t, s, Record{Slug: "cont.md", Type: "continuity", Created: "2020-01-01", Status: "active"})
+	mustUpsert(t, s, Record{Slug: "proj.md", Type: "project", Created: "2020-01-01", Status: "active"})
+
+	if _, err := s.MarkStale("2026-06-09"); err != nil {
+		t.Fatal(err)
+	}
+	if r, _, _ := s.Get("cont.md"); r.Status != "active" {
+		t.Errorf("continuity must never rotate, got %q", r.Status)
+	}
+	if r, _, _ := s.Get("proj.md"); r.Status != "active" {
+		t.Errorf("project must never rotate, got %q", r.Status)
+	}
+}

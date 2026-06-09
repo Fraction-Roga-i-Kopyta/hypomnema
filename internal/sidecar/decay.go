@@ -33,6 +33,11 @@ func (s *Store) MarkStale(today string) (int, error) {
 			rows.Close()
 			return 0, fmt.Errorf("sidecar.MarkStale: scan: %w", err)
 		}
+		// continuity/project are "where we left off" markers — exempt from
+		// rotation entirely (CLAUDE.md lifecycle contract).
+		if typ == "continuity" || typ == "project" {
+			continue
+		}
 		c, perr := time.Parse("2006-01-02", lastInjected)
 		if perr != nil {
 			c, perr = time.Parse("2006-01-02", created)
