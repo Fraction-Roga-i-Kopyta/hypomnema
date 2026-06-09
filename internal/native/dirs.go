@@ -41,3 +41,12 @@ func GlobalMemoryDir(home string) string {
 	}
 	return filepath.Join(home, ".claude", "memory-global")
 }
+
+// GlobalProject is the sidecar project tag for facts in the global store.
+const GlobalProject = "global"
+
+// Scope returns the sidecar reconciliation scope for a session in cwd:
+// the project's own slug plus the global store.
+func Scope(cwd string) []string {
+	return []string{SlugFromCWD(cwd), GlobalProject}
+}

@@ -75,3 +75,23 @@ func TestDecodeStream_NoAssistantRecords(t *testing.T) {
 		t.Errorf("Text should be empty when no assistant records, got %q", s.Text)
 	}
 }
+
+func TestDecodeStream_SessionMetrics(t *testing.T) {
+	lines := `{"type":"user","sessionId":"s1","timestamp":"2026-06-09T10:00:00Z","message":{"content":[{"type":"text","text":"go"}]}}
+{"type":"assistant","timestamp":"2026-06-09T10:00:30Z","message":{"content":[{"type":"text","text":"running"},{"type":"tool_use"},{"type":"tool_use"}]}}
+{"type":"user","timestamp":"2026-06-09T10:01:00Z","message":{"content":[{"type":"tool_result","is_error":true}]}}
+{"type":"assistant","timestamp":"2026-06-09T10:02:00Z","message":{"content":[{"type":"tool_use"}]}}`
+	s, err := decodeStream(strings.NewReader(lines))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.ToolCalls != 3 {
+		t.Errorf("ToolCalls = %d, want 3", s.ToolCalls)
+	}
+	if s.ToolErrors != 1 {
+		t.Errorf("ToolErrors = %d, want 1", s.ToolErrors)
+	}
+	if s.DurationSec != 120 {
+		t.Errorf("DurationSec = %d, want 120 (10:00:00 → 10:02:00)", s.DurationSec)
+	}
+}

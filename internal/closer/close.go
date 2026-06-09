@@ -9,6 +9,7 @@ import (
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/jsonl"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/memindex"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/pathutil"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/profile"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/sidecar"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/wal"
@@ -37,14 +38,14 @@ type Result struct {
 func Run(in Input) (Result, error) {
 	var res Result
 	injected := readInjectedSet(in.MemoryDir, in.SessionID)
-	names := slugNames(in.ClaudeHome, in.CWD)
+	names, evidence := slugMeta(in.ClaudeHome, in.CWD)
 
-	var text string
-	if sess, err := jsonl.ReadSession(in.TranscriptPath); err == nil {
-		text = sess.Text
+	var sess jsonl.Session
+	if s, err := jsonl.ReadSession(in.TranscriptPath); err == nil {
+		sess = s
 	}
 
-	useful, silent := Classify(injected, names, text)
+	useful, silent := Classify(injected, names, evidence, sess.Text)
 	res.Useful, res.Silent = len(useful), len(silent)
 	sid := wal.SanitizeField(in.SessionID)
 	for _, slug := range useful {
@@ -53,13 +54,14 @@ func Run(in Input) (Result, error) {
 	for _, slug := range silent {
 		appendWAL(in.MemoryDir, in.Today, "trigger-silent", slug, sid)
 	}
-	metrics := fmt.Sprintf("%s|session-metrics|domains:_global_,error_count:0,tool_calls:0,duration:0s|%s", in.Today, sid)
+	metrics := fmt.Sprintf("%s|session-metrics|domains:_global_,error_count:%d,tool_calls:%d,duration:%ds|%s",
+		in.Today, sess.ToolErrors, sess.ToolCalls, sess.DurationSec, sid)
 	wal.Append(in.MemoryDir, metrics, "")
 	wal.Append(in.MemoryDir, fmt.Sprintf("%s|session-close|%s|%s", in.Today, sid, sid), "")
 
 	nativeFiles := collectNative(in.ClaudeHome, in.CWD)
 	if s, err := sidecar.Open(filepath.Join(in.MemoryDir, ".sidecar.db")); err == nil {
-		_ = sidecar.Reproject(s, nativeFiles, filepath.Join(in.MemoryDir, ".wal"))
+		_ = sidecar.Reproject(s, nativeFiles, filepath.Join(in.MemoryDir, ".wal"), native.Scope(in.CWD))
 		if n, derr := s.MarkStale(in.Today); derr == nil {
 			res.Staled = n
 		}
@@ -80,7 +82,8 @@ func Run(in Input) (Result, error) {
 }
 
 func readInjectedSet(memDir, sessionID string) []string {
-	b, err := os.ReadFile(filepath.Join(memDir, ".runtime", "injected-"+sessionID+".list"))
+	b, err := os.ReadFile(filepath.Join(memDir, ".runtime",
+		"injected-"+pathutil.SafeFileName(sessionID)+".list"))
 	if err != nil {
 		return nil
 	}
@@ -94,18 +97,19 @@ func readInjectedSet(memDir, sessionID string) []string {
 }
 
 func collectNative(claudeHome, cwd string) []native.MemFile {
-	osHome := filepath.Dir(claudeHome)
-	proj, _ := native.List(native.ProjectMemoryDir(osHome, cwd))
-	glob, _ := native.List(native.GlobalMemoryDir(osHome))
-	return append(proj, glob...)
+	return native.Collect(claudeHome, cwd)
 }
 
-func slugNames(claudeHome, cwd string) map[string]string {
-	out := map[string]string{}
+func slugMeta(claudeHome, cwd string) (names map[string]string, evidence map[string][]string) {
+	names = map[string]string{}
+	evidence = map[string][]string{}
 	for _, f := range collectNative(claudeHome, cwd) {
-		out[f.Slug] = f.Name
+		names[f.Slug] = f.Name
+		if len(f.Evidence) > 0 {
+			evidence[f.Slug] = f.Evidence
+		}
 	}
-	return out
+	return names, evidence
 }
 
 func appendWAL(memDir, day, event, slug, sid string) {

@@ -35,7 +35,7 @@ func TestReproject(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	defer s.Close()
-	if err := Reproject(s, files, walPath); err != nil {
+	if err := Reproject(s, files, walPath, nil); err != nil {
 		t.Fatalf("Reproject: %v", err)
 	}
 
@@ -84,7 +84,7 @@ func TestReproject_InjectAggCount(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	defer s.Close()
-	if err := Reproject(s, files, walPath); err != nil {
+	if err := Reproject(s, files, walPath, nil); err != nil {
 		t.Fatalf("Reproject: %v", err)
 	}
 	r, _, _ := s.Get("x.md")
@@ -124,11 +124,11 @@ func TestReproject_MarksDeletedOrphans(t *testing.T) {
 	defer s.Close()
 
 	// First rebuild: both a.md and b.md present.
-	if err := Reproject(s, []native.MemFile{{Slug: "a.md", ContentSHA: "a"}, {Slug: "b.md", ContentSHA: "b"}}, walPath); err != nil {
+	if err := Reproject(s, []native.MemFile{{Slug: "a.md", ContentSHA: "a"}, {Slug: "b.md", ContentSHA: "b"}}, walPath, nil); err != nil {
 		t.Fatalf("reproject 1: %v", err)
 	}
 	// Second rebuild: b.md is gone (no longer in files).
-	if err := Reproject(s, []native.MemFile{{Slug: "a.md", ContentSHA: "a"}}, walPath); err != nil {
+	if err := Reproject(s, []native.MemFile{{Slug: "a.md", ContentSHA: "a"}}, walPath, nil); err != nil {
 		t.Fatalf("reproject 2: %v", err)
 	}
 
@@ -154,7 +154,7 @@ func TestReproject_MatchesV1SlugsWithoutMdSuffix(t *testing.T) {
 	defer s.Close()
 	// native file slug DOES have .md.
 	files := []native.MemFile{{Slug: "code-approach.md", ContentSHA: "x"}}
-	if err := Reproject(s, files, walPath); err != nil {
+	if err := Reproject(s, files, walPath, nil); err != nil {
 		t.Fatal(err)
 	}
 	r, ok, _ := s.Get("code-approach.md")
@@ -173,9 +173,195 @@ func reprojectInto(t *testing.T, dbPath string, files []native.MemFile, walPath 
 		t.Fatalf("Open: %v", err)
 	}
 	defer s.Close()
-	if err := Reproject(s, files, walPath); err != nil {
+	if err := Reproject(s, files, walPath, nil); err != nil {
 		t.Fatalf("Reproject: %v", err)
 	}
 	r, _, _ := s.Get("m.md")
 	return r
+}
+
+// TestReproject_ScopedTombstone is the regression for the cross-project
+// tombstoning bug: the sidecar is shared across projects, but each close
+// only sees "current project + global" files. A close must therefore only
+// reconcile deletions inside its own scope — never another project's rows.
+func TestReproject_ScopedTombstone(t *testing.T) {
+	dir := t.TempDir()
+	walPath := filepath.Join(dir, ".wal")
+	if err := os.WriteFile(walPath, []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(filepath.Join(dir, ".sidecar.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	projA, projB := "-proj-a", "-proj-b"
+	g := native.MemFile{Slug: "g.md", ContentSHA: "g", Project: "global"}
+	a1 := native.MemFile{Slug: "a1.md", ContentSHA: "a1", Project: projA}
+	b1 := native.MemFile{Slug: "b1.md", ContentSHA: "b1", Project: projB}
+
+	// Close from project A, then from project B.
+	if err := Reproject(s, []native.MemFile{a1, g}, walPath, []string{projA, "global"}); err != nil {
+		t.Fatalf("reproject A: %v", err)
+	}
+	if err := Reproject(s, []native.MemFile{b1, g}, walPath, []string{projB, "global"}); err != nil {
+		t.Fatalf("reproject B: %v", err)
+	}
+	a, _, _ := s.Get("a1.md")
+	if a.Status != "active" {
+		t.Errorf("a1.md was tombstoned by another project's close: status=%q", a.Status)
+	}
+	if a.Project != projA {
+		t.Errorf("a1.md project = %q, want %q", a.Project, projA)
+	}
+
+	// A's file disappears from disk: a close from A tombstones it; B stays.
+	if err := Reproject(s, []native.MemFile{g}, walPath, []string{projA, "global"}); err != nil {
+		t.Fatalf("reproject A2: %v", err)
+	}
+	if a, _, _ := s.Get("a1.md"); a.Status != "deleted" {
+		t.Errorf("a1.md should be tombstoned by its own project's close, got %q", a.Status)
+	}
+	if b, _, _ := s.Get("b1.md"); b.Status != "active" {
+		t.Errorf("b1.md must survive project A's close, got %q", b.Status)
+	}
+	if gr, _, _ := s.Get("g.md"); gr.Status != "active" {
+		t.Errorf("g.md (global, still on disk) must stay active, got %q", gr.Status)
+	}
+}
+
+// A sidecar from a previous schema generation is a stale projection: Open
+// must wipe and recreate it (it rebuilds from WAL + native on next use).
+func TestOpen_RecreatesOnSchemaVersionMismatch(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, ".sidecar.db")
+	s, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if _, err := s.db.Exec(`UPDATE meta SET v='1' WHERE k='schema_version'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Upsert(Record{Slug: "old.md", Status: "active"}); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	s2, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer s2.Close()
+	var v string
+	if err := s2.db.QueryRow(`SELECT v FROM meta WHERE k='schema_version'`).Scan(&v); err != nil {
+		t.Fatalf("read schema_version: %v", err)
+	}
+	if v != "2" {
+		t.Errorf("schema_version = %q, want 2", v)
+	}
+	if _, ok, _ := s2.Get("old.md"); ok {
+		t.Error("rows from an old schema generation must not survive (projection is rebuildable)")
+	}
+}
+
+// Keywords of rows outside the populated file set must survive — otherwise a
+// close from one project wipes every other project's relevance signal.
+func TestPopulateKeywords_PreservesOtherSlugs(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), ".sidecar.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+	a := native.MemFile{Slug: "a.md", Name: "alpha", Body: "kubernetes restart"}
+	b := native.MemFile{Slug: "b.md", Name: "beta", Body: "postgres index"}
+	if err := s.PopulateKeywords([]native.MemFile{a}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PopulateKeywords([]native.MemFile{b}); err != nil {
+		t.Fatal(err)
+	}
+	overlap, err := s.OverlapScores([]string{"kubernetes"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overlap["a.md"] != 1 {
+		t.Errorf("a.md keyword signal wiped by a later populate of other files: %v", overlap)
+	}
+}
+
+// Effectiveness must learn from the trigger events close already writes:
+// one observation per (slug, session), useful wins over silent within a
+// session, retro-silents count, and legacy outcome-* events still add in.
+func TestReproject_EffectivenessFromTriggerEvents(t *testing.T) {
+	dir := t.TempDir()
+	walPath := filepath.Join(dir, ".wal")
+	wal := "" +
+		"2026-04-01|inject|m.md|s1\n" +
+		"2026-04-01|trigger-silent|m.md|s1\n" + // flips to useful below
+		"2026-04-01|trigger-useful|m.md|s1\n" +
+		"2026-04-02|inject|m.md|s2\n" +
+		"2026-04-02|trigger-silent|m.md|s2\n" +
+		"2026-04-02|outcome-positive|m.md|s2\n" + // legacy signal still counts
+		"2026-04-03|inject|n.md|s1\n" +
+		"2026-04-03|trigger-silent|n.md|s1\n" +
+		"2026-04-04|trigger-silent|n.md|s2\n" +
+		"2026-04-05|trigger-silent-retro|n.md|s3\n"
+	if err := os.WriteFile(walPath, []byte(wal), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(filepath.Join(dir, ".sidecar.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	files := []native.MemFile{
+		{Slug: "m.md", ContentSHA: "m"},
+		{Slug: "n.md", ContentSHA: "n"},
+	}
+	if err := Reproject(s, files, walPath, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// m: useful s1 + silent s2 + legacy positive → (2+1)/(2+1+2) = 0.6
+	if r, _, _ := s.Get("m.md"); r.Effectiveness != 0.6 {
+		t.Errorf("m.md effectiveness = %v, want 0.6 (1 useful session + 1 legacy positive vs 1 silent session)", r.Effectiveness)
+	}
+	// n: three silent sessions, never useful → (0+1)/(0+3+2) = 0.2
+	if r, _, _ := s.Get("n.md"); r.Effectiveness != 0.2 {
+		t.Errorf("n.md effectiveness = %v, want 0.2 (3 silent sessions)", r.Effectiveness)
+	}
+}
+
+// Frontmatter created/status finally drive the projection: created is the
+// author's recency claim (WAL-earliest only a fallback), and pinned is
+// honoured instead of being hard-reset to active on every close.
+func TestReproject_FrontmatterCreatedAndPinned(t *testing.T) {
+	dir := t.TempDir()
+	walPath := filepath.Join(dir, ".wal")
+	if err := os.WriteFile(walPath, []byte("2026-04-01|inject|pin.md|s1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(filepath.Join(dir, ".sidecar.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	files := []native.MemFile{
+		{Slug: "pin.md", ContentSHA: "p", Created: "2026-06-01", Status: "pinned"},
+		{Slug: "plain.md", ContentSHA: "q"},
+	}
+	if err := Reproject(s, files, walPath, nil); err != nil {
+		t.Fatal(err)
+	}
+	pin, _, _ := s.Get("pin.md")
+	if pin.Created != "2026-06-01" {
+		t.Errorf("frontmatter created must win over WAL-earliest, got %q", pin.Created)
+	}
+	if pin.Status != "pinned" {
+		t.Errorf("frontmatter pinned must survive reproject, got %q", pin.Status)
+	}
+	if plain, _, _ := s.Get("plain.md"); plain.Status != "active" {
+		t.Errorf("file without status stays active, got %q", plain.Status)
+	}
 }

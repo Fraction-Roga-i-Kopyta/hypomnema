@@ -8,7 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"time"
+
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/inject"
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/pathutil"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/wal"
 )
 
@@ -40,21 +43,48 @@ func runInject(args []string) {
 	if err := json.Unmarshal(raw, &in); err != nil {
 		os.Exit(0) // fail-safe
 	}
+	already := readInjectedList(in.SessionID)
 	res, err := inject.Run(inject.Input{
 		Event: event, SessionID: in.SessionID, CWD: in.CWD, Prompt: in.Prompt,
 		ClaudeHome: claudeDir(), MemoryDir: memoryDir(), Today: today(), MaxK: 8,
+		AlreadyInjected: already,
 	})
 	if err != nil {
 		os.Exit(0)
 	}
 	if len(res.Injected) > 0 && in.SessionID != "" {
-		persistInjected(res.Injected, in.SessionID)
+		persistInjected(already, res.Injected, in.SessionID)
 	}
 	emitEnvelope(event, res.Markdown)
 	os.Exit(0)
 }
 
-func persistInjected(slugs []string, sessionID string) {
+func sessionListPath(sessionID string) string {
+	return filepath.Join(memoryDir(), ".runtime",
+		"injected-"+pathutil.SafeFileName(sessionID)+".list")
+}
+
+// readInjectedList returns the slugs already injected this session, so the
+// ranker never re-renders them (and close classifies the whole session's
+// set, not just the last batch).
+func readInjectedList(sessionID string) []string {
+	if sessionID == "" {
+		return nil
+	}
+	b, err := os.ReadFile(sessionListPath(sessionID))
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, ln := range strings.Split(string(b), "\n") {
+		if ln = strings.TrimSpace(ln); ln != "" {
+			out = append(out, ln)
+		}
+	}
+	return out
+}
+
+func persistInjected(already, slugs []string, sessionID string) {
 	day := today()
 	sid := wal.SanitizeField(sessionID)
 	for _, slug := range slugs {
@@ -65,8 +95,30 @@ func persistInjected(slugs []string, sessionID string) {
 	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
 		return
 	}
-	_ = os.WriteFile(filepath.Join(runtimeDir, "injected-"+sessionID+".list"),
-		[]byte(strings.Join(slugs, "\n")+"\n"), 0o600)
+	pruneRuntimeLists(runtimeDir)
+	union := append(append(make([]string, 0, len(already)+len(slugs)), already...), slugs...)
+	_ = os.WriteFile(sessionListPath(sessionID),
+		[]byte(strings.Join(union, "\n")+"\n"), 0o600)
+}
+
+// pruneRuntimeLists drops session lists untouched for 7 days: a session that
+// old will never see another inject or close, so its list is dead weight
+// (the live install had accumulated 170+ of them).
+func pruneRuntimeLists(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-7 * 24 * time.Hour)
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasPrefix(name, "injected-") || !strings.HasSuffix(name, ".list") {
+			continue
+		}
+		if info, err := e.Info(); err == nil && info.ModTime().Before(cutoff) {
+			_ = os.Remove(filepath.Join(dir, name))
+		}
+	}
 }
 
 func emitEnvelope(event, markdown string) {

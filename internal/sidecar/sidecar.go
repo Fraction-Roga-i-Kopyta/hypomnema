@@ -34,9 +34,18 @@ type Record struct {
 	Effectiveness float64
 }
 
+// schemaVersion identifies the projection generation. v2 added project
+// scoping (rows are stamped with their owning store and reconciled
+// per-scope). Open wipes a sidecar written by a different generation — the
+// sidecar is a derived projection, so the wipe only costs the next Reproject.
+const schemaVersion = "2"
+
 // Open opens (creating if needed) the sidecar DB at dbPath and applies the
 // schema. Mirrors internal/fts: modernc.org/sqlite, busy_timeout, WAL journal.
-func Open(dbPath string) (*Store, error) {
+// A schema_version mismatch recreates the file.
+func Open(dbPath string) (*Store, error) { return open(dbPath, true) }
+
+func open(dbPath string, allowRecreate bool) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		return nil, fmt.Errorf("sidecar.Open: mkdir parent: %w", err)
 	}
@@ -49,9 +58,26 @@ func Open(dbPath string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("sidecar.Open: schema: %w", err)
 	}
-	if _, err := db.Exec(`INSERT OR IGNORE INTO meta (k, v) VALUES ('schema_version', '1')`); err != nil {
+	var v string
+	err = db.QueryRow(`SELECT v FROM meta WHERE k='schema_version'`).Scan(&v)
+	switch {
+	case err == sql.ErrNoRows:
+		if _, ierr := db.Exec(`INSERT INTO meta (k, v) VALUES ('schema_version', ?)`, schemaVersion); ierr != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("sidecar.Open: seed meta: %w", ierr)
+		}
+	case err != nil:
 		_ = db.Close()
-		return nil, fmt.Errorf("sidecar.Open: seed meta: %w", err)
+		return nil, fmt.Errorf("sidecar.Open: read schema_version: %w", err)
+	case v != schemaVersion:
+		_ = db.Close()
+		if !allowRecreate {
+			return nil, fmt.Errorf("sidecar.Open: schema_version %q persists after recreate", v)
+		}
+		for _, p := range []string{dbPath, dbPath + "-wal", dbPath + "-shm"} {
+			_ = os.Remove(p)
+		}
+		return open(dbPath, false)
 	}
 	return &Store{db: db}, nil
 }

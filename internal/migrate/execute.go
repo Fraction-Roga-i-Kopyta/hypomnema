@@ -35,7 +35,7 @@ func Execute(p Plan, o ExecOpts) error {
 		if err := os.MkdirAll(c.TargetDir, 0o755); err != nil {
 			return fmt.Errorf("migrate.Execute: mkdir %s: %w", c.TargetDir, err)
 		}
-		if err := os.WriteFile(filepath.Join(c.TargetDir, c.Slug), []byte(c.Native), 0o644); err != nil {
+		if err := writeFileAtomic(filepath.Join(c.TargetDir, c.Slug), []byte(c.Native), 0o644); err != nil {
 			return fmt.Errorf("migrate.Execute: write %s: %w", c.Slug, err)
 		}
 	}
@@ -43,7 +43,9 @@ func Execute(p Plan, o ExecOpts) error {
 	files := allNative(p)
 	s, err := sidecar.Open(filepath.Join(o.MemoryDir, ".sidecar.db"))
 	if err == nil {
-		_ = sidecar.Reproject(s, files, filepath.Join(o.MemoryDir, ".wal"))
+		// nil scope: the reconciliation scope derives from the migrated files'
+		// own project tags — a one-shot migration owns everything it wrote.
+		_ = sidecar.Reproject(s, files, filepath.Join(o.MemoryDir, ".wal"), nil)
 		s.Close()
 	}
 	return nil
@@ -94,6 +96,30 @@ func copyTree(src, dst string) error {
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return err
 		}
-		return os.WriteFile(target, b, info.Mode())
+		return writeFileAtomic(target, b, info.Mode())
 	})
+}
+
+// writeFileAtomic writes data via a same-dir temp file + rename so a crash
+// mid-write never leaves a truncated memory file (invariant I3).
+func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := os.Chmod(tmpName, mode); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	return os.Rename(tmpName, path)
 }

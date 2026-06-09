@@ -24,22 +24,11 @@ func projectCWD() string {
 }
 
 // collectNative lists native files from both the per-project dir and the
-// hypomnema-owned global dir (native lacks a global store).
+// hypomnema-owned global dir (native lacks a global store), tagged with
+// their owning project. claudeDir() honours $CLAUDE_HOME, which keeps the
+// dir resolution overridable in tests.
 func collectNative() ([]native.MemFile, error) {
-	// claudeDir() honours $CLAUDE_HOME (needed for test fixtures), so derive
-	// the OS home from it rather than calling os.UserHomeDir() directly —
-	// keeps the per-project + global dir resolution overridable in tests.
-	claudeHome := claudeDir()            // <home>/.claude
-	osHome := filepath.Dir(claudeHome)   // <home>
-	projFiles, err := native.List(native.ProjectMemoryDir(osHome, projectCWD()))
-	if err != nil {
-		return nil, err
-	}
-	globalFiles, err := native.List(native.GlobalMemoryDir(osHome))
-	if err != nil {
-		return nil, err
-	}
-	return append(projFiles, globalFiles...), nil
+	return native.Collect(claudeDir(), projectCWD()), nil
 }
 
 func runSidecarRebuild(args []string) {
@@ -62,7 +51,7 @@ func runSidecarRebuild(args []string) {
 		os.Exit(1)
 	}
 	defer s.Close()
-	if err := sidecar.Reproject(s, files, filepath.Join(memoryDir(), ".wal")); err != nil {
+	if err := sidecar.Reproject(s, files, filepath.Join(memoryDir(), ".wal"), native.Scope(projectCWD())); err != nil {
 		fmt.Fprintf(os.Stderr, "sidecar rebuild: %v\n", err)
 		os.Exit(1)
 	}
