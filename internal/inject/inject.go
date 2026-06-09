@@ -26,6 +26,22 @@ const maxBodyBytes = 2500
 // budget are not recorded as injected and get their turn on a later prompt.
 const maxTotalBytes = 8000
 
+// MaxBodyBytes is the per-record body cap, shared by push (injection) and
+// pull (memoryctl recall) so a recalled note obeys the same context budget.
+const MaxBodyBytes = maxBodyBytes
+
+// CapBody bounds one record body to maxBytes at a UTF-8 rune boundary with a
+// visible truncation marker. Exported for the recall verb.
+func CapBody(body string, maxBytes int) string { return capBody(body, maxBytes) }
+
+// Candidates assembles ranker-ready candidates for an ad-hoc query against
+// the project+global scope — the same sidecar-backed assembly (self-healing
+// reproject, degraded native-only fallback) the injection pipeline uses.
+// Exported for the recall verb.
+func Candidates(memoryDir, cwd string, files []native.MemFile, terms []string) []rank.Candidate {
+	return candidates(Input{MemoryDir: memoryDir, CWD: cwd}, files, terms)
+}
+
 // Input is everything Run needs (parsed by the memoryctl inject verb).
 type Input struct {
 	Event           string
