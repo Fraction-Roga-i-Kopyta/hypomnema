@@ -5,7 +5,7 @@
 // ~/.claude/projects/<slug>/<session-uuid>.jsonl. The object type
 // we care about is:
 //
-//   {"type":"assistant","message":{"content":[{"type":"text","text":"…"}]}}
+//	{"type":"assistant","message":{"content":[{"type":"text","text":"…"}]}}
 //
 // Any other type (user, attachment, hook_additional_context,
 // permission-mode, deferred_tools_delta, …) is ignored. Inside the
@@ -26,15 +26,19 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 )
 
 // Session pairs the session_id with the concatenated assistant text
-// from its transcript. Evidence mining needs both: session_id for
-// WAL joins (did this session fire trigger-silent for slug X?), and
-// text for phrase extraction.
+// from its transcript, plus the headline session metrics the Stop hook
+// writes into the WAL `session-metrics` event. Evidence mining needs
+// ID + Text; the metrics feed self-profile calibration.
 type Session struct {
-	ID   string // session UUID from the `sessionId` field on record 0
-	Text string // all assistant `content[].text` joined by `\n\n`
+	ID          string // session UUID from the `sessionId` field on record 0
+	Text        string // all assistant `content[].text` joined by `\n\n`
+	ToolCalls   int    // assistant `tool_use` content parts
+	ToolErrors  int    // `tool_result` parts flagged is_error
+	DurationSec int    // last timestamp − first timestamp, in seconds
 }
 
 // record is a minimal shape for decoding what we need from each line.
@@ -42,6 +46,7 @@ type Session struct {
 type record struct {
 	Type      string         `json:"type"`
 	SessionID string         `json:"sessionId"`
+	Timestamp string         `json:"timestamp"`
 	Message   *messageRecord `json:"message,omitempty"`
 }
 
@@ -50,8 +55,9 @@ type messageRecord struct {
 }
 
 type contentPart struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type    string `json:"type"`
+	Text    string `json:"text"`
+	IsError bool   `json:"is_error"`
 }
 
 // ReadSession opens path and walks every line, returning one Session.
@@ -78,6 +84,7 @@ func decodeStream(r io.Reader) (Session, error) {
 
 	var out Session
 	var b strings.Builder
+	var firstTS, lastTS time.Time
 	first := true
 	for sc.Scan() {
 		line := sc.Bytes()
@@ -93,20 +100,33 @@ func decodeStream(r io.Reader) (Session, error) {
 			out.ID = rec.SessionID
 			first = false
 		}
-		if rec.Type != "assistant" || rec.Message == nil {
+		if ts, err := time.Parse(time.RFC3339, rec.Timestamp); err == nil {
+			if firstTS.IsZero() {
+				firstTS = ts
+			}
+			lastTS = ts
+		}
+		if rec.Message == nil {
 			continue
 		}
 		for _, p := range rec.Message.Content {
-			if p.Type != "text" || p.Text == "" {
-				continue
+			switch {
+			case rec.Type == "assistant" && p.Type == "tool_use":
+				out.ToolCalls++
+			case p.Type == "tool_result" && p.IsError:
+				out.ToolErrors++
+			case rec.Type == "assistant" && p.Type == "text" && p.Text != "":
+				if b.Len() > 0 {
+					b.WriteString("\n\n")
+				}
+				b.WriteString(p.Text)
 			}
-			if b.Len() > 0 {
-				b.WriteString("\n\n")
-			}
-			b.WriteString(p.Text)
 		}
 	}
 	out.Text = b.String()
+	if !firstTS.IsZero() && lastTS.After(firstTS) {
+		out.DurationSec = int(lastTS.Sub(firstTS).Seconds())
+	}
 	if err := sc.Err(); err != nil {
 		// Bufio errors (oversized line etc.) are tolerated the same
 		// way as malformed JSON — caller gets whatever was decoded.
