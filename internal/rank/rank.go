@@ -32,6 +32,10 @@ type Query struct {
 	Project string
 	Domains []string
 	Today   string // YYYY-MM-DD; drives recency decay
+	// IncludeStale widens the status allowlist to stale rows — used by the
+	// pull path (memoryctl recall), where an explicit query has no noise
+	// cost and recalling a stale fact revives it. Deleted stays excluded.
+	IncludeStale bool
 }
 
 // Scored is a Candidate with its computed score.
@@ -57,10 +61,12 @@ func Rank(q Query, cands []Candidate, k int) []Scored {
 	today := parseDay(q.Today)
 	out := make([]Scored, 0, len(cands))
 	for _, c := range cands {
-		// Allowlist: only active/pinned are injectable. Everything else
-		// (stale, deleted, archived, superseded, unknown) is excluded —
-		// matches the shell pipeline's status guard.
-		if c.Status != "active" && c.Status != "pinned" {
+		// Allowlist: active/pinned are always injectable; stale joins only
+		// for the pull path (Query.IncludeStale). Everything else (deleted,
+		// archived, superseded, unknown) is excluded.
+		allowed := c.Status == "active" || c.Status == "pinned" ||
+			(q.IncludeStale && c.Status == "stale")
+		if !allowed {
 			continue
 		}
 		if !domainOK(q.Domains, c.Domains) {
