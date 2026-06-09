@@ -115,11 +115,11 @@ func TestHookFailSafeChecker_AllowsPipefailOnly(t *testing.T) {
 
 func TestHookFailSafeChecker_AllowsApprovedFailFastHook(t *testing.T) {
 	dir := setupRepo(t)
-	writeFile(t, dir, "hooks/test-memory-hooks.sh",
-		"#!/bin/bash\nset -e\nrun_tests\n")
+	writeFile(t, dir, "hooks/v2/shims_test.sh",
+		"#!/usr/bin/env bash\nset -u\nrun_tests\n")
 	v, _ := hookFailSafeChecker{}.Check(dir)
 	if len(v) != 0 {
-		t.Errorf("test-memory-hooks.sh is in approved list, got %+v", v)
+		t.Errorf("shims_test.sh is in approved list, got %+v", v)
 	}
 }
 

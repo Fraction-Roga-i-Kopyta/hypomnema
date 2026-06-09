@@ -17,6 +17,11 @@
 
 ### Fixed
 
+- **`audit invariants` passes on its own repo and gates CI.** Migration
+  file writes go through tmp+rename (I3), the shim test runner is
+  explicitly allowlisted for fail-fast (I5), allowlist entries pointing
+  at files deleted in the v2 cutover are gone, and the audit now runs
+  in the test workflow so violations can't accumulate silently again.
 - **Cross-project tombstoning.** The sidecar DB is shared across all
   projects, but `Reproject` treated "current project + global" as the
   whole universe — every `close` marked all other projects' rows
