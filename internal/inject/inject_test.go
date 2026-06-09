@@ -232,3 +232,77 @@ func TestRun_DegradedOnCorruptSidecar(t *testing.T) {
 		t.Errorf("after recovery, docker memory should still inject:\n%s", res.Markdown)
 	}
 }
+
+// Regression for the live cross-project leak: rows seeded into the shared
+// sidecar by another project's session must not inject here, and this
+// project's own files must (the sidecar self-heals via a scoped reproject).
+func TestRun_ExcludesOtherProjectCandidates(t *testing.T) {
+	memDir, projDirA, home := setup(t)
+	projDirB := filepath.Join(home, ".claude", "projects", "-tmp-other", "memory")
+	if err := os.MkdirAll(projDirB, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(projDirA, "mine.md"),
+		[]byte("---\nname: mine\ntype: knowledge\n---\ndocker mine\n"), 0o644)
+	os.WriteFile(filepath.Join(projDirB, "theirs.md"),
+		[]byte("---\nname: theirs\ntype: knowledge\n---\ndocker theirs\n"), 0o644)
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
+
+	// A session in the OTHER project seeds the shared sidecar first.
+	if _, err := Run(Input{
+		Event: "SessionStart", SessionID: "sb", CWD: "/tmp/other", Prompt: "docker",
+		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir,
+		Today: "2026-05-29", MaxK: 8,
+	}); err != nil {
+		t.Fatalf("seed run: %v", err)
+	}
+
+	res, err := Run(Input{
+		Event: "SessionStart", SessionID: "sa", CWD: "/tmp/proj", Prompt: "docker",
+		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir,
+		Today: "2026-05-29", MaxK: 8,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var hasMine bool
+	for _, slug := range res.Injected {
+		if slug == "theirs.md" {
+			t.Errorf("another project's fact leaked into this session: %v", res.Injected)
+		}
+		if slug == "mine.md" {
+			hasMine = true
+		}
+	}
+	if !hasMine {
+		t.Errorf("own project's fact must inject, got %v", res.Injected)
+	}
+}
+
+// On otherwise equal signals a project-local fact outranks a global one
+// (the rank projectBoost, which requires Query.Project to be wired up).
+func TestRun_ProjectFactOutranksGlobalOnTie(t *testing.T) {
+	memDir, projDir, home := setup(t)
+	globDir := filepath.Join(home, ".claude", "memory-global")
+	if err := os.MkdirAll(globDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Slug order alone would put the global fact first.
+	os.WriteFile(filepath.Join(globDir, "a-global.md"),
+		[]byte("---\nname: aglob\ntype: knowledge\n---\ndocker body\n"), 0o644)
+	os.WriteFile(filepath.Join(projDir, "b-project.md"),
+		[]byte("---\nname: bproj\ntype: knowledge\n---\ndocker body\n"), 0o644)
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
+
+	res, err := Run(Input{
+		Event: "SessionStart", SessionID: "s1", CWD: "/tmp/proj", Prompt: "docker",
+		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir,
+		Today: "2026-05-29", MaxK: 8,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res.Injected) == 0 || res.Injected[0] != "b-project.md" {
+		t.Errorf("project-local fact must outrank the global tie, got %v", res.Injected)
+	}
+}

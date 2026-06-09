@@ -22,12 +22,17 @@ type agg struct {
 // files and the WAL at walPath. Existing rows are upserted (idempotent).
 // Native files with no WAL history are inserted with ref_count 0 and the
 // neutral effectiveness prior, so freshly-written facts are injectable
-// immediately. Orphan rows — memory rows whose native file is no longer in
-// files — are marked status='deleted' (the row and its outcome history are
-// kept so WAL replay remains correct; deleted rows are excluded from
-// injection) — spec §5. The keyword table is left untouched (a later phase
-// owns it).
-func Reproject(s *Store, files []native.MemFile, walPath string) error {
+// immediately.
+//
+// The sidecar DB is shared across every project, while a session only ever
+// sees "its project + global" files — so deletion reconciliation is scoped:
+// a row is tombstoned (status='deleted', history kept — spec §5) only when
+// its native file is missing from `files` AND its project is inside `scope`
+// (the explicit scope plus every project present in `files`). Rows owned by
+// other projects are never touched — that is the cross-project tombstoning
+// fix. Same-name files in two projects still share one row (slug is the PK);
+// last writer wins until a composite key lands.
+func Reproject(s *Store, files []native.MemFile, walPath string, scope []string) error {
 	aggs := readWALAgg(walPath)
 
 	if _, err := s.db.Exec(`DELETE FROM outcome`); err != nil {
@@ -47,6 +52,7 @@ func Reproject(s *Store, files []native.MemFile, walPath string) error {
 			Type:          f.Type,
 			Name:          f.Name,
 			Description:   f.Description,
+			Project:       f.Project,
 			Created:       a.created,
 			LastInjected:  a.lastInject,
 			RefCount:      a.injects,
@@ -58,21 +64,28 @@ func Reproject(s *Store, files []native.MemFile, walPath string) error {
 		}
 	}
 
-	// Reconcile deletions: any memory row whose native file is no longer in
-	// `files` is marked status='deleted' (the row + its outcome history are
-	// kept; it is simply excluded from injection) — spec §5.
+	// Scoped deletion reconciliation (see doc comment above).
+	inScope := make(map[string]bool, len(scope)+4)
+	for _, p := range scope {
+		inScope[p] = true
+	}
 	keep := make(map[string]bool, len(files))
 	for _, f := range files {
 		keep[f.Slug] = true
+		inScope[f.Project] = true
 	}
 	existing, err := s.All()
 	if err != nil {
 		return fmt.Errorf("sidecar.Reproject: reconcile list: %w", err)
 	}
 	for _, r := range existing {
-		if !keep[r.Slug] && r.Status != "deleted" {
+		if !keep[r.Slug] && r.Status != "deleted" && inScope[r.Project] {
 			if _, err := s.db.Exec(`UPDATE memory SET status='deleted' WHERE slug=?`, r.Slug); err != nil {
 				return fmt.Errorf("sidecar.Reproject: mark deleted %s: %w", r.Slug, err)
+			}
+			// Drop the dead row's keywords so it stops matching overlap queries.
+			if _, err := s.db.Exec(`DELETE FROM keyword WHERE slug=?`, r.Slug); err != nil {
+				return fmt.Errorf("sidecar.Reproject: clear keywords %s: %w", r.Slug, err)
 			}
 		}
 	}

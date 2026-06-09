@@ -8,12 +8,15 @@ import (
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/tokenize"
 )
 
-// PopulateKeywords clears and rebuilds the keyword table from the supplied
-// files: name + description + body are tokenized; weight is term frequency.
-// Called from Reproject so a rebuild keeps keywords in sync.
+// PopulateKeywords rebuilds keyword rows for the supplied files: name +
+// description + body are tokenized; weight is term frequency. Only the
+// supplied files' rows are cleared — the table is shared across projects,
+// and a scoped Reproject must not wipe other projects' relevance signal.
 func (s *Store) PopulateKeywords(files []native.MemFile) error {
-	if _, err := s.db.Exec(`DELETE FROM keyword`); err != nil {
-		return fmt.Errorf("sidecar.PopulateKeywords: clear: %w", err)
+	for _, f := range files {
+		if _, err := s.db.Exec(`DELETE FROM keyword WHERE slug=?`, f.Slug); err != nil {
+			return fmt.Errorf("sidecar.PopulateKeywords: clear %s: %w", f.Slug, err)
+		}
 	}
 	for _, f := range files {
 		text := f.Name + " " + f.Description + " " + f.Body

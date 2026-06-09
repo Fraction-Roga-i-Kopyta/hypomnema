@@ -4,6 +4,24 @@
 
 ### Fixed
 
+- **Cross-project tombstoning.** The sidecar DB is shared across all
+  projects, but `Reproject` treated "current project + global" as the
+  whole universe — every `close` marked all other projects' rows
+  `deleted`, making their memory invisible to the ranker (on the live
+  install all 8 hypomnema project facts were tombstoned while another
+  project's continuity note injected 612 times). Reconciliation is now
+  scoped: rows are stamped with their owning store (`project` column),
+  deletions only reconcile inside `current project ∪ global`, and
+  injection candidates are filtered to the same scope, so one project's
+  facts no longer leak into another's sessions. The rank `projectBoost`
+  is finally wired up (project-local facts outrank global ones on equal
+  signals). Sidecar `schema_version` bumped to 2; an old sidecar is
+  wiped and rebuilt automatically on first open.
+- **Keyword table survives scoped rebuilds.** `PopulateKeywords` no
+  longer truncates the whole table (which wiped other projects'
+  relevance signal); it clears only the supplied files' rows, and
+  tombstoned rows drop their keywords.
+
 - **Injection now fits the harness inline limit.** The rendered
   `additionalContext` is capped at 8KB total (per-body cap unchanged at
   2.5KB). Claude Code persists oversized hook output to a file with only

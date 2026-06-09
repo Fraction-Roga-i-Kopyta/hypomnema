@@ -60,7 +60,7 @@ func Run(in Input) (Result, error) {
 
 	nativeFiles := collectNative(in.ClaudeHome, in.CWD)
 	if s, err := sidecar.Open(filepath.Join(in.MemoryDir, ".sidecar.db")); err == nil {
-		_ = sidecar.Reproject(s, nativeFiles, filepath.Join(in.MemoryDir, ".wal"))
+		_ = sidecar.Reproject(s, nativeFiles, filepath.Join(in.MemoryDir, ".wal"), native.Scope(in.CWD))
 		if n, derr := s.MarkStale(in.Today); derr == nil {
 			res.Staled = n
 		}
@@ -96,10 +96,7 @@ func readInjectedSet(memDir, sessionID string) []string {
 }
 
 func collectNative(claudeHome, cwd string) []native.MemFile {
-	osHome := filepath.Dir(claudeHome)
-	proj, _ := native.List(native.ProjectMemoryDir(osHome, cwd))
-	glob, _ := native.List(native.GlobalMemoryDir(osHome))
-	return append(proj, glob...)
+	return native.Collect(claudeHome, cwd)
 }
 
 func slugNames(claudeHome, cwd string) map[string]string {
