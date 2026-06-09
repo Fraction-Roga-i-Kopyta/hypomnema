@@ -16,7 +16,7 @@ The point: you remember things across sessions, and the things most likely to ma
 
 ## Memory layout
 
-Native memory files live in `~/.claude/projects/<slug>/memory/` (project-local) and `~/.claude/memory-global/` (global). There are no fixed subdirectories — type is encoded in the file's `type:` frontmatter field. The **sidecar** (`memory.db`, SQLite, rebuildable from WAL + frontmatter) holds metadata: ref_count, effectiveness, status, keywords, domains. The **WAL** (`.wal`, append-only text) is the source of truth for all events.
+Native memory files live in `~/.claude/projects/<slug>/memory/` (project-local) and `~/.claude/memory-global/` (global). There are no fixed subdirectories — type is encoded in the file's `type:` frontmatter field. The **sidecar** (`~/.claude/memory/.sidecar.db`, SQLite, rebuildable from WAL + frontmatter) holds metadata: ref_count, effectiveness, status, project, keywords. The **WAL** (`~/.claude/memory/.wal`, append-only text) is the source of truth for all events.
 
 Logical types:
 
@@ -68,7 +68,7 @@ domains: [domain1, domain2]  # domain filter — use kebab-case for multi-word
 ```yaml
 severity: minor | major | critical
 recurrence: <integer>
-scope: universal | domain | narrow     # narrow = inject only on keyword match
+scope: universal | domain | narrow     # informational: how broadly the lesson applies
 root-cause: "..."
 prevention: "..."
 ```
@@ -197,7 +197,7 @@ An architecture or technology choice you want future sessions to defer to rather
 
 ### When to write `continuity`
 
-At session end, if you stopped mid-task. Three lines max: what you were doing, current status, next step. File path: `continuity/{project-slug}.md` inside native memory.
+At session end, if you stopped mid-task. Three lines max: what you were doing, current status, next step. It is a regular file with `type: continuity` in the project's native store (stores are flat — there is no `continuity/` subdirectory).
 
 ## When NOT to write
 

@@ -6,7 +6,7 @@
 
 **Governance and ranking layer for Claude Code's native file memory — a Go engine (`memoryctl`) + 4 thin shims. No cloud, no embeddings.** Claude Code now ships native file memory; hypomnema adds ranked auto-injection, effectiveness measurement, decay, and a global store that native lacks.
 
-> **Status:** v2.0; native-primary. Requires Claude Code ≥ v2.1.59 with auto-memory enabled. v1.x stays on its tag for older Claude Code installs — see [MIGRATION.md](docs/MIGRATION.md) for the v1.x → v2.0 upgrade path.
+> **Status:** v2.1; native-primary. Requires Claude Code ≥ v2.1.59 with auto-memory enabled. v1.x stays on its tag for older Claude Code installs — see [MIGRATION.md](docs/MIGRATION.md) for the v1.x → v2.x upgrade path.
 >
 > **Platforms:** macOS (primary, daily-driver) and Linux (`ubuntu-latest`), both covered by CI. The shim layer requires only `bash` + `jq`; all logic runs in the Go binary. Windows: WSL only, native unsupported.
 >
@@ -42,7 +42,7 @@ Hypomnema adds:
 |---|---|
 | Native injects only an index, not ranked content | `memoryctl inject` ranks native facts by relevance (keyword overlap + ref_count + recency + effectiveness) and injects the top-K via `additionalContext` — not just a table of contents |
 | No per-session effectiveness signal | WAL captures `trigger-useful`/`trigger-silent` per session; effectiveness feeds back into ranking |
-| No decay / lifecycle | `memoryctl close` down-ranks stale facts in the sidecar; pruning is safe and reversible |
+| No decay / lifecycle | `memoryctl close` down-ranks stale facts in the sidecar; nothing is deleted from disk |
 | No secrets gate | `memoryctl guard` (PreToolUse:Write|Edit) blocks credential patterns before they land in a memory file |
 | No global store | Native memory is per-project only; hypomnema owns `~/.claude/memory-global/` for facts that travel across every project (language rules, universal debugging patterns) |
 | No migration path | `memoryctl migrate` converts a v1.x hypomnema store to native format + sidecar in one shot |
@@ -79,9 +79,9 @@ A/B replay on the maintainer's corpus (n=49 sessions, temporal-holdout): ranked 
 | `SessionStart` | `session-start.sh` | Detect project + domains + keywords → rank native facts → inject top-K via `additionalContext` |
 | `UserPromptSubmit` | `user-prompt-submit.sh` | Re-rank with prompt tokens added to keywords → inject anything not yet in session |
 | `PreToolUse:Write|Edit` (memory path) | `pre-tool-write.sh` | `guard`: secrets scan → exit 2 on credential pattern; fuzzy dedup → warn |
-| `Stop` | `session-stop.sh` | `close`: attribute outcomes → WAL → recompute effectiveness/decay → regenerate self-profile + continuity |
+| `Stop` | `session-stop.sh` | `close`: classify injected set (evidence/citation) → WAL → recompute effectiveness/decay → regenerate `MEMORY.md` index + self-profile |
 
-Native `MEMORY.md` stays as-is — we don't fight the harness for that channel. Our top-K facts arrive separately through `additionalContext`.
+The project's native `MEMORY.md` index is regenerated from native files on close; the ranked facts arrive separately through `additionalContext` — we don't fight the harness for the index channel.
 
 ## How injection ranks files
 
@@ -118,23 +118,27 @@ All types compete in one ranked top-8 — there are no per-type quotas; type bal
 
 ### Example: a mistake
 
-```yaml
+```markdown
 ---
 type: mistake
-project: global
+name: "api-auth-skipped"
+description: "Built API client without reading auth docs first"
 created: 2026-04-15
 status: pinned
 severity: major
 recurrence: 1
-scope: universal
 keywords: [api, auth, planning, rewrite]
 domains: [backend, integration]
 root-cause: "Built the API client without checking auth flow first."
 prevention: "Read auth section of API docs before writing the first request."
 ---
+
+Read the auth/security section before the first request: required headers,
+signing scheme, token lifecycle. The injection renders the **body**, so the
+prose lives here — frontmatter is metadata and ranking signal.
 ```
 
-This gets injected into every session. After the fifth time, Claude stops doing it.
+This gets injected when relevant. After the fifth time, Claude stops doing it.
 
 ## How hypomnema compares
 
@@ -186,18 +190,14 @@ Surgically strips hypomnema entries from `~/.claude/settings.json`. Memory files
 
 ## Setup
 
-### Map your projects
+### Where facts live
 
-Global facts (type `global`) inject in every project automatically. Project-local facts (`project: your-slug`) inject only in that project. `memoryctl` infers the project slug from `cwd` at runtime — no `projects.json` needed for standard git repos.
-
-To override or add non-git directories, edit `~/.claude/memory-global/projects.json`:
-
-```json
-{
-  "/Users/you/dev/webapp": "webapp",
-  "/Users/you/dev/api": "api"
-}
-```
+Routing is by store location, not by frontmatter: files in
+`~/.claude/projects/<slug>/memory/` inject only in that project; files in
+`~/.claude/memory-global/` inject everywhere. The project slug derives from
+`cwd` at runtime (every `/` becomes `-`) — no mapping file needed.
+(`projects.json` is only consulted by `memoryctl migrate` when converting a
+v1 store.)
 
 ### Add memory instructions to CLAUDE.md
 
@@ -205,7 +205,7 @@ To override or add non-git directories, edit `~/.claude/memory-global/projects.j
 ## Memory
 - Bug found → write to native memory file (type: mistake)
 - Successful strategy → write to native memory file (type: strategy)
-- Before ending session → update continuity/{project}.md
+- Before ending session → update the project's continuity file in its native store
 ```
 
 ### Restart Claude Code
@@ -214,7 +214,7 @@ The shims activate on next session start.
 
 ## Self-profile
 
-`memoryctl close` regenerates `self-profile.md` after every session from WAL events. Five sections: meta-signals (total sessions, outcome-positive/negative counts, trigger-useful vs trigger-silent), intuition signal (silent-applied/trigger-useful ratio), strengths (top strategies by success_count), weaknesses (top mistakes by recurrence), and calibration (domains by error rate). Never edit manually — it's a pure function of WAL.
+`memoryctl close` regenerates `self-profile.md` on every close (Stop fires per turn) from WAL events. Five sections: meta-signals (total sessions, outcome-positive/negative counts, trigger-useful vs trigger-silent), intuition signal (silent-applied/trigger-useful ratio), strengths (top strategies by success_count), weaknesses (top mistakes by recurrence), and calibration (domains by error rate). Never edit manually — it's a pure function of WAL.
 
 Run `memoryctl doctor` for a health snapshot: sidecar drift, WAL anomalies, stale facts due for down-rank, global store coverage.
 
@@ -222,7 +222,7 @@ Run `memoryctl doctor` for a health snapshot: sidecar drift, WAL anomalies, stal
 
 `memoryctl close` down-ranks stale facts in the sidecar (no mutation of native content). Staleness counts from the **last injection** (fallback `created`), so facts in active rotation never age out. An explicit archiving command (`memoryctl gc`) is planned but not shipped yet — stale facts simply stop injecting while staying on disk.
 
-| Type | Stale after | Archive-eligible after |
+| Type | Stale after | Archive-eligible after (planned `gc`) |
 |------|-------------|----------------------|
 | mistakes | 60 days | 180 days |
 | strategies | 90 days | 180 days |
@@ -231,7 +231,7 @@ Run `memoryctl doctor` for a health snapshot: sidecar drift, WAL anomalies, stal
 | feedback | 45 days | 120 days |
 | notes | 30 days | 90 days |
 | projects | never | never |
-| continuity | never (auto-generated per session) | never |
+| continuity | never | never |
 
 `pinned` facts never decay automatically.
 
@@ -244,12 +244,12 @@ Fields you write in the native file:
 ```yaml
 ---
 type: mistake            # mistake | strategy | feedback | knowledge | decision | project | continuity | note
-name: "short-slug"       # used as the sidecar key
-description: "one-liner" # shown in MEMORY.md index and injection headers
-created: YYYY-MM-DD      # recency signal for ranking
+name: "short-slug"       # title of the injected block; citation signal for close (the sidecar key is the filename)
+description: "one-liner" # shown in the MEMORY.md index
+created: YYYY-MM-DD      # recency claim for ranking (wins over WAL history)
 status: active           # active | pinned  (stale is sidecar-managed, not hand-set)
-keywords: [tag1, tag2]   # primary ranking signal — keyword overlap drives injection
-domains: [domain1]       # domain filter — memory only injects when session domain matches
+keywords: [tag1, tag2]   # explicit relevance signal — feeds keyword overlap alongside name/description/body
+domains: [domain1]       # relevance signal today; per-session domain filtering is planned
 
 # Mistakes only
 severity: minor | major | critical
@@ -299,13 +299,13 @@ No. Hypomnema depends on Claude Code's `additionalContext` injection channel and
 `memoryctl migrate` converts it: v1 subdirectories → native files, WAL seeds ref_count/effectiveness, global facts route to `~/.claude/memory-global/`, low-signal files pruned. The old store is backed up, not deleted. Run `--dry-run` first to see the plan.
 
 **Can I run on CC older than v2.1.59?**
-No — v2.0 requires native memory as the substrate. v1.x stays on its tag and works as before on older CC; there are no backports.
+No — v2.x requires native memory as the substrate. v1.x stays on its tag and works as before on older CC; there are no backports.
 
 **Can I version-control my memory?**
-Yes — native memory files are plain markdown in `~/.claude/projects/<slug>/memory/`. `git init` there, commit `*.md`, ignore runtime artefacts. The sidecar (`memory.db`) is rebuildable and should be gitignored.
+Yes — native memory files are plain markdown in `~/.claude/projects/<slug>/memory/` and `~/.claude/memory-global/`. `git init` there and commit `*.md`. Runtime state (the WAL and the `.sidecar.db` projection) lives outside the stores, in `~/.claude/memory/`, so there is nothing to gitignore — and the sidecar is rebuildable anyway.
 
 **How much overhead does the hook add?**
-`inject` < 1s warm on ~200 files (soft deadline; returns best-so-far if exceeded). Shims are ~10 lines of bash — they're not the bottleneck. `close` is the heavier operation (outcome attribution + sidecar reproject) but runs after the session ends.
+`inject` runs well under 1s warm on a ~200-file corpus. Shims are ~10 lines of bash — they're not the bottleneck. `close` is the heavier operation (classification + sidecar reproject + index/profile regen) and runs on every Stop, off the prompt hot path.
 
 **What happens if the sidecar is missing or corrupted?**
 `memoryctl` rebuilds it from WAL + native frontmatter scan. During rebuild, the ranker runs in degraded mode (overlap over native files only; ref_count/recency/effectiveness neutral). Injection still happens — degraded, not absent.
