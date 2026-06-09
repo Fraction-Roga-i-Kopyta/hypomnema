@@ -1,5 +1,93 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **`evidence:` classification is back.** The close-path classifier
+  marked a memory useful only when the assistant literally wrote its
+  slug or name — the documented `evidence:` phrases (the whole point of
+  the feedback type) were ignored since the v2 cutover. Frontmatter
+  `evidence:` lists are parsed again and any phrase match counts as
+  applied; slug/name citation still counts too.
+- **Real session metrics.** The `session-metrics` WAL event carried
+  hardcoded zeros; it now reports actual `tool_calls`, `error_count`
+  (is_error tool results) and `duration` derived from the transcript
+  timestamps.
+
+### Fixed
+
+- **`audit invariants` passes on its own repo and gates CI.** Migration
+  file writes go through tmp+rename (I3), the shim test runner is
+  explicitly allowlisted for fail-fast (I5), allowlist entries pointing
+  at files deleted in the v2 cutover are gone, and the audit now runs
+  in the test workflow so violations can't accumulate silently again.
+- **Cross-project tombstoning.** The sidecar DB is shared across all
+  projects, but `Reproject` treated "current project + global" as the
+  whole universe — every `close` marked all other projects' rows
+  `deleted`, making their memory invisible to the ranker (on the live
+  install all 8 hypomnema project facts were tombstoned while another
+  project's continuity note injected 612 times). Reconciliation is now
+  scoped: rows are stamped with their owning store (`project` column),
+  deletions only reconcile inside `current project ∪ global`, and
+  injection candidates are filtered to the same scope, so one project's
+  facts no longer leak into another's sessions. The rank `projectBoost`
+  is finally wired up (project-local facts outrank global ones on equal
+  signals). Sidecar `schema_version` bumped to 2; an old sidecar is
+  wiped and rebuilt automatically on first open.
+- **Keyword table survives scoped rebuilds.** `PopulateKeywords` no
+  longer truncates the whole table (which wiped other projects'
+  relevance signal); it clears only the supplied files' rows, and
+  tombstoned rows drop their keywords.
+- **Effectiveness actually learns again.** The Bayesian effectiveness
+  read only `outcome-positive/negative` WAL events, which nothing in v2
+  writes — every v2-born fact sat at the neutral 0.5 forever and the
+  documented "effectiveness feeds back into ranking" loop was open.
+  `Reproject` now also folds in the `trigger-useful`/`trigger-silent`
+  (+`trigger-silent-retro`) events `close` already writes, deduplicated
+  to one observation per (slug, session) with useful winning over silent
+  (close fires every turn). Legacy outcome events still count.
+- **Staleness follows use, not file age.** `MarkStale` measures from
+  `last_injected` (fallback `created`), so a fact in active rotation no
+  longer goes stale purely by calendar — previously even the
+  highest-effectiveness feedback rules aged out while unused records
+  survived.
+- **Ranking frontmatter is parsed again.** The native adapter read only
+  `name`/`description`/`type`, silently discarding the documented
+  `keywords:`, `domains:`, `created:` and `status:` fields — authors
+  were writing the "primary ranking signal" into the void and
+  `status: pinned` was unreachable (every close hard-reset rows to
+  active). Keywords/domains (inline and block-style lists) now feed the
+  keyword table on both the sidecar and degraded paths, frontmatter
+  `created` wins over WAL-earliest as the recency claim (a brand-new
+  file finally gets fresh recency instead of zero), and `pinned`
+  survives reproject and exempts the row from decay.
+- **Secrets gate covers what v2 actually stores.** `guard` gated only
+  the legacy `~/.claude/memory` tree, while v2 content lives in native
+  per-project stores and `~/.claude/memory-global` — the documented
+  protection did not apply to a single v2 memory file. The gate now
+  covers all three store kinds, the hook matcher registers for
+  `Write|Edit` (an Edit could previously slip a credential past it),
+  and `.secretsignore` is honoured at its documented location in the
+  global store (legacy locations still work).
+
+- **Injection now fits the harness inline limit.** The rendered
+  `additionalContext` is capped at 8KB total (per-body cap unchanged at
+  2.5KB). Claude Code persists oversized hook output to a file with only
+  a ~2KB inline preview, so an uncapped 8×2.5KB payload never actually
+  reached the model. Facts cut by the budget are not booked as injected
+  and surface on a later prompt.
+- **A fact injects once per session.** `inject` now reads the session's
+  `.runtime/injected-<sid>.list` and skips already-injected slugs; the
+  list accumulates across SessionStart/UserPromptSubmit instead of being
+  overwritten by each call. `close` therefore classifies the whole
+  session's injected set, not just the last batch, and `ref_count` stops
+  growing by mere prompt count. Session lists older than 7 days are
+  pruned.
+- **Session ids are sanitised before filesystem use**
+  (`pathutil.SafeFileName`) — a hostile `session_id` can no longer
+  escape `.runtime/`.
+
 ## [2.0.0] — 2026-05-29
 
 MAJOR. Repositions hypomnema as a governance + ranking layer over

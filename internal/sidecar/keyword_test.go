@@ -24,7 +24,7 @@ func TestPopulateKeywordsAndOverlap(t *testing.T) {
 		{Slug: "a.md", Name: "Docker cache", Description: "buildkit layer", Body: "docker docker layer", ContentSHA: "a"},
 		{Slug: "b.md", Name: "SQL tuning", Description: "index plan", Body: "postgres index", ContentSHA: "b"},
 	}
-	if err := Reproject(s, files, walPath); err != nil {
+	if err := Reproject(s, files, walPath, nil); err != nil {
 		t.Fatalf("Reproject: %v", err)
 	}
 
@@ -60,10 +60,10 @@ func TestPopulateKeywordsIsIdempotent(t *testing.T) {
 	s, _ := Open(filepath.Join(dir, ".sidecar.db"))
 	defer s.Close()
 	files := []native.MemFile{{Slug: "a.md", Body: "docker layer cache", ContentSHA: "a"}}
-	if err := Reproject(s, files, walPath); err != nil {
+	if err := Reproject(s, files, walPath, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := Reproject(s, files, walPath); err != nil {
+	if err := Reproject(s, files, walPath, nil); err != nil {
 		t.Fatal(err)
 	}
 	scores, _ := s.OverlapScores([]string{"docker"})

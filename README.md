@@ -19,22 +19,14 @@ When you open a new Claude Code session in a project, hypomnema injects a `# Mem
 ```markdown
 # Memory Context
 
-**Active domains:** backend python fastapi
-
-## Active Mistakes
-
-### sqlalchemy-metadata-reserved-name [major, x1]
+## sqlalchemy-metadata-reserved-name
 Root cause: `metadata_` mapped to column "metadata" collides with `Base.metadata`
 Prevention: Check SQLAlchemy reserved attribute names before mapping
 
-## Feedback
-
-### code-approach
+## code-approach
 Parameterized queries only. No hardcoded secrets. No debug logging in committed code.
 
-## Strategies
-
-### verification-before-done
+## verification-before-done
 Don't claim "done" before running a minimum verification set.
 ```
 
@@ -48,10 +40,10 @@ Hypomnema adds:
 
 | Gap in native | What hypomnema provides |
 |---|---|
-| Native injects only an index, not ranked content | `memoryctl inject` ranks native facts by relevance (keyword overlap × ref_count × recency × effectiveness) and injects the top-K via `additionalContext` — not just a table of contents |
+| Native injects only an index, not ranked content | `memoryctl inject` ranks native facts by relevance (keyword overlap + ref_count + recency + effectiveness) and injects the top-K via `additionalContext` — not just a table of contents |
 | No per-session effectiveness signal | WAL captures `trigger-useful`/`trigger-silent` per session; effectiveness feeds back into ranking |
 | No decay / lifecycle | `memoryctl close` down-ranks stale facts in the sidecar; pruning is safe and reversible |
-| No secrets gate | `memoryctl guard` (PreToolUse:Write) blocks credential patterns before they land in a memory file |
+| No secrets gate | `memoryctl guard` (PreToolUse:Write|Edit) blocks credential patterns before they land in a memory file |
 | No global store | Native memory is per-project only; hypomnema owns `~/.claude/memory-global/` for facts that travel across every project (language rules, universal debugging patterns) |
 | No migration path | `memoryctl migrate` converts a v1.x hypomnema store to native format + sidecar in one shot |
 
@@ -71,7 +63,7 @@ A/B replay on the maintainer's corpus (n=49 sessions, temporal-holdout): ranked 
 │                                                             │
 │  inject ──► additionalContext (ranked top-K)                │
 │  close  ──► outcomes → WAL → effectiveness/decay → profile  │
-│  guard  ──► secrets gate + dedup (PreToolUse:Write)         │
+│  guard  ──► secrets gate + dedup (PreToolUse:Write|Edit)         │
 │  migrate──► one-shot v1 conversion + pruning                │
 │                                                             │
 │  WAL (append-only text) = source of truth for events        │
@@ -86,7 +78,7 @@ A/B replay on the maintainer's corpus (n=49 sessions, temporal-holdout): ranked 
 |---|---|---|
 | `SessionStart` | `session-start.sh` | Detect project + domains + keywords → rank native facts → inject top-K via `additionalContext` |
 | `UserPromptSubmit` | `user-prompt-submit.sh` | Re-rank with prompt tokens added to keywords → inject anything not yet in session |
-| `PreToolUse:Write` (memory path) | `pre-tool-write.sh` | `guard`: secrets scan → exit 2 on credential pattern; fuzzy dedup → warn |
+| `PreToolUse:Write|Edit` (memory path) | `pre-tool-write.sh` | `guard`: secrets scan → exit 2 on credential pattern; fuzzy dedup → warn |
 | `Stop` | `session-stop.sh` | `close`: attribute outcomes → WAL → recompute effectiveness/decay → regenerate self-profile + continuity |
 
 Native `MEMORY.md` stays as-is — we don't fight the harness for that channel. Our top-K facts arrive separately through `additionalContext`.
@@ -96,32 +88,33 @@ Native `MEMORY.md` stays as-is — we don't fight the harness for that channel. 
 A single relevance ranker (merged from the two v1 pipelines) scores every candidate:
 
 ```
-score = overlap(keywords, file_keywords)
-      × log10(1 + ref_count)           # diminishing-returns on overused records
-      × recency_weight(created)        # ≤7d → 1.0, ≤30d → 0.8, ≤90d → 0.6, older → 0.4
-      × effectiveness                  # Bayesian (pos+1)/(pos+neg+2) — neutral 1.0 until signal lands
+score = 3.0 × overlap(keywords, file keywords+name+description+body)
+      + 1.0 × log10(1 + ref_count)     # diminishing-returns on heavily-injected records
+      + 2.0 × recency                  # 1/(1 + days/30) from last injection (fallback created)
+      + 2.0 × effectiveness            # Bayesian (pos+1)/(pos+neg+2) — neutral 0.5 until signal lands
+      + 1.0 × project boost            # project-local facts beat global ones on ties
 ```
 
-Zero-safe: a brand-new fact with `ref_count=0` and no outcome history is still injectable — it gets neutral priors, not a zero score. Status filter: `active` and `pinned` only; `stale` is skipped (down-ranked in sidecar, still on disk). Per-type quotas (3+3 mistakes, adaptive pool for others) apply after ranking.
+The blend is additive and zero-safe: a brand-new fact with `ref_count=0` and no outcome history is still injectable — it scores on overlap, its frontmatter `created` recency and the neutral prior, not zero. Status filter: `active` and `pinned` only; `stale` is skipped (down-ranked in sidecar, still on disk). Scope filter: only the current project's facts plus the global store inject — other projects' rows never leak in. The result is a flat top-8, capped at 2.5KB per body and 8KB total (Claude Code diverts larger hook payloads to a file the model never sees inline), and each fact injects at most once per session.
 
-Keyword overlap is the primary signal. Keywords come from git context (branch name, diff filenames, recent commit messages, CWD basename) plus prompt tokens on `UserPromptSubmit`. The old substring-trigger mechanism is gone; the ranker treats all tokens as relevance signal, not imperative triggers.
+Keyword overlap is the primary signal. Keywords come from git context (branch name, changed filenames, recent commit messages, CWD basename) plus prompt tokens, on both events. The old substring-trigger mechanism is gone; the ranker treats all tokens as relevance signal, not imperative triggers.
 
 You do NOT need to set ranks manually. Write good frontmatter (`keywords`, `domains`), let `memoryctl inject` handle the rest.
 
 ## What gets remembered
 
-| Type | What | Injected | Limit |
-|------|------|:-:|---|
-| **mistakes** | Bugs, wrong approaches, repeated errors | Yes | 3 global + 3 per project |
-| **strategies** | Proven approaches that worked | Yes | adaptive cap |
-| **feedback** | Behavioral rules (why + how to apply) | Yes | adaptive cap |
-| **knowledge** | Domain facts, API docs, infrastructure | Yes | adaptive cap |
-| **decisions** | Architecture & technology choices | Yes | adaptive cap |
-| **notes** | Long-form knowledge, references | Yes | adaptive cap |
-| **projects** | Project description, stack, known issues | Yes | 1 (current) |
-| **continuity** | "Where we left off" last session | Yes | 1 (current, auto-generated) |
+| Type | What |
+|------|------|
+| **mistakes** | Bugs, wrong approaches, repeated errors |
+| **strategies** | Proven approaches that worked |
+| **feedback** | Behavioral rules (why + how to apply) |
+| **knowledge** | Domain facts, API docs, infrastructure |
+| **decisions** | Architecture & technology choices |
+| **notes** | Long-form knowledge, references |
+| **projects** | Project description, stack, known issues |
+| **continuity** | "Where we left off" last session |
 
-The adaptive pool (feedback/knowledge/strategies/decisions/notes) shares a 12-slot budget that flows toward whichever types are most relevant for the session.
+All types compete in one ranked top-8 — there are no per-type quotas; type balance emerges from relevance. `continuity` and `project` facts are exempt from staleness rotation.
 
 ### Example: a mistake
 
@@ -227,7 +220,7 @@ Run `memoryctl doctor` for a health snapshot: sidecar drift, WAL anomalies, stal
 
 ## Lifecycle
 
-`memoryctl close` down-ranks stale facts in the sidecar (no mutation of native content by default). Archiving (moving files) is done only by explicit `memoryctl gc`.
+`memoryctl close` down-ranks stale facts in the sidecar (no mutation of native content). Staleness counts from the **last injection** (fallback `created`), so facts in active rotation never age out. An explicit archiving command (`memoryctl gc`) is planned but not shipped yet — stale facts simply stop injecting while staying on disk.
 
 | Type | Stale after | Archive-eligible after |
 |------|-------------|----------------------|
@@ -279,13 +272,7 @@ precision_class: ambient  # excludes from precision denominator (use for languag
 
 ## Subagents
 
-Claude Code subagents don't receive SessionStart injection. Include in subagent prompts:
-
-```
-Read ~/.claude/memory/_agent_context.md before starting.
-```
-
-`_agent_context.md` is auto-generated by `memoryctl close` — a compact summary with top mistakes and strategies from the global + project store.
+Claude Code subagents don't receive SessionStart injection, and there is no auto-generated context file (`_agent_context.md` was a v1 artefact). Pass the facts a subagent needs inline in its prompt — the orchestrating session has them from its own `# Memory Context` block.
 
 ## Design decisions
 
@@ -321,7 +308,7 @@ Yes — native memory files are plain markdown in `~/.claude/projects/<slug>/mem
 `inject` < 1s warm on ~200 files (soft deadline; returns best-so-far if exceeded). Shims are ~10 lines of bash — they're not the bottleneck. `close` is the heavier operation (outcome attribution + sidecar reproject) but runs after the session ends.
 
 **What happens if the sidecar is missing or corrupted?**
-`memoryctl` rebuilds it from WAL + native frontmatter scan. During rebuild, the ranker runs in degraded mode (overlap + recency only; ref_count/effectiveness neutral). Injection still happens — degraded, not absent.
+`memoryctl` rebuilds it from WAL + native frontmatter scan. During rebuild, the ranker runs in degraded mode (overlap over native files only; ref_count/recency/effectiveness neutral). Injection still happens — degraded, not absent.
 
 ## Contributing
 

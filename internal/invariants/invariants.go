@@ -57,8 +57,6 @@ func (atomicWriteChecker) Name() string { return "atomic writes for multi-line f
 // only with a one-line justification in the comment.
 var approvedWriteFileSites = map[string]string{
 	"internal/dedup/dedup.go": "incrementRecurrence: read-modify-write under WAL lock; atomicity covered by lock",
-	"internal/profile/decisions_append.go": "AppendDecisionsPressure: atomic-via-rename is implemented inside this function",
-	"internal/evidence/evidence.go": "AppendToFrontmatter implements its own tmp+rename; intermediate WriteFile calls cover non-frontmatter siblings",
 }
 
 func (c atomicWriteChecker) Check(repoRoot string) ([]Violation, error) {
@@ -124,10 +122,7 @@ func (hookFailSafeChecker) Name() string { return "fail-safe on hook errors (set
 // Production hooks (called by Claude Code lifecycle events) MUST
 // stay out of this list.
 var approvedFailFastHooks = map[string]string{
-	"hooks/test-memory-hooks.sh":     "test runner: fail-fast is the test-suite contract",
-	"hooks/test-fixture-snapshot.sh": "test runner: fail-fast is the test-suite contract",
-	"hooks/memory-fts-sync.sh":       "one-shot index sync: idempotent, no Claude Code session impact",
-	"hooks/bench-memory.sh":          "one-shot benchmark: fail-fast surfaces measurement bugs",
+	"hooks/v2/shims_test.sh": "test runner: fail-fast is the test-suite contract, it never runs as a lifecycle hook",
 }
 
 // reWriteFileCall matches the actual call syntax — identifier

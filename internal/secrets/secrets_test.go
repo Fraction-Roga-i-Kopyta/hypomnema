@@ -29,18 +29,25 @@ func TestScan(t *testing.T) {
 
 func TestIgnoreMatch(t *testing.T) {
 	dir := t.TempDir()
+	globalDir := filepath.Join(dir, "memory-global")
+	os.MkdirAll(globalDir, 0o755)
 	os.WriteFile(filepath.Join(dir, ".secretsignore.default"), []byte("seeds/**\n"), 0o644)
 	os.WriteFile(filepath.Join(dir, ".secretsignore"), []byte("# user\ndocs/examples/*\n!docs/examples/real.md\n"), 0o644)
-	if !IgnoreMatch(dir, "seeds/hazard.md") {
+	os.WriteFile(filepath.Join(globalDir, ".secretsignore"), []byte("vault-*.md\n"), 0o644)
+	files := DefaultIgnoreFiles(dir, globalDir)
+	if !IgnoreMatch("seeds/hazard.md", files...) {
 		t.Error("seeds/** should whitelist seeds/hazard.md")
 	}
-	if !IgnoreMatch(dir, "docs/examples/demo.md") {
+	if !IgnoreMatch("docs/examples/demo.md", files...) {
 		t.Error("docs/examples/* should whitelist demo.md")
 	}
-	if IgnoreMatch(dir, "docs/examples/real.md") {
+	if IgnoreMatch("docs/examples/real.md", files...) {
 		t.Error("!docs/examples/real.md should UN-whitelist it")
 	}
-	if IgnoreMatch(dir, "mistakes/x.md") {
+	if IgnoreMatch("mistakes/x.md", files...) {
 		t.Error("unmatched path must not be whitelisted")
+	}
+	if !IgnoreMatch("vault-keys.md", files...) {
+		t.Error("the global store's .secretsignore must whitelist too")
 	}
 }
