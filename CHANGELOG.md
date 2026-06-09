@@ -1,6 +1,14 @@
 # Changelog
 
-## [Unreleased]
+## [2.1.0] — 2026-06-09
+
+Closes the five feedback contours a live-install audit found broken in
+v2.0: the injection payload never reached the model inline, the shared
+sidecar tombstoned other projects' memory, effectiveness was frozen at
+its prior, the secrets gate did not cover v2 stores, and ranking
+frontmatter was silently discarded. Upgrade note: re-run `./install.sh`
+(or set the PreToolUse matcher to `Write|Edit` manually) and expect the
+sidecar to rebuild itself once (`schema_version` 1 → 2).
 
 ### Added
 
@@ -87,6 +95,11 @@
 - **Session ids are sanitised before filesystem use**
   (`pathutil.SafeFileName`) — a hostile `session_id` can no longer
   escape `.runtime/`.
+- **v2 cutover completion** (landed on main right after the v2.0.0 tag,
+  first changelogged here): the orphaned v1 `MEMORY.md` the harness kept
+  injecting is regenerated from native, `doctor`/`self-profile`/`dedup`
+  read the native stores instead of the deleted v1 tree, and migration
+  normalises plural `type:` values.
 
 ## [2.0.0] — 2026-05-29
 
