@@ -11,14 +11,18 @@ import (
 
 // MemFile is one native memory file: minimal frontmatter + body + identity.
 type MemFile struct {
-	Slug        string // path relative to its memory dir, e.g. "feedback_x.md"
-	Path        string // absolute path
-	Name        string // frontmatter: name
-	Description string // frontmatter: description
-	Type        string // frontmatter: type — native bucket (non-exhaustive); fine-grained type lives in the sidecar
-	ContentSHA  string // sha256 of full file bytes — rename/edit detection
-	Body        string // markdown body, frontmatter stripped
-	Project     string // owning store: cwd slug or GlobalProject — set by Collect, not parsed from the file
+	Slug        string   // path relative to its memory dir, e.g. "feedback_x.md"
+	Path        string   // absolute path
+	Name        string   // frontmatter: name
+	Description string   // frontmatter: description
+	Type        string   // frontmatter: type — native bucket (non-exhaustive); fine-grained type lives in the sidecar
+	Created     string   // frontmatter: created (YYYY-MM-DD) — author's recency claim
+	Status      string   // frontmatter: status — only "pinned" is honoured; lifecycle states are sidecar-owned
+	Keywords    []string // frontmatter: keywords — explicit relevance signal
+	Domains     []string // frontmatter: domains — domain filter tags
+	ContentSHA  string   // sha256 of full file bytes — rename/edit detection
+	Body        string   // markdown body, frontmatter stripped
+	Project     string   // owning store: cwd slug or GlobalProject — set by Collect, not parsed from the file
 }
 
 // List enumerates *.md files directly under dir (non-recursive) and parses
@@ -60,9 +64,30 @@ func parseFile(path string) (MemFile, error) {
 		Name:        fm["name"],
 		Description: fm["description"],
 		Type:        fm["type"],
+		Created:     fm["created"],
+		Status:      fm["status"],
+		Keywords:    splitList(fm["keywords"]),
+		Domains:     splitList(fm["domains"]),
 		ContentSHA:  hex.EncodeToString(sum[:]),
 		Body:        body,
 	}, nil
+}
+
+// splitList parses a frontmatter list value: inline "[a, b]" or the
+// comma-joined form splitFrontmatter accumulates for block-style lists.
+// A bare scalar yields a single-element list.
+func splitList(v string) []string {
+	v = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(v), "["), "]"))
+	if v == "" {
+		return nil
+	}
+	var out []string
+	for _, item := range strings.Split(v, ",") {
+		if item = strings.Trim(strings.TrimSpace(item), `"'`); item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 // splitFrontmatter parses a leading `---`-fenced YAML-ish block into a flat
@@ -87,15 +112,33 @@ func splitFrontmatter(s string) (map[string]string, string) {
 	if end == -1 {
 		return fm, strings.TrimSpace(s)
 	}
+	listKey := "" // key whose block-style list items we are accumulating
 	for _, ln := range lines[1:end] {
 		ln = strings.TrimRight(ln, "\r")
+		// Block-style list item under the pending key: collapse into the
+		// same comma-joined form as an inline [a, b] list.
+		if item, isItem := strings.CutPrefix(strings.TrimSpace(ln), "- "); isItem && listKey != "" {
+			item = strings.Trim(strings.TrimSpace(item), `"'`)
+			if fm[listKey] == "" {
+				fm[listKey] = item
+			} else {
+				fm[listKey] += ", " + item
+			}
+			continue
+		}
 		idx := strings.IndexByte(ln, ':')
 		if idx <= 0 {
+			listKey = ""
 			continue
 		}
 		key := strings.TrimSpace(ln[:idx])
 		val := strings.Trim(strings.TrimSpace(ln[idx+1:]), `"'`)
 		fm[key] = val
+		if val == "" {
+			listKey = key
+		} else {
+			listKey = ""
+		}
 	}
 	return fm, strings.TrimSpace(strings.Join(lines[end+1:], "\n"))
 }

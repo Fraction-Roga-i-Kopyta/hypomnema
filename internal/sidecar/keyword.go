@@ -19,7 +19,10 @@ func (s *Store) PopulateKeywords(files []native.MemFile) error {
 		}
 	}
 	for _, f := range files {
-		text := f.Name + " " + f.Description + " " + f.Body
+		// Frontmatter keywords/domains are explicit relevance signal — they
+		// often name concepts the body never spells out.
+		text := f.Name + " " + f.Description + " " +
+			strings.Join(f.Keywords, " ") + " " + strings.Join(f.Domains, " ") + " " + f.Body
 		freq := map[string]int{}
 		for _, tok := range tokenize.Tokenize(text, nil) {
 			freq[tok]++

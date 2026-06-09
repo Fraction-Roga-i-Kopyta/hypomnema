@@ -332,3 +332,36 @@ func TestReproject_EffectivenessFromTriggerEvents(t *testing.T) {
 		t.Errorf("n.md effectiveness = %v, want 0.2 (3 silent sessions)", r.Effectiveness)
 	}
 }
+
+// Frontmatter created/status finally drive the projection: created is the
+// author's recency claim (WAL-earliest only a fallback), and pinned is
+// honoured instead of being hard-reset to active on every close.
+func TestReproject_FrontmatterCreatedAndPinned(t *testing.T) {
+	dir := t.TempDir()
+	walPath := filepath.Join(dir, ".wal")
+	if err := os.WriteFile(walPath, []byte("2026-04-01|inject|pin.md|s1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(filepath.Join(dir, ".sidecar.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	files := []native.MemFile{
+		{Slug: "pin.md", ContentSHA: "p", Created: "2026-06-01", Status: "pinned"},
+		{Slug: "plain.md", ContentSHA: "q"},
+	}
+	if err := Reproject(s, files, walPath, nil); err != nil {
+		t.Fatal(err)
+	}
+	pin, _, _ := s.Get("pin.md")
+	if pin.Created != "2026-06-01" {
+		t.Errorf("frontmatter created must win over WAL-earliest, got %q", pin.Created)
+	}
+	if pin.Status != "pinned" {
+		t.Errorf("frontmatter pinned must survive reproject, got %q", pin.Status)
+	}
+	if plain, _, _ := s.Get("plain.md"); plain.Status != "active" {
+		t.Errorf("file without status stays active, got %q", plain.Status)
+	}
+}
