@@ -32,6 +32,9 @@ jobs:
       - name: Test
         run: go test -race ./...
 
+      - name: Invariants audit
+        run: go run ./cmd/memoryctl audit invariants
+
   shellcheck:
     runs-on: ubuntu-latest
     steps:
