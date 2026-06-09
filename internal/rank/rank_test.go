@@ -174,28 +174,35 @@ func slugs(s []Scored) []string {
 	return out
 }
 
-func TestRankIncludeStale(t *testing.T) {
+func TestRank_IncludeStale(t *testing.T) {
 	cands := []Candidate{
 		{Slug: "live.md", Status: "active", Overlap: 1},
 		{Slug: "old.md", Status: "stale", Overlap: 5},
 		{Slug: "gone.md", Status: "deleted", Overlap: 9},
+		{Slug: "pin.md", Status: "pinned", Overlap: 2},
 	}
 	q := Query{Today: "2026-06-10"}
 
 	got := Rank(q, cands, 0)
-	if len(got) != 1 || got[0].Slug != "live.md" {
+	if len(got) != 2 {
+		t.Fatalf("default rank must exclude stale/deleted, want active+pinned (2), got %+v", got)
+	}
+	if has(got, "old.md") || has(got, "gone.md") {
 		t.Fatalf("default rank must exclude stale/deleted, got %+v", got)
 	}
 
 	q.IncludeStale = true
 	got = Rank(q, cands, 0)
-	if len(got) != 2 {
-		t.Fatalf("IncludeStale: want active+stale (2), got %+v", got)
+	if len(got) != 3 {
+		t.Fatalf("IncludeStale: want active+pinned+stale (3), got %+v", got)
 	}
 	for _, sc := range got {
 		if sc.Slug == "gone.md" {
 			t.Fatal("deleted must never rank, even with IncludeStale")
 		}
+	}
+	if got[0].Slug != "old.md" {
+		t.Errorf("IncludeStale: higher-overlap stale fact must rank first, got %+v", got)
 	}
 }
 
