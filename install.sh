@@ -231,7 +231,7 @@ register_hook() {
 
 register_hook SessionStart     ""      "$HOME/.claude/hooks/v2/session-start.sh"      15 "SessionStart (hypomnema v2)"
 register_hook UserPromptSubmit ""      "$HOME/.claude/hooks/v2/user-prompt-submit.sh" 10 "UserPromptSubmit (hypomnema v2)"
-register_hook PreToolUse       "Write" "$HOME/.claude/hooks/v2/pre-tool-write.sh"     10 "PreToolUse secrets gate (hypomnema v2)"
+register_hook PreToolUse       "Write|Edit" "$HOME/.claude/hooks/v2/pre-tool-write.sh"     10 "PreToolUse secrets gate (hypomnema v2)"
 register_hook Stop             ""      "$HOME/.claude/hooks/v2/session-stop.sh"       10 "Stop (hypomnema v2)"
 
 # Upgrade hint: existing v1 store
