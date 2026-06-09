@@ -289,3 +289,46 @@ func TestPopulateKeywords_PreservesOtherSlugs(t *testing.T) {
 		t.Errorf("a.md keyword signal wiped by a later populate of other files: %v", overlap)
 	}
 }
+
+// Effectiveness must learn from the trigger events close already writes:
+// one observation per (slug, session), useful wins over silent within a
+// session, retro-silents count, and legacy outcome-* events still add in.
+func TestReproject_EffectivenessFromTriggerEvents(t *testing.T) {
+	dir := t.TempDir()
+	walPath := filepath.Join(dir, ".wal")
+	wal := "" +
+		"2026-04-01|inject|m.md|s1\n" +
+		"2026-04-01|trigger-silent|m.md|s1\n" + // flips to useful below
+		"2026-04-01|trigger-useful|m.md|s1\n" +
+		"2026-04-02|inject|m.md|s2\n" +
+		"2026-04-02|trigger-silent|m.md|s2\n" +
+		"2026-04-02|outcome-positive|m.md|s2\n" + // legacy signal still counts
+		"2026-04-03|inject|n.md|s1\n" +
+		"2026-04-03|trigger-silent|n.md|s1\n" +
+		"2026-04-04|trigger-silent|n.md|s2\n" +
+		"2026-04-05|trigger-silent-retro|n.md|s3\n"
+	if err := os.WriteFile(walPath, []byte(wal), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(filepath.Join(dir, ".sidecar.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	files := []native.MemFile{
+		{Slug: "m.md", ContentSHA: "m"},
+		{Slug: "n.md", ContentSHA: "n"},
+	}
+	if err := Reproject(s, files, walPath, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// m: useful s1 + silent s2 + legacy positive → (2+1)/(2+1+2) = 0.6
+	if r, _, _ := s.Get("m.md"); r.Effectiveness != 0.6 {
+		t.Errorf("m.md effectiveness = %v, want 0.6 (1 useful session + 1 legacy positive vs 1 silent session)", r.Effectiveness)
+	}
+	// n: three silent sessions, never useful → (0+1)/(0+3+2) = 0.2
+	if r, _, _ := s.Get("n.md"); r.Effectiveness != 0.2 {
+		t.Errorf("n.md effectiveness = %v, want 0.2 (3 silent sessions)", r.Effectiveness)
+	}
+}

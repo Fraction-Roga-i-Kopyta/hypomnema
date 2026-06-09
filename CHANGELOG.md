@@ -21,6 +21,19 @@
   longer truncates the whole table (which wiped other projects'
   relevance signal); it clears only the supplied files' rows, and
   tombstoned rows drop their keywords.
+- **Effectiveness actually learns again.** The Bayesian effectiveness
+  read only `outcome-positive/negative` WAL events, which nothing in v2
+  writes — every v2-born fact sat at the neutral 0.5 forever and the
+  documented "effectiveness feeds back into ranking" loop was open.
+  `Reproject` now also folds in the `trigger-useful`/`trigger-silent`
+  (+`trigger-silent-retro`) events `close` already writes, deduplicated
+  to one observation per (slug, session) with useful winning over silent
+  (close fires every turn). Legacy outcome events still count.
+- **Staleness follows use, not file age.** `MarkStale` measures from
+  `last_injected` (fallback `created`), so a fact in active rotation no
+  longer goes stale purely by calendar — previously even the
+  highest-effectiveness feedback rules aged out while unused records
+  survived.
 
 - **Injection now fits the harness inline limit.** The rendered
   `additionalContext` is capped at 8KB total (per-body cap unchanged at
