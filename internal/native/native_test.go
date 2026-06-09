@@ -143,3 +143,25 @@ func TestParse_RankingFrontmatterFields(t *testing.T) {
 		t.Errorf("Domains = %v (block-style list), want [backend devops]", f.Domains)
 	}
 }
+
+func TestParse_EvidenceList(t *testing.T) {
+	dir := t.TempDir()
+	content := "---\n" +
+		"type: feedback\n" +
+		"name: real-db\n" +
+		"evidence:\n" +
+		"  - \"do not mock the database\"\n" +
+		"  - \"real database in tests\"\n" +
+		"---\nrule body\n"
+	if err := os.WriteFile(filepath.Join(dir, "real-db.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	files, err := List(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 || len(files[0].Evidence) != 2 ||
+		files[0].Evidence[0] != "do not mock the database" {
+		t.Fatalf("Evidence not parsed: %+v", files)
+	}
+}

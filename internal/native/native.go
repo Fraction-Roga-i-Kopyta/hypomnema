@@ -20,6 +20,7 @@ type MemFile struct {
 	Status      string   // frontmatter: status — only "pinned" is honoured; lifecycle states are sidecar-owned
 	Keywords    []string // frontmatter: keywords — explicit relevance signal
 	Domains     []string // frontmatter: domains — domain filter tags
+	Evidence    []string // frontmatter: evidence — phrases that mark the rule as applied
 	ContentSHA  string   // sha256 of full file bytes — rename/edit detection
 	Body        string   // markdown body, frontmatter stripped
 	Project     string   // owning store: cwd slug or GlobalProject — set by Collect, not parsed from the file
@@ -68,6 +69,7 @@ func parseFile(path string) (MemFile, error) {
 		Status:      fm["status"],
 		Keywords:    splitList(fm["keywords"]),
 		Domains:     splitList(fm["domains"]),
+		Evidence:    splitList(fm["evidence"]),
 		ContentSHA:  hex.EncodeToString(sum[:]),
 		Body:        body,
 	}, nil

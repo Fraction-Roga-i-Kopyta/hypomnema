@@ -5,14 +5,26 @@ package closer
 
 import "strings"
 
-// Classify splits injected slugs into useful (cited in the assistant text) and
-// silent (not cited). A slug counts as cited if its base name (slug minus
-// ".md") or its frontmatter name appears in the text, case-insensitively.
-func Classify(injected []string, names map[string]string, text string) (useful, silent []string) {
+// Classify splits injected slugs into useful (applied in the assistant text)
+// and silent. A slug counts as useful when any of its frontmatter `evidence:`
+// phrases appears in the text, OR its base name (slug minus ".md") or
+// frontmatter name does — all case-insensitive substring matches. Evidence
+// widens the signal (it catches a rule being applied without being named);
+// it does not replace citation.
+func Classify(injected []string, names map[string]string, evidence map[string][]string, text string) (useful, silent []string) {
 	lower := strings.ToLower(text)
 	for _, slug := range injected {
-		base := strings.ToLower(strings.TrimSuffix(slug, ".md"))
-		cited := base != "" && strings.Contains(lower, base)
+		cited := false
+		for _, phrase := range evidence[slug] {
+			if p := strings.ToLower(strings.TrimSpace(phrase)); p != "" && strings.Contains(lower, p) {
+				cited = true
+				break
+			}
+		}
+		if !cited {
+			base := strings.ToLower(strings.TrimSuffix(slug, ".md"))
+			cited = base != "" && strings.Contains(lower, base)
+		}
 		if !cited {
 			if n := strings.ToLower(strings.TrimSpace(names[slug])); n != "" && strings.Contains(lower, n) {
 				cited = true

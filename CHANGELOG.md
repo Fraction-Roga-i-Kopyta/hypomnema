@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`evidence:` classification is back.** The close-path classifier
+  marked a memory useful only when the assistant literally wrote its
+  slug or name — the documented `evidence:` phrases (the whole point of
+  the feedback type) were ignored since the v2 cutover. Frontmatter
+  `evidence:` lists are parsed again and any phrase match counts as
+  applied; slug/name citation still counts too.
+- **Real session metrics.** The `session-metrics` WAL event carried
+  hardcoded zeros; it now reports actual `tool_calls`, `error_count`
+  (is_error tool results) and `duration` derived from the transcript
+  timestamps.
+
 ### Fixed
 
 - **Cross-project tombstoning.** The sidecar DB is shared across all
