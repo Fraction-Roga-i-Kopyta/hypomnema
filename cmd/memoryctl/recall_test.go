@@ -142,9 +142,18 @@ func TestRecallSessionIDTraversal(t *testing.T) {
 	if len(entries) == 0 {
 		t.Error("sanitised session list missing from .runtime")
 	}
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), "injected-") || !strings.HasSuffix(e.Name(), ".list") {
+			t.Errorf("unexpected file in .runtime: %s", e.Name())
+		}
+	}
 }
 
-func TestRecallHostileQueryKeepsWALValid(t *testing.T) {
+// Note: a pipe inside a query word is defanged by tokenize (split on
+// non-alphanumeric) long before any WAL write — the real WAL guard is slug
+// sanitisation. This test pins the structural invariant: after several
+// recall runs the WAL still passes `wal validate`.
+func TestRecallWALStaysValidAcrossRuns(t *testing.T) {
 	env, _, _ := recallFixture(t)
 	run(t, env, "recall", "docker|cache")
 	run(t, env, "recall", "docker", "cache")
@@ -192,6 +201,9 @@ func TestRecallGarbageToday(t *testing.T) {
 	if code != 0 {
 		t.Errorf("garbage HYPOMNEMA_TODAY must not crash recall, exit=%d", code)
 	}
+	// Parity with inject: today() passes $HYPOMNEMA_TODAY into the WAL date
+	// column verbatim, so a garbage value produces a row `wal validate`
+	// would reject. Guarding it is a design change tracked outside recall.
 }
 
 func TestRecallStaleMarkerAndCliFallback(t *testing.T) {
