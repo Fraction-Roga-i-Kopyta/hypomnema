@@ -91,6 +91,13 @@ func persistInjected(already, slugs []string, sessionID string) {
 		line := fmt.Sprintf("%s|inject|%s|%s", day, wal.SanitizeField(slug), sid)
 		wal.Append(memoryDir(), line, "")
 	}
+	appendSessionList(already, slugs, sessionID)
+}
+
+// appendSessionList unions slugs into the session's injected list. Shared by
+// push (inject) and pull (recall) so push dedup and close classification see
+// both delivery paths.
+func appendSessionList(already, slugs []string, sessionID string) {
 	runtimeDir := filepath.Join(memoryDir(), ".runtime")
 	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
 		return
