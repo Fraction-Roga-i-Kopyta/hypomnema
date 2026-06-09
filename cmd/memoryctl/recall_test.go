@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/sidecar"
 )
 
 // recallFixture builds a CLAUDE_HOME with two project facts and returns
@@ -89,5 +92,67 @@ func TestRecallEmptyQuery(t *testing.T) {
 	}
 	if !strings.Contains(errOut, "empty query") {
 		t.Errorf("want usage hint on stderr, got %q", errOut)
+	}
+}
+
+func TestRecallKFlag(t *testing.T) {
+	env, _, _ := recallFixture(t)
+	for _, bad := range []string{"0", "-1", "abc", "3x"} {
+		_, _, code := run(t, env, "recall", "--k", bad, "docker")
+		if code != 2 {
+			t.Errorf("--k %q must exit 2, got %d", bad, code)
+		}
+	}
+	out, _, code := run(t, env, "recall", "--k", "1", "docker", "cache")
+	if code != 0 {
+		t.Fatalf("--k 1 exit=%d", code)
+	}
+	if strings.Contains(out, "Also relevant:") {
+		t.Errorf("--k 1 must suppress the index section, got:\n%s", out)
+	}
+}
+
+func TestRecallStaleMarkerAndCliFallback(t *testing.T) {
+	env, memDir, _ := recallFixture(t)
+	// Age docker.md into stale: an old inject, then sidecar rebuild + decay.
+	if err := os.WriteFile(filepath.Join(memDir, ".wal"),
+		[]byte("2025-01-01|inject|docker.md|s0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := sidecar.Open(filepath.Join(memDir, ".sidecar.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// claudeHome = CLAUDE_HOME = home/.claude; filepath.Dir(memDir) = home/.claude
+	claudeHome := filepath.Dir(memDir)
+	files := native.Collect(claudeHome, "/tmp/proj")
+	if err := sidecar.Reproject(s, files, filepath.Join(memDir, ".wal"), native.Scope("/tmp/proj")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.MarkStale("2026-06-10"); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	// No session env at all → WAL sid falls back to "cli", list untouched.
+	env["HYPOMNEMA_SESSION_ID"] = ""
+	out, errOut, code := run(t, env, "recall", "docker", "cache")
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, errOut)
+	}
+	if !strings.Contains(out, "[stale]") {
+		t.Errorf("stale fact must carry the [stale] marker, got:\n%s", out)
+	}
+	walB, _ := os.ReadFile(filepath.Join(memDir, ".wal"))
+	if !strings.Contains(string(walB), "|recall|docker.md|cli") {
+		t.Errorf("want cli-fallback recall event, got:\n%s", walB)
+	}
+	if _, err := os.Stat(filepath.Join(memDir, ".runtime")); err == nil {
+		entries, _ := os.ReadDir(filepath.Join(memDir, ".runtime"))
+		for _, e := range entries {
+			if strings.HasPrefix(e.Name(), "injected-") {
+				t.Errorf("no-session recall must not write a session list, found %s", e.Name())
+			}
+		}
 	}
 }
