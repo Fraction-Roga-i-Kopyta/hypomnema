@@ -76,6 +76,18 @@ func Reproject(s *Store, files []native.MemFile, walPath string, scope []string)
 		}
 		pos, neg := a.outcomes()
 		eff := float64(pos+1) / float64(pos+neg+2)
+		// Frontmatter created is the author's recency claim; WAL-earliest is
+		// only the fallback for files that never declared one.
+		created := f.Created
+		if created == "" {
+			created = a.created
+		}
+		// Only "pinned" is honoured from frontmatter (it exempts the row from
+		// decay); every other lifecycle state is sidecar-owned.
+		status := "active"
+		if f.Status == "pinned" {
+			status = "pinned"
+		}
 		rec := Record{
 			Slug:          f.Slug,
 			ContentSHA:    f.ContentSHA,
@@ -83,10 +95,10 @@ func Reproject(s *Store, files []native.MemFile, walPath string, scope []string)
 			Name:          f.Name,
 			Description:   f.Description,
 			Project:       f.Project,
-			Created:       a.created,
+			Created:       created,
 			LastInjected:  a.lastInject,
 			RefCount:      a.injects,
-			Status:        "active",
+			Status:        status,
 			Effectiveness: eff,
 		}
 		if err := s.Upsert(rec); err != nil {

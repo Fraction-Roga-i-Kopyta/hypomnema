@@ -306,3 +306,53 @@ func TestRun_ProjectFactOutranksGlobalOnTie(t *testing.T) {
 		t.Errorf("project-local fact must outrank the global tie, got %v", res.Injected)
 	}
 }
+
+// Frontmatter keywords are a first-class relevance signal: a fact whose
+// keywords match the prompt outranks one that matches nothing, even when
+// the keyword never appears in the body.
+func TestRun_FrontmatterKeywordsDriveOverlap(t *testing.T) {
+	memDir, projDir, home := setup(t)
+	// Slug order alone would put a-pg.md first.
+	os.WriteFile(filepath.Join(projDir, "a-pg.md"),
+		[]byte("---\nname: pg\ntype: knowledge\n---\npostgres planner notes\n"), 0o644)
+	os.WriteFile(filepath.Join(projDir, "z-kube.md"),
+		[]byte("---\nname: kube\ntype: knowledge\nkeywords: [kubernetes, probes]\n---\nprobe tuning\n"), 0o644)
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
+
+	res, err := Run(Input{
+		Event: "SessionStart", SessionID: "s1", CWD: "/tmp/proj", Prompt: "kubernetes",
+		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir,
+		Today: "2026-05-29", MaxK: 8,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res.Injected) == 0 || res.Injected[0] != "z-kube.md" {
+		t.Errorf("keyword-matching fact must rank first, got %v", res.Injected)
+	}
+}
+
+// The degraded (sidecar-less) path must honour frontmatter keywords too.
+func TestRun_DegradedHonoursFrontmatterKeywords(t *testing.T) {
+	memDir, projDir, home := setup(t)
+	os.WriteFile(filepath.Join(projDir, "a-pg.md"),
+		[]byte("---\nname: pg\ntype: knowledge\n---\npostgres planner notes\n"), 0o644)
+	os.WriteFile(filepath.Join(projDir, "z-kube.md"),
+		[]byte("---\nname: kube\ntype: knowledge\nkeywords: [kubernetes]\n---\nprobe tuning\n"), 0o644)
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
+	// Unremovable non-empty dir at the sidecar path forces the degraded rank.
+	if err := os.MkdirAll(filepath.Join(memDir, ".sidecar.db", "x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Run(Input{
+		Event: "SessionStart", SessionID: "s1", CWD: "/tmp/proj", Prompt: "kubernetes",
+		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir,
+		Today: "2026-05-29", MaxK: 8,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res.Injected) == 0 || res.Injected[0] != "z-kube.md" {
+		t.Errorf("degraded rank must use frontmatter keywords, got %v", res.Injected)
+	}
+}

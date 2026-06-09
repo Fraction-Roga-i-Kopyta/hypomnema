@@ -105,3 +105,41 @@ func TestList_UnterminatedFrontmatterIsSkippedNotFatal(t *testing.T) {
 		t.Errorf("bad.md Body should contain raw content, got %q", bad.Body)
 	}
 }
+
+func TestParse_RankingFrontmatterFields(t *testing.T) {
+	dir := t.TempDir()
+	content := "---\n" +
+		"type: mistake\n" +
+		"name: kube-probe\n" +
+		"description: probes\n" +
+		"created: 2026-06-01\n" +
+		"status: pinned\n" +
+		"keywords: [kubernetes, healthcheck, probe]\n" +
+		"domains:\n" +
+		"  - backend\n" +
+		"  - devops\n" +
+		"---\nbody text\n"
+	if err := os.WriteFile(filepath.Join(dir, "kube.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	files, err := List(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("want 1 file, got %d", len(files))
+	}
+	f := files[0]
+	if f.Created != "2026-06-01" {
+		t.Errorf("Created = %q, want 2026-06-01", f.Created)
+	}
+	if f.Status != "pinned" {
+		t.Errorf("Status = %q, want pinned", f.Status)
+	}
+	if len(f.Keywords) != 3 || f.Keywords[0] != "kubernetes" || f.Keywords[2] != "probe" {
+		t.Errorf("Keywords = %v, want [kubernetes healthcheck probe]", f.Keywords)
+	}
+	if len(f.Domains) != 2 || f.Domains[0] != "backend" || f.Domains[1] != "devops" {
+		t.Errorf("Domains = %v (block-style list), want [backend devops]", f.Domains)
+	}
+}

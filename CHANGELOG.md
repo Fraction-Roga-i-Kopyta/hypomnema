@@ -34,6 +34,16 @@
   longer goes stale purely by calendar — previously even the
   highest-effectiveness feedback rules aged out while unused records
   survived.
+- **Ranking frontmatter is parsed again.** The native adapter read only
+  `name`/`description`/`type`, silently discarding the documented
+  `keywords:`, `domains:`, `created:` and `status:` fields — authors
+  were writing the "primary ranking signal" into the void and
+  `status: pinned` was unreachable (every close hard-reset rows to
+  active). Keywords/domains (inline and block-style lists) now feed the
+  keyword table on both the sidecar and degraded paths, frontmatter
+  `created` wins over WAL-earliest as the recency claim (a brand-new
+  file finally gets fresh recency instead of zero), and `pinned`
+  survives reproject and exempts the row from decay.
 - **Secrets gate covers what v2 actually stores.** `guard` gated only
   the legacy `~/.claude/memory` tree, while v2 content lives in native
   per-project stores and `~/.claude/memory-global` — the documented

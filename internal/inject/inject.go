@@ -154,7 +154,9 @@ func degradedCandidates(files []native.MemFile, terms []string) []rank.Candidate
 	for _, f := range files {
 		seen := map[string]bool{}
 		overlap := 0
-		for _, tok := range tokenize.Tokenize(f.Name+" "+f.Description+" "+f.Body, nil) {
+		text := f.Name + " " + f.Description + " " +
+			strings.Join(f.Keywords, " ") + " " + strings.Join(f.Domains, " ") + " " + f.Body
+		for _, tok := range tokenize.Tokenize(text, nil) {
 			if want[tok] && !seen[tok] {
 				seen[tok] = true
 				overlap++
