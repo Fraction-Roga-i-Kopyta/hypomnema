@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/inject"
@@ -29,10 +30,12 @@ func runRecall(args []string) {
 				fmt.Fprintln(os.Stderr, "memoryctl recall: --k needs a value")
 				os.Exit(2)
 			}
-			if _, err := fmt.Sscanf(args[i], "%d", &k); err != nil || k < 1 {
+			n, err := strconv.Atoi(args[i])
+			if err != nil || n < 1 {
 				fmt.Fprintf(os.Stderr, "memoryctl recall: bad --k %q\n", args[i])
 				os.Exit(2)
 			}
+			k = n
 		case "-h", "--help":
 			fmt.Print(usage)
 			return
@@ -115,6 +118,7 @@ func recordRecall(slug string) {
 	// in the same session is one delivery, not two ref_count increments.
 	if err := wal.AppendStrict(memoryDir(), line, line); err != nil {
 		fmt.Fprintf(os.Stderr, "memoryctl recall: wal append failed: %v\n", err)
+		return
 	}
 	if sid == "" {
 		return // no session — nothing to dedup against, no close to classify
@@ -146,8 +150,12 @@ func renderRecall(top rank.Scored, rest []rank.Scored, bySlug map[string]native.
 	b.WriteString("\nAlso relevant:\n")
 	for i, sc := range rest {
 		rf := bySlug[sc.Slug]
-		fmt.Fprintf(&b, "%d. %s (%.2f)%s — %s\n   %s\n",
-			i+2, sc.Slug, sc.Score, staleMark(sc.Status), rf.Description, rf.Path)
+		desc := ""
+		if rf.Description != "" {
+			desc = " — " + rf.Description
+		}
+		fmt.Fprintf(&b, "%d. %s (%.2f)%s%s\n   %s\n",
+			i+2, sc.Slug, sc.Score, staleMark(sc.Status), desc, rf.Path)
 	}
 	return b.String()
 }
