@@ -101,6 +101,13 @@ Keyword overlap is the primary signal. Keywords come from git context (branch na
 
 You do NOT need to set ranks manually. Write good frontmatter (`keywords`, `domains`), let `memoryctl inject` handle the rest.
 
+Injection is push: the ranker sees the user's prompt, not what the agent
+hits mid-task. `memoryctl recall` is the pull counterpart — the agent (or
+you) queries the same ranker explicitly and gets the best fact's body plus
+an index of runner-ups. A recalled fact counts as delivered: it joins the
+session's injected set (the close hook classifies it useful/silent), bumps
+ref_count/recency, and — if it had gone stale — comes back to life.
+
 ## What gets remembered
 
 | Type | What |
@@ -217,6 +224,14 @@ The shims activate on next session start.
 `memoryctl close` regenerates `self-profile.md` on every close (Stop fires per turn) from WAL events. Five sections: meta-signals (total sessions, outcome-positive/negative counts, trigger-useful vs trigger-silent), intuition signal (silent-applied/trigger-useful ratio), strengths (top strategies by success_count), weaknesses (top mistakes by recurrence), and calibration (domains by error rate). Never edit manually — it's a pure function of WAL.
 
 Run `memoryctl doctor` for a health snapshot: sidecar drift, WAL anomalies, stale facts due for down-rank, global store coverage.
+
+## Pull retrieval
+
+```
+memoryctl recall <query words...> [--k N]
+```
+
+Pull-side retrieval: rank current project + global memory against an ad-hoc query; print the best fact's body (2.5KB cap) plus an index of runner-ups with file paths (default 6 results total). Writes a `recall` WAL event for the delivered fact and unions it into the session's injected list. Includes stale facts (marked `[stale]`) — recalling one revives it.
 
 ## Lifecycle
 
