@@ -102,9 +102,8 @@ Keyword overlap is the primary signal. Keywords come from git context (branch na
 You do NOT need to set ranks manually. Write good frontmatter (`keywords`, `domains`), let `memoryctl inject` handle the rest.
 
 Injection is push: the ranker sees the user's prompt, not what the agent
-hits mid-task. `memoryctl recall` is the pull counterpart — the agent (or
-you) queries the same ranker explicitly and gets the best fact's body plus
-an index of runner-ups. A recalled fact counts as delivered: it joins the
+hits mid-task. `memoryctl recall` is the pull counterpart — an explicit query
+against the same ranker. A recalled fact counts as delivered: it joins the
 session's injected set (the close hook classifies it useful/silent), bumps
 ref_count/recency, and — if it had gone stale — comes back to life.
 

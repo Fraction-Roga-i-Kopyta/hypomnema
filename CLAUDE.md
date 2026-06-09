@@ -259,11 +259,13 @@ Push injection ranks against the user's prompt — it cannot see what you hit
 mid-task. When you encounter an unfamiliar error, an unfamiliar domain, or a
 decision that smells previously-solved, pull first:
 
-    memoryctl recall "<3-6 query words>"
+```
+memoryctl recall "<3-6 query words>"
+```
 
 The top match arrives with its body (2.5KB cap); runner-ups come as an index
 with file paths — Read the ones that look relevant. Stale facts are included
-and marked `[stale]`; recalling one revives it. The delivered fact joins the
+— unlike push injection — and marked `[stale]`; recalling one revives it. The delivered fact joins the
 session's injected set, so the close hook classifies it useful/silent like
 any injected memory.
 
