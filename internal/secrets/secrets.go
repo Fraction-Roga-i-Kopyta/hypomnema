@@ -41,15 +41,29 @@ func Scan(content string) []string {
 	return hits
 }
 
-// IgnoreMatch reports whether relPath (relative to memoryDir) is whitelisted
-// by .secretsignore.default or .secretsignore.
-func IgnoreMatch(memoryDir, relPath string) bool {
-	for _, name := range []string{".secretsignore.default", ".secretsignore"} {
-		if matchIgnoreFile(filepath.Join(memoryDir, name), relPath) {
+// IgnoreMatch reports whether relPath (relative to its memory store) is
+// whitelisted by any of the given .secretsignore files. Files are checked in
+// order; within a file the last matching pattern wins and `!` negates.
+// Missing files simply don't match. Callers pass the legacy runtime tree's
+// .secretsignore.default/.secretsignore plus the global store's
+// .secretsignore (the documented user-facing location).
+func IgnoreMatch(relPath string, ignoreFiles ...string) bool {
+	for _, p := range ignoreFiles {
+		if matchIgnoreFile(p, relPath) {
 			return true
 		}
 	}
 	return false
+}
+
+// DefaultIgnoreFiles returns the standard .secretsignore lookup chain for a
+// legacy runtime dir + global store pair.
+func DefaultIgnoreFiles(memoryDir, globalDir string) []string {
+	return []string{
+		filepath.Join(memoryDir, ".secretsignore.default"),
+		filepath.Join(memoryDir, ".secretsignore"),
+		filepath.Join(globalDir, ".secretsignore"),
+	}
 }
 
 func matchIgnoreFile(path, rel string) bool {

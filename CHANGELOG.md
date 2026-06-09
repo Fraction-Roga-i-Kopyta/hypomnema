@@ -34,6 +34,14 @@
   longer goes stale purely by calendar — previously even the
   highest-effectiveness feedback rules aged out while unused records
   survived.
+- **Secrets gate covers what v2 actually stores.** `guard` gated only
+  the legacy `~/.claude/memory` tree, while v2 content lives in native
+  per-project stores and `~/.claude/memory-global` — the documented
+  protection did not apply to a single v2 memory file. The gate now
+  covers all three store kinds, the hook matcher registers for
+  `Write|Edit` (an Edit could previously slip a credential past it),
+  and `.secretsignore` is honoured at its documented location in the
+  global store (legacy locations still work).
 
 - **Injection now fits the harness inline limit.** The rendered
   `additionalContext` is capped at 8KB total (per-body cap unchanged at
