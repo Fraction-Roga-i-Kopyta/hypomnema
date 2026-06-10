@@ -1,5 +1,43 @@
 # Changelog
 
+## [2.2.0] — 2026-06-10
+
+Adds the pull side of retrieval. Injection is push-only — the ranker sees
+the user's prompt, not what the agent hits mid-task. `memoryctl recall`
+closes that gap: an explicit query against the same ranker, wired into the
+same effectiveness loop. No migration needed; redeploy the binary to get
+the new verb.
+
+### Added
+
+- **`memoryctl recall <query words...> [--k N]` — pull retrieval.** Ranks
+  the current project + global memory against an ad-hoc query and prints
+  the best fact's body (2.5KB cap, the injection budget) plus an index of
+  runner-ups with file paths (default 6 results). Only the rendered top-1
+  counts as delivered: it emits a `recall` WAL event (whole-line dedup —
+  same-day repeats are one delivery) and joins the session's injected
+  list, so push dedup and close classification cover the pull path too.
+  Session id comes from `$HYPOMNEMA_SESSION_ID`, then
+  `$CLAUDE_CODE_SESSION_ID` (exported by Claude Code into Bash), with a
+  `cli` fallback in the WAL when neither is set. Interactive-verb error
+  policy: visible errors, no hook fail-safe.
+- **`recall` WAL event.** `Reproject` counts it like `inject` toward
+  ref_count and `last_injected` — which is also what revives a stale fact:
+  recall includes stale rows (marked `[stale]`), and a recalled one comes
+  back to life at the next close.
+- **`rank.Query.IncludeStale`.** The pull path widens the status allowlist
+  to stale; push injection is unchanged.
+
+### Changed
+
+- **`internal/inject` exports `Candidates`, `CapBody`, `MaxBodyBytes`** —
+  thin wrappers so the pull path reuses the push pipeline's candidate
+  assembly (scoped, self-healing, degraded fallback) and body budget.
+- **Session-list writer is now an honest set-union.** The helper shared by
+  inject and recall (`writeSessionList`) deduplicates slugs instead of
+  concatenating; the inject path produced disjoint slugs by construction,
+  but the contract is now safe for any caller.
+
 ## [2.1.0] — 2026-06-09
 
 Closes the five feedback contours a live-install audit found broken in
