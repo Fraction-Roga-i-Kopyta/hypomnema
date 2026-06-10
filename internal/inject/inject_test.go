@@ -356,3 +356,14 @@ func TestRun_DegradedHonoursFrontmatterKeywords(t *testing.T) {
 		t.Errorf("degraded rank must use frontmatter keywords, got %v", res.Injected)
 	}
 }
+
+func TestExportedCapBody(t *testing.T) {
+	long := strings.Repeat("я", 3000) // 6000 bytes of UTF-8
+	got := CapBody(long, MaxBodyBytes)
+	if len(got) > MaxBodyBytes+len("\n\n…(truncated)") {
+		t.Fatalf("cap exceeded: %d bytes", len(got))
+	}
+	if !strings.HasSuffix(got, "…(truncated)") {
+		t.Fatal("missing truncation marker")
+	}
+}

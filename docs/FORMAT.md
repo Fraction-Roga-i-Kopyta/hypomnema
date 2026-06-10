@@ -187,6 +187,7 @@ date|event|target|session
 
 - `inject` — SessionStart injected a file. `target` = slug.
 - `inject-agg` — WAL compaction folded multiple `inject` events into one. `target` = `slug,count` (comma-separated).
+- `recall` — `memoryctl recall` delivered a fact via pull retrieval. `target` = slug. Unions the fact into the session's injected list; bumps ref_count/recency in the sidecar; revives stale facts.
 - `referenced` — metadata bump without content change. Rare; used by out-of-band touches.
 
 **Retrieval signals:**
