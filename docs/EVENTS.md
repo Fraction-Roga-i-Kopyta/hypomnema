@@ -46,6 +46,7 @@ before write — see [`FORMAT.md § 5`](FORMAT.md#5-wal-grammar) and the
 |---|---|---|---|---|---|:-:|
 | `inject` | `<slug>` | `hooks/session-start.sh` | `hooks/session-stop.sh` (feedback loop), `bin/memory-self-profile.sh` | v0.1.0 | Active | — |
 | `inject-agg` | `<slug>,<count>` (comma sub-delim) | `hooks/wal-compact.sh` | `bin/memory-self-profile.sh` | v0.1.0 | Active | — |
+| `recall` | `<slug>` | `memoryctl recall` (pull CLI) | `internal/sidecar` reproject (ref_count, last_injected), `internal/closer` via the session injected list | v2.2.0 | Active | — |
 
 ### Retrieval signals
 

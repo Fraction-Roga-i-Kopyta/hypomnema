@@ -91,12 +91,31 @@ func persistInjected(already, slugs []string, sessionID string) {
 		line := fmt.Sprintf("%s|inject|%s|%s", day, wal.SanitizeField(slug), sid)
 		wal.Append(memoryDir(), line, "")
 	}
+	writeSessionList(already, slugs, sessionID)
+}
+
+// writeSessionList rewrites the session's injected list with the set-union
+// of already + slugs. Shared by push (inject) and pull (recall) so push
+// dedup and close classification see both delivery paths. Two concurrent
+// writers race read→union→write (last writer wins) — pre-existing behaviour,
+// acceptable for per-session lists.
+func writeSessionList(already, slugs []string, sessionID string) {
 	runtimeDir := filepath.Join(memoryDir(), ".runtime")
 	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
 		return
 	}
 	pruneRuntimeLists(runtimeDir)
-	union := append(append(make([]string, 0, len(already)+len(slugs)), already...), slugs...)
+	seen := make(map[string]bool, len(already))
+	union := append(make([]string, 0, len(already)+len(slugs)), already...)
+	for _, s := range already {
+		seen[s] = true
+	}
+	for _, s := range slugs {
+		if !seen[s] {
+			union = append(union, s)
+			seen[s] = true
+		}
+	}
 	_ = os.WriteFile(sessionListPath(sessionID),
 		[]byte(strings.Join(union, "\n")+"\n"), 0o600)
 }

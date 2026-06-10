@@ -60,6 +60,13 @@ Usage:
       links, bounded under the harness size limit. v2 owns this index; the
       Stop hook regenerates it each session, this is the on-demand path.
       Resolves the project from CLAUDE_PROJECT_CWD, else the working dir.
+  memoryctl recall <query words...> [--k N]
+      Pull-side retrieval: rank current project + global memory against an
+      ad-hoc query; print the best fact's body (2.5KB cap) plus an index of
+      runner-ups with file paths (default 6 results total). Writes a
+      "recall" WAL event for the delivered fact and unions it into the
+      session's injected list. Includes stale facts (marked [stale]) —
+      recalling one revives it.
 
 Environment:
   CLAUDE_MEMORY_DIR       Memory root (default: ~/.claude/memory).
@@ -67,6 +74,8 @@ Environment:
   HYPOMNEMA_TODAY         Freeze "today" in YYYY-MM-DD (for tests/replay).
   HYPOMNEMA_NOW           Freeze self-profile "generated:" stamp (YYYY-MM-DD HH:MM).
   HYPOMNEMA_SESSION_ID    Session id stamped into WAL entries.
+  CLAUDE_CODE_SESSION_ID  Session id exported by Claude Code into Bash; recall
+                          falls back to it when HYPOMNEMA_SESSION_ID is unset.
 `
 
 func main() {
@@ -122,6 +131,8 @@ func main() {
 		runInject(os.Args[2:])
 	case "rank":
 		runRank(os.Args[2:])
+	case "recall":
+		runRecall(os.Args[2:])
 	case "ab":
 		runAB(os.Args[2:])
 	case "guard":
