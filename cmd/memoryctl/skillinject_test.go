@@ -78,3 +78,46 @@ func TestSkillInjectMissingSkillIsSilentExit0(t *testing.T) {
 		t.Fatalf("exit=%d, want 0 (fail-safe)", exit)
 	}
 }
+
+// TestSkillInjectRecallUsesStdinSessionID is a regression test for the bug
+// where skill-inject keyed WAL recall events to the env-resolved session id
+// instead of the session_id carried in the stdin envelope.
+//
+// In the real PostToolUse hook path no shim exports HYPOMNEMA_SESSION_ID, so
+// events were silently attributed to "cli", breaking reinforcement attribution
+// and same-session dedup. The fix reads session_id from stdin first and only
+// falls back to env when stdin carries nothing.
+func TestSkillInjectRecallUsesStdinSessionID(t *testing.T) {
+	env := skillFixture(t)
+	// Use a different env session id so the two sources are distinguishable.
+	env["HYPOMNEMA_SESSION_ID"] = "env-session"
+	env["CLAUDE_CODE_SESSION_ID"] = ""
+
+	// Stdin carries a different session_id — this is the one that must win.
+	stdin := `{"session_id":"stdin-xyz","tool_input":{"skill":"commit"}}`
+	_, _, exit := runStdin(t, env, stdin, "skill-inject")
+	if exit != 0 {
+		t.Fatalf("exit=%d, want 0", exit)
+	}
+
+	walPath := filepath.Join(env["CLAUDE_MEMORY_DIR"], ".wal")
+	walBytes, err := os.ReadFile(walPath)
+	if err != nil {
+		t.Fatalf("reading WAL: %v", err)
+	}
+	walContent := string(walBytes)
+
+	// Must contain a recall event keyed to the stdin session.
+	if !strings.Contains(walContent, "|recall|") {
+		t.Fatalf("WAL has no recall events at all:\n%s", walContent)
+	}
+	if !strings.Contains(walContent, "stdin-xyz") {
+		t.Fatalf("WAL recall events not keyed to stdin session_id 'stdin-xyz':\n%s", walContent)
+	}
+	// Must NOT be keyed to the env session or the fallback "cli".
+	for _, bad := range []string{"|recall|commit-learning|env-session", "|recall|commit-learning|cli"} {
+		if strings.Contains(walContent, bad) {
+			t.Fatalf("WAL recall event incorrectly keyed to %q instead of stdin session:\n%s", bad, walContent)
+		}
+	}
+}
