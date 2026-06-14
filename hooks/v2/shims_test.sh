@@ -46,4 +46,16 @@ printf '%s' '{"session_id":"s1","tool_input":{"skill":"commit"}}' \
   | HYPOMNEMA_MEMORYCTL=/nonexistent/memoryctl bash "$DIR/skill-learnings-inject.sh"
 [ $? -eq 0 ] || { echo "FAIL: skill-learnings-inject missing binary must exit 0"; exit 1; }
 
+# skill-active: with binary present, writes marker; missing binary exits 0
+printf '%s' '{"session_id":"s1","tool_input":{"skill":"commit"}}' \
+  | HYPOMNEMA_MEMORYCTL="$MCTL" CLAUDE_HOME="$TMP/.claude" CLAUDE_MEMORY_DIR="$TMP/.claude/memory" \
+    bash "$DIR/skill-active.sh"
+[ $? -eq 0 ] || { echo "FAIL: skill-active.sh must exit 0"; exit 1; }
+[ -f "$TMP/.claude/memory/.runtime/active-skill-s1" ] \
+  || { echo "FAIL: skill-active.sh marker not written"; exit 1; }
+
+printf '%s' '{"session_id":"s1","tool_input":{"skill":"commit"}}' \
+  | HYPOMNEMA_MEMORYCTL=/nonexistent/memoryctl bash "$DIR/skill-active.sh"
+[ $? -eq 0 ] || { echo "FAIL: skill-active.sh missing binary must exit 0"; exit 1; }
+
 echo "PASS"

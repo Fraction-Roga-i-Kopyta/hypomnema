@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/closer"
 )
@@ -35,5 +38,18 @@ func runClose(args []string) {
 		SessionID: in.SessionID, CWD: in.CWD, TranscriptPath: in.TranscriptPath,
 		ClaudeHome: claudeDir(), MemoryDir: memoryDir(), Today: today(),
 	})
+
+	// Age out stale active-skill markers (bounded cleanup, best-effort).
+	runtimeDir := filepath.Join(memoryDir(), ".runtime")
+	if entries, err := os.ReadDir(runtimeDir); err == nil {
+		for _, e := range entries {
+			if strings.HasPrefix(e.Name(), "active-skill-") {
+				if info, ierr := e.Info(); ierr == nil && time.Since(info.ModTime()) > 24*time.Hour {
+					_ = os.Remove(filepath.Join(runtimeDir, e.Name()))
+				}
+			}
+		}
+	}
+
 	os.Exit(0)
 }

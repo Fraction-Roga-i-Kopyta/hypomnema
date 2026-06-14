@@ -121,3 +121,20 @@ func TestSkillInjectRecallUsesStdinSessionID(t *testing.T) {
 		}
 	}
 }
+
+func TestSkillActiveWritesMarker(t *testing.T) {
+	env := skillFixture(t)
+	stdin := `{"session_id":"s9","tool_input":{"skill":"commit"}}`
+	_, _, exit := runStdin(t, env, stdin, "skill-active")
+	if exit != 0 {
+		t.Fatalf("exit=%d, want 0", exit)
+	}
+	marker := filepath.Join(env["CLAUDE_MEMORY_DIR"], ".runtime", "active-skill-s9")
+	data, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatalf("marker not written: %v", err)
+	}
+	if strings.TrimSpace(string(data)) != "commit" {
+		t.Fatalf("want marker=commit, got %q", string(data))
+	}
+}

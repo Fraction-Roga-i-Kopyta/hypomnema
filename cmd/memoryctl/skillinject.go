@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/inject"
@@ -98,5 +99,36 @@ func runSkillInject(_ []string) {
 	out.HookSpecificOutput.AdditionalContext = b.String()
 	enc, _ := json.Marshal(out)
 	fmt.Println(string(enc))
+	os.Exit(0)
+}
+
+type activeEnvelope struct {
+	SessionID string `json:"session_id"`
+	ToolInput struct {
+		Skill string `json:"skill"`
+	} `json:"tool_input"`
+}
+
+// runSkillActive implements `memoryctl skill-active`. It reads a PreToolUse
+// hook envelope from stdin, extracts the skill name and session_id, and writes
+// an active-skill marker file under memoryDir/.runtime/active-skill-<sid>.
+// This lets the capture path tag skill-learnings with the correct skill even
+// after context compaction. Fail-safe: exits 0 on bad/empty input.
+func runSkillActive(_ []string) {
+	raw, _ := io.ReadAll(os.Stdin)
+	var env activeEnvelope
+	_ = json.Unmarshal(raw, &env)
+	skill := strings.TrimSpace(env.ToolInput.Skill)
+	sid := strings.TrimSpace(env.SessionID)
+	if skill == "" || sid == "" {
+		os.Exit(0) // fail-safe
+	}
+	dir := filepath.Join(memoryDir(), ".runtime")
+	_ = os.MkdirAll(dir, 0o755)
+	tmp := filepath.Join(dir, "active-skill-"+sid+".tmp")
+	final := filepath.Join(dir, "active-skill-"+sid)
+	if err := os.WriteFile(tmp, []byte(skill+"\n"), 0o644); err == nil {
+		_ = os.Rename(tmp, final) // atomic (I3)
+	}
 	os.Exit(0)
 }
