@@ -43,6 +43,7 @@ func learningsForSkill(skill string, k int) ([]rank.Scored, map[string]native.Me
 const skillInjectK = 5
 
 type skillEnvelope struct {
+	SessionID string `json:"session_id"`
 	ToolInput struct {
 		Skill string `json:"skill"`
 	} `json:"tool_input"`
@@ -75,12 +76,21 @@ func runSkillInject(_ []string) {
 		os.Exit(0) // silent: skill has no learnings yet
 	}
 
+	// Prefer the session_id carried in the stdin envelope (spec §6: env vars
+	// are unreliable in hook paths). Fall back to env resolution so the verb
+	// still works when invoked manually from the CLI.
+	stdinSid := strings.TrimSpace(env.SessionID)
+
 	var b strings.Builder
 	fmt.Fprintf(&b, "Accumulated learnings for skill `%s` (apply alongside the skill):\n\n", skill)
 	for _, s := range scored {
 		f := bySlug[s.Slug]
 		fmt.Fprintf(&b, "- %s\n", inject.CapBody(f.Body, inject.MaxBodyBytes))
-		recordRecall(s.Slug) // reuse existing reinforcement (ref_count/effectiveness)
+		if stdinSid != "" {
+			recordRecallWithSession(s.Slug, stdinSid)
+		} else {
+			recordRecall(s.Slug) // env-resolved sid for manual CLI invocations
+		}
 	}
 
 	var out hookOutput
