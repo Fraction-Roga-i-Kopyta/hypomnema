@@ -266,6 +266,12 @@ func TestGenerate_NoOrphanTmpOnSuccess(t *testing.T) {
 	}
 }
 
+func TestSkillLearningCountsTowardBayesian(t *testing.T) {
+	if !bayesianCorpusTypes["skill-learning"] {
+		t.Fatal("skill-learning must count toward the Bayesian corpus gate")
+	}
+}
+
 // --- fixtures ------------------------------------------------------------
 
 const walFixture = `2026-04-01|session-metrics|backend,testing|error_count:3,tool_calls:20,duration:120s
