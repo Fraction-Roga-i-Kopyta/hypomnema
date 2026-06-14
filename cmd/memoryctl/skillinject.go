@@ -10,6 +10,7 @@ import (
 
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/inject"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/pathutil"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/rank"
 )
 
@@ -123,10 +124,11 @@ func runSkillActive(_ []string) {
 	if skill == "" || sid == "" {
 		os.Exit(0) // fail-safe
 	}
+	safe := pathutil.SafeFileName(sid)
 	dir := filepath.Join(memoryDir(), ".runtime")
 	_ = os.MkdirAll(dir, 0o755)
-	tmp := filepath.Join(dir, "active-skill-"+sid+".tmp")
-	final := filepath.Join(dir, "active-skill-"+sid)
+	tmp := filepath.Join(dir, "active-skill-"+safe+".tmp")
+	final := filepath.Join(dir, "active-skill-"+safe)
 	if err := os.WriteFile(tmp, []byte(skill+"\n"), 0o644); err == nil {
 		_ = os.Rename(tmp, final) // atomic (I3)
 	}

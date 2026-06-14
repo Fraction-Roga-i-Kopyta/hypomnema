@@ -138,3 +138,39 @@ func TestSkillActiveWritesMarker(t *testing.T) {
 		t.Fatalf("want marker=commit, got %q", string(data))
 	}
 }
+
+func TestSkillActiveSanitizesSessionID(t *testing.T) {
+	env := skillFixture(t)
+	// hostile session id with path separators and traversal components
+	stdin := `{"session_id":"../../evil","tool_input":{"skill":"commit"}}`
+	_, _, exit := runStdin(t, env, stdin, "skill-active")
+	if exit != 0 {
+		t.Fatalf("exit=%d, want 0", exit)
+	}
+	runtimeDir := filepath.Join(env["CLAUDE_MEMORY_DIR"], ".runtime")
+	entries, err := os.ReadDir(runtimeDir)
+	if err != nil {
+		t.Fatalf("read .runtime: %v", err)
+	}
+	// exactly one marker, and it lives directly under .runtime (no traversal escape)
+	found := 0
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "active-skill-") {
+			found++
+			// The marker must be a plain filename component: no slash means
+			// filepath.Join can never escape the .runtime directory regardless
+			// of dot sequences. SafeFileName replaces '/' with '_'; dots are
+			// allowed as filename characters and are harmless without a separator.
+			if strings.Contains(e.Name(), "/") {
+				t.Fatalf("marker name contains path separator (traversal possible): %q", e.Name())
+			}
+		}
+	}
+	if found != 1 {
+		t.Fatalf("want exactly 1 sanitized marker in .runtime, got %d", found)
+	}
+	// nothing escaped above .runtime into CLAUDE_MEMORY_DIR/evil
+	if _, err := os.Stat(filepath.Join(env["CLAUDE_MEMORY_DIR"], "evil")); err == nil {
+		t.Fatal("traversal escaped: found CLAUDE_MEMORY_DIR/evil")
+	}
+}
