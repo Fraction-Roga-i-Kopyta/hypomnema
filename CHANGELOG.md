@@ -1,5 +1,35 @@
 # Changelog
 
+## [2.3.0] — 2026-06-15
+
+Self-improving skills (Phase 1). Skills accrete usage-learned knowledge as a
+non-destructive memory layer — a new `skill-learning` type, keyed by a `skill:`
+field — injected into context when the skill activates. `SKILL.md` is never
+modified. Capture is semi-manual in Phase 1; auto-distillation of recurring
+patterns is Phase 2. Redeploy the binary and re-run `./install.sh` to register
+the two new `Skill`-matched hooks, then restart Claude Code.
+
+### Added
+
+- **`type: skill-learning` memory type.** A `skill:` frontmatter field binds a
+  learning to a skill name. Parsed into `native.MemFile.Skill`, counted in the
+  Bayesian corpus gate, and decayed on a 120-day threshold (durable). Lives in
+  the global store, keyed by skill — a learning applies wherever that skill runs.
+- **`memoryctl skill-inject` verb.** Reads a `PostToolUse(Skill)` hook envelope
+  from stdin, retrieves the activated skill's learnings (query-less, ranked by
+  effectiveness+recency, top-5 with the 2.5KB-per-body injection cap), and emits
+  them as `additionalContext`. Records a `recall` WAL event per delivered
+  learning keyed to the stdin `session_id`, so the close loop attributes
+  effectiveness to the right session. Fail-safe: silent exit 0 on empty/unknown
+  skill or when the skill has no learnings yet.
+- **`memoryctl skill-active` verb.** Reads a `PreToolUse(Skill)` envelope and
+  writes a session-scoped active-skill marker under `~/.claude/memory/.runtime/`
+  (atomic tmp+rename; filename sanitized via `pathutil.SafeFileName`) so
+  semi-manual capture can tag `skill:` reliably. Stale markers age out at close.
+- **Two `Skill`-matched hook shims** — `skill-learnings-inject.sh` (PostToolUse)
+  and `skill-active.sh` (PreToolUse) — registered by `install.sh` and tracked by
+  `doctor`'s `settings_hooks_registered` check.
+
 ## [2.2.0] — 2026-06-10
 
 Adds the pull side of retrieval. Injection is push-only — the ranker sees
