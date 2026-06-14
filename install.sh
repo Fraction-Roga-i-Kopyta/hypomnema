@@ -111,10 +111,10 @@ echo "[3/4] Installing v2 hook shims..."
 V2_HOOKS_DIR="$HOOKS_DIR/v2"
 if [ "$DRY_RUN" -eq 1 ]; then
   echo "[dry-run] would create $V2_HOOKS_DIR"
-  echo "[dry-run] would copy 4 shims from $SCRIPT_DIR/hooks/v2/ to $V2_HOOKS_DIR"
+  echo "[dry-run] would copy 5 shims from $SCRIPT_DIR/hooks/v2/ to $V2_HOOKS_DIR"
 else
   mkdir -p "$V2_HOOKS_DIR"
-  for shim in session-start.sh user-prompt-submit.sh pre-tool-write.sh session-stop.sh; do
+  for shim in session-start.sh user-prompt-submit.sh pre-tool-write.sh skill-learnings-inject.sh session-stop.sh; do
     src="$SCRIPT_DIR/hooks/v2/$shim"
     if [ -f "$src" ]; then
       cp "$src" "$V2_HOOKS_DIR/$shim"
@@ -123,7 +123,7 @@ else
       echo "WARNING: shim not found: $src" >&2
     fi
   done
-  echo "  Installed 4 shims into $V2_HOOKS_DIR"
+  echo "  Installed 5 shims into $V2_HOOKS_DIR"
 fi
 
 # --- Sweep stale symlinks left by earlier versions ---
@@ -229,10 +229,11 @@ register_hook() {
   echo "  Added $label"
 }
 
-register_hook SessionStart     ""      "$HOME/.claude/hooks/v2/session-start.sh"      15 "SessionStart (hypomnema v2)"
-register_hook UserPromptSubmit ""      "$HOME/.claude/hooks/v2/user-prompt-submit.sh" 10 "UserPromptSubmit (hypomnema v2)"
-register_hook PreToolUse       "Write|Edit" "$HOME/.claude/hooks/v2/pre-tool-write.sh"     10 "PreToolUse secrets gate (hypomnema v2)"
-register_hook Stop             ""      "$HOME/.claude/hooks/v2/session-stop.sh"       10 "Stop (hypomnema v2)"
+register_hook SessionStart     ""      "$HOME/.claude/hooks/v2/session-start.sh"           15 "SessionStart (hypomnema v2)"
+register_hook UserPromptSubmit ""      "$HOME/.claude/hooks/v2/user-prompt-submit.sh"      10 "UserPromptSubmit (hypomnema v2)"
+register_hook PreToolUse       "Write|Edit" "$HOME/.claude/hooks/v2/pre-tool-write.sh"      10 "PreToolUse secrets gate (hypomnema v2)"
+register_hook PostToolUse      "Skill" "$HOME/.claude/hooks/v2/skill-learnings-inject.sh"  10 "PostToolUse(Skill) skill learnings (hypomnema v2)"
+register_hook Stop             ""      "$HOME/.claude/hooks/v2/session-stop.sh"            10 "Stop (hypomnema v2)"
 
 # Upgrade hint: existing v1 store
 if [ -d "$HOME/.claude/memory" ]; then
