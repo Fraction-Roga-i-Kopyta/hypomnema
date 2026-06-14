@@ -64,6 +64,12 @@ func TestMarkStale_UsesLastInjectedOverCreated(t *testing.T) {
 	}
 }
 
+func TestSkillLearningDecayThreshold(t *testing.T) {
+	if got := staleDays["skill-learning"]; got != 120 {
+		t.Fatalf("want skill-learning staleDays=120, got %d", got)
+	}
+}
+
 // continuity/project facts are "where we left off" markers — they must
 // never rotate out by age (CLAUDE.md lifecycle contract).
 func TestMarkStale_ExemptsContinuityAndProject(t *testing.T) {

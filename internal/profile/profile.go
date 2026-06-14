@@ -164,12 +164,13 @@ func computeAmbientFraction(sig *walSignals) {
 // directory set (mistakes/feedback/strategies/knowledge/notes/decisions),
 // collapsed to the singular type names native files carry.
 var bayesianCorpusTypes = map[string]bool{
-	"mistake":   true,
-	"feedback":  true,
-	"strategy":  true,
-	"knowledge": true,
-	"note":      true,
-	"decision":  true,
+	"mistake":        true,
+	"feedback":       true,
+	"strategy":       true,
+	"knowledge":      true,
+	"note":           true,
+	"decision":       true,
+	"skill-learning": true,
 }
 
 // computeCorpusBayesianFraction counts every native memory record of a content

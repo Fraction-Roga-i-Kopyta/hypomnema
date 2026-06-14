@@ -144,6 +144,30 @@ func TestParse_RankingFrontmatterFields(t *testing.T) {
 	}
 }
 
+func TestParseFileReadsSkillField(t *testing.T) {
+	dir := t.TempDir()
+	content := "---\n" +
+		"type: skill-learning\n" +
+		"name: commit-runs-full-suite\n" +
+		"description: commit gate already runs tests\n" +
+		"skill: commit\n" +
+		"status: active\n" +
+		"---\n\nbody\n"
+	if err := os.WriteFile(filepath.Join(dir, "commit-runs-full-suite.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	files, err := List(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("want 1 file, got %d", len(files))
+	}
+	if files[0].Skill != "commit" {
+		t.Fatalf("want Skill=commit, got %q", files[0].Skill)
+	}
+}
+
 func TestParse_EvidenceList(t *testing.T) {
 	dir := t.TempDir()
 	content := "---\n" +

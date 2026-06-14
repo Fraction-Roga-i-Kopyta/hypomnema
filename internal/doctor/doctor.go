@@ -188,6 +188,8 @@ var requiredHookCommands = []string{
 	"session-start.sh",
 	"user-prompt-submit.sh",
 	"pre-tool-write.sh",
+	"skill-learnings-inject.sh",
+	"skill-active.sh",
 	"session-stop.sh",
 }
 
