@@ -194,10 +194,10 @@ func newDoctorFixture(t *testing.T) string {
 			t.Fatal(err)
 		}
 	}
-	// settings.json with all required hypomnema v2 hook shims (v2: 5).
+	// settings.json with all required hypomnema v2 hook shims (v2: 6).
 	hooks := []string{
 		"session-start.sh", "user-prompt-submit.sh",
-		"pre-tool-write.sh", "skill-learnings-inject.sh", "session-stop.sh",
+		"pre-tool-write.sh", "skill-learnings-inject.sh", "skill-active.sh", "session-stop.sh",
 	}
 	lines := make([]string, 0, len(hooks))
 	for _, h := range hooks {

@@ -73,6 +73,12 @@ Usage:
       and prints a hookSpecificOutput JSON envelope with additionalContext.
       Writes a recall WAL event per delivered learning. Fail-safe: exits 0
       silently on bad input, missing skill, or no learnings.
+  memoryctl skill-active
+      PreToolUse hook verb. Reads a hook envelope from stdin, extracts
+      tool_input.skill and session_id, and writes an active-skill marker
+      file to memoryDir/.runtime/active-skill-<sid>. Lets the capture path
+      tag skill-learnings with the correct skill after context compaction.
+      Fail-safe: exits 0 on bad input or missing skill/session.
 
 Environment:
   CLAUDE_MEMORY_DIR       Memory root (default: ~/.claude/memory).
@@ -141,6 +147,8 @@ func main() {
 		runRecall(os.Args[2:])
 	case "skill-inject":
 		runSkillInject(os.Args[2:])
+	case "skill-active":
+		runSkillActive(os.Args[2:])
 	case "ab":
 		runAB(os.Args[2:])
 	case "guard":
