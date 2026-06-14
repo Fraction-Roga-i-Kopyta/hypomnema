@@ -102,11 +102,22 @@ func runRecall(args []string) {
 // recordRecall logs the pull delivery to the WAL and unions the slug into
 // the session's injected list, so push dedup and close classification cover
 // the pull path too. Only the rendered top-1 counts as delivered.
+// Session id is resolved from the environment (HYPOMNEMA_SESSION_ID →
+// CLAUDE_CODE_SESSION_ID → "cli"). Callers that already hold an explicit
+// session id (e.g. skill-inject reading it from stdin) should call
+// recordRecallWithSession directly.
 func recordRecall(slug string) {
 	sid := os.Getenv("HYPOMNEMA_SESSION_ID")
 	if sid == "" {
 		sid = os.Getenv("CLAUDE_CODE_SESSION_ID")
 	}
+	recordRecallWithSession(slug, sid)
+}
+
+// recordRecallWithSession is the implementation shared by recordRecall and
+// skill-inject. sid is the caller-resolved session id; if empty, WAL events
+// are keyed to "cli" and no session list is updated.
+func recordRecallWithSession(slug, sid string) {
 	walSid := sid
 	if walSid == "" {
 		// `wal validate` requires a non-empty session column.

@@ -8,6 +8,8 @@
 # Go build artefacts
 bin/memoryctl
 bin/memoryctl.exe
+/memoryctl
+/memoryctl.exe
 coverage.out
 coverage/
 
