@@ -10,6 +10,7 @@ import (
 var staleDays = map[string]int{
 	"mistake": 60, "strategy": 90, "feedback": 45,
 	"knowledge": 90, "decision": 90, "note": 30,
+	"skill-learning": 120, // durable; decays slower than mistakes
 }
 
 // MarkStale flips active rows older than their type's stale threshold to
