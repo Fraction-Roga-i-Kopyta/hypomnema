@@ -223,13 +223,21 @@ score is an additive blend — no single zero signal annihilates a candidate:
 
 ```
 score = 3.0 × overlap(session_keywords, file keywords+name+description+body)
-      + 1.0 × log10(1 + ref_count)     # diminishing-returns on heavily-injected records
+      + 1.0 × log10(1 + ref_count) × effGate   # popularity, GATED by proven usefulness
       + 2.0 × recency                  # 1/(1 + days/30) from last injection (fallback created)
       + 2.0 × effectiveness            # Bayesian (pos+1)/(pos+neg+2); neutral 0.5 until signal lands
       + 1.0 if project-local           # project facts outrank global ones on ties
+
+effGate = clamp(2 × effectiveness, 0, 1)   # 1.0 at the prior (0.5); only damps, never amplifies
 ```
 
-**Zero-safe:** a new fact with `ref_count=0` and no outcomes gets the neutral prior and its frontmatter `created` as recency — it is injectable from day one.
+**Earned popularity:** the `ref_count` term is scaled by `effGate` so a fact
+injected hundreds of times that rarely proved useful cannot coast on volume.
+The gate is neutral (1.0) at the Bayesian prior 0.5 and capped at 1.0, so it
+only *damps* unearned popularity — high-eff facts get the full ref reward, not
+an inflated one.
+
+**Zero-safe:** a new fact with `ref_count=0` and no outcomes gets the neutral prior and its frontmatter `created` as recency — it is injectable from day one. The gate cannot hurt it either: an extreme low `effectiveness` *requires* substantial negative evidence (the prior holds new facts near 0.5), so `effGate≈1.0` until a fact has genuinely under-performed.
 
 Status filter: `active` and `pinned` only (sidecar-managed `stale` is excluded). Scope filter: only the current project's facts plus the global store — other projects' rows never inject. Result cap: top-8, 8KB total, once per session per fact.
 
