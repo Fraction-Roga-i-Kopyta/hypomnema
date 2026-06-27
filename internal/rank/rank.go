@@ -89,13 +89,39 @@ func Rank(q Query, cands []Candidate, k int) []Scored {
 
 func score(q Query, c Candidate, today time.Time) float64 {
 	s := wOverlap*float64(c.Overlap) +
-		wRef*math.Log10(1+float64(c.RefCount)) +
+		wRef*math.Log10(1+float64(c.RefCount))*effGate(c.Effectiveness) +
 		wRecency*recency(c, today) +
 		wEffective*c.Effectiveness
 	if q.Project != "" && c.Project == q.Project {
 		s += projectBoost
 	}
 	return s
+}
+
+// effGate makes popularity *earned*. The ref_count term rewards
+// heavily-injected facts, but a fact injected hundreds of times that rarely
+// proved useful (low effectiveness) must not coast on volume — that was the
+// failure mode where eff≈0.05 notes with ref in the hundreds out-ranked
+// proven facts purely on injection count. The gate scales the ref reward by
+// effectiveness, normalised so the Bayesian prior (0.5) is neutral (1.0) and
+// capped at 1.0 so it only *damps* unearned popularity, never amplifies it
+// (a single proven fact must not snowball on volume).
+//
+// Zero-safe by construction: a new or low-evidence fact sits near 0.5 — the
+// (pos+1)/(pos+neg+2) prior pulls it there until many outcomes accrue, so an
+// extreme low eff *requires* substantial negative evidence — hence its ref
+// reward is untouched; only well-evidenced low-effectiveness facts are
+// suppressed. Overlap, recency and the standalone effectiveness term are
+// unaffected, so no candidate is annihilated (spec §3.3).
+func effGate(effectiveness float64) float64 {
+	g := 2.0 * effectiveness
+	if g > 1.0 {
+		return 1.0
+	}
+	if g < 0 {
+		return 0
+	}
+	return g
 }
 
 // recency decays from 1.0 (today) toward 0 with a 30-day scale, using

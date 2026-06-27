@@ -1,6 +1,9 @@
 package rank
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 func base() Candidate {
 	return Candidate{Slug: "x", Status: "active", RefCount: 0, Effectiveness: 0.5, Created: "2026-05-01"}
@@ -163,6 +166,57 @@ func TestRank_RecencyOrdering(t *testing.T) {
 	got := Rank(q, []Candidate{old, recent}, 0)
 	if got[0].Slug != "recent" {
 		t.Errorf("more recently injected should rank first; got %v", slugs(got))
+	}
+}
+
+// Regression for the effectiveness gate: a heavily-injected fact that rarely
+// proved useful (low eff, high ref) must NOT out-rank a less-popular but
+// proven-useful fact at equal relevance. Pre-gate, popularity carried the
+// useless fact to the top (parallel-worktree eff 0.06 ref 572 beat
+// verification-before-done eff 0.53). This fails on the additive-only score.
+func TestRank_LowEffectivenessDampensPopularity(t *testing.T) {
+	q := Query{Today: "2026-06-28"}
+	useless := base()
+	useless.Slug = "useless"
+	useless.RefCount = 572
+	useless.Effectiveness = 0.06
+	useless.Overlap = 2
+	proven := base()
+	proven.Slug = "proven"
+	proven.RefCount = 10
+	proven.Effectiveness = 0.53
+	proven.Overlap = 2
+	got := Rank(q, []Candidate{useless, proven}, 0)
+	if got[0].Slug != "proven" {
+		t.Errorf("proven-useful fact must out-rank popular-but-useless at equal overlap; got %v", slugs(got))
+	}
+}
+
+// Cap guard: above the prior the ref reward saturates, so two facts that
+// differ only in (high) effectiveness differ by exactly the standalone
+// effectiveness term — the gate must never amplify popularity, or high-eff
+// facts would snowball on injection volume.
+func TestRank_EffGateNeverAmplifiesPopularity(t *testing.T) {
+	q := Query{Today: "2026-06-28"}
+	mk := func(slug string, eff float64) Candidate {
+		c := base()
+		c.Slug = slug
+		c.RefCount = 100
+		c.Effectiveness = eff
+		return c
+	}
+	got := Rank(q, []Candidate{mk("a", 0.75), mk("b", 1.0)}, 0)
+	var sa, sb float64
+	for _, sc := range got {
+		switch sc.Slug {
+		case "a":
+			sa = sc.Score
+		case "b":
+			sb = sc.Score
+		}
+	}
+	if gap, want := sb-sa, wEffective*(1.0-0.75); math.Abs(gap-want) > 1e-9 {
+		t.Errorf("above prior the score gap must be the standalone eff term only (%.3f); got %.3f", want, gap)
 	}
 }
 
