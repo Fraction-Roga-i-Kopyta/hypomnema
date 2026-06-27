@@ -1,5 +1,31 @@
 # Changelog
 
+## [2.4.0] — 2026-06-28
+
+Earned-popularity ranking. The `ref_count` term in the injection ranker is now
+gated by effectiveness, so a fact injected hundreds of times that rarely proved
+useful can no longer coast on volume. Diagnosed from the live corpus: notes with
+effectiveness 0.03–0.20 and ref_count in the hundreds (generic
+`debugging-approach`, `design-system-migration-claude-ai-handoff`,
+`parallel-worktree-subagent-migration`) were out-ranking proven facts purely on
+injection count. Ranking-only change — no format, schema, or API impact; redeploy
+the binary to pick it up.
+
+### Changed
+
+- **`ref_count` reward is gated by effectiveness.** The popularity term is now
+  `1.0 × log10(1+ref_count) × effGate`, where `effGate = clamp(2×effectiveness,
+  0, 1)`. The gate is neutral (1.0) at the Bayesian prior 0.5 and capped at 1.0,
+  so it only *damps* unearned popularity — it never amplifies a high-effectiveness
+  fact's volume reward. Zero-safe by construction: an extreme low effectiveness
+  requires substantial negative evidence (the `(pos+1)/(pos+neg+2)` prior holds
+  new and low-evidence facts near 0.5), so a fresh fact's ref reward is untouched
+  and only well-evidenced under-performers are suppressed. Overlap, recency, and
+  the standalone effectiveness term are unchanged, so no candidate is annihilated
+  (spec §3.3). This subsumes "generic strategy demotion": evergreen-but-rarely-
+  cited notes fall by data, not by a name blocklist, while a proven generic note
+  (e.g. `verification-before-done`, eff 0.53) keeps its rank.
+
 ## [2.3.0] — 2026-06-15
 
 Self-improving skills (Phase 1). Skills accrete usage-learned knowledge as a
