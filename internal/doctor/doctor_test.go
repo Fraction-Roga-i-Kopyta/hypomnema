@@ -475,8 +475,10 @@ func TestRequiredHookCommands_MatchInstallScript(t *testing.T) {
 		t.Fatalf("read %s: %v", installPath, err)
 	}
 	// Match every register_hook line that references the v2 shim directory.
-	// install.sh uses $HOME/.claude/hooks/v2/<name>.sh in register_hook calls.
-	re := regexp.MustCompile(`(?:~|\$HOME)/\.claude/hooks/v2/([a-z0-9-]+\.sh)`)
+	// install.sh uses $CLAUDE_DIR/hooks/v2/<name>.sh in register_hook calls
+	// ($CLAUDE_DIR defaults to ~/.claude; the v2.5.1 review O1 fix moved these
+	// off a hardcoded $HOME).
+	re := regexp.MustCompile(`(?:\$CLAUDE_DIR|~|\$HOME/\.claude)/hooks/v2/([a-z0-9-]+\.sh)`)
 	matches := re.FindAllStringSubmatch(string(data), -1)
 
 	fromInstall := map[string]struct{}{}
