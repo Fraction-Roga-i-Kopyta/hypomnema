@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS memory (
   status        TEXT NOT NULL DEFAULT 'active',
   effectiveness REAL NOT NULL DEFAULT 0.5
 );
-CREATE TABLE IF NOT EXISTS keyword (slug TEXT, term TEXT, weight REAL);
+CREATE TABLE IF NOT EXISTS keyword (slug TEXT, project TEXT, term TEXT, weight REAL);
 CREATE TABLE IF NOT EXISTS outcome (slug TEXT, ts TEXT, kind TEXT);
 CREATE TABLE IF NOT EXISTS meta    (k TEXT PRIMARY KEY, v TEXT);
 CREATE INDEX IF NOT EXISTS idx_keyword_term ON keyword(term);
