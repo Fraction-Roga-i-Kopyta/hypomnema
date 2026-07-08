@@ -96,6 +96,15 @@ func reprojectIn(e dbtx, files []native.MemFile, walPath string, scope []string)
 			a = &agg{}
 		}
 		pos, neg := a.outcomes()
+		// An ambient rule shapes behaviour silently (language pref, security
+		// baseline, meta-policy) — going uncited is its NORMAL mode, not
+		// evidence it failed. Counting trigger-silent as negative spiralled its
+		// effectiveness down, then effGate damped its ranking — the "poor get
+		// poorer" loop (P3a). Drop the silence penalty so it stays at/above the
+		// neutral prior; explicit useful citations still raise it.
+		if f.PrecisionClass == "ambient" {
+			neg = 0
+		}
 		eff := float64(pos+1) / float64(pos+neg+2)
 		// Frontmatter created is the author's recency claim; WAL-earliest is
 		// only the fallback for files that never declared one.

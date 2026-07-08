@@ -59,7 +59,7 @@ func runRecall(args []string) {
 	for _, f := range files {
 		bySlug[f.Slug] = f
 	}
-	terms := tokenize.Tokenize(query, nil)
+	terms := tokenize.Relevance(query)
 	cands := inject.Candidates(memoryDir(), cwd, files, terms)
 
 	// Pull is an explicit query: a fact that matches zero terms is not an

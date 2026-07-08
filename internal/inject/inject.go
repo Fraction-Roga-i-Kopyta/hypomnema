@@ -206,7 +206,7 @@ func degradedCandidates(files []native.MemFile, terms []string) []rank.Candidate
 		overlap := 0
 		text := f.Name + " " + f.Description + " " +
 			strings.Join(f.Keywords, " ") + " " + strings.Join(f.Domains, " ") + " " + f.Body
-		for _, tok := range tokenize.Tokenize(text, nil) {
+		for _, tok := range tokenize.Relevance(text) {
 			if want[tok] && !seen[tok] {
 				seen[tok] = true
 				overlap++

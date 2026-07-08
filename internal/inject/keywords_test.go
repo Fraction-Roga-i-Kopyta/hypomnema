@@ -15,10 +15,14 @@ func TestKeywords(t *testing.T) {
 	for _, k := range got {
 		set[k] = true
 	}
-	for _, want := range []string{"docker", "cache", "layer", "help", "with"} {
+	for _, want := range []string{"docker", "cache", "layer", "help"} {
 		if !set[want] {
 			t.Errorf("expected prompt token %q in %v", want, got)
 		}
+	}
+	// "with" is a stopword now (P3a) — it must NOT appear as a relevance token.
+	if set["with"] {
+		t.Errorf("stopword 'with' should be filtered out, got %v", got)
 	}
 	if !set["project"] {
 		t.Errorf("expected basename token 'project' in %v", got)

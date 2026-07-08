@@ -32,8 +32,8 @@ func Keywords(cwd, prompt string) []string {
 			}
 		}
 	}
-	add(tokenize.Tokenize(prompt, nil))
-	add(tokenize.Tokenize(filepath.Base(cwd), nil))
+	add(tokenize.Relevance(prompt))
+	add(tokenize.Relevance(filepath.Base(cwd)))
 	add(gitSignal(cwd))
 	return out
 }
@@ -59,8 +59,8 @@ func gitSignal(cwd string) []string {
 		return string(out)
 	}
 	var toks []string
-	toks = append(toks, tokenize.Tokenize(git("branch", "--show-current"), nil)...)
-	toks = append(toks, tokenize.Tokenize(git("status", "--porcelain"), nil)...)
-	toks = append(toks, tokenize.Tokenize(git("log", "-3", "--format=%s"), nil)...)
+	toks = append(toks, tokenize.Relevance(git("branch", "--show-current"))...)
+	toks = append(toks, tokenize.Relevance(git("status", "--porcelain"))...)
+	toks = append(toks, tokenize.Relevance(git("log", "-3", "--format=%s"))...)
 	return toks
 }

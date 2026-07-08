@@ -22,9 +22,13 @@ type MemFile struct {
 	Domains     []string // frontmatter: domains — domain filter tags
 	Evidence    []string // frontmatter: evidence — phrases that mark the rule as applied
 	Skill       string   // frontmatter: skill — binds a skill-learning to a skill name
-	ContentSHA  string   // sha256 of full file bytes — rename/edit detection
-	Body        string   // markdown body, frontmatter stripped
-	Project     string   // owning store: cwd slug or GlobalProject — set by Collect, not parsed from the file
+	// PrecisionClass — frontmatter: precision_class. "ambient" marks a rule that
+	// shapes behaviour silently (language pref, security baseline, meta-policy);
+	// such rules are not penalised in effectiveness for going uncited.
+	PrecisionClass string
+	ContentSHA     string // sha256 of full file bytes — rename/edit detection
+	Body           string // markdown body, frontmatter stripped
+	Project        string // owning store: cwd slug or GlobalProject — set by Collect, not parsed from the file
 }
 
 // List enumerates *.md files directly under dir (non-recursive) and parses
@@ -61,19 +65,20 @@ func parseFile(path string) (MemFile, error) {
 	fm, body := splitFrontmatter(string(raw))
 	sum := sha256.Sum256(raw)
 	return MemFile{
-		Slug:        filepath.Base(path),
-		Path:        path,
-		Name:        fm["name"],
-		Description: fm["description"],
-		Type:        fm["type"],
-		Created:     fm["created"],
-		Status:      fm["status"],
-		Keywords:    splitList(fm["keywords"]),
-		Domains:     splitList(fm["domains"]),
-		Evidence:    splitList(fm["evidence"]),
-		Skill:       fm["skill"],
-		ContentSHA:  hex.EncodeToString(sum[:]),
-		Body:        body,
+		Slug:           filepath.Base(path),
+		Path:           path,
+		Name:           fm["name"],
+		Description:    fm["description"],
+		Type:           fm["type"],
+		Created:        fm["created"],
+		Status:         fm["status"],
+		Keywords:       splitList(fm["keywords"]),
+		Domains:        splitList(fm["domains"]),
+		Evidence:       splitList(fm["evidence"]),
+		Skill:          fm["skill"],
+		PrecisionClass: fm["precision_class"],
+		ContentSHA:     hex.EncodeToString(sum[:]),
+		Body:           body,
 	}, nil
 }
 
