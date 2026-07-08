@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"testing"
+	"time"
 )
 
 func TestKeywords(t *testing.T) {
@@ -93,5 +94,21 @@ func TestKeywords_NonGitDirIsSafe(t *testing.T) {
 	kw := Keywords(dir, "deploy the cache")
 	if !has(kw, "deploy") || !has(kw, "cache") {
 		t.Errorf("prompt tokens must survive in non-git dir; got %v", kw)
+	}
+}
+
+func TestGitSignal_BoundedByTimeout(t *testing.T) {
+	// A hung git (lock contention, network mount) must not stall the
+	// SessionStart hook: gitSignal is best-effort context, not a blocker.
+	bin := t.TempDir()
+	stub := "#!/bin/sh\n/bin/sleep 3\n"
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	start := time.Now()
+	gitSignal(t.TempDir())
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("gitSignal took %v — git calls are unbounded", elapsed)
 	}
 }
