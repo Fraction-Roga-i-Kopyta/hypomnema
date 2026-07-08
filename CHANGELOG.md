@@ -1,5 +1,84 @@
 # Changelog
 
+## [2.5.1] — 2026-07-08
+
+Hardening release from an internal audit (nine independent review lenses, each
+finding empirically reproduced). It closes residual holes in the very things
+v2.5.0 hardened — the secret gate and install/doctor — plus new
+harness-contract, concurrency, and operational defects. Five of the fixes are
+regressions v2.5.0 itself introduced. No format or schema changes; redeploy the
+binary and re-run ./install.sh.
+
+### Fixed
+
+- **Secret gate — snake_case / SCREAMING_SNAKE keys** (`db_password`,
+  `client_secret`, `access_token`, `AWS_SECRET_ACCESS_KEY`) now match; the
+  `\b`-anchored keyword only caught bare/camelCase keys, letting the canonical
+  config/env form through — the single biggest remaining hole.
+- **Secret gate — URL false positive** (regression from v2.5.0): the
+  connection-string pattern no longer flags ordinary dev URLs
+  (`http://host:5173/@vite/client`, npm registry with a port, callback URLs with
+  an email); a password may not span `/`.
+- **Secret gate — a code-fence delimiter/info-string line is now scanned** (a
+  secret parked as ```` ```<secret> ```` rendered as an empty block but sat in
+  plaintext), and `~~~` fences are handled like backtick fences.
+- **Secret gate — `.secretsignore` over-broad patterns** (`*`, `**`, `**/*`)
+  are ignored, so an agent can't self-disable the gate with one non-secret write.
+- **`memoryctl guard` scans MultiEdit `edits[].new_string` and NotebookEdit
+  `new_source`**, not just Write `content` / Edit `new_string` (was fail-open).
+- **Injection envelope budget** now holds: emitted with HTML-escaping off, so
+  `< > &` stay one byte instead of six — a code/markup-heavy fact at the 8KB
+  markdown budget no longer produces a ~2x envelope that Claude Code diverts to
+  a file the model never reads inline. `skill-inject` gained the same total
+  budget (it had none).
+- **`close` writes a non-empty session id (`unknown`)** when the hook envelope
+  omits one, instead of empty-session WAL rows that `wal validate` rejects.
+- **WAL lock ownership token**: a holder that stalled past the stale threshold
+  and was taken over can no longer delete the new holder's live lock on Release;
+  partial `LockConfig` values default each field independently (a `{MaxWait}`
+  alone no longer makes every lock instantly stealable).
+- **Corrupt-sidecar recovery only wipes on genuine corruption** (regression from
+  v2.5.0): a transient `SQLITE_BUSY` from a concurrent process no longer deletes
+  a live sidecar. Concurrent first-open of a fresh sidecar retries the schema
+  DDL and seeds the version row idempotently instead of failing fast.
+- **Atomic writes** (tmp+rename via `pathutil.WriteFileAtomic`) for the
+  session injected-list and the dedup merge rewrite — a Stop-hook reader no
+  longer sees a truncated list, and a crash can't truncate a native memory file.
+- **doctor** parses settings.json (an invalid file, which Claude Code can't load,
+  now FAILs instead of reading OK) and verifies each shim is wired under the
+  right event and is a regular file (a directory carrying exec bits no longer
+  passes).
+- **install.sh** registers hooks under `$CLAUDE_DIR` (not a hardcoded `$HOME`),
+  so a custom-dir install wires the right tree; `--patch-claude-md` writes v2
+  instructions (flat stores + `type:`) instead of v1 subdirectory paths that
+  silently lost memory; a dangling shim symlink no longer aborts the installer
+  mid-run; the settings gate is skipped under `--skip-base`; the v1-upgrade
+  hint fires on a real v1 store (subdirectories), not the always-present runtime
+  dir.
+- **uninstall.sh** strips the CLAUDE.md section it added, matches only the six
+  known shim names (preserving a user's own `hooks/v2` hook), removes runtime
+  state (`.wal`/`.sidecar.db`/`.runtime`/`self-profile.md`) under
+  `--purge-memory`, and routes dry-run notices to stderr.
+- **`migrate --rollback`** restores the newest `memory.v1-backup-*` instead of
+  deriving today's path — rollback worked only on the migration day.
+- **Frontmatter block scalars** (`root-cause: |`) no longer clobber real keys:
+  an indented `description:`/`name:` inside the block is treated as continuation.
+
+### Changed / CI
+
+- `make test-go-cover` runs the subprocess pass with `-count=1`, so warm-cache
+  runs actually write the coverage profile instead of silently reporting an
+  absent file.
+- `hooks/v2/shims_test.sh` now exercises the secret-gate shim (`pre-tool-write.sh`).
+- The I3 atomic-write invariant checker walks `cmd/` as well as `internal/`.
+
+### Known residual
+
+- The WAL lock's stale-takeover has a microsecond free window that can permit a
+  brief double-*acquire* (bounded by the ownership token + atomic `O_APPEND`, so
+  it cannot corrupt the WAL). A full fix requires moving to `flock(2)` and is
+  deferred.
+
 ## [2.5.0] — 2026-07-08
 
 Hardening release closing the Priority-1 findings of the 2026-07-08 external
