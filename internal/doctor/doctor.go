@@ -133,6 +133,7 @@ func Run(claudeDir, memoryDir, cwd string) Report {
 		checkClaudeDir(claudeDir),
 		checkMemoryDir(memoryDir),
 		checkSettings(filepath.Join(claudeDir, "settings.json")),
+		checkShimFiles(claudeDir),
 		checkBrokenSymlinks(filepath.Join(claudeDir, "hooks"), "hooks"),
 		checkBrokenSymlinks(filepath.Join(claudeDir, "bin"), "bin"),
 		checkMemoryctl(claudeDir),
@@ -224,6 +225,45 @@ func checkSettings(path string) Check {
 		Name:   "settings_hooks_registered",
 		Status: FAIL,
 		Detail: fmt.Sprintf("missing: %s — re-run ./install.sh", strings.Join(missing, ",")),
+	}
+}
+
+// checkShimFiles verifies each required v2 shim EXISTS and is EXECUTABLE at
+// <claudeDir>/hooks/v2/. checkSettings only substring-matches settings.json,
+// so without this check a wiped hooks/v2/ directory reads as fully healthy —
+// the false-OK found by the 2026-07-08 review.
+func checkShimFiles(claudeDir string) Check {
+	const name = "shim_files_present"
+	dir := filepath.Join(claudeDir, "hooks", "v2")
+	var missing, notExec []string
+	for _, cmd := range requiredHookCommands {
+		info, err := os.Stat(filepath.Join(dir, cmd))
+		if err != nil {
+			missing = append(missing, cmd)
+			continue
+		}
+		if info.Mode()&0o111 == 0 {
+			notExec = append(notExec, cmd)
+		}
+	}
+	if len(missing) == 0 && len(notExec) == 0 {
+		return Check{
+			Name:   name,
+			Status: OK,
+			Detail: fmt.Sprintf("all %d shims present and executable in %s", len(requiredHookCommands), dir),
+		}
+	}
+	var parts []string
+	if len(missing) > 0 {
+		parts = append(parts, "missing: "+strings.Join(missing, ","))
+	}
+	if len(notExec) > 0 {
+		parts = append(parts, "not executable: "+strings.Join(notExec, ","))
+	}
+	return Check{
+		Name:   name,
+		Status: FAIL,
+		Detail: strings.Join(parts, "; ") + " — re-run ./install.sh",
 	}
 }
 

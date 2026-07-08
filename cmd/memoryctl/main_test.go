@@ -212,6 +212,18 @@ func newDoctorFixture(t *testing.T) string {
 		[]byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// Executable shim files — doctor's shim_files_present check verifies
+	// presence + exec bit, not just the settings.json substrings above.
+	shimDir := filepath.Join(claude, "hooks", "v2")
+	if err := os.MkdirAll(shimDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range hooks {
+		if err := os.WriteFile(filepath.Join(shimDir, h),
+			[]byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
 	return claude
 }
 
