@@ -56,27 +56,20 @@ func TestAcquire_TimesOutWhenHeld(t *testing.T) {
 	}
 }
 
-func TestAcquire_StaleTakeover(t *testing.T) {
+// Under flock there is no staleness/takeover: an unheld lock (even one left
+// over from a crashed holder) is simply free to acquire — the OS dropped it
+// when that process died. A stale *file* at the path is acquired immediately.
+func TestAcquire_UnheldLockIsFree(t *testing.T) {
 	mem := t.TempDir()
-	lockDir := filepath.Join(mem, ".wal.lockd")
-	// Manually create the lock dir and backdate its mtime past StaleAfter.
-	if err := os.Mkdir(lockDir, 0o755); err != nil {
+	// A pre-existing (unlocked) lock file from a prior run must not block.
+	if err := os.WriteFile(filepath.Join(mem, ".wal.lockd"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	old := time.Now().Add(-30 * time.Second)
-	if err := os.Chtimes(lockDir, old, old); err != nil {
-		t.Fatal(err)
-	}
-	cfg := LockConfig{
-		MaxWait:      500 * time.Millisecond,
-		StaleAfter:   10 * time.Second, // existing mtime is older → takeover
-		PollInterval: 20 * time.Millisecond,
-	}
-	l, err := Acquire(mem, cfg)
+	l, err := Acquire(mem, LockConfig{MaxWait: 500 * time.Millisecond, PollInterval: 20 * time.Millisecond})
 	if err != nil {
-		t.Fatalf("expected stale takeover to succeed, got %v", err)
+		t.Fatalf("an unheld lock file must acquire immediately, got %v", err)
 	}
-	defer l.Release()
+	l.Release()
 }
 
 func TestAcquire_NoTakeoverWhenFresh(t *testing.T) {
@@ -163,4 +156,19 @@ func TestAcquire_ConcurrentCallersSerialize(t *testing.T) {
 	if maxHeld != 1 {
 		t.Errorf("lock permitted %d concurrent holders, want 1", maxHeld)
 	}
+}
+
+func TestAcquire_MigratesLegacyMkdirLock(t *testing.T) { // C1 flock migration
+	mem := t.TempDir()
+	// Pre-v2.8 versions used a DIRECTORY as the lock; flock needs a file.
+	// A leftover legacy dir at the path must be migrated, not treated as a
+	// permanently-held lock.
+	if err := os.Mkdir(filepath.Join(mem, ".wal.lockd"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	l, err := Acquire(mem, LockConfig{MaxWait: 500 * time.Millisecond, PollInterval: 20 * time.Millisecond})
+	if err != nil {
+		t.Fatalf("Acquire must migrate a legacy lock dir and succeed, got: %v", err)
+	}
+	l.Release()
 }
