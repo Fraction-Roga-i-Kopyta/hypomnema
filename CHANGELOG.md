@@ -1,5 +1,33 @@
 # Changelog
 
+## [2.8.0] — 2026-07-08
+
+Replaces the WAL lock with `flock(2)` (internal-audit design item C1). This is
+the first of the deferred design changes. Behaviour is unchanged in the normal
+case; the fix is in the crash/contention edges the old mkdir lock couldn't get
+right.
+
+### Fixed
+
+- **WAL lock uses `flock(2)` instead of a mkdir lock.** The mkdir lock recovered
+  an orphaned lock via a staleness heuristic that had three audit-confirmed
+  defects: a microsecond free window during stale-takeover permitting a brief
+  double-acquire (C1); a `Release` that could delete a lock another process had
+  legitimately taken over after the holder stalled (C2); and a partial
+  `LockConfig` (`{MaxWait}` alone) that left `StaleAfter` at 0 and made a fresh
+  lock instantly stealable (C3). `flock` eliminates all three by construction —
+  the kernel drops the lock when the holding process exits, so there is no
+  staleness to guess at and no takeover to race.
+
+### Notes
+
+- The lock at `~/.claude/memory/.wal.lockd` is now a regular file, not a
+  directory; a legacy lock directory left by ≤ v2.7.x is migrated automatically
+  on the next acquire. The `Acquire`/`AcquirePath`/`Release`/`LockConfig` API is
+  unchanged (`LockConfig.StaleAfter` is retained for compatibility but ignored).
+- `flock(2)` is advisory and reliable on local filesystems (where `~/.claude`
+  lives); Linux and macOS only, matching the project's supported targets.
+
 ## [2.7.1] — 2026-07-08
 
 The deferred local bugfixes from the internal audit — correctness fixes with no

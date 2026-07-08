@@ -1,71 +1,83 @@
 package wal
 
 import (
-	"os"
-	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
 
-func TestAcquire_PartialConfigDoesNotStealFresh(t *testing.T) { // review C3
+// The v2.5.1 ownership-token / stale-takeover tests are gone: v2.8 moved the
+// lock to flock(2), which has no staleness heuristic and no takeover, so the
+// C1 double-hold free-window, the C2 "Release deletes another's lock", and the
+// C3 "partial config steals a fresh lock" bugs are all eliminated by
+// construction. These tests assert the flock guarantees directly.
+
+func TestAcquire_HeldLockNeverAcquirableRegardlessOfConfig(t *testing.T) { // ex-C3
 	mem := t.TempDir()
 	first, err := Acquire(mem, DefaultLockConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer first.Release()
-	// StaleAfter omitted — must default to 10s, NOT 0 (which would make every
-	// held lock instantly "stale" and stealable).
-	cfg := LockConfig{MaxWait: 200 * time.Millisecond}
-	if _, err := Acquire(mem, cfg); err != ErrTimeout {
-		t.Errorf("fresh lock stolen because StaleAfter defaulted to 0, want ErrTimeout, got %v", err)
+	// A partial/odd config must not let a held lock be stolen — flock has no
+	// stale-takeover path at all, so a held lock always times out.
+	for _, cfg := range []LockConfig{
+		{MaxWait: 150 * time.Millisecond},                // StaleAfter/Poll zero
+		{MaxWait: 150 * time.Millisecond, StaleAfter: 0}, // explicit zero StaleAfter (was the C3 trigger)
+		{MaxWait: 150 * time.Millisecond, PollInterval: 5 * time.Millisecond},
+	} {
+		if _, err := Acquire(mem, cfg); err != ErrTimeout {
+			t.Errorf("held lock must time out for cfg %+v, got %v", cfg, err)
+		}
 	}
 }
 
-func TestRelease_OnlyRemovesOwnedLock(t *testing.T) { // review C2
+func TestAcquire_HeavyContentionSingleHolder(t *testing.T) { // ex-C1: no double-hold window
 	mem := t.TempDir()
-	lockDir := filepath.Join(mem, ".wal.lockd")
+	cfg := LockConfig{MaxWait: 10 * time.Second, PollInterval: time.Millisecond}
+	const workers, rounds = 8, 25
+	var held, maxHeld int32
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for r := 0; r < rounds; r++ {
+				l, err := Acquire(mem, cfg)
+				if err != nil {
+					t.Errorf("acquire timed out under contention: %v", err)
+					return
+				}
+				n := atomic.AddInt32(&held, 1)
+				for {
+					m := atomic.LoadInt32(&maxHeld)
+					if n <= m || atomic.CompareAndSwapInt32(&maxHeld, m, n) {
+						break
+					}
+				}
+				time.Sleep(200 * time.Microsecond)
+				atomic.AddInt32(&held, -1)
+				l.Release()
+			}
+		}()
+	}
+	wg.Wait()
+	if maxHeld != 1 {
+		t.Errorf("flock permitted %d concurrent holders, want 1 (no free window)", maxHeld)
+	}
+}
+
+func TestRelease_AfterReleaseAnotherCanAcquire(t *testing.T) { // ex-C2: clean handoff
+	mem := t.TempDir()
 	a, err := Acquire(mem, DefaultLockConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A stalls past the stale threshold; B legitimately takes the lock over.
-	old := time.Now().Add(-30 * time.Second)
-	os.Chtimes(lockDir, old, old)
-	b, err := Acquire(mem, LockConfig{MaxWait: 2 * time.Second, StaleAfter: 10 * time.Second, PollInterval: 5 * time.Millisecond})
-	if err != nil {
-		t.Fatalf("B should take over the stale lock: %v", err)
-	}
-	// A wakes up and releases — this must NOT free B's live lock.
 	a.Release()
-	if _, err := Acquire(mem, LockConfig{MaxWait: 200 * time.Millisecond, StaleAfter: 10 * time.Second, PollInterval: 20 * time.Millisecond}); err != ErrTimeout {
-		t.Errorf("A.Release() removed B's lock — a third acquire succeeded, want ErrTimeout (got %v)", err)
-	}
-	b.Release()
-}
-
-func TestAcquire_ReleaseTokenSurvivesStaleTakeoverChurn(t *testing.T) { // review C1/C2
-	// The C1 double-hold free-window is a documented mkdir-lock residual; what
-	// MUST hold under stale-takeover churn is that the ownership token keeps a
-	// stalled holder's Release from deleting whoever holds the lock now. Here A
-	// stalls and is taken over repeatedly; A.Release() at the end must never
-	// remove the live lock.
-	mem := t.TempDir()
-	lockDir := filepath.Join(mem, ".wal.lockd")
-	a, err := Acquire(mem, DefaultLockConfig)
+	b, err := Acquire(mem, LockConfig{MaxWait: 500 * time.Millisecond, PollInterval: 10 * time.Millisecond})
 	if err != nil {
-		t.Fatal(err)
-	}
-	old := time.Now().Add(-30 * time.Second)
-	os.Chtimes(lockDir, old, old)
-	cfg := LockConfig{MaxWait: 2 * time.Second, StaleAfter: 10 * time.Second, PollInterval: 10 * time.Millisecond}
-	b, err := Acquire(mem, cfg) // B takes over A's stale lock
-	if err != nil {
-		t.Fatalf("B takeover: %v", err)
-	}
-	a.Release() // stalled A must not free B's live lock
-	if _, err := Acquire(mem, LockConfig{MaxWait: 150 * time.Millisecond, StaleAfter: 10 * time.Second, PollInterval: 20 * time.Millisecond}); err != ErrTimeout {
-		t.Errorf("A.Release() freed B's live lock under churn, want ErrTimeout, got %v", err)
+		t.Fatalf("after Release the lock must be re-acquirable, got %v", err)
 	}
 	b.Release()
 }
