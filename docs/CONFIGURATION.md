@@ -1,194 +1,105 @@
 # Configuration
 
-Hypomnema has three separate layers of tunable parameters. They live in
-different places, are edited by different people, and exist for
-different reasons. This document lists what each layer controls, where
-it lives, and how to change it.
+Hypomnema v2 has **no configuration file**. There is no `.config.sh`, no
+`projects.json` to edit, no per-type `decay_rate:` knob. Everything the
+system reads at runtime is either an **environment variable** or a small
+on-disk allow-list (`.secretsignore`). Injection itself is not tunable:
+a single ranker produces one **top-8** result set capped at **2.5 KB per
+body / 8 KB total**, and that budget is fixed in the binary.
 
-## 1. Runtime config — `~/.claude/memory/.config.sh`
+This document lists every knob that actually exists and where it lives.
 
-Operator-facing. Controls injection caps and session-level behaviour.
-Hooks source this file at startup; missing values fall back to built-in
-defaults.
+## 1. Environment variables
 
-Copy from `seeds/` (or your existing install) and edit integers:
+`memoryctl` and the v2 hook shims read configuration from the environment.
+None of these are required for a normal install — the defaults are correct
+out of the box. Set them only for non-standard installs, tests, or replay.
 
 | Variable | Default | What it controls |
 |---|---|---|
-| `MAX_FILES` | 22 | Total files injected per session (hard ceiling across all types) |
-| `MAX_SCORED_TOTAL` | 12 | Adaptive pool shared by feedback / knowledge / strategies / decisions / notes |
-| `MAX_CLUSTER` | 4 | Max related-link expansion per seed file |
-| `MAX_GLOBAL_MISTAKES` | 3 | Mistakes injected with `project: global` |
-| `MAX_PROJECT_MISTAKES` | 3 | Mistakes injected for the current project |
-| `CAP_FEEDBACK` | 6 | Per-type cap inside the adaptive pool |
-| `CAP_KNOWLEDGE` | 4 | Per-type cap inside the adaptive pool |
-| `CAP_STRATEGIES` | 4 | Per-type cap inside the adaptive pool |
-| `CAP_DECISIONS` | 3 | Per-type cap inside the adaptive pool |
-| `CAP_NOTES` | 2 | Per-type cap inside the adaptive pool |
-| `MAX_TRIGGERED` | 4 | Max files injected per prompt match (UserPromptSubmit) |
-| `MIN_SESSION_SECONDS` | 120 | Below this, skip the session-stop checkpoint reminder |
+| `CLAUDE_MEMORY_DIR` | `~/.claude/memory` | Metadata root — holds `.wal`, `.sidecar.db`, `self-profile.md`. Not the content store. |
+| `CLAUDE_HOME` | `~/.claude` | Claude Code state root. Used by `memoryctl doctor` and native-store resolution; lets parallel installs / fixtures coexist. |
+| `CLAUDE_PROJECT_CWD` | current working dir | Working directory used to resolve the per-project native store (`<home>/.claude/projects/<slug>/memory`). |
+| `HYPOMNEMA_GLOBAL_DIR` | `~/.claude/memory-global` | Location of the global native store (facts that apply across every project). |
+| `HYPOMNEMA_MEMORYCTL` | `~/.claude/bin/memoryctl` | Path to the `memoryctl` binary the shims invoke. |
+| `HYPOMNEMA_SESSION_ID` | (from hook envelope) | Session id stamped into WAL entries. |
+| `CLAUDE_CODE_SESSION_ID` | (exported by Claude Code) | Session id fallback — `memoryctl recall` uses it when `HYPOMNEMA_SESSION_ID` is unset. |
+| `HYPOMNEMA_TODAY` | wall clock | Freeze "today" as `YYYY-MM-DD` (decay windows, WAL cutoffs) for tests / replay. |
+| `HYPOMNEMA_NOW` | wall clock | Freeze the self-profile `generated:` stamp as `YYYY-MM-DD HH:MM`. |
+| `HYPOMNEMA_ALLOW_SECRETS` | unset | Set to `1` to bypass the secrets gate for a single invocation (see §3). |
 
-Changes take effect from the next session (hooks re-source the file on
-start). No restart of Claude Code is required — just start a new
-conversation.
+### Self-profile analytics knobs
 
-**Tuning guidance.** If you raise `MAX_FILES` above ~30, expect context
-dilution: more memory also means more noise, and the `-3` noise penalty
-in scoring stops filtering effectively. If you lower it below ~10,
-expect frequent `shadow-miss` events for relevant-but-cut files.
+These three affect only `memoryctl self-profile` (the WAL analytics pass).
+They exist mostly for fixture tests; the defaults come from the ADRs and
+are what production runs on.
 
-## 2. Decay thresholds — hardcoded in `hooks/session-stop.sh`
-
-Not currently operator-configurable. Days after `created` before a file
-transitions `active → stale`, and days before `stale → archived`
-(moved to `~/.claude/memory/archive/<type>/`).
-
-| Type | Stale (days) | Archive (days) |
+| Variable | Default | What it controls |
 |---|---|---|
-| mistakes | 60 | 180 |
-| strategies | 90 | 180 |
-| feedback | 45 | 120 |
-| knowledge | 90 | 365 |
-| decisions | 90 | 365 |
-| notes | 30 | 90 |
-| journal | 30 | 90 |
-| projects | — | — (exempt from rotation) |
-| continuity | — | — (auto-generated, not rotated) |
+| `HYPOMNEMA_OUTCOME_WINDOW_DAYS` | 14 | Rolling window (days) for the per-slug Bayesian outcome sampling. |
+| `HYPOMNEMA_BAYESIAN_MIN_SAMPLES` | 5 | Minimum samples before a slug is counted in the corpus Bayesian fraction. |
+| `HYPOMNEMA_INTUITION_WINDOW_DAYS` | 30 | Intuition-milestone window; `0` disables that filter entirely. |
 
-A file can override its type default via the `decay_rate:` frontmatter
-field:
+## 2. Decay thresholds
 
-| `decay_rate` | Stale (days) | Archive (days) |
-|---|---|---|
-| `slow` | 180 | 365 |
-| `normal` | type default | type default |
-| `fast` | 14 | 45 |
+Decay is **hardcoded in `internal/sidecar/decay.go`** — it is not
+operator-configurable and there is no frontmatter override. When a fact
+goes unused past its per-type threshold the sidecar flips its status
+`active → stale` (a down-rank, never a file move — v2 has **no `archive/`
+directory** and no second archival stage). Native content is never mutated.
 
-`status: pinned` files never decay automatically, regardless of type or
-`decay_rate`.
-
-**Source of truth:** `hooks/session-stop.sh:92-104`. If you need
-different thresholds, edit that file directly until operator override
-lands (see `docs/plans/` for the tracking plan).
-
-## 3. ADR review-triggers — prose in `decisions/*.md`
-
-Each architecture decision record carries a `## When to revisit`
-section describing an observable signal that would re-open the
-decision. These are **not enforced automatically** — an agent reads
-them and compares to `self-profile.md` and WAL metrics by hand.
-
-Examples of triggers currently live in:
-
-- [`docs/decisions/bash-go-gradual-port.md`](decisions/bash-go-gradual-port.md) — pure-bash install becoming untenable, or a parity divergence that can't be scoped to a fixture subset.
-- [`docs/decisions/fts5-shadow-retrieval.md`](decisions/fts5-shadow-retrieval.md) — metric-based (user needs an FTS-surfaced record that can't be expressed as a trigger phrase).
-- [`docs/decisions/substring-triggers-with-negation.md`](decisions/substring-triggers-with-negation.md) — metric-based (trigger-match persistently below ~10% on a well-populated corpus, or high shadow-miss on slugs with non-empty triggers).
-
-See [`docs/decisions/README.md`](decisions/README.md) for the full index.
-
-To audit current triggers:
-
-```bash
-grep -A3 "## When to revisit" docs/decisions/*.md
-```
-
-### Automated evaluation (v0.11+)
-
-Each ADR may also declare structured `review-triggers:` in its
-frontmatter. Two shapes:
-
-```yaml
-review-triggers:
-  - metric: measurable_precision   # self-profile | wal | file
-    operator: "<"                  # <, <=, >, >=, ==, !=
-    threshold: 0.40
-    source: self-profile
-  - after: "2027-04-22"            # calendar trigger
-```
-
-`memoryctl decisions review` evaluates them against the current
-`self-profile.md` + WAL snapshot and prints one line per trigger:
-
-```
-$ memoryctl decisions review
-[pressure] fts5-shadow-retrieval — shadow_miss_ratio = 0.34 > 0.30
-[overdue]  bash-go-gradual-port — after 2027-04-22 passed (14 days ago)
-[ok]       substring-triggers-with-negation — shadow_miss_ratio = 0.21 (trigger: > 0.60)
-```
-
-Exit code 0 if every trigger is `ok`, 1 if any `pressure` / `overdue`.
-`memoryctl self-profile` appends a `## Decisions under pressure`
-section when triggers fire. `memoryctl doctor` surfaces a single-line
-summary.
-
-Directory precedence: `--dir <path>` → `./docs/decisions/` (project-
-level ADRs if run from a repo root) → `$CLAUDE_MEMORY_DIR/decisions/`
-(personal ADRs). Supported metrics:
-
-| Metric | Source |
+| Type | Stale after (days) |
 |---|---|
-| `measurable_precision` | `self-profile.md` |
-| `recurrence_top_mistake` | `self-profile.md` |
-| `shadow_miss_ratio` | `.wal` (rolling 14-day window) |
-| `ref_count` | the ADR file's own frontmatter (`source: file`) |
+| `note` | 30 |
+| `feedback` | 45 |
+| `mistake` | 60 |
+| `strategy` | 90 |
+| `knowledge` | 90 |
+| `decision` | 90 |
+| `skill-learning` | 120 |
+| any other type | 90 (default) |
 
-Unknown metrics route the trigger to `skipped` — the review run
-continues rather than failing on a newer schema.
+Rules:
 
-## 4. Evidence learning (v0.12+)
+- **Age counts from the last injection**, falling back to `created`. A fact
+  in active rotation never goes stale just because its file is old.
+- `status: pinned` files never decay.
+- `type: continuity` and `type: project` facts are exempt from rotation
+  entirely — they are "where we left off" markers.
+- A stale fact is simply excluded from push injection. It still surfaces
+  through `memoryctl recall` (marked `[stale]`), and recalling it revives it.
 
-Memory files can ship a hand-authored `evidence:` block of phrases
-the Stop-hook feedback-loop uses to classify an injection as
-`trigger-useful` vs `trigger-silent`. Hand-authoring these phrases is
-the cold-start bottleneck for every new install — you don't know
-what voice your own Claude actually uses until it has run for weeks.
+If you genuinely need different thresholds, edit the `staleDays` map in
+`internal/sidecar/decay.go` and rebuild (`make build`).
 
-`memoryctl evidence learn --target <slug>` bootstraps the
-`evidence:` block by mining phrases from your real
-`~/.claude/projects/*/*.jsonl` session transcripts. It reads the WAL
-to find sessions where the target rule fired `trigger-silent`,
-extracts 2/3-gram phrases from bullet-list / enumeration regions of
-the assistant text, ranks by silent-session coverage, filters out
-phrases that are also common in the non-silent noise baseline, and
-presents a ranked list through an interactive approval REPL.
-Accepted phrases append to the target file's `evidence:` block;
-pattern-rejected phrases persist in
-`~/.claude/memory/.runtime/evidence-rejections/<slug>.list` so
-subsequent runs skip them.
+## 3. Secrets gate
 
-```
-$ memoryctl evidence learn --target wrong-root-cause-diagnosis --dry-run
-Scanning 30 sessions (7 silent, 23 noise baseline)
-Target: wrong-root-cause-diagnosis
+`memoryctl guard` (the `PreToolUse` matcher `Write|Edit`) blocks writes to
+memory files whose body contains a recognised credential pattern. It is not
+configured — it is always on — but it has two escape hatches:
 
-Candidates (ranked by silent-session coverage):
-  [5 silent / 0 noise]  "варианты"
-  [4 silent / 1 noise]  "три гипотезы"
-  ...
-```
+- **Whitelist a path permanently.** Add a glob to
+  `~/.claude/memory-global/.secretsignore` (one pattern per line; last
+  matching pattern wins, `!` negates). The lookup chain also includes
+  `$CLAUDE_MEMORY_DIR/.secretsignore.default` and
+  `$CLAUDE_MEMORY_DIR/.secretsignore`.
+- **Override for one write.** Set `HYPOMNEMA_ALLOW_SECRETS=1` for a single
+  invocation.
 
-Flags: `--sessions N` (default 30), `--dry-run` (skip REPL,
-print-only), `--yes` (accept every candidate non-interactively;
-useful only when you trust the ranking and want to batch).
+Do not route around the gate by stripping the value — either whitelist the
+path or replace the text with an obvious placeholder.
 
-`memoryctl` has no access to prompt transcripts unless they already
-exist on disk. No network call; no model inference; all extraction is
-deterministic n-gram + filter.
+## What is NOT configurable
 
-## Why three layers, not one
+These were tunable (or claimed to be) in v1 and are **gone** in v2:
 
-The three layers exist for different audiences:
+- **Injection caps** (`MAX_FILES`, `CAP_*`, per-type quotas). The ranker
+  emits a fixed top-8 / 8 KB budget; there is no `.config.sh`.
+- **`decay_rate:` frontmatter** and archive thresholds — decay is the single
+  compiled table in §2.
+- **ADR review-triggers / `memoryctl decisions review`** — no such verb.
+  Revisit-conditions live only as prose in decision files.
+- **`memoryctl evidence learn`** — no such verb. Author `evidence:` phrases
+  by hand (see the repo `CLAUDE.md`).
 
-- **Runtime config** is for operators who want to tune the system's
-  behaviour right now — more files, fewer files, tighter caps.
-- **Decay thresholds** are architectural choices embedded in the
-  lifecycle model. They shape the project's opinion of what "stale"
-  means per type. Operator override is a gap, not a feature.
-- **ADR review-triggers** are meta: they decide when the architecture
-  itself should change. They are slower-moving, less frequent, and
-  (for now) read by agents, not hooks.
-
-Do not conflate them. A runtime-config variable that wants to become an
-ADR review-trigger is a signal that you're turning a knob into a
-principle. A decay threshold that wants to become runtime-config is a
-signal that your type taxonomy is leaking into operator decisions.
+Run `memoryctl --help` for the authoritative verb list.
