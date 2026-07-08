@@ -27,6 +27,25 @@ func TestScan(t *testing.T) {
 	}
 }
 
+func TestScan_QuotedValues(t *testing.T) {
+	// P0 from the 2026-07-08 review: Claude most often writes YAML/JSON with
+	// quoted values; the gate must not be unquoted-only.
+	hits := []string{
+		`password: "realSecret123"`,
+		`api_key = 'sk_live_abcd1234efgh'`,
+		`"token": "ghp_abcdefgh1234567890abcd"`,
+	}
+	for _, c := range hits {
+		if got := Scan(c); len(got) == 0 {
+			t.Errorf("quoted secret must hit: %s", c)
+		}
+	}
+	// The 8-char value minimum still applies inside quotes.
+	if got := Scan(`password: "short"`); len(got) != 0 {
+		t.Errorf("short quoted placeholder must not hit: %v", got)
+	}
+}
+
 func TestIgnoreMatch(t *testing.T) {
 	dir := t.TempDir()
 	globalDir := filepath.Join(dir, "memory-global")
