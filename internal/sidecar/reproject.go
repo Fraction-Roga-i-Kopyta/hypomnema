@@ -110,12 +110,17 @@ func reprojectIn(e dbtx, files []native.MemFile, walPath string, scope []string)
 			status = "pinned"
 		}
 		rec := Record{
-			Slug:          f.Slug,
-			ContentSHA:    f.ContentSHA,
-			Type:          f.Type,
-			Name:          f.Name,
-			Description:   f.Description,
-			Project:       f.Project,
+			Slug:        f.Slug,
+			ContentSHA:  f.ContentSHA,
+			Type:        f.Type,
+			Name:        f.Name,
+			Description: f.Description,
+			Project:     f.Project,
+			// Persist domains so the column is correct (review E7). This does
+			// NOT activate domain filtering — Query.Domains stays empty, so
+			// rank.domainOK still passes everything; wiring the filter is a
+			// behaviour change left for a design cycle.
+			Domains:       strings.Join(f.Domains, ","),
 			Created:       created,
 			LastInjected:  a.lastInject,
 			RefCount:      a.injects,
