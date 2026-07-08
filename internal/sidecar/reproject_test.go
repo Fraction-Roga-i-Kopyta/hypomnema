@@ -257,8 +257,8 @@ func TestOpen_RecreatesOnSchemaVersionMismatch(t *testing.T) {
 	if err := s2.db.QueryRow(`SELECT v FROM meta WHERE k='schema_version'`).Scan(&v); err != nil {
 		t.Fatalf("read schema_version: %v", err)
 	}
-	if v != "3" {
-		t.Errorf("schema_version = %q, want 3", v)
+	if v != "4" {
+		t.Errorf("schema_version = %q, want 4", v)
 	}
 	if _, ok, _ := s2.Get("old.md"); ok {
 		t.Error("rows from an old schema generation must not survive (projection is rebuildable)")

@@ -6,7 +6,7 @@ package sidecar
 // (0+1)/(0+0+2)=0.5 so a brand-new fact is never zeroed out of ranking.
 const Schema = `
 CREATE TABLE IF NOT EXISTS memory (
-  slug          TEXT PRIMARY KEY,
+  slug          TEXT,
   content_sha   TEXT,
   type          TEXT,
   name          TEXT,
@@ -17,7 +17,8 @@ CREATE TABLE IF NOT EXISTS memory (
   last_injected TEXT,
   ref_count     INTEGER NOT NULL DEFAULT 0,
   status        TEXT NOT NULL DEFAULT 'active',
-  effectiveness REAL NOT NULL DEFAULT 0.5
+  effectiveness REAL NOT NULL DEFAULT 0.5,
+  PRIMARY KEY (slug, project)
 );
 CREATE TABLE IF NOT EXISTS keyword (slug TEXT, project TEXT, term TEXT, weight REAL);
 CREATE TABLE IF NOT EXISTS outcome (slug TEXT, ts TEXT, kind TEXT);

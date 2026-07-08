@@ -64,6 +64,11 @@ type Input struct {
 type Result struct {
 	Markdown string
 	Injected []string
+	// ProjectBySlug maps each injected slug to its owning project (cwd slug or
+	// GlobalProject), so the caller can write project-qualified WAL events
+	// (review E5-deep). Project-local wins over global on a basename tie —
+	// matching scopeRecords' preference.
+	ProjectBySlug map[string]string
 }
 
 // Run orchestrates a single injection: keywords → native files → ranked
@@ -104,7 +109,24 @@ func Run(in Input) (Result, error) {
 		maxTotal = maxTotalBytes
 	}
 	md, injected := render(ranked, bySlug, maxBodyBytes, maxTotal)
-	return Result{Markdown: md, Injected: injected}, nil
+	projectSlug := native.SlugFromCWD(in.CWD)
+	localSlug := map[string]bool{}
+	for _, f := range files {
+		if f.Project == projectSlug {
+			localSlug[f.Slug] = true
+		}
+	}
+	projectBySlug := make(map[string]string, len(injected))
+	for _, slug := range injected {
+		// Prefer the project-local owner over global on a basename tie
+		// (matches scopeRecords / bySlug rendering preference).
+		if localSlug[slug] {
+			projectBySlug[slug] = projectSlug
+		} else if f, ok := bySlug[slug]; ok {
+			projectBySlug[slug] = f.Project
+		}
+	}
+	return Result{Markdown: md, Injected: injected, ProjectBySlug: projectBySlug}, nil
 }
 
 func candidates(in Input, files []native.MemFile, terms []string) []rank.Candidate {

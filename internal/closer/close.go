@@ -58,11 +58,12 @@ func Run(in Input) (Result, error) {
 	if sErr == nil {
 		useful, silent := Classify(injected, names, evidence, sess.Text)
 		res.Useful, res.Silent = len(useful), len(silent)
+		projectOf := projectBySlug(in.ClaudeHome, in.CWD)
 		for _, slug := range useful {
-			appendWAL(in.MemoryDir, in.Today, "trigger-useful", slug, sid)
+			appendWAL(in.MemoryDir, in.Today, "trigger-useful", qualify(projectOf, slug), sid)
 		}
 		for _, slug := range silent {
-			appendWAL(in.MemoryDir, in.Today, "trigger-silent", slug, sid)
+			appendWAL(in.MemoryDir, in.Today, "trigger-silent", qualify(projectOf, slug), sid)
 		}
 	}
 	metrics := fmt.Sprintf("%s|session-metrics|domains:_global_,error_count:%d,tool_calls:%d,duration:%ds|%s",
@@ -126,4 +127,27 @@ func slugMeta(claudeHome, cwd string) (names map[string]string, evidence map[str
 func appendWAL(memDir, day, event, slug, sid string) {
 	line := fmt.Sprintf("%s|%s|%s|%s", day, event, wal.SanitizeField(slug), sid)
 	wal.Append(memDir, line, "")
+}
+
+// projectBySlug maps each in-scope fact's slug to its owning project, project-
+// local winning over global on a basename tie (matches injection preference).
+func projectBySlug(claudeHome, cwd string) map[string]string {
+	local := native.SlugFromCWD(cwd)
+	out := map[string]string{}
+	for _, f := range collectNative(claudeHome, cwd) {
+		if f.Project == local || out[f.Slug] == "" {
+			out[f.Slug] = f.Project
+		}
+	}
+	return out
+}
+
+// qualify project-qualifies a slug for the WAL target so trigger events feed
+// per-project effectiveness (review E5-deep); an unknown project falls back to
+// the bare slug (grandfathered on read).
+func qualify(projectOf map[string]string, slug string) string {
+	if p := projectOf[slug]; p != "" {
+		return native.QKey(p, slug)
+	}
+	return slug
 }
