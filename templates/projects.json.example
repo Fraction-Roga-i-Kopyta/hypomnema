@@ -1,5 +1,5 @@
 {
-  "_comment": "Map absolute project root paths to short project slugs. SessionStart uses longest-prefix match. Slugs are referenced in mistake/strategy frontmatter as `project: <slug>`. Use `project: global` in frontmatter for cross-project content.",
+  "_comment": "V1-LEGACY. In v2 a memory file's owning project is derived from the store it lives in (a project's native store vs the global store) — there is no `project:` frontmatter field. This file is read by ONE thing only: the one-time `memoryctl migrate` command, which uses this cwd->slug map to route legacy v1 files into the right v2 store. If you are not migrating a v1 install, ignore/delete this file.",
   "/Users/you/Development/webapp": "webapp",
   "/Users/you/Development/api": "api-service",
   "/Users/you/code/cli-tool": "cli"

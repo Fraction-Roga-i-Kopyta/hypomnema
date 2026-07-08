@@ -1,25 +1,16 @@
 ---
 type: mistake
-seed: true
+name: "file-path-spaces-unquoted"
+description: "Unquoted paths with spaces get word-split into multiple shell arguments"
 created: 2026-04-13
 status: active
-domains: [shell]
-keywords: [path, spaces, quote, macos, file, directory]
 severity: minor
 recurrence: 0
+scope: domain
+keywords: [path, spaces, quote, macos, file, directory]
+domains: [shell]
 root-cause: "The shell word-splits on whitespace, so the path 'My Documents/file.txt' without quotes becomes two arguments: 'My' and 'Documents/file.txt'"
 prevention: "Always wrap paths in double quotes, especially in scripts and copy/move commands"
-decay_rate: never
-ref_count: 0
-triggers:
-  - "path spaces"
-  - "unquoted path"
-  - "path with spaces"
-  - "quote a path"
-  - "quote path"
-  - "word splitting"
-  - "spaces in path"
-scope: domain
 ---
 
 # Paths with spaces, unquoted

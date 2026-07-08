@@ -1,26 +1,16 @@
 ---
 type: mistake
-seed: true
+name: "git-committed-secrets-history"
+description: "Deleting a committed secret leaves it reachable in git history — rotate the key, then rewrite history"
 created: 2026-04-13
 status: active
-domains: [git, security]
-keywords: [git, secrets, env, history, leak, gitignore, bfg]
 severity: critical
 recurrence: 0
+scope: domain
+keywords: [git, secrets, env, history, leak, gitignore, bfg]
+domains: [git, security]
 root-cause: "Removing a file from the current commit does not remove it from history — a committed .env stays reachable via git log/show forever. If the repo is public, the secret is already compromised"
 prevention: "1) Add .env to .gitignore BEFORE the first commit. 2) Use pre-commit hooks (gitleaks, trufflehog). 3) On leak — rotate the key immediately, then rewrite history with git-filter-repo"
-decay_rate: never
-ref_count: 0
-triggers:
-  - "git secret leak"
-  - "committed env file"
-  - "committed .env"
-  - ".env from history"
-  - "remove from history"
-  - "remove from git history"
-  - "bfg"
-  - "git-filter-repo"
-scope: domain
 ---
 
 # Git: secrets committed to history

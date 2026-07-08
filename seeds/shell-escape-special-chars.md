@@ -1,26 +1,16 @@
 ---
 type: mistake
-seed: true
+name: "shell-escape-special-chars"
+description: "$, !, backticks and $() are interpreted inside double quotes before the command runs"
 created: 2026-04-13
 status: active
-domains: [shell]
-keywords: [bash, shell, escape, dollar, exclamation, quote, password]
 severity: minor
 recurrence: 0
+scope: domain
+keywords: [bash, shell, escape, dollar, exclamation, quote, password]
+domains: [shell]
 root-cause: "Special characters ($, !, backticks, $()) get interpreted inside double quotes before the string reaches the command"
 prevention: "Use single quotes for strings containing special characters; for bcrypt hashes or passwords, use a heredoc with a quoted EOF delimiter to suppress interpolation"
-decay_rate: never
-ref_count: 0
-triggers:
-  - "shell escape"
-  - "bash dollar sign"
-  - "$2b$"
-  - "bcrypt"
-  - "double-quoted bash"
-  - "escape in bash"
-  - "history expansion"
-  - "special characters inside"
-scope: domain
 ---
 
 # Shell escape: special characters inside quotes
