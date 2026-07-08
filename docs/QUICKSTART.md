@@ -33,13 +33,12 @@ make build       # produces ./bin/memoryctl (static, CGO_ENABLED=0)
 
 Without `memoryctl` the hook silently exits 0 — dedup is off, everything else still works. If you're seeing many near-duplicate mistakes accumulate, build `memoryctl` and they'll start being blocked at write time.
 
-## 2. Run the wizard (90 seconds)
+## 2. Project registration — not needed in v2
 
-```bash
-./install.sh --discover
-```
-
-The wizard scans `~/Development/`, `~/code/`, `~/projects/`, and `~/src/` for git repos and asks which ones you want hypomnema to track. It updates `~/.claude/memory/projects.json` with your selections.
+v2 derives each project's memory store from the working directory
+(`~/.claude/projects/<slug>/memory/`); there is nothing to register.
+(The v1 `--discover` wizard and `projects.json` were removed — the flag
+now exits with an explanation.)
 
 ## 3. Add the agent protocol to your global CLAUDE.md (15 seconds)
 
