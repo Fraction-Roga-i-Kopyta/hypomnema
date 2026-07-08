@@ -30,6 +30,10 @@ const maxTotalBytes = 8000
 // pull (memoryctl recall) so a recalled note obeys the same context budget.
 const MaxBodyBytes = maxBodyBytes
 
+// MaxTotalBytes is the whole-payload cap, exported so other envelope emitters
+// (skill-inject) enforce the same budget the injection render path does.
+const MaxTotalBytes = maxTotalBytes
+
 // CapBody bounds one record body to maxBytes at a UTF-8 rune boundary with a
 // visible truncation marker. Exported for the recall verb.
 func CapBody(body string, maxBytes int) string { return capBody(body, maxBytes) }

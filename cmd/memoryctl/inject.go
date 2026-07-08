@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -140,7 +141,12 @@ func pruneRuntimeLists(dir string) {
 	}
 }
 
-func emitEnvelope(event, markdown string) {
+// marshalEnvelope builds the hookSpecificOutput JSON with HTML-escaping OFF.
+// Default json.Marshal rewrites <,>,& to </>/& (6 bytes each);
+// on code/markup-heavy facts that inflates the envelope ~2x past the markdown
+// byte count the injection budget measures, so Claude Code diverts the payload
+// to a file the model never reads inline — defeating the budget (review H1).
+func marshalEnvelope(event, markdown string) ([]byte, error) {
 	type hookOut struct {
 		HookEventName     string `json:"hookEventName"`
 		AdditionalContext string `json:"additionalContext"`
@@ -148,7 +154,17 @@ func emitEnvelope(event, markdown string) {
 	env := struct {
 		HookSpecificOutput hookOut `json:"hookSpecificOutput"`
 	}{HookSpecificOutput: hookOut{HookEventName: event, AdditionalContext: markdown}}
-	b, err := json.Marshal(env)
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(env); err != nil {
+		return nil, err
+	}
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil
+}
+
+func emitEnvelope(event, markdown string) {
+	b, err := marshalEnvelope(event, markdown)
 	if err != nil {
 		return
 	}

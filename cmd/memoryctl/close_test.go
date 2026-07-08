@@ -48,3 +48,32 @@ func TestCloseVerb_FailSafe(t *testing.T) {
 		t.Fatalf("bad stdin must exit 0, got %d", code)
 	}
 }
+
+func TestCloseVerb_EmptySessionFallsBackToUnknown(t *testing.T) { // review H3
+	home := t.TempDir()
+	memDir := filepath.Join(home, ".claude", "memory")
+	os.MkdirAll(memDir, 0o755)
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
+	env := map[string]string{"CLAUDE_HOME": filepath.Join(home, ".claude"), "CLAUDE_MEMORY_DIR": memDir}
+	// Envelope with no session_id — must NOT write empty-session WAL rows,
+	// which `wal validate` rejects (poisoning the CI gate).
+	_, _, code := runStdin(t, env, `{}`, "close")
+	if code != 0 {
+		t.Fatalf("close must be fail-safe (exit 0), got %d", code)
+	}
+	wal, _ := os.ReadFile(filepath.Join(memDir, ".wal"))
+	for _, ln := range strings.Split(strings.TrimSpace(string(wal)), "\n") {
+		if ln == "" {
+			continue
+		}
+		cols := strings.Split(ln, "|")
+		if len(cols) == 4 && cols[3] == "" {
+			t.Errorf("close wrote a WAL row with an empty session column: %q", ln)
+		}
+	}
+	// And the WAL must pass validation.
+	_, _, vcode := runStdin(t, env, "", "wal", "validate")
+	if vcode != 0 {
+		t.Errorf("wal validate rejects close's rows (exit %d)", vcode)
+	}
+}
