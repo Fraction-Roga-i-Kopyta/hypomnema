@@ -146,12 +146,13 @@ func windowCutoffDate(windowDays int) string {
 }
 
 // computeAmbientFraction derives the share of ambient activations among
-// all reactive trigger fires. Denominator is `triggerUsefulAll +
-// triggerSilentAll`; numerator is `ambientActivations`. When the
+// all reactive trigger fires (per session). Denominator is
+// ambientActivations + triggerUsefulMeas + triggerSilentMeas. When the
 // denominator is 0 the fraction is left undefined so the renderer
 // emits "n/a%" instead of a misleading 0%.
 func computeAmbientFraction(sig *walSignals) {
-	total := sig.triggerUsefulAll + sig.triggerSilentAll
+	// Per-session reactive fires (consistent with the per-session numerator).
+	total := sig.ambientActivations + sig.triggerUsefulMeas + sig.triggerSilentMeas
 	if total <= 0 {
 		return
 	}
@@ -219,8 +220,6 @@ type walSignals struct {
 	outcomeNegative     int
 	strategyUsed        int
 	strategyGap         int
-	triggerUsefulAll    int
-	triggerSilentAll    int
 	ambientActivations  int
 	triggerUsefulMeas   int
 	triggerSilentMeas   int
@@ -295,6 +294,24 @@ func collectWALSignals(walPath string, ambient map[string]bool, outcomeCutoff, i
 	// intuition-milestone.md.
 	silentRecent := map[string]bool{}
 
+	// v2.6.0 (review E1+E2): count SESSIONS, not turns, and classify each
+	// (slug, session) once (useful wins over silent). close writes a
+	// session-metrics + trigger rows on every turn, so per-event counters
+	// inflated totals ~20x; and trigger slugs carry a `.md` suffix while
+	// ambient slugs are bare, so the ambient lookup must normalize.
+	sessSet := map[string]bool{} // unique session ids → total sessions
+	type trigAgg struct{ useful, ambient, usefulRecent, silentRecentSeen bool }
+	trig := map[string]*trigAgg{} // key: bareSlug|session
+	getTrig := func(bare, sess string) *trigAgg {
+		k := bare + "|" + sess
+		a := trig[k]
+		if a == nil {
+			a = &trigAgg{}
+			trig[k] = a
+		}
+		return a
+	}
+
 	sc := bufio.NewScanner(f)
 	// WAL lines can be long if the bash side buffered arguments. Bump max
 	// line from the default 64KiB to be safe against future growth.
@@ -310,8 +327,8 @@ func collectWALSignals(walPath string, ambient map[string]bool, outcomeCutoff, i
 		// Cheap counters first (most events land here).
 		switch event {
 		case "session-metrics":
-			sig.totalSessions++
 			if len(fields) >= 4 {
+				sessSet[fields[3]] = true // col4 is the session id in v2 (metrics blob in v1 — still a per-row key)
 				domainsCSV, metricsBlob := splitSessionMetrics(fields[2], fields[3])
 				ec := parseErrorCount(metricsBlob)
 				for _, d := range strings.Split(domainsCSV, ",") {
@@ -329,7 +346,9 @@ func collectWALSignals(walPath string, ambient map[string]bool, outcomeCutoff, i
 		case "outcome-positive":
 			sig.outcomePositive++
 			if len(fields) >= 4 {
-				positive[fields[2]+"|"+fields[3]] = true
+				// Normalize the slug so v2 trigger keys (bareSlug|session) can
+				// correlate with legacy outcome keys (review E1).
+				positive[strings.TrimSuffix(fields[2], ".md")+"|"+fields[3]] = true
 			}
 			if len(fields) >= 3 && (outcomeCutoff == "" || fields[0] >= outcomeCutoff) {
 				sig.outcomesPerSlug[fields[2]]++
@@ -344,34 +363,22 @@ func collectWALSignals(walPath string, ambient map[string]bool, outcomeCutoff, i
 		case "strategy-gap":
 			sig.strategyGap++
 		case "trigger-useful":
-			sig.triggerUsefulAll++
-			slug := ""
-			if len(fields) >= 3 {
-				slug = fields[2]
-			}
-			if ambient[slug] {
-				sig.ambientActivations++
-			} else {
-				sig.triggerUsefulMeas++
+			if len(fields) >= 4 {
+				bare := strings.TrimSuffix(fields[2], ".md")
+				a := getTrig(bare, fields[3])
+				a.useful = true // useful wins over silent within a session
+				a.ambient = ambient[bare]
 				if intuitionCutoff == "" || fields[0] >= intuitionCutoff {
-					sig.triggerUsefulMeasRecent++
+					a.usefulRecent = true
 				}
 			}
 		case "trigger-silent":
-			sig.triggerSilentAll++
-			slug := ""
-			if len(fields) >= 3 {
-				slug = fields[2]
-			}
-			if ambient[slug] {
-				sig.ambientActivations++
-			} else {
-				sig.triggerSilentMeas++
-				if len(fields) >= 4 {
-					silent[slug+"|"+fields[3]] = true
-					if intuitionCutoff == "" || fields[0] >= intuitionCutoff {
-						silentRecent[slug+"|"+fields[3]] = true
-					}
+			if len(fields) >= 4 {
+				bare := strings.TrimSuffix(fields[2], ".md")
+				a := getTrig(bare, fields[3])
+				a.ambient = ambient[bare]
+				if intuitionCutoff == "" || fields[0] >= intuitionCutoff {
+					a.silentRecentSeen = true
 				}
 			}
 		case "evidence-empty":
@@ -384,6 +391,28 @@ func collectWALSignals(walPath string, ambient map[string]bool, outcomeCutoff, i
 	}
 	if err := sc.Err(); err != nil {
 		return nil, err
+	}
+
+	// Tally per (slug, session) — dedups the per-turn events and applies
+	// useful-wins-over-silent (review E2). Ambient rules (E1: matched after
+	// .md normalization) are excluded from precision.
+	sig.totalSessions = len(sessSet)
+	for key, a := range trig {
+		switch {
+		case a.ambient:
+			sig.ambientActivations++
+		case a.useful:
+			sig.triggerUsefulMeas++
+			if a.usefulRecent {
+				sig.triggerUsefulMeasRecent++
+			}
+		default:
+			sig.triggerSilentMeas++
+			silent[key] = true
+			if a.silentRecentSeen {
+				silentRecent[key] = true
+			}
+		}
 	}
 
 	// Windowed silent-applied correlation for intuition milestone.

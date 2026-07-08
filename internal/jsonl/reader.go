@@ -76,61 +76,67 @@ func ReadSession(path string) (Session, error) {
 
 // decodeStream is exported to the package only for testability —
 // lets tests pass strings.NewReader instead of writing temp files.
+// maxLineBytes bounds a single line we will parse. A transcript line larger
+// than this is a giant tool payload, never assistant text we mine — we skip
+// its content but MUST keep scanning. bufio.Scanner could not: on a token
+// past its cap it stops the whole scan, silently dropping every line after
+// the big one and fabricating "silent" for facts cited later (review E3).
+const maxLineBytes = 4 * 1024 * 1024
+
 func decodeStream(r io.Reader) (Session, error) {
-	sc := bufio.NewScanner(r)
-	// Real transcripts routinely have multi-KB tool output lines; cap
-	// at 4MB so a single large line doesn't kill the scan.
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	br := bufio.NewReader(r)
 
 	var out Session
 	var b strings.Builder
 	var firstTS, lastTS time.Time
 	first := true
-	for sc.Scan() {
-		line := sc.Bytes()
-		if len(line) == 0 {
-			continue
+	for {
+		line, err := br.ReadBytes('\n')
+		if len(line) > 0 && len(line) <= maxLineBytes {
+			processLine(line, &out, &b, &firstTS, &lastTS, &first)
 		}
-		var rec record
-		if err := json.Unmarshal(line, &rec); err != nil {
-			// Malformed line — skip, don't fail the whole session.
-			continue
-		}
-		if first && rec.SessionID != "" {
-			out.ID = rec.SessionID
-			first = false
-		}
-		if ts, err := time.Parse(time.RFC3339, rec.Timestamp); err == nil {
-			if firstTS.IsZero() {
-				firstTS = ts
-			}
-			lastTS = ts
-		}
-		if rec.Message == nil {
-			continue
-		}
-		for _, p := range rec.Message.Content {
-			switch {
-			case rec.Type == "assistant" && p.Type == "tool_use":
-				out.ToolCalls++
-			case p.Type == "tool_result" && p.IsError:
-				out.ToolErrors++
-			case rec.Type == "assistant" && p.Type == "text" && p.Text != "":
-				if b.Len() > 0 {
-					b.WriteString("\n\n")
-				}
-				b.WriteString(p.Text)
-			}
+		// A line longer than maxLineBytes is skipped (content unneeded) but the
+		// loop continues to the next line — the whole point of the E3 fix.
+		if err != nil {
+			break // io.EOF (or a read error) — return whatever was decoded
 		}
 	}
 	out.Text = b.String()
 	if !firstTS.IsZero() && lastTS.After(firstTS) {
 		out.DurationSec = int(lastTS.Sub(firstTS).Seconds())
 	}
-	if err := sc.Err(); err != nil {
-		// Bufio errors (oversized line etc.) are tolerated the same
-		// way as malformed JSON — caller gets whatever was decoded.
-		return out, nil
-	}
 	return out, nil
+}
+
+func processLine(line []byte, out *Session, b *strings.Builder, firstTS, lastTS *time.Time, first *bool) {
+	var rec record
+	if err := json.Unmarshal(line, &rec); err != nil {
+		return // malformed line — skip, don't fail the whole session
+	}
+	if *first && rec.SessionID != "" {
+		out.ID = rec.SessionID
+		*first = false
+	}
+	if ts, err := time.Parse(time.RFC3339, rec.Timestamp); err == nil {
+		if firstTS.IsZero() {
+			*firstTS = ts
+		}
+		*lastTS = ts
+	}
+	if rec.Message == nil {
+		return
+	}
+	for _, p := range rec.Message.Content {
+		switch {
+		case rec.Type == "assistant" && p.Type == "tool_use":
+			out.ToolCalls++
+		case p.Type == "tool_result" && p.IsError:
+			out.ToolErrors++
+		case rec.Type == "assistant" && p.Type == "text" && p.Text != "":
+			if b.Len() > 0 {
+				b.WriteString("\n\n")
+			}
+			b.WriteString(p.Text)
+		}
+	}
 }

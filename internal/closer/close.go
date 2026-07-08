@@ -40,13 +40,8 @@ func Run(in Input) (Result, error) {
 	injected := readInjectedSet(in.MemoryDir, in.SessionID)
 	names, evidence := slugMeta(in.ClaudeHome, in.CWD)
 
-	var sess jsonl.Session
-	if s, err := jsonl.ReadSession(in.TranscriptPath); err == nil {
-		sess = s
-	}
+	sess, sErr := jsonl.ReadSession(in.TranscriptPath)
 
-	useful, silent := Classify(injected, names, evidence, sess.Text)
-	res.Useful, res.Silent = len(useful), len(silent)
 	// A missing/blank session id must not produce empty-session WAL rows:
 	// wal validate (and the CI gate) reject them as corrupt (review H3).
 	// Mirror recall's non-empty fallback.
@@ -54,11 +49,21 @@ func Run(in Input) (Result, error) {
 	if sid == "" {
 		sid = "unknown"
 	}
-	for _, slug := range useful {
-		appendWAL(in.MemoryDir, in.Today, "trigger-useful", slug, sid)
-	}
-	for _, slug := range silent {
-		appendWAL(in.MemoryDir, in.Today, "trigger-silent", slug, sid)
+
+	// Classify usefulness ONLY when the transcript was actually readable. A
+	// failed read (missing/blocked path, no transcript_path) leaves Text empty,
+	// which Classify would score as "every injected fact was silent" —
+	// fabricating negative evidence for the whole session (review E4). v1
+	// skipped the evidence pass in this case; v2 must too.
+	if sErr == nil {
+		useful, silent := Classify(injected, names, evidence, sess.Text)
+		res.Useful, res.Silent = len(useful), len(silent)
+		for _, slug := range useful {
+			appendWAL(in.MemoryDir, in.Today, "trigger-useful", slug, sid)
+		}
+		for _, slug := range silent {
+			appendWAL(in.MemoryDir, in.Today, "trigger-silent", slug, sid)
+		}
 	}
 	metrics := fmt.Sprintf("%s|session-metrics|domains:_global_,error_count:%d,tool_calls:%d,duration:%ds|%s",
 		in.Today, sess.ToolErrors, sess.ToolCalls, sess.DurationSec, sid)

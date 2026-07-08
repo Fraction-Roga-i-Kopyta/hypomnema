@@ -1,5 +1,51 @@
 # Changelog
 
+## [2.6.0] — 2026-07-08
+
+Effectiveness-signal data-quality release (internal-audit cluster E1–E5). The
+self-profile metrics and cross-project overlap that the Bayesian ranker rests
+on were being computed from corrupted inputs — inflated ~20x by per-turn
+duplication, blind to ambient rules, poisoned by giant transcript lines and
+missing transcripts, and clobbered across same-named files in different
+projects. This corrects **what gets measured**, so effectiveness/precision now
+reflect reality. Redeploy the binary; the sidecar auto-rebuilds on the next
+inject/close (schema bumped v2→v3).
+
+### Fixed
+
+- **Self-profile counts sessions, not turns** (E2). `close` writes a
+  session-metrics + trigger rows every turn, so per-event counters inflated
+  `total sessions`, `silent-noise`, and `measurable precision` roughly 20x
+  (e.g. 1657 rows for 79 real sessions). Each (slug, session) is now classified
+  once, useful winning over silent within a session.
+- **Ambient rules are recognized** (E1). Trigger events carry a `.md`-suffixed
+  slug (`close` writes `f.Slug`) while ambient slugs are bare, so the ambient
+  lookup always missed and `ambient activations` read 0. The lookup now
+  normalizes the suffix; the `ambient_fraction` denominator switched to the
+  per-session measurables to match its numerator.
+- **A huge transcript line no longer truncates the scan** (E3). `decodeStream`
+  read with a 4MB-capped `bufio.Scanner`; a larger line (a giant `tool_result`)
+  stopped the scan and silently dropped every assistant line after it —
+  fabricating "silent" for facts cited later. It now reads with
+  `bufio.Reader.ReadBytes`, skipping oversized lines but continuing.
+- **A missing/unreadable transcript skips classification** (E4). An unreadable
+  transcript left the assistant text empty, which `Classify` scored as "every
+  injected fact was silent" — fabricated negative evidence for the whole
+  session. `close` now only classifies when the transcript actually read;
+  session-metrics/close are still recorded.
+- **Cross-project keyword clobber** (E5). The `keyword` table gained a `project`
+  column; `PopulateKeywords` clears rows scoped by (slug, project). A Reproject
+  for one project (fired on every Stop of any project) no longer wipes another
+  project's keyword rows for a shared basename slug (`continuity.md`/`notes.md`
+  exist in every project), which had zeroed the other project's overlap.
+
+### Known residual
+
+- The deeper cross-project effectiveness poisoning — the `memory` table's
+  bare-slug primary key plus WAL events that carry no project — still merges
+  same-named files' history across projects. A true composite key needs project
+  attribution in the WAL (a format change) and is deferred to its own release.
+
 ## [2.5.1] — 2026-07-08
 
 Hardening release from an internal audit (nine independent review lenses, each

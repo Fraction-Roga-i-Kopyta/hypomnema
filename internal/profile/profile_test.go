@@ -353,3 +353,48 @@ func mustMkdir(t *testing.T, path string) {
 		t.Fatalf("mkdir %s: %v", path, err)
 	}
 }
+
+// TestGenerate_MdSlugAndPerSession is the v2.6.0 regression for review E1+E2:
+// (E1) trigger events carry a `.md` slug (close writes f.Slug) while ambient
+// slugs are bare — the ambient lookup must normalize, or ambient activations
+// read 0; (E2) the same (slug,session) is written every turn, so counts must
+// dedup per session, not sum per event.
+func TestGenerate_MdSlugAndPerSession(t *testing.T) {
+	dir := t.TempDir()
+	nat := filepath.Join(dir, "native")
+	files := []native.MemFile{
+		nativeFile(t, nat, "ambient-rule", ambientFile),
+		nativeFile(t, nat, "bar-mistake", mistakeUniversal),
+	}
+	var b strings.Builder
+	// One real session, recorded across many turns (per-turn duplication).
+	for i := 0; i < 40; i++ {
+		b.WriteString("2026-04-10|session-metrics|domains:_global_,error_count:0,tool_calls:1,duration:1s|sessX\n")
+		b.WriteString("2026-04-10|trigger-silent|bar-mistake.md|sessX\n")  // .md slug, repeated
+		b.WriteString("2026-04-10|trigger-useful|ambient-rule.md|sessX\n") // .md slug, ambient
+	}
+	mustWrite(t, filepath.Join(dir, ".wal"), b.String())
+
+	t.Setenv("HYPOMNEMA_NOW", "2026-04-22 12:34")
+	t.Setenv("HYPOMNEMA_INTUITION_WINDOW_DAYS", "0")
+	if err := Generate(dir, files); err != nil {
+		t.Fatal(err)
+	}
+	got := mustRead(t, filepath.Join(dir, "self-profile.md"))
+
+	// E2: 40 turns of one session → 1 session, not 40.
+	mustContain(t, got, "| total sessions (logged) | 1 |")
+	// E1: ambient slug written as .md is still recognized → 1 activation (deduped per session).
+	mustContain(t, got, "| ambient activations (rules excluded from precision by design) | 1 |")
+	// E2: the .md silent slug is deduped to one measurable silent, not 40.
+	mustContain(t, got, "| silent-noise (silent, no application signal — **tuning targets**) | 1 |")
+}
+
+func mustRead(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
