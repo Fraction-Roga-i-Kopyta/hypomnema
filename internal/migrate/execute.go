@@ -20,11 +20,11 @@ type ExecOpts struct {
 // the (preserved) WAL + native, and back up the v1 store. Idempotent: writing
 // the same native files again is a no-op overwrite; backup is skipped if it
 // already exists. The old store is NEVER deleted — only copied to BackupDir.
-func Execute(p Plan, o ExecOpts) error {
+func Execute(p Plan, o ExecOpts) (sidecarRebuilt bool, err error) {
 	// 1. Back up the v1 store (once).
 	if _, err := os.Stat(o.BackupDir); os.IsNotExist(err) {
 		if err := copyTree(o.V1Dir, o.BackupDir); err != nil {
-			return fmt.Errorf("migrate.Execute: backup: %w", err)
+			return false, fmt.Errorf("migrate.Execute: backup: %w", err)
 		}
 	}
 	// 2. Write kept native files.
@@ -33,22 +33,29 @@ func Execute(p Plan, o ExecOpts) error {
 			continue
 		}
 		if err := os.MkdirAll(c.TargetDir, 0o755); err != nil {
-			return fmt.Errorf("migrate.Execute: mkdir %s: %w", c.TargetDir, err)
+			return false, fmt.Errorf("migrate.Execute: mkdir %s: %w", c.TargetDir, err)
 		}
 		if err := writeFileAtomic(filepath.Join(c.TargetDir, c.Slug), []byte(c.Native), 0o644); err != nil {
-			return fmt.Errorf("migrate.Execute: write %s: %w", c.Slug, err)
+			return false, fmt.Errorf("migrate.Execute: write %s: %w", c.Slug, err)
 		}
 	}
 	// 3. Rebuild the sidecar from the preserved WAL + the new native files.
+	// The sidecar is a rebuildable projection, so a failure here does NOT fail
+	// the migration (files are already written + backed up) — but it must be
+	// SURFACED, not swallowed, so the CLI doesn't claim "sidecar rebuilt" when
+	// it wasn't (review: migrate swallows sidecar rebuild error).
 	files := allNative(p)
 	s, err := sidecar.Open(filepath.Join(o.MemoryDir, ".sidecar.db"))
-	if err == nil {
-		// nil scope: the reconciliation scope derives from the migrated files'
-		// own project tags — a one-shot migration owns everything it wrote.
-		_ = sidecar.Reproject(s, files, filepath.Join(o.MemoryDir, ".wal"), nil)
-		s.Close()
+	if err != nil {
+		return false, nil
 	}
-	return nil
+	defer s.Close()
+	// nil scope: the reconciliation scope derives from the migrated files'
+	// own project tags — a one-shot migration owns everything it wrote.
+	if rerr := sidecar.Reproject(s, files, filepath.Join(o.MemoryDir, ".wal"), nil); rerr != nil {
+		return false, nil
+	}
+	return true, nil
 }
 
 // Rollback restores the v1 store from BackupDir (the new native dirs are left
