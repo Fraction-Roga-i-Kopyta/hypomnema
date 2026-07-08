@@ -9,16 +9,18 @@ import (
 )
 
 // PopulateKeywords rebuilds keyword rows for the supplied files: name +
-// description + body are tokenized; weight is term frequency. Only the
-// supplied files' rows are cleared — the table is shared across projects,
-// and a scoped Reproject must not wipe other projects' relevance signal.
+// description + body are tokenized; weight is term frequency. Rows are cleared
+// scoped by (slug, project) so a Reproject for one project never wipes another
+// project's rows for a same-basename slug (continuity.md/notes.md exist in
+// every project) — that cross-project clobber zeroed the other project's
+// overlap (review E5).
 func (s *Store) PopulateKeywords(files []native.MemFile) error {
 	return populateKeywordsIn(s.db, files)
 }
 
 func populateKeywordsIn(e dbtx, files []native.MemFile) error {
 	for _, f := range files {
-		if _, err := e.Exec(`DELETE FROM keyword WHERE slug=?`, f.Slug); err != nil {
+		if _, err := e.Exec(`DELETE FROM keyword WHERE slug=? AND project=?`, f.Slug, f.Project); err != nil {
 			return fmt.Errorf("sidecar.PopulateKeywords: clear %s: %w", f.Slug, err)
 		}
 	}
@@ -32,8 +34,8 @@ func populateKeywordsIn(e dbtx, files []native.MemFile) error {
 			freq[tok]++
 		}
 		for term, n := range freq {
-			if _, err := e.Exec(`INSERT INTO keyword (slug, term, weight) VALUES (?,?,?)`,
-				f.Slug, term, float64(n)); err != nil {
+			if _, err := e.Exec(`INSERT INTO keyword (slug, project, term, weight) VALUES (?,?,?,?)`,
+				f.Slug, f.Project, term, float64(n)); err != nil {
 				return fmt.Errorf("sidecar.PopulateKeywords: insert %s/%s: %w", f.Slug, term, err)
 			}
 		}
