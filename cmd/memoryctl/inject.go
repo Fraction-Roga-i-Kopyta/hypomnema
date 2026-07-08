@@ -97,9 +97,11 @@ func persistInjected(already, slugs []string, sessionID string) {
 
 // writeSessionList rewrites the session's injected list with the set-union
 // of already + slugs. Shared by push (inject) and pull (recall) so push
-// dedup and close classification see both delivery paths. Two concurrent
-// writers race read→union→write (last writer wins) — pre-existing behaviour,
-// acceptable for per-session lists.
+// dedup and close classification see both delivery paths. The write is atomic
+// (tmp+rename) so the Stop-hook reader never sees a truncated/empty list mid-
+// write — a torn read there means a whole turn's trigger classification is
+// lost (review C4). Two concurrent writers still race read→union→write (last
+// writer wins), acceptable for per-session lists.
 func writeSessionList(already, slugs []string, sessionID string) {
 	runtimeDir := filepath.Join(memoryDir(), ".runtime")
 	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
@@ -117,7 +119,7 @@ func writeSessionList(already, slugs []string, sessionID string) {
 			seen[s] = true
 		}
 	}
-	_ = os.WriteFile(sessionListPath(sessionID),
+	_ = pathutil.WriteFileAtomic(sessionListPath(sessionID),
 		[]byte(strings.Join(union, "\n")+"\n"), 0o600)
 }
 
