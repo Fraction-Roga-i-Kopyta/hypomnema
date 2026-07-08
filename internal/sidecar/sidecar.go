@@ -50,7 +50,7 @@ type Record struct {
 // per-project Reproject clears only its own rows for a same-basename slug.
 // Open wipes a sidecar written by a different generation — the sidecar is a
 // derived projection, so the wipe only costs the next Reproject.
-const schemaVersion = "3"
+const schemaVersion = "4"
 
 // Open opens (creating if needed) the sidecar DB at dbPath and applies the
 // schema. Mirrors internal/fts: modernc.org/sqlite, busy_timeout, WAL journal.
@@ -150,7 +150,7 @@ func upsertIn(e dbtx, r Record) error {
 INSERT INTO memory (slug, content_sha, type, name, description, project,
 	domains, created, last_injected, ref_count, status, effectiveness)
 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-ON CONFLICT(slug) DO UPDATE SET
+ON CONFLICT(slug, project) DO UPDATE SET
 	content_sha=excluded.content_sha, type=excluded.type, name=excluded.name,
 	description=excluded.description, project=excluded.project,
 	domains=excluded.domains, created=excluded.created,

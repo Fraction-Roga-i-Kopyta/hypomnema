@@ -50,3 +50,29 @@ const GlobalProject = "global"
 func Scope(cwd string) []string {
 	return []string{SlugFromCWD(cwd), GlobalProject}
 }
+
+// qkeySep separates the project from the slug in a project-qualified WAL
+// target / sidecar identity. ASCII Unit Separator (0x1f) is impossible inside
+// a filename-derived slug or a cwd-derived project slug, so QKey is
+// collision-proof, and it is neither the WAL column delimiter ('|') nor a
+// carriage return, so a qualified target still passes wal.Validate. Grep still
+// finds a slug: it survives intact after the separator.
+const qkeySep = "\x1f"
+
+// QKey builds the project-qualified key for a fact. Global facts use the
+// GlobalProject tag. The slug is used as-is (callers pass the bare or .md slug
+// consistently on both the write and read side).
+func QKey(project, slug string) string {
+	return project + qkeySep + slug
+}
+
+// ParseQKey splits a WAL target into (project, slug). qualified is false for a
+// legacy bare slug (no separator) written before project attribution — those
+// are grandfathered at reproject time to whichever project currently owns the
+// slug.
+func ParseQKey(target string) (project, slug string, qualified bool) {
+	if i := strings.IndexByte(target, qkeySep[0]); i >= 0 {
+		return target[:i], target[i+1:], true
+	}
+	return "", target, false
+}
