@@ -47,7 +47,13 @@ func Run(in Input) (Result, error) {
 
 	useful, silent := Classify(injected, names, evidence, sess.Text)
 	res.Useful, res.Silent = len(useful), len(silent)
+	// A missing/blank session id must not produce empty-session WAL rows:
+	// wal validate (and the CI gate) reject them as corrupt (review H3).
+	// Mirror recall's non-empty fallback.
 	sid := wal.SanitizeField(in.SessionID)
+	if sid == "" {
+		sid = "unknown"
+	}
 	for _, slug := range useful {
 		appendWAL(in.MemoryDir, in.Today, "trigger-useful", slug, sid)
 	}

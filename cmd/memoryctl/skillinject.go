@@ -51,13 +51,6 @@ type skillEnvelope struct {
 	} `json:"tool_input"`
 }
 
-type hookOutput struct {
-	HookSpecificOutput struct {
-		HookEventName     string `json:"hookEventName"`
-		AdditionalContext string `json:"additionalContext"`
-	} `json:"hookSpecificOutput"`
-}
-
 // runSkillInject implements `memoryctl skill-inject`. It reads a PostToolUse
 // hook envelope from stdin, extracts the skill name, retrieves accumulated
 // skill-learning facts for that skill, and prints a hookSpecificOutput JSON
@@ -87,7 +80,15 @@ func runSkillInject(_ []string) {
 	fmt.Fprintf(&b, "Accumulated learnings for skill `%s` (apply alongside the skill):\n\n", skill)
 	for _, s := range scored {
 		f := bySlug[s.Slug]
-		fmt.Fprintf(&b, "- %s\n", inject.CapBody(f.Body, inject.MaxBodyBytes))
+		entry := fmt.Sprintf("- %s\n", inject.CapBody(f.Body, inject.MaxBodyBytes))
+		// Honour the same total budget as injection: an oversized envelope is
+		// diverted to a file the model never reads inline, so learnings past the
+		// budget would silently never surface (review H2). Stop before overflow,
+		// and record recall only for learnings actually delivered.
+		if b.Len()+len(entry) > inject.MaxTotalBytes && b.Len() > 0 {
+			break
+		}
+		b.WriteString(entry)
 		if stdinSid != "" {
 			recordRecallWithSession(s.Slug, stdinSid)
 		} else {
@@ -95,10 +96,10 @@ func runSkillInject(_ []string) {
 		}
 	}
 
-	var out hookOutput
-	out.HookSpecificOutput.HookEventName = "PostToolUse"
-	out.HookSpecificOutput.AdditionalContext = b.String()
-	enc, _ := json.Marshal(out)
+	enc, err := marshalEnvelope("PostToolUse", b.String())
+	if err != nil {
+		os.Exit(0)
+	}
 	fmt.Println(string(enc))
 	os.Exit(0)
 }
