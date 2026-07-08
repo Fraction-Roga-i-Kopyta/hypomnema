@@ -95,3 +95,22 @@ func TestDecodeStream_SessionMetrics(t *testing.T) {
 		t.Errorf("DurationSec = %d, want 120 (10:00:00 → 10:02:00)", s.DurationSec)
 	}
 }
+
+func TestDecodeStream_OversizeLineDoesNotTruncateRest(t *testing.T) { // review E3
+	// A giant tool_result line (>4MB) must not stop the scan: assistant text
+	// AFTER it would otherwise be lost, fabricating "silent" for cited facts.
+	huge := strings.Repeat("x", 5*1024*1024)
+	src := `{"type":"assistant","message":{"content":[{"type":"text","text":"before"}]}}` + "\n" +
+		`{"type":"user","message":{"content":[{"type":"tool_result","text":"` + huge + `"}]}}` + "\n" +
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"after-CITATION"}]}}` + "\n"
+	s, err := decodeStream(strings.NewReader(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(s.Text, "after-CITATION") {
+		t.Errorf("text after an oversized line was lost: %q", s.Text)
+	}
+	if !strings.Contains(s.Text, "before") {
+		t.Errorf("text before the oversized line missing: %q", s.Text)
+	}
+}

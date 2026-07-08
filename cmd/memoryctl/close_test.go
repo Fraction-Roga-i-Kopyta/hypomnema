@@ -77,3 +77,44 @@ func TestCloseVerb_EmptySessionFallsBackToUnknown(t *testing.T) { // review H3
 		t.Errorf("wal validate rejects close's rows (exit %d)", vcode)
 	}
 }
+
+func TestCloseVerb_UnreadableTranscriptSkipsClassification(t *testing.T) { // review E4
+	home := t.TempDir()
+	memDir := filepath.Join(home, ".claude", "memory")
+	projDir := filepath.Join(home, ".claude", "projects", "-tmp-proj", "memory")
+	os.MkdirAll(filepath.Join(memDir, ".runtime"), 0o755)
+	os.MkdirAll(projDir, 0o755)
+	os.WriteFile(filepath.Join(projDir, "docker.md"),
+		[]byte("---\nname: Docker\ntype: mistake\n---\ndocker\n"), 0o644)
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
+	os.WriteFile(filepath.Join(memDir, ".runtime", "injected-s1.list"), []byte("docker.md\n"), 0o600)
+
+	env := map[string]string{
+		"CLAUDE_HOME": filepath.Join(home, ".claude"), "CLAUDE_MEMORY_DIR": memDir,
+		"HYPOMNEMA_TODAY": "2026-05-29",
+	}
+	// transcript_path points at a file that does not exist — usefulness is
+	// unobservable, so close must NOT fabricate trigger-silent for the injected
+	// facts (review E4). session-metrics/close still get written.
+	stdin := `{"session_id":"s1","cwd":"/tmp/proj","transcript_path":"` + filepath.Join(home, "nope.jsonl") + `"}`
+	_, errOut, code := runStdin(t, env, stdin, "close")
+	if code != 0 {
+		t.Fatalf("close exit=%d stderr=%s", code, errOut)
+	}
+	wal := mustReadStr(t, filepath.Join(memDir, ".wal"))
+	if strings.Contains(wal, "trigger-silent") || strings.Contains(wal, "trigger-useful") {
+		t.Errorf("unreadable transcript must skip trigger classification, got:\n%s", wal)
+	}
+	if !strings.Contains(wal, "|session-close|") {
+		t.Errorf("session-close should still be written:\n%s", wal)
+	}
+}
+
+func mustReadStr(t *testing.T, p string) string {
+	t.Helper()
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
