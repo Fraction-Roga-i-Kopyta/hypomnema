@@ -39,3 +39,29 @@ func TestMigrateDryRunAndExecute(t *testing.T) {
 		t.Errorf("execute must write native f1.md: %v", err)
 	}
 }
+
+func TestMigrateRollback_FindsBackupFromAnotherDay(t *testing.T) { // review G1
+	home := t.TempDir()
+	memDir := filepath.Join(home, ".claude", "memory")
+	os.MkdirAll(filepath.Join(memDir, "feedback"), 0o755)
+	os.WriteFile(filepath.Join(memDir, "feedback", "f1.md"),
+		[]byte("---\ntype: feedback\nproject: global\ncreated: 2026-04-01\nstatus: active\n---\nrule\n"), 0o644)
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte("2026-04-01|inject|f1.md|s0\n"), 0o644)
+	claude := filepath.Join(home, ".claude")
+
+	// Migrate on day 1 (creates memory.v1-backup-2026-07-01).
+	env1 := map[string]string{"CLAUDE_HOME": claude, "CLAUDE_MEMORY_DIR": memDir, "HYPOMNEMA_TODAY": "2026-07-01"}
+	if _, errOut, code := run(t, env1, "migrate", "--execute"); code != 0 {
+		t.Fatalf("execute exit=%d %s", code, errOut)
+	}
+
+	// Roll back on a LATER day — must still find yesterday's backup.
+	env2 := map[string]string{"CLAUDE_HOME": claude, "CLAUDE_MEMORY_DIR": memDir, "HYPOMNEMA_TODAY": "2026-07-08"}
+	_, errOut, code := run(t, env2, "migrate", "--rollback")
+	if code != 0 {
+		t.Fatalf("rollback the day after migration must succeed, exit=%d stderr=%s", code, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(memDir, "feedback", "f1.md")); err != nil {
+		t.Errorf("rollback should have restored the v1 store: %v", err)
+	}
+}

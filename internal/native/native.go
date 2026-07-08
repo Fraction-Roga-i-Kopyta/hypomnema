@@ -130,6 +130,14 @@ func splitFrontmatter(s string) (map[string]string, string) {
 			}
 			continue
 		}
+		// An INDENTED line that isn't a block-list item is continuation content
+		// of a block scalar (`root-cause: |`, `description: >`) — never a
+		// top-level key. Parsing its `prose: text` as a key silently overwrote
+		// real frontmatter like description/name (review G2). Top-level keys are
+		// always at column 0.
+		if len(ln) > 0 && (ln[0] == ' ' || ln[0] == '\t') {
+			continue
+		}
 		idx := strings.IndexByte(ln, ':')
 		if idx <= 0 {
 			listKey = ""

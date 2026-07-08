@@ -39,8 +39,12 @@ test-go-cover:
 	@mkdir -p coverage
 	@rm -f coverage/cmd-memoryctl-subprocess.out coverage/test.out
 	go test ./... -coverprofile=coverage/test.out
+	@# -count=1 defeats the test cache: on a warm cache `go test` reports
+	@# (cached) and TestMain never re-runs, so the subprocess coverage profile
+	@# (written as a side effect via MEMORYCTL_SUBPROCESS_COVER_OUT) is missing
+	@# and the report below silently reads a stale/absent file (review T1).
 	@MEMORYCTL_SUBPROCESS_COVER_OUT=$(PWD)/coverage/cmd-memoryctl-subprocess.out \
-		go test ./cmd/memoryctl/... > /dev/null
+		go test -count=1 ./cmd/memoryctl/... > /dev/null
 	@echo "=== test-binary coverage (in-process) ==="
 	@go tool cover -func=coverage/test.out | tail -1
 	@echo "=== cmd/memoryctl subprocess coverage ==="

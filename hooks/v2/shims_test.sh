@@ -58,4 +58,20 @@ printf '%s' '{"session_id":"s1","tool_input":{"skill":"commit"}}' \
   | HYPOMNEMA_MEMORYCTL=/nonexistent/memoryctl bash "$DIR/skill-active.sh"
 [ $? -eq 0 ] || { echo "FAIL: skill-active.sh missing binary must exit 0"; exit 1; }
 
+# pre-tool-write (secrets gate): blocks a secret (exit 2), allows clean (exit 0),
+# missing binary exits 0. This is the security-critical shim — its exit-code
+# propagation is what lets Claude Code actually block the write.
+mkdir -p "$TMP/.claude/memory/mistakes"
+printf '%s' '{"tool_name":"Write","tool_input":{"file_path":"'"$TMP"'/.claude/memory/mistakes/x.md","content":"api_key: sk_live_abcd1234efgh"}}' \
+  | HYPOMNEMA_MEMORYCTL="$MCTL" CLAUDE_MEMORY_DIR="$TMP/.claude/memory" bash "$DIR/pre-tool-write.sh"
+[ $? -eq 2 ] || { echo "FAIL: pre-tool-write.sh must exit 2 (block) on a secret"; exit 1; }
+
+printf '%s' '{"tool_name":"Write","tool_input":{"file_path":"'"$TMP"'/.claude/memory/mistakes/x.md","content":"a clean note about rate limits"}}' \
+  | HYPOMNEMA_MEMORYCTL="$MCTL" CLAUDE_MEMORY_DIR="$TMP/.claude/memory" bash "$DIR/pre-tool-write.sh"
+[ $? -eq 0 ] || { echo "FAIL: pre-tool-write.sh must exit 0 (allow) on clean content"; exit 1; }
+
+printf '%s' '{"tool_name":"Write","tool_input":{"file_path":"'"$TMP"'/.claude/memory/mistakes/x.md","content":"api_key: sk_live_abcd1234efgh"}}' \
+  | HYPOMNEMA_MEMORYCTL=/nonexistent/memoryctl bash "$DIR/pre-tool-write.sh"
+[ $? -eq 0 ] || { echo "FAIL: pre-tool-write.sh missing binary must exit 0"; exit 1; }
+
 echo "PASS"

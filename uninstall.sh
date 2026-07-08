@@ -30,9 +30,14 @@ By default, ~/.claude/memory-global/ (your memory files) is preserved.
 
 Options:
   --dry-run       Print what would happen; make no changes.
-  --purge-memory  Also delete ~/.claude/memory-global/ (requires --yes).
+  --purge-memory  Also delete ~/.claude/memory-global/ AND the runtime state
+                  (.wal, .sidecar.db, .runtime/, self-profile.md). Requires --yes.
   --yes, -y       Skip confirmation prompts.
   --help          Show this message.
+
+Always removes the six v2 shims, the memoryctl symlink, hypomnema's
+settings.json hook entries, and the CLAUDE.md section (if --patch-claude-md
+added one).
 
 Examples:
   ./uninstall.sh                          # remove shims, keep memory
@@ -99,7 +104,13 @@ _remove_our_symlinks() {
     target=$(readlink "$path" 2>/dev/null) || continue
     case "$target" in
       "$SCRIPT_DIR"/*)
-        _run rm "$path"
+        # stdout of this function is its return value (a count); a dry-run
+        # notice on stdout corrupts the caller's capture (review R4).
+        if [ "$DRY_RUN" -eq 1 ]; then
+          echo "[dry-run] rm $path" >&2
+        else
+          rm "$path"
+        fi
         removed=$((removed + 1))
         ;;
     esac
@@ -110,12 +121,13 @@ removed_bin=$(_remove_our_symlinks "$BIN_DIR")
 echo "  Removed $removed_bin symlink(s) from $BIN_DIR."
 
 # --- [3/3] Strip v2 hypomnema hook entries from settings.json ---
-# Matches the 4 v2 shim paths registered by install.sh.
+# Matches only the 6 known v2 shim names install.sh registers (not arbitrary
+# hooks/v2/*.sh, which could be a user's own hook — review O5).
 echo "[3/3] Stripping hypomnema v2 entries from $SETTINGS..."
 if [ -f "$SETTINGS" ]; then
   if [ "$DRY_RUN" -eq 1 ]; then
     affected=$(jq '[.hooks // {} | to_entries[] | .value[]?.hooks[]?
-                    | select((.command // "") | test("hooks/v2/.*\\.sh"))] | length' \
+                    | select((.command // "") | test("hooks/v2/(session-start|user-prompt-submit|pre-tool-write|skill-learnings-inject|skill-active|session-stop)\\.sh"))] | length' \
                   "$SETTINGS" 2>/dev/null || echo 0)
     echo "[dry-run] would strip $affected hypomnema v2 entry(ies) across all hook events"
   else
@@ -128,7 +140,7 @@ if [ -f "$SETTINGS" ]; then
             .value |= (
               map(
                 .hooks = ((.hooks // []) | map(select(
-                  (.command // "") | test("hooks/v2/.*\\.sh") | not
+                  (.command // "") | test("hooks/v2/(session-start|user-prompt-submit|pre-tool-write|skill-learnings-inject|skill-active|session-stop)\\.sh") | not
                 )))
               )
               | map(select(((.hooks // []) | length) > 0))
@@ -139,34 +151,57 @@ if [ -f "$SETTINGS" ]; then
         | if (.hooks // {}) == {} then del(.hooks) else . end
       end
     ' "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS"
-    echo "  settings.json updated (all hooks/v2/*.sh entries removed)."
+    echo "  settings.json updated (hypomnema v2 shim entries removed)."
   fi
 else
   echo "  $SETTINGS not found — skipping."
 fi
 
-# --- Memory directory (user data) ---
+# --- Memory + runtime (user data) ---
 echo ""
+RUNTIME_DIR="$CLAUDE_DIR/memory"
 if [ "$PURGE_MEMORY" -eq 1 ]; then
-  if [ -d "$MEMORY_GLOBAL_DIR" ]; then
-    if [ "$ASSUME_YES" -ne 1 ]; then
-      printf "Delete memory directory '%s' and all its contents? [y/N]: " "$MEMORY_GLOBAL_DIR"
-      read -r ans </dev/tty || ans="n"
-      case "$ans" in
-        y|Y|yes) ;;
-        *) echo "Skipped memory purge."; MEMORY_GLOBAL_DIR=""; ;;
-      esac
-    fi
-    if [ -n "$MEMORY_GLOBAL_DIR" ] && [ -d "$MEMORY_GLOBAL_DIR" ]; then
-      _run rm -rf "$MEMORY_GLOBAL_DIR"
-      echo "Memory directory removed."
-    fi
-  else
-    echo "Memory directory not found — nothing to purge."
+  _confirmed=1
+  if [ "$ASSUME_YES" -ne 1 ]; then
+    printf "Delete memory (%s) AND runtime state (%s/.wal,.sidecar.db,.runtime,self-profile.md)? [y/N]: " \
+      "$MEMORY_GLOBAL_DIR" "$RUNTIME_DIR"
+    read -r ans </dev/tty || ans="n"
+    case "$ans" in
+      y|Y|yes) ;;
+      *) echo "Skipped memory purge."; _confirmed=0 ;;
+    esac
+  fi
+  if [ "$_confirmed" -eq 1 ]; then
+    [ -d "$MEMORY_GLOBAL_DIR" ] && { _run rm -rf "$MEMORY_GLOBAL_DIR"; echo "Memory directory removed."; }
+    # Remove hypomnema's runtime artifacts by NAME (the v1 store may still live
+    # under $CLAUDE_DIR/memory — do not blow the whole dir away). "wipe
+    # everything" previously left .wal/.sidecar.db/self-profile behind (O6).
+    for art in .wal .wal.lockd .sidecar.db .sidecar.db-wal .sidecar.db-shm \
+               self-profile.md .self-profile.lockd .runtime; do
+      [ -e "$RUNTIME_DIR/$art" ] && _run rm -rf "$RUNTIME_DIR/$art"
+    done
+    echo "Runtime state removed."
   fi
 else
   [ -d "$MEMORY_GLOBAL_DIR" ] && echo "Memory directory preserved: $MEMORY_GLOBAL_DIR"
-  [ -d "$MEMORY_GLOBAL_DIR" ] && echo "  (pass --purge-memory --yes to delete it)"
+  [ -d "$MEMORY_GLOBAL_DIR" ] && echo "  (pass --purge-memory --yes to delete it and the runtime state)"
+fi
+
+# --- Remove the CLAUDE.md section install --patch-claude-md may have added ---
+# Otherwise every future session keeps getting instructions for a memory system
+# that is no longer installed (review O3).
+CLAUDE_MD="$CLAUDE_DIR/CLAUDE.md"
+if [ -f "$CLAUDE_MD" ] && grep -q "<!-- hypomnema-section -->" "$CLAUDE_MD"; then
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] would remove the hypomnema section from $CLAUDE_MD"
+  else
+    tmp="$CLAUDE_MD.tmp.$$"
+    awk 'BEGIN{skip=0}
+         /<!-- hypomnema-section -->/{skip=1; next}
+         /<!-- \/hypomnema-section -->/{skip=0; next}
+         skip==0{print}' "$CLAUDE_MD" > "$tmp" && mv "$tmp" "$CLAUDE_MD"
+    echo "Removed hypomnema section from $CLAUDE_MD"
+  fi
 fi
 
 echo ""

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -172,5 +173,39 @@ func TestSkillActiveSanitizesSessionID(t *testing.T) {
 	// nothing escaped above .runtime into CLAUDE_MEMORY_DIR/evil
 	if _, err := os.Stat(filepath.Join(env["CLAUDE_MEMORY_DIR"], "evil")); err == nil {
 		t.Fatal("traversal escaped: found CLAUDE_MEMORY_DIR/evil")
+	}
+}
+
+func TestSkillInject_TotalBudgetBounded(t *testing.T) { // review H2
+	home := t.TempDir()
+	globalDir := filepath.Join(home, ".claude", "memory-global")
+	os.MkdirAll(globalDir, 0o755)
+	os.MkdirAll(filepath.Join(home, ".claude", "memory"), 0o755)
+	os.WriteFile(filepath.Join(home, ".claude", "memory", ".wal"), nil, 0o644)
+	big := strings.Repeat("x", 2400) // each learning ~2.4KB → 5 of them ~12KB
+	for i := 0; i < 5; i++ {
+		name := "big-learning-" + string(rune('a'+i))
+		c := "---\ntype: skill-learning\nname: " + name +
+			"\ndescription: d\nskill: commit\nstatus: active\ncreated: 2026-06-14\n---\n\n" + big + "\n"
+		os.WriteFile(filepath.Join(globalDir, name+".md"), []byte(c), 0o644)
+	}
+	env := map[string]string{
+		"CLAUDE_HOME": filepath.Join(home, ".claude"), "CLAUDE_MEMORY_DIR": filepath.Join(home, ".claude", "memory"),
+		"CLAUDE_PROJECT_CWD": "/tmp/whatever", "HYPOMNEMA_TODAY": "2026-06-14", "HYPOMNEMA_SESSION_ID": "s9",
+	}
+	stdout, _, exit := runStdin(t, env, `{"session_id":"s9","tool_input":{"skill":"commit"}}`, "skill-inject")
+	if exit != 0 {
+		t.Fatalf("exit=%d", exit)
+	}
+	var out struct {
+		HookSpecificOutput struct {
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &out); err != nil {
+		t.Fatalf("bad envelope: %v\n%s", err, stdout)
+	}
+	if n := len(out.HookSpecificOutput.AdditionalContext); n > 8000 {
+		t.Errorf("skill-inject additionalContext is %d bytes — no total budget (would be diverted)", n)
 	}
 }
