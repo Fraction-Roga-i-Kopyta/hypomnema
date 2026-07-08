@@ -76,11 +76,17 @@ func runMigrate(args []string) {
 		fmt.Println("(dry-run — nothing written)")
 		return
 	}
-	if err := migrate.Execute(p, exec); err != nil {
+	rebuilt, err := migrate.Execute(p, exec)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "migrate: execute: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println("Migration complete. Old store backed up; native files written; sidecar rebuilt.")
+	if rebuilt {
+		fmt.Println("Migration complete. Old store backed up; native files written; sidecar rebuilt.")
+	} else {
+		fmt.Println("Migration complete. Old store backed up; native files written.")
+		fmt.Fprintln(os.Stderr, "WARNING: sidecar rebuild did not succeed — run `memoryctl sidecar rebuild` before your next session.")
+	}
 }
 
 // latestBackup returns the newest memory.v1-backup-* directory under claudeDir.
