@@ -32,16 +32,26 @@ func runMigrate(args []string) {
 	v1 := memoryDir()
 	t := today()
 	backup := filepath.Join(claudeDir(), "memory.v1-backup-"+t)
-	exec := migrate.ExecOpts{V1Dir: v1, BackupDir: backup, MemoryDir: v1}
 
 	if mode == "--rollback" {
-		if err := migrate.Rollback(exec); err != nil {
+		// Rollback must find the backup from WHENEVER the migration ran, not
+		// today — deriving the path from today's date meant rollback only
+		// worked on the migration day (review G1). Pick the newest backup;
+		// the YYYY-MM-DD suffix makes lexical order chronological.
+		rb, err := latestBackup(claudeDir())
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "rollback failed: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("rolled back from %s\n", backup)
+		if err := migrate.Rollback(migrate.ExecOpts{V1Dir: v1, BackupDir: rb, MemoryDir: v1}); err != nil {
+			fmt.Fprintf(os.Stderr, "rollback failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("rolled back from %s\n", rb)
 		return
 	}
+
+	exec := migrate.ExecOpts{V1Dir: v1, BackupDir: backup, MemoryDir: v1}
 
 	p, err := migrate.BuildPlan(migrate.Opts{
 		V1Dir: v1, GlobalDir: filepath.Join(osHome, ".claude", "memory-global"),
@@ -71,6 +81,26 @@ func runMigrate(args []string) {
 		os.Exit(1)
 	}
 	fmt.Println("Migration complete. Old store backed up; native files written; sidecar rebuilt.")
+}
+
+// latestBackup returns the newest memory.v1-backup-* directory under claudeDir.
+// The YYYY-MM-DD suffix sorts lexically in chronological order, so the last
+// entry is the most recent migration's backup.
+func latestBackup(claudeDir string) (string, error) {
+	matches, err := filepath.Glob(filepath.Join(claudeDir, "memory.v1-backup-*"))
+	if err != nil {
+		return "", fmt.Errorf("rollback: glob backups: %w", err)
+	}
+	newest := ""
+	for _, m := range matches {
+		if fi, err := os.Stat(m); err == nil && fi.IsDir() && m > newest {
+			newest = m
+		}
+	}
+	if newest == "" {
+		return "", fmt.Errorf("rollback: no memory.v1-backup-* directory under %s (nothing to roll back to)", claudeDir)
+	}
+	return newest, nil
 }
 
 func loadProjects(memDir string) map[string]string {
