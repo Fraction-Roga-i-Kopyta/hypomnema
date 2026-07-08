@@ -194,38 +194,78 @@ var requiredHookCommands = []string{
 	"session-stop.sh",
 }
 
+// shimEvent maps each required v2 shim to the hook event install.sh registers
+// it under. Kept in lockstep with install.sh's register_hook calls; checked by
+// checkSettings so a shim wired to the WRONG event (e.g. session-start under
+// Stop) is caught, not just a missing one (review O4).
+var shimEvent = map[string]string{
+	"session-start.sh":          "SessionStart",
+	"user-prompt-submit.sh":     "UserPromptSubmit",
+	"pre-tool-write.sh":         "PreToolUse",
+	"skill-active.sh":           "PreToolUse",
+	"skill-learnings-inject.sh": "PostToolUse",
+	"session-stop.sh":           "Stop",
+}
+
 func checkSettings(path string) Check {
+	const name = "settings_hooks_registered"
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return Check{
-			Name:   "settings_hooks_registered",
-			Status: FAIL,
-			Detail: fmt.Sprintf("%s unreadable: %v", path, err),
+		return Check{Name: name, Status: FAIL, Detail: fmt.Sprintf("%s unreadable: %v", path, err)}
+	}
+	// Parse the hooks structure rather than substring-matching: a corrupt
+	// settings.json (which Claude Code cannot load, so NO hook runs) or a shim
+	// wired under the wrong event would both pass a substring scan (review O4).
+	var parsed struct {
+		Hooks map[string][]struct {
+			Hooks []struct {
+				Command string `json:"command"`
+			} `json:"hooks"`
+		} `json:"hooks"`
+	}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return Check{Name: name, Status: FAIL, Detail: fmt.Sprintf("%s is not valid JSON (%v) — Claude Code cannot load it, so NO hooks run; fix or restore a backup", path, err)}
+	}
+	// Build event → set of registered command strings.
+	byEvent := map[string][]string{}
+	for event, entries := range parsed.Hooks {
+		for _, e := range entries {
+			for _, h := range e.Hooks {
+				byEvent[event] = append(byEvent[event], h.Command)
+			}
 		}
 	}
-	// Rather than parsing the full schema (Claude Code owns it and can
-	// extend it between releases), substring-match each required v2 shim
-	// path across the whole settings.json. install.sh registers them as
-	// "~/.claude/hooks/v2/<name>" so match against "hooks/v2/<name>".
-	text := string(data)
-	missing := []string{}
-	for _, cmd := range requiredHookCommands {
-		if !strings.Contains(text, "hooks/v2/"+cmd) {
-			missing = append(missing, cmd)
+	var problems []string
+	for _, shim := range requiredHookCommands {
+		wantEvent := shimEvent[shim]
+		found := false
+		for _, cmd := range byEvent[wantEvent] {
+			if strings.Contains(cmd, "hooks/v2/"+shim) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			// Is it registered under some OTHER event (misconfigured) vs absent?
+			misplaced := ""
+			for event, cmds := range byEvent {
+				for _, cmd := range cmds {
+					if strings.Contains(cmd, "hooks/v2/"+shim) {
+						misplaced = event
+					}
+				}
+			}
+			if misplaced != "" {
+				problems = append(problems, fmt.Sprintf("%s under %s (want %s)", shim, misplaced, wantEvent))
+			} else {
+				problems = append(problems, fmt.Sprintf("%s missing (want %s)", shim, wantEvent))
+			}
 		}
 	}
-	if len(missing) == 0 {
-		return Check{
-			Name:   "settings_hooks_registered",
-			Status: OK,
-			Detail: fmt.Sprintf("all %d hypomnema hooks registered", len(requiredHookCommands)),
-		}
+	if len(problems) == 0 {
+		return Check{Name: name, Status: OK, Detail: fmt.Sprintf("all %d hypomnema hooks registered under the right events", len(requiredHookCommands))}
 	}
-	return Check{
-		Name:   "settings_hooks_registered",
-		Status: FAIL,
-		Detail: fmt.Sprintf("missing: %s — re-run ./install.sh", strings.Join(missing, ",")),
-	}
+	return Check{Name: name, Status: FAIL, Detail: strings.Join(problems, "; ") + " — re-run ./install.sh"}
 }
 
 // checkShimFiles verifies each required v2 shim EXISTS and is EXECUTABLE at
@@ -238,7 +278,9 @@ func checkShimFiles(claudeDir string) Check {
 	var missing, notExec []string
 	for _, cmd := range requiredHookCommands {
 		info, err := os.Stat(filepath.Join(dir, cmd))
-		if err != nil {
+		if err != nil || !info.Mode().IsRegular() {
+			// A directory also carries exec bits, so IsRegular is required or a
+			// shim replaced by a directory reads as "present executable" (R3).
 			missing = append(missing, cmd)
 			continue
 		}
