@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-var secretRe = regexp.MustCompile(`(?i)\b(api[_-]?key|apikey|aws[_-]?(?:access|secret)[_-]?key|secret|password|token)\s*[:=]\s*[^\s"'` + "`" + `]{8,}`)
+var secretRe = regexp.MustCompile(`(?i)\b(api[_-]?key|apikey|aws[_-]?(?:access|secret)[_-]?key|secret|password|token)["'` + "`" + `]?\s*[:=]\s*["'` + "`" + `]?[^\s"'` + "`" + `]{8,}`)
 var inlineCodeRe = regexp.MustCompile("`[^`]*`")
 
 // Scan returns "line: fragment" hits for secret-looking tokens in content,
