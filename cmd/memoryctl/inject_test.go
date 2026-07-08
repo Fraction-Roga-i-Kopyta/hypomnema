@@ -44,7 +44,7 @@ func TestInjectVerb(t *testing.T) {
 		t.Errorf("expected docker memory in context: %q", env2.HookSpecificOutput.AdditionalContext)
 	}
 	wal, _ := os.ReadFile(filepath.Join(memDir, ".wal"))
-	if !strings.Contains(string(wal), "|inject|docker.md|s1") {
+	if !strings.Contains(string(wal), "\x1fdocker.md|s1") {
 		t.Errorf("expected inject WAL event, got:\n%s", wal)
 	}
 	if _, err := os.Stat(filepath.Join(memDir, ".runtime", "injected-s1.list")); err != nil {
@@ -69,7 +69,7 @@ func TestInjectVerb_SessionDedup(t *testing.T) {
 	runStdin(t, env, stdin, "inject", "--event=SessionStart")
 	out2, _, _ := runStdin(t, env, stdin, "inject", "--event=UserPromptSubmit")
 	walBytes, _ := os.ReadFile(filepath.Join(memDir, ".wal"))
-	if n := strings.Count(string(walBytes), "|inject|docker.md|s1"); n != 1 {
+	if n := strings.Count(string(walBytes), "\x1fdocker.md|s1"); n != 1 {
 		t.Errorf("a fact injects once per session, expected 1 inject event, got %d:\n%s", n, walBytes)
 	}
 	var env2 struct {
@@ -88,7 +88,7 @@ func TestInjectVerb_SessionDedup(t *testing.T) {
 	stdin2 := `{"session_id":"s2","cwd":"/tmp/proj","prompt":"docker"}`
 	runStdin(t, env, stdin2, "inject", "--event=SessionStart")
 	walBytes, _ = os.ReadFile(filepath.Join(memDir, ".wal"))
-	if n := strings.Count(string(walBytes), "|inject|docker.md|s2"); n != 1 {
+	if n := strings.Count(string(walBytes), "\x1fdocker.md|s2"); n != 1 {
 		t.Errorf("new session injects again, expected 1 event for s2, got %d:\n%s", n, walBytes)
 	}
 }
@@ -128,7 +128,7 @@ func TestInjectVerb_RuntimeListAccumulatesUnderBudget(t *testing.T) {
 	runStdin(t, env, stdin, "inject", "--event=UserPromptSubmit")
 	walBytes, _ := os.ReadFile(filepath.Join(memDir, ".wal"))
 	for _, name := range []string{"a.md", "b.md", "c.md", "d.md"} {
-		if n := strings.Count(string(walBytes), "|inject|"+name+"|s1"); n != 1 {
+		if n := strings.Count(string(walBytes), "\x1f"+name+"|s1"); n != 1 {
 			t.Errorf("%s: expected exactly 1 inject event across the session, got %d", name, n)
 		}
 	}

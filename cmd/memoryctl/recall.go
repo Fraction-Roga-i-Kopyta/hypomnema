@@ -95,7 +95,7 @@ func runRecall(args []string) {
 		return
 	}
 
-	recordRecall(kept[0].Slug)
+	recordRecall(kept[0].Slug, kept[0].Project)
 	fmt.Print(renderRecall(kept[0], kept[1:], bySlug))
 }
 
@@ -106,25 +106,31 @@ func runRecall(args []string) {
 // CLAUDE_CODE_SESSION_ID → "cli"). Callers that already hold an explicit
 // session id (e.g. skill-inject reading it from stdin) should call
 // recordRecallWithSession directly.
-func recordRecall(slug string) {
+func recordRecall(slug, project string) {
 	sid := os.Getenv("HYPOMNEMA_SESSION_ID")
 	if sid == "" {
 		sid = os.Getenv("CLAUDE_CODE_SESSION_ID")
 	}
-	recordRecallWithSession(slug, sid)
+	recordRecallWithSession(slug, project, sid)
 }
 
 // recordRecallWithSession is the implementation shared by recordRecall and
 // skill-inject. sid is the caller-resolved session id; if empty, WAL events
 // are keyed to "cli" and no session list is updated.
-func recordRecallWithSession(slug, sid string) {
+func recordRecallWithSession(slug, project, sid string) {
 	walSid := sid
 	if walSid == "" {
 		// `wal validate` requires a non-empty session column.
 		walSid = "cli"
 	}
+	// Project-qualify the target so recall ref_count/recency feed the right
+	// per-project row (review E5-deep); empty project falls back to bare slug.
+	target := wal.SanitizeField(slug)
+	if project != "" {
+		target = native.QKey(project, target)
+	}
 	line := fmt.Sprintf("%s|recall|%s|%s",
-		today(), wal.SanitizeField(slug), wal.SanitizeField(walSid))
+		today(), target, wal.SanitizeField(walSid))
 	// dedupKey = the whole line: a same-day repeat recall of the same fact
 	// in the same session is one delivery, not two ref_count increments.
 	if err := wal.AppendStrict(memoryDir(), line, line); err != nil {

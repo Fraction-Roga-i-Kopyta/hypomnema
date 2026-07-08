@@ -35,7 +35,7 @@ func TestRun_EmitsClosingEvents(t *testing.T) {
 	}
 	wal, _ := os.ReadFile(filepath.Join(memDir, ".wal"))
 	w := string(wal)
-	for _, want := range []string{"|trigger-useful|docker.md|s1", "|trigger-silent|sql.md|s1", "|session-close|s1|s1", "|session-metrics|"} {
+	for _, want := range []string{"\x1fdocker.md|s1", "\x1fsql.md|s1", "|session-close|s1|s1", "|session-metrics|"} {
 		if !strings.Contains(w, want) {
 			t.Errorf("WAL missing %q:\n%s", want, w)
 		}

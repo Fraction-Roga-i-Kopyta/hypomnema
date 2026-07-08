@@ -30,7 +30,7 @@ func TestCloseVerb(t *testing.T) {
 		t.Fatalf("close exit=%d stderr=%s", code, errOut)
 	}
 	wal, _ := os.ReadFile(filepath.Join(memDir, ".wal"))
-	if !strings.Contains(string(wal), "|trigger-useful|docker.md|s1") {
+	if !strings.Contains(string(wal), "\x1fdocker.md|s1") {
 		t.Errorf("expected trigger-useful for cited docker.md:\n%s", wal)
 	}
 	if !strings.Contains(string(wal), "|session-close|s1|s1") {

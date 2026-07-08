@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/inject"
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/pathutil"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/wal"
 )
@@ -54,7 +55,7 @@ func runInject(args []string) {
 		os.Exit(0)
 	}
 	if len(res.Injected) > 0 && in.SessionID != "" {
-		persistInjected(already, res.Injected, in.SessionID)
+		persistInjected(already, res.Injected, res.ProjectBySlug, in.SessionID)
 	}
 	emitEnvelope(event, res.Markdown)
 	os.Exit(0)
@@ -85,11 +86,18 @@ func readInjectedList(sessionID string) []string {
 	return out
 }
 
-func persistInjected(already, slugs []string, sessionID string) {
+func persistInjected(already, slugs []string, projectBySlug map[string]string, sessionID string) {
 	day := today()
 	sid := wal.SanitizeField(sessionID)
 	for _, slug := range slugs {
-		line := fmt.Sprintf("%s|inject|%s|%s", day, wal.SanitizeField(slug), sid)
+		// Project-qualify the WAL target so per-project effectiveness doesn't
+		// merge across same-basename facts (review E5-deep). Fall back to the
+		// bare slug if the project is unknown (grandfathered on read).
+		target := wal.SanitizeField(slug)
+		if p := projectBySlug[slug]; p != "" {
+			target = native.QKey(p, target)
+		}
+		line := fmt.Sprintf("%s|inject|%s|%s", day, target, sid)
 		wal.Append(memoryDir(), line, "")
 	}
 	writeSessionList(already, slugs, sessionID)
