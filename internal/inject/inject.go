@@ -143,7 +143,13 @@ func candidates(in Input, files []native.MemFile, terms []string) []rank.Candida
 		// corpus — fall through to the degraded native-only rank. Spec §5:
 		// injection still happens.
 		if lerr == nil && len(scoped) > 0 {
-			overlap, _ := s.OverlapScores(terms)
+			// A failed overlap query must degrade to no-overlap, never crash the
+			// hook; chunking (review E6) keeps the common >32766-term case from
+			// erroring in the first place.
+			overlap, oerr := s.OverlapScores(terms)
+			if oerr != nil {
+				overlap = map[string]int{}
+			}
 			out := make([]rank.Candidate, 0, len(scoped))
 			for _, r := range scoped {
 				out = append(out, rank.Candidate{
