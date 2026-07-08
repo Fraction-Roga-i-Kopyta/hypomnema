@@ -1,351 +1,290 @@
-# Hypomnema hook contract — v1.0
+# Hypomnema hook contract — v2
 
 **Status:** STABLE. Companion to `docs/FORMAT.md`.
 
-This document describes the wire shape between Claude Code and any hypomnema hook implementation. It covers stdin JSON shape, stdout JSON shape, exit codes, environment variables, and fail-safe rules for every hook type hypomnema installs.
+This document describes the wire shape between Claude Code and the hypomnema
+hooks. It covers the six hooks the installer wires, the stdin/stdout JSON
+shapes, exit codes, environment variables, and the fail-safe rules.
 
-If you are writing a hook implementation (bash, Go, Rust, whatever), conform to this document. If you are writing tests for hooks, use this document as the reference for what you can assume and what you must tolerate.
+In v2 every hook is a **thin shim** (`hooks/v2/*.sh`, a few lines of `sh`) that
+does one thing: locate the `memoryctl` binary and `exec` it with a verb, piping
+the Claude Code hook envelope straight through on stdin. All logic lives in
+`memoryctl` (`cmd/memoryctl/` + `internal/`). `memoryctl` is **mandatory** — it
+is not an optional dependency. The shim's only defensive behaviour is that if
+the binary is missing from its resolved path it exits 0 (so a broken install
+never breaks a session); it does not degrade to a bash fallback.
 
-The invariants here are what hypomnema's installer wires into `~/.claude/settings.json`. Changes to the upstream Claude Code hook envelope (new event types, new tool-input fields) are tracked separately — this document describes **hypomnema's own commitments**, not Claude Code's.
+The invariants here are what `install.sh` wires into `~/.claude/settings.json`.
+This document describes **hypomnema's own commitments**, not the upstream Claude
+Code envelope (new event types / tool-input fields are tracked separately).
 
 ---
 
 ## 1. Shared contract
 
-### 1.1 Input
+### 1.1 The six hooks
 
-Every hook reads a single JSON object from stdin. The full envelope is defined by Claude Code; hypomnema only consumes a known subset and MUST ignore unknown keys forward-compatibly.
+`install.sh` (`register_hook` calls) wires exactly these, and nothing else:
 
-Minimal fields every hook SHOULD expect:
+| Event | Matcher | Shim | `memoryctl` verb | Timeout | Purpose |
+|---|---|---|---|:-:|---|
+| `SessionStart` | — | `session-start.sh` | `inject --event=SessionStart` | 15 s | Rank + inject memory at session open |
+| `UserPromptSubmit` | — | `user-prompt-submit.sh` | `inject --event=UserPromptSubmit` | 10 s | Re-rank + inject for the just-typed prompt |
+| `PreToolUse` | `Write\|Edit` | `pre-tool-write.sh` | `guard` | 10 s | Secrets gate — block credential writes |
+| `PreToolUse` | `Skill` | `skill-active.sh` | `skill-active` | 10 s | Record the activated skill for this session |
+| `PostToolUse` | `Skill` | `skill-learnings-inject.sh` | `skill-inject` | 10 s | Inject skill-learning facts for the skill |
+| `Stop` | — | `session-stop.sh` | `close` | 10 s | Close the session: classify, decay, rollup |
 
-```json
-{
-  "session_id": "<string>",
-  "cwd": "<absolute-path>"
-}
-```
+There is **no** `PreCompact` hook, no fuzzy-dedup `PreToolUse` hook, no
+`PostToolUse` outcome/error-detect hooks. Those v1 mechanics are retired
+(see §7).
 
-Per-event extensions are listed in each hook's section below.
+### 1.2 Input
 
-### 1.2 Output
+Every verb reads a single JSON object from stdin (the Claude Code hook
+envelope) and consumes only a known subset, ignoring unknown keys. The fields
+each verb actually reads:
 
-Every hook that wants to feed context back to Claude writes a single JSON object on stdout:
-
-```json
-{
-  "hookSpecificOutput": {
-    "hookEventName": "<EventName>",
-    "additionalContext": "<string>"
-  }
-}
-```
-
-`hookEventName` MUST match the hook type exactly (`SessionStart`, `Stop`, `UserPromptSubmit`, `PreCompact`). PreToolUse and PostToolUse hooks do not produce context envelopes — they communicate via exit code and stderr (PreToolUse) or side effects on the WAL (PostToolUse).
-
-A hook that has no context to contribute MUST either print an empty-context envelope (`additionalContext: ""`) or no output at all. It MUST NOT print partial / invalid JSON.
-
-### 1.3 Exit codes
-
-| Code | Meaning |
+| Verb | Fields read from stdin |
 |---|---|
-| `0` | Success or graceful no-op. Claude Code continues normally. |
-| `2` | **PreToolUse only** — block the tool call. stderr is surfaced to Claude. |
-| Anything else | Undefined by hypomnema. Claude Code MAY surface the error to the user. |
+| `inject` | `session_id`, `cwd`, `prompt` |
+| `guard` | `tool_input.file_path`, `tool_input.content` (Write), `tool_input.new_string` (Edit), `tool_input.new_source` (NotebookEdit), `tool_input.edits[].new_string` (MultiEdit) |
+| `skill-active` | `session_id`, `tool_input.skill` |
+| `skill-inject` | `tool_input.skill` |
+| `close` | `session_id`, `cwd`, `transcript_path` |
 
-**Fail-safe rule:** Every hypomnema hook MUST exit `0` on internal failure. A broken memory file, an unreadable config, a malformed WAL line — none of these are a reason to break the user's session. Log internally (if anywhere), exit 0, move on. The only intentional non-zero exit is `2` from PreToolUse/dedup.
+### 1.3 Output
 
-### 1.4 Environment variables
-
-| Variable | Purpose | Default |
-|---|---|---|
-| `CLAUDE_MEMORY_DIR` | Override the memory root. Used in tests and multi-memory setups. | `$HOME/.claude/memory` |
-| `HYPOMNEMA_TODAY` | Override "today" (YYYY-MM-DD) in any date-sensitive logic. Used in tests to freeze WAL fixture age. | `$(date +%Y-%m-%d)` |
-| `HYPOMNEMA_SESSION_ID` | Session identifier passed to subprocesses (notably `memoryctl dedup check`). Mirrors the `session_id` field from stdin. | `unknown` |
-| `LC_ALL` | Forced to `C` by hooks that call `awk`/`perl` with float printf — keeps decimal separator as `.` across locales. | (inherited) |
-
-Implementations MAY add new environment variables. They MUST NOT re-purpose the variables listed above with new semantics.
-
-### 1.5 Side effects
-
-Hooks may read and write:
-
-- `~/.claude/memory/**/*.md` (per §3 of FORMAT.md).
-- `~/.claude/memory/.wal` (per §5 of FORMAT.md).
-- `~/.claude/memory/continuity/<project>.md` (Stop hook only).
-- `~/.claude/memory/.runtime/` (session-scoped temp state; may be cleaned at will).
-- Derivative indices (`.tfidf-index`, `index.db`, `.analytics-report`) — see FORMAT.md §6.
-
-Hooks MUST NOT:
-
-- Modify `~/.claude/settings.json` at runtime.
-- Write outside `~/.claude/memory/` or `/tmp`.
-- Prompt the user interactively (hooks run headless; there's no tty guarantee).
-- Block for more than the configured hook timeout (default 10–15 s depending on event).
-
----
-
-## 2. SessionStart
-
-**Wire name:** `SessionStart`
-**Timeout:** 15 s (configurable in `settings.json`).
-**Purpose:** Inject relevant memory into the session opener.
-
-### 2.1 Input
-
-```json
-{
-  "session_id": "<string>",
-  "cwd": "<absolute-path>"
-}
-```
-
-### 2.2 Output
+The two `inject` verbs and `skill-inject` write a single JSON object on stdout
+that Claude Code prepends to the model's context:
 
 ```json
 {
   "hookSpecificOutput": {
     "hookEventName": "SessionStart",
-    "additionalContext": "# Memory Context\n\n**Active domains:** <...>\n\n## Active Mistakes\n\n### <slug> [<severity>, x<recurrence>]\n..."
+    "additionalContext": "# Memory Context\n\n## <name>\n<body>\n..."
   }
 }
 ```
 
-`additionalContext` is Markdown that Claude Code prepends to the session's system context. Section headings within it are part of hypomnema's format but not mandated by Claude Code. The minimum viable output is `"# Memory Context\n"` — anything less is a signal the implementation couldn't run.
+`hookEventName` is `SessionStart` or `UserPromptSubmit` for `inject`
+(mirroring the `--event` flag). `additionalContext` is the ranked `# Memory
+Context` block (top-8 facts, ≤2.5 KB per body, ≤8 KB total). Empty context is
+valid and means nothing matched.
 
-### 2.3 Contract
+`guard`, `skill-active`, and `close` produce **no** stdout envelope. `guard`
+communicates via exit code + stderr; `skill-active` and `close` are
+side-effect-only (WAL writes, sidecar updates, `.runtime/` markers).
 
-- Exit 0 always.
-- Empty `additionalContext` is valid (means: nothing matched / memory is empty).
-- Writes `inject`, optionally `cluster-load`, `index-stale` events to WAL.
-- Increments `ref_count` and refreshes `referenced:` on every injected file.
-- Session-private file `.runtime/injected-<session_id>.list` lists slugs this hook injected, for later dedup by UserPromptSubmit. Created mode `0600`.
+### 1.4 Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | Success or graceful no-op. Claude Code continues normally. |
+| `2` | **`guard` only** — block the tool call. stderr is surfaced to Claude. |
+| other | Undefined by hypomnema. |
+
+**Fail-safe rule:** every verb exits `0` on bad or absent input — malformed
+envelope JSON, unreadable memory, missing session id. A broken memory file is
+never a reason to break the user's session. The **only** intentional non-zero
+exit is `2` from `guard` when it finds a secret. (`memoryctl dedup check`, a
+manual CLI verb not wired to any hook, also uses exit 2, but no hook invokes
+it.)
+
+### 1.5 Environment variables
+
+Read by `memoryctl` (from its `--help` usage) and by the shims:
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `HYPOMNEMA_MEMORYCTL` | Path the shim uses to locate the `memoryctl` binary. | `$HOME/.claude/bin/memoryctl` |
+| `CLAUDE_MEMORY_DIR` | Runtime memory root (WAL, sidecar, `.runtime/`, self-profile). | `$HOME/.claude/memory` |
+| `CLAUDE_PROJECT_CWD` | Working dir used to resolve the per-project native store. | current working dir |
+| `HYPOMNEMA_SESSION_ID` | Session id stamped into WAL entries. | `unknown` |
+| `CLAUDE_CODE_SESSION_ID` | Session id Claude Code exports into Bash; `recall` falls back to it when `HYPOMNEMA_SESSION_ID` is unset. | (inherited) |
+| `HYPOMNEMA_TODAY` | Freeze "today" (`YYYY-MM-DD`) in date-sensitive logic; used by tests/replay. | `$(date +%Y-%m-%d)` |
+| `HYPOMNEMA_NOW` | Freeze the self-profile `generated:` stamp (`YYYY-MM-DD HH:MM`). | now |
+| `HYPOMNEMA_ALLOW_SECRETS` | Set to `1` to bypass the `guard` secrets gate for a single invocation. | unset |
+| `CLAUDE_HOME` | Claude Code state root (`projects/`, native stores). Used by `doctor`; hooks resolve it from `$HOME`. | `$HOME/.claude` |
+
+Implementations MAY add new variables. They MUST NOT re-purpose the ones above.
+
+### 1.6 Side effects
+
+Verbs may read and write:
+
+- Native memory files: `~/.claude/projects/<slug>/memory/*.md` (per-project) and
+  `~/.claude/memory-global/*.md` (global) — per FORMAT.md §3.
+- The runtime tree `~/.claude/memory/`: `.wal` (§5 of FORMAT.md), `.sidecar.db`
+  (the single derivative index), `self-profile.md`, and `.runtime/`
+  (session-scoped markers: `injected-<session_id>.list`, `active-skill-<sid>`).
+
+Verbs MUST NOT modify `~/.claude/settings.json` at runtime, prompt
+interactively (hooks run headless), or block past the configured timeout.
 
 ---
 
-## 3. UserPromptSubmit
+## 2. SessionStart — `inject --event=SessionStart`
 
-**Wire name:** `UserPromptSubmit`
+**Timeout:** 15 s.
+
+Reads `session_id`, `cwd`, `prompt` (usually empty at session open). Ranks the
+current project + global native memory against `session_keywords` (prompt
+tokens, CWD basename, git branch / changed files / recent commit subjects) and
+emits the top-8 as `hookSpecificOutput.additionalContext` with
+`hookEventName: SessionStart`.
+
+Contract:
+
+- Exit 0 always; empty `additionalContext` when nothing matched.
+- Writes an `inject` WAL event per emitted fact. The sidecar bumps `ref_count`
+  and recency from those events.
+- Records the injected slugs in `.runtime/injected-<session_id>.list` so
+  UserPromptSubmit dedups against them and `close` classifies the whole
+  session's set.
+
+## 3. UserPromptSubmit — `inject --event=UserPromptSubmit`
+
 **Timeout:** 10 s.
-**Purpose:** Inject trigger-matched files for the specific prompt the user just typed.
 
-### 3.1 Input
+Same verb, `hookEventName: UserPromptSubmit`. Re-ranks against the just-typed
+`prompt` (folded into `session_keywords`) and emits **only** facts that newly
+enter the top-8 — anything already listed in
+`.runtime/injected-<session_id>.list` is not re-emitted (once per session per
+fact). Exit 0 always; `inject` WAL events for the newly injected facts.
 
-```json
-{
-  "session_id": "<string>",
-  "prompt": "<user-text>",
-  "cwd": "<absolute-path>"
-}
+There is no substring-trigger matching and no negation-token logic; all tokens
+are relevance signal to a single ranker (see CLAUDE.md "How injection ranks
+files"). Both are retired v1 mechanics.
+
+## 4. PreToolUse `Write|Edit` — `guard` (secrets gate)
+
+**Timeout:** 10 s. **The only hook that can block.**
+
+Reads the mutating tool's payload from stdin and blocks (exit 2) a write into a
+guarded memory store whose content carries a plaintext credential.
+
+Guarded stores (from `guardedRel`): the runtime tree `$CLAUDE_MEMORY_DIR`, the
+global store `~/.claude/memory-global/`, and every native
+`~/.claude/projects/<slug>/memory/` store. A write anywhere else is not policed.
+
+Scan input: `content` (Write), `new_string` (Edit), `new_source`
+(NotebookEdit), and each `edits[].new_string` (MultiEdit) are concatenated and
+scanned by `internal/secrets`.
+
+Exit **0** (allow) when any of: envelope JSON won't parse; `HYPOMNEMA_ALLOW_SECRETS=1`;
+`file_path` empty; path outside every guarded store; path matches a glob in a
+`.secretsignore` (`~/.claude/memory-global/.secretsignore`); concatenated
+content empty; no secret pattern hit.
+
+Exit **2** (block) when `internal/secrets` matches. stderr carries:
+
+```
+Blocked: <file_path> would write a plaintext secret-looking token.
+Matches (line : fragment):
+  <line> : <fragment>
+If intentional, set HYPOMNEMA_ALLOW_SECRETS=1 for this single invocation and retry.
 ```
 
-`prompt` is the raw user message. Fenced code blocks, inline backticks, and blockquotes are stripped **inside the hook** before substring matching. Implementations MUST NOT trigger on text inside fences.
+Patterns (see CLAUDE.md "Secrets detection"): key-based (`api_key` / `secret` /
+`password` / `token` + a ≥8-char value) plus value-based (AWS `AKIA…`/`ASIA…`,
+GitHub `ghp_…`/`github_pat_…`, Anthropic `sk-ant-…`, Slack `xox*-…`, PEM
+blocks, JWTs, `scheme://user:pass@` URLs). An unclosed code fence does not
+exempt the rest of the file.
 
-### 3.2 Output
+## 5. PreToolUse `Skill` — `skill-active`
 
-```json
-{
-  "hookSpecificOutput": {
-    "hookEventName": "UserPromptSubmit",
-    "additionalContext": "## Triggered (from prompt)\n\n### <slug> (matched: \"<phrase>\")\n<body>\n..."
-  }
-}
-```
-
-Absent output means no triggers matched. The heading `## Triggered (from prompt)` is part of the hypomnema presentation format and MAY change between minor versions; implementations SHOULD keep consumer-facing Markdown stable within the section.
-
-### 3.3 Contract
-
-- Exit 0 always.
-- Reads `.runtime/injected-<session_id>.list` to dedup against SessionStart's set. Files already injected this session are NOT re-emitted.
-- Negation detection MUST honour the tokens listed in FORMAT.md §4 (feedback/strategy) — `не`, `без`, `уже`, `already`, `skip`, `ignore`, `without`, `игнор`, case-insensitive.
-- Writes `trigger-match` events for matched files.
-- MAY spawn `bin/memory-fts-shadow.sh` as a detached background process. The background process MUST be fail-safe (exit 0 silently on any error) and MUST NOT affect this hook's output.
-
----
-
-## 4. PreToolUse / fuzzy dedup
-
-**Wire name:** `PreToolUse`
-**Matcher (hypomnema only wires one):** `Write`
 **Timeout:** 10 s.
-**Purpose:** Block creation of a `mistakes/*.md` that is too similar to an existing one.
 
-### 4.1 Input
+Reads `session_id` and `tool_input.skill`, and writes an active-skill marker
+`$CLAUDE_MEMORY_DIR/.runtime/active-skill-<session_id>`. This lets the capture
+path tag `skill-learning` facts with the correct skill even after context
+compaction. Exit 0 always (including on missing skill/session). No stdout, no
+WAL write. Stale markers (>24 h) are cleaned up by `close`.
 
-```json
-{
-  "session_id": "<string>",
-  "tool_name": "Write",
-  "tool_input": {
-    "file_path": "<absolute-or-relative-path>",
-    "content": "<proposed-file-body>"
-  }
-}
-```
+## 6. PostToolUse `Skill` — `skill-inject`
 
-### 4.2 Output
-
-None on `additionalContext`. Block messages go to **stderr**:
-
-```
-Blocked: <new-slug> is similar to existing <existing-slug> (<score>%)
-```
-
-Claude Code forwards stderr to the user when the hook exits with code 2.
-
-### 4.3 Contract
-
-- Exit **2** if similarity ≥ 80 % on `root-cause` field (rapidfuzz-compatible `token_set_ratio`, implemented in `internal/fuzzy`). Also writes `dedup-blocked|new>existing|session` to WAL.
-- Exit **0** in all other cases (including: path not under `mistakes/`, file already exists, `memoryctl` unavailable, empty content, empty root-cause, no similar file found). Optional `dedup-candidate` WAL entry for medium-similarity warnings.
-- Hook MUST handle both pretool (file not yet on disk) and posttool (file exists) invocations — see `internal/dedup/dedup.go` for the split.
-
-### 4.4 Dependency degradation
-
-If `memoryctl` is not on `PATH`, the hook exits 0 silently. This is the documented optional-dependency path — see `docs/QUICKSTART.md` §1. Users opt in by running `make build` and re-running `./install.sh`. Never silently-fail MUST here: the user must have made an explicit choice to skip dedup (by not building the Go binary).
-
----
-
-## 5. PostToolUse hooks
-
-hypomnema wires two PostToolUse hooks that do different things.
-
-### 5.1 `memory-outcome.sh` — cascade and outcome signals
-
-**Matcher:** `Write|Edit`
-**Triggers on writes/edits to `~/.claude/memory/**/*.md`.**
-
-Writes the following WAL events (as applicable):
-
-- `outcome-new` — a new mistake file was just written.
-- `cascade-review` — this file is listed as `related:` from another file; flag for review.
-- `outcome-positive` / `outcome-negative` — deferred; actually emitted by Stop.
-
-Exit 0 always. No stdout context.
-
-### 5.2 `memory-error-detect.sh` — error pattern detection
-
-**Matcher:** `Bash`
-
-Reads `tool_response.stdout` and `tool_response.stderr`, matches against a curated list of error patterns (npm deprecations, permission denied, DeprecationWarning, etc.), and writes `error-detect|tool:category|session` to WAL. MAY emit a one-line hint to stdout for Claude's context.
-
-Session-level deduplication: the same (tool, category) pair is written at most once per session.
-
-Exit 0 always.
-
----
-
-## 6. Stop
-
-**Wire name:** `Stop`
 **Timeout:** 10 s.
-**Purpose:** Analyze the session that just ended, write outcome signals, generate continuity.
 
-### 6.1 Input
+Reads `tool_input.skill`, retrieves the `skill-learning` facts bound to that
+skill (frontmatter `skill: <name>`), and emits them as
+`hookSpecificOutput.additionalContext`. Writes a `recall` WAL event per
+delivered learning (so the close hook classifies them like any injected fact).
+Exit 0 always — silent no-op on bad input, missing skill, or no matching
+learnings.
 
-```json
-{
-  "session_id": "<string>",
-  "cwd": "<absolute-path>",
-  "transcript_path": "<absolute-path>"
-}
-```
+## 7. Stop — `close`
 
-`transcript_path` points to a JSONL file with the session's message history. Stop hook MUST tolerate absence of this file (log, exit 0).
+**Timeout:** 10 s.
 
-### 6.2 Output
+Reads `session_id`, `cwd`, `transcript_path` (tolerates its absence). Runs the
+session-close pass and exits 0 with **no** stdout envelope (side-effect only —
+it does not print a checkpoint reminder; that v1 behaviour is retired).
 
-```json
-{
-  "hookSpecificOutput": {
-    "hookEventName": "Stop",
-    "additionalContext": "[STRATEGIES] ...\n[MEMORY CHECKPOINT] ..."
-  }
-}
-```
+Contract (see CLAUDE.md "Lifecycle"):
 
-The output is a reminder string shown to Claude (not the user). It is advisory — it tells Claude what to save if anything surfaced this session.
+- Classifies the session's injected set into `trigger-useful` / `trigger-silent`
+  (evidence-phrase or slug/name citation in assistant text) and writes those
+  WAL events.
+- Writes one `session-metrics` (v2 shape) and one `session-close` per session.
+- Recomputes effectiveness in the sidecar; marks unused facts `stale` past their
+  type threshold (age from last injection). No native content is mutated;
+  `pinned` / `continuity` / `project` facts never decay.
+- Ages out stale `active-skill-<sid>` markers (>24 h) from `.runtime/`.
 
-### 6.3 Contract
-
-- Exit 0 always.
-- Writes at most one `clean-session` and one `session-metrics` event per session (by session_id).
-- Generates / updates `continuity/<project>.md` from git state when the cwd is in a git repo and the project is known.
-- MAY kick off background analytics rebuild when `.analytics-report` is stale (> 7 d). Background process MUST be detached and fail-safe.
-- Reads trigger-match events to compute `trigger-useful` / `trigger-silent` for citation-detection.
-- Rotation (`stale` → `archived`) runs here, on a per-type schedule (see FORMAT.md and CLAUDE.md for thresholds). Pinned files MUST NOT be rotated.
-
----
-
-## 7. PreCompact
-
-**Wire name:** `PreCompact`
-**Timeout:** 5 s.
-**Purpose:** Remind Claude to checkpoint insights to memory before context compression.
-
-### 7.1 Input
-
-```json
-{
-  "session_id": "<string>",
-  "cwd": "<absolute-path>"
-}
-```
-
-### 7.2 Output
-
-```json
-{"systemMessage": "<reminder>"}
-```
-
-### 7.3 Contract
-
-- Exit 0 always (cannot block compaction; observability only).
-- Stronger reminder if zero memory files were written this session (`outcome-new` events count stays at 0).
-- No WAL writes.
-- **Envelope choice:** PreCompact uses the top-level `systemMessage` channel rather than the `hookSpecificOutput.additionalContext` envelope that other hooks use. The Claude Code hook schema restricts `hookSpecificOutput.additionalContext` to PreToolUse / UserPromptSubmit / PostToolUse / SessionStart / Stop — PreCompact must use `systemMessage` to surface its reminder. See commit `9c99ce9` for the discovery trace.
+**Continuity files are agent-written in v2**, not generated here. When you stop
+mid-task you write a `type: continuity` file into the project's native store
+yourself (CLAUDE.md "When to write `continuity`"). The Stop hook does not touch
+them.
 
 ---
 
 ## 8. Running hooks manually
 
-Each hook is a self-contained script that accepts its JSON envelope on stdin. This is how the test suite exercises them, and how you debug a failure:
+Each verb reads its JSON envelope on stdin; this is how tests and debugging
+exercise them:
 
 ```bash
-# SessionStart
-echo '{"session_id":"test","cwd":"/tmp"}' \
-  | CLAUDE_MEMORY_DIR=/tmp/test-mem bash ~/.claude/hooks/memory-session-start.sh
+MCTL=~/.claude/bin/memoryctl
 
-# UserPromptSubmit
-echo '{"session_id":"test","prompt":"help me with X"}' \
-  | CLAUDE_MEMORY_DIR=/tmp/test-mem bash ~/.claude/hooks/memory-user-prompt-submit.sh
+# SessionStart / UserPromptSubmit
+echo '{"session_id":"test","cwd":"/tmp","prompt":"help me with X"}' \
+  | CLAUDE_MEMORY_DIR=/tmp/test-mem "$MCTL" inject --event=UserPromptSubmit
 
-# PreToolUse (dedup)
-echo '{"session_id":"t","tool_name":"Write","tool_input":{"file_path":"/tmp/m.md","content":"---\ntype: mistake\nroot-cause: \"X\"\n---"}}' \
-  | CLAUDE_MEMORY_DIR=/tmp/test-mem bash ~/.claude/hooks/memory-dedup.sh
-echo "exit=$?"  # 0 = allow, 2 = block
+# guard (secrets gate)
+echo '{"tool_input":{"file_path":"'"$HOME"'/.claude/memory-global/x.md","content":"api_key = \"abcd12345678\""}}' \
+  | "$MCTL" guard ; echo "exit=$?"   # 0 = allow, 2 = block
+
+# Stop
+echo '{"session_id":"test","cwd":"/tmp","transcript_path":"/tmp/t.jsonl"}' \
+  | CLAUDE_MEMORY_DIR=/tmp/test-mem "$MCTL" close
 ```
 
-`HYPOMNEMA_TODAY` is your tool for freezing time in replay / diagnostics:
+Freeze time for replay/diagnostics with `HYPOMNEMA_TODAY=2026-04-10`.
 
-```bash
-echo '{...}' | HYPOMNEMA_TODAY=2026-04-10 bash ~/.claude/hooks/memory-session-start.sh
-```
+Validate the WAL grammar (FORMAT.md §5) with `memoryctl wal validate`
+(exit 0 clean, 1 failing rows, 2 WAL missing / misuse).
 
 ---
 
-## 9. Adding a new hook
+## 9. Retired in v2
 
-Before emitting any new hook script or registering a new event type in `settings.json`:
+These v1 hooks and behaviours are **gone** — do not implement or rely on them:
 
-1. Decide which of the existing hook types it fits into. Prefer extending an existing hook over adding a new one — `settings.json` patching is a visible user-facing change.
-2. Document its wire shape in this file. Input, output, exit codes, WAL writes, timeout, failure mode.
-3. Update the installer's directory-enumeration loop only if the new hook lives in a new directory (otherwise the enumeration picks it up automatically).
-4. Add smoke-test coverage in `hooks/test-memory-hooks.sh`.
-
-Do not ship a hook that has no documented contract here. If you need behaviour this document does not allow, propose a revision — don't invent silently.
-
----
+- `PreCompact` hook and its `systemMessage` reminder.
+- Fuzzy-dedup `PreToolUse` (matcher `Write`). `memoryctl dedup check` survives as
+  a manual CLI verb but is not wired to any hook.
+- `PostToolUse` `memory-outcome.sh` and `memory-error-detect.sh`.
+- Substring `trigger:`/`triggers:` matching and negation-token windows.
+- FTS5 shadow retrieval / `shadow-miss`.
+- Stop-generated continuity files, checkpoint reminders, and stale→archive
+  rotation.
+- The bash `~/.claude/hooks/memory-*.sh` scripts (replaced by `hooks/v2/*.sh`
+  thin shims).
 
 ## 10. Versioning
 
-This document versions together with `FORMAT.md`. Any change to the wire shape, exit-code semantics, or fail-safe rule of an existing hook is a breaking change and requires a major version bump of both documents. Adding a new hook type or a new optional environment variable is non-breaking.
+This document versions together with `FORMAT.md`. Any change to a wire shape,
+exit-code semantics, or the fail-safe rule of an existing hook is a breaking
+change requiring a major bump of both. Adding a new hook or a new optional
+environment variable is non-breaking.
