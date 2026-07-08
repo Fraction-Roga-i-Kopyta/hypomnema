@@ -46,9 +46,11 @@ type Record struct {
 
 // schemaVersion identifies the projection generation. v2 added project
 // scoping (rows are stamped with their owning store and reconciled
-// per-scope). Open wipes a sidecar written by a different generation — the
-// sidecar is a derived projection, so the wipe only costs the next Reproject.
-const schemaVersion = "2"
+// per-scope). v3 (v2.6.0) added a `project` column to the keyword table so a
+// per-project Reproject clears only its own rows for a same-basename slug.
+// Open wipes a sidecar written by a different generation — the sidecar is a
+// derived projection, so the wipe only costs the next Reproject.
+const schemaVersion = "3"
 
 // Open opens (creating if needed) the sidecar DB at dbPath and applies the
 // schema. Mirrors internal/fts: modernc.org/sqlite, busy_timeout, WAL journal.
