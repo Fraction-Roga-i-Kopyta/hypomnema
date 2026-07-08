@@ -3,11 +3,19 @@
 package inject
 
 import (
+	"context"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/tokenize"
 )
+
+// gitSignalTimeout bounds the TOTAL wall-clock of the three git calls. The
+// signal is best-effort garnish for ranking; a git hung on an index lock or
+// a network mount must degrade to "no git signal", not stall the
+// SessionStart hook toward its harness-side kill timeout.
+const gitSignalTimeout = 500 * time.Millisecond
 
 // Keywords derives the ranking query terms from the prompt (the reactive
 // signal), the cwd basename (a weak project hint), and — at SessionStart when
@@ -36,8 +44,15 @@ func Keywords(cwd, prompt string) []string {
 // nil, never an error. This is the SessionStart relevance signal (the prompt is
 // empty then); UserPromptSubmit re-ranks on prompt tokens.
 func gitSignal(cwd string) []string {
+	ctx, cancel := context.WithTimeout(context.Background(), gitSignalTimeout)
+	defer cancel()
 	git := func(args ...string) string {
-		out, err := exec.Command("git", append([]string{"-C", cwd}, args...)...).Output()
+		cmd := exec.CommandContext(ctx, "git", append([]string{"-C", cwd}, args...)...)
+		// Without WaitDelay, Output() keeps waiting for the stdout pipe even
+		// after the context kill — a child git spawns (credential helper,
+		// hook) inherits the pipe and can hold it open indefinitely.
+		cmd.WaitDelay = 100 * time.Millisecond
+		out, err := cmd.Output()
 		if err != nil {
 			return ""
 		}
