@@ -138,10 +138,7 @@ func shouldPrune(filename string, fm map[string]string, today day, walActive map
 	}
 	// I2: honour WAL activity — don't prune a slug with any inject/outcome events.
 	bareSlug := strings.TrimSuffix(filename, ".md")
-	if walActive[bareSlug] {
-		return false
-	}
-	return true
+	return !walActive[bareSlug]
 }
 
 // readWALActive reads the WAL and returns a set of bare slugs that have any
