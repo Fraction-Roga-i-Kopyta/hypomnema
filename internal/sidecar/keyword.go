@@ -13,8 +13,12 @@ import (
 // supplied files' rows are cleared — the table is shared across projects,
 // and a scoped Reproject must not wipe other projects' relevance signal.
 func (s *Store) PopulateKeywords(files []native.MemFile) error {
+	return populateKeywordsIn(s.db, files)
+}
+
+func populateKeywordsIn(e dbtx, files []native.MemFile) error {
 	for _, f := range files {
-		if _, err := s.db.Exec(`DELETE FROM keyword WHERE slug=?`, f.Slug); err != nil {
+		if _, err := e.Exec(`DELETE FROM keyword WHERE slug=?`, f.Slug); err != nil {
 			return fmt.Errorf("sidecar.PopulateKeywords: clear %s: %w", f.Slug, err)
 		}
 	}
@@ -28,7 +32,7 @@ func (s *Store) PopulateKeywords(files []native.MemFile) error {
 			freq[tok]++
 		}
 		for term, n := range freq {
-			if _, err := s.db.Exec(`INSERT INTO keyword (slug, term, weight) VALUES (?,?,?)`,
+			if _, err := e.Exec(`INSERT INTO keyword (slug, term, weight) VALUES (?,?,?)`,
 				f.Slug, term, float64(n)); err != nil {
 				return fmt.Errorf("sidecar.PopulateKeywords: insert %s/%s: %w", f.Slug, term, err)
 			}
