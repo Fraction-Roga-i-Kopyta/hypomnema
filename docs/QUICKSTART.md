@@ -2,76 +2,77 @@
 
 Five minutes from clone to your first injected context.
 
-## 1. Install (30 seconds)
+## Prerequisites
+
+- **Claude Code v2.1.59+** (native file memory — hypomnema builds on it).
+- **Go 1.25+** and `make` — hypomnema's core is the Go binary `memoryctl`; the
+  hooks are thin shims that call it. The binary is **not** checked in (it's
+  built locally), so building it is a required step, not optional.
+- `jq` (install.sh uses it to edit `settings.json`).
+
+## 1. Build and install (1 minute)
 
 ```bash
 git clone https://github.com/Fraction-Roga-i-Kopyta/hypomnema.git
 cd hypomnema
-./install.sh
+make build       # compiles ./bin/memoryctl (static, CGO_ENABLED=0)
+./install.sh     # symlinks memoryctl into ~/.claude/bin/, installs the 6
+                 # hook shims into ~/.claude/hooks/v2/, registers them in
+                 # settings.json, creates ~/.claude/memory-global/
 ```
 
-The installer checks for `jq`, `perl`, `awk`, and `bash 3.2+`. If anything is missing, it tells you what to install.
+`./install.sh` refuses to run if `bin/memoryctl` is missing — run `make build`
+first. It also checks that Claude Code is ≥ 2.1.59 before touching anything.
 
-### Optional: fuzzy dedup for mistakes
-
-The PreToolUse dedup hook blocks creation of a `mistakes/*.md` file whose root-cause is >80% similar to an existing one. It's implemented in the Go binary `memoryctl`. To enable it:
+Verify the install end-to-end:
 
 ```bash
-# macOS: Go already installed via Homebrew, or
-brew install go
-
-# Linux
-sudo apt-get install golang   # or: asdf install golang ...
+memoryctl doctor     # expect: all checks OK, 0 FAIL
 ```
 
-Then build and reinstall:
-
-```bash
-make build       # produces ./bin/memoryctl (static, CGO_ENABLED=0)
-./install.sh     # symlinks it into ~/.claude/bin/memoryctl
-```
-
-Without `memoryctl` the hook silently exits 0 — dedup is off, everything else still works. If you're seeing many near-duplicate mistakes accumulate, build `memoryctl` and they'll start being blocked at write time.
-
-## 2. Project registration — not needed in v2
+## 2. Projects need no registration
 
 v2 derives each project's memory store from the working directory
-(`~/.claude/projects/<slug>/memory/`); there is nothing to register.
-(The v1 `--discover` wizard and `projects.json` were removed — the flag
-now exits with an explanation.)
+(`~/.claude/projects/<slug>/memory/`) — there is nothing to register, no
+`projects.json`, no wizard. Global facts (useful in every project) live in
+`~/.claude/memory-global/`.
 
-## 3. Add the agent protocol to your global CLAUDE.md (15 seconds)
+## 3. (Optional) point your global CLAUDE.md at the protocol (15 s)
 
 ```bash
 ./install.sh --patch-claude-md
 ```
 
-Adds a four-line section to `~/.claude/CLAUDE.md` pointing future Claude Code sessions at the memory schema.
+Appends a short section to `~/.claude/CLAUDE.md` telling future Claude Code
+sessions how the memory schema works. `./uninstall.sh` removes it again.
 
 ## 4. Restart Claude Code (10 seconds)
 
-Quit the Claude Code app/CLI and start it again. Hooks register on the next session.
+Quit the Claude Code app/CLI and start it again — the hooks register on the
+next launch.
 
-## 5. Open a session in a tracked project (1 minute)
+## 5. Open a session and check memory (1 minute)
 
 ```bash
-cd ~/Development/<one-of-the-tracked-projects>
+cd ~/Development/<any-project>
 claude
 ```
 
-In your first message, ask: "What's in memory?" — Claude should mention the seeded mistakes from `seeds/` and any continuity from prior sessions (none yet).
+On SessionStart the `session-start` hook injects the most relevant facts for
+that project; there won't be any yet on a fresh install. You can also pull on
+demand from inside a session: `memoryctl recall "<query words>"`.
 
 ## 6. Record your first real mistake (90 seconds)
 
-When you hit a bug or take a wrong approach during a real task, ask Claude:
-
-> "Record this as a mistake — root cause was X, prevention is Y."
-
-Claude writes a file in `~/.claude/memory/mistakes/`. Next session, it'll be injected automatically.
+When you hit a bug or take a wrong approach during a real task, ask Claude to
+remember it. Claude writes a **flat** native memory file — the kind is the
+`type:` frontmatter field (`mistake`), not a subdirectory — into
+`~/.claude/projects/<slug>/memory/` (or `~/.claude/memory-global/` for a
+cross-project lesson). Next session it is injected automatically when relevant.
 
 ## What's next
 
-- `docs/TROUBLESHOOTING.md` — when context isn't injecting
+- `docs/TROUBLESHOOTING.md` — when context isn't injecting (`memoryctl doctor` first)
 - `docs/FAQ.md` — sync across machines, upgrade path, fixing wrongly-recorded entries
-- `README.md` — full architecture and scoring details
-- `CLAUDE.md` (repo root) — full agent protocol with examples
+- `README.md` — architecture and scoring details
+- `CLAUDE.md` (repo root) — the full agent protocol with worked examples
