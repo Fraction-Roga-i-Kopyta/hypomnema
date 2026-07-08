@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -96,9 +97,11 @@ func persistInjected(already, slugs []string, sessionID string) {
 
 // writeSessionList rewrites the session's injected list with the set-union
 // of already + slugs. Shared by push (inject) and pull (recall) so push
-// dedup and close classification see both delivery paths. Two concurrent
-// writers race read→union→write (last writer wins) — pre-existing behaviour,
-// acceptable for per-session lists.
+// dedup and close classification see both delivery paths. The write is atomic
+// (tmp+rename) so the Stop-hook reader never sees a truncated/empty list mid-
+// write — a torn read there means a whole turn's trigger classification is
+// lost (review C4). Two concurrent writers still race read→union→write (last
+// writer wins), acceptable for per-session lists.
 func writeSessionList(already, slugs []string, sessionID string) {
 	runtimeDir := filepath.Join(memoryDir(), ".runtime")
 	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
@@ -116,7 +119,7 @@ func writeSessionList(already, slugs []string, sessionID string) {
 			seen[s] = true
 		}
 	}
-	_ = os.WriteFile(sessionListPath(sessionID),
+	_ = pathutil.WriteFileAtomic(sessionListPath(sessionID),
 		[]byte(strings.Join(union, "\n")+"\n"), 0o600)
 }
 
@@ -140,7 +143,12 @@ func pruneRuntimeLists(dir string) {
 	}
 }
 
-func emitEnvelope(event, markdown string) {
+// marshalEnvelope builds the hookSpecificOutput JSON with HTML-escaping OFF.
+// Default json.Marshal rewrites <,>,& to </>/& (6 bytes each);
+// on code/markup-heavy facts that inflates the envelope ~2x past the markdown
+// byte count the injection budget measures, so Claude Code diverts the payload
+// to a file the model never reads inline — defeating the budget (review H1).
+func marshalEnvelope(event, markdown string) ([]byte, error) {
 	type hookOut struct {
 		HookEventName     string `json:"hookEventName"`
 		AdditionalContext string `json:"additionalContext"`
@@ -148,7 +156,17 @@ func emitEnvelope(event, markdown string) {
 	env := struct {
 		HookSpecificOutput hookOut `json:"hookSpecificOutput"`
 	}{HookSpecificOutput: hookOut{HookEventName: event, AdditionalContext: markdown}}
-	b, err := json.Marshal(env)
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(env); err != nil {
+		return nil, err
+	}
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil
+}
+
+func emitEnvelope(event, markdown string) {
+	b, err := marshalEnvelope(event, markdown)
 	if err != nil {
 		return
 	}

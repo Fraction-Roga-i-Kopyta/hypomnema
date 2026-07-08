@@ -194,16 +194,27 @@ func newDoctorFixture(t *testing.T) string {
 			t.Fatal(err)
 		}
 	}
-	// settings.json with all required hypomnema v2 hook shims (v2: 6).
+	// Valid settings.json wiring every v2 shim under its correct hook event
+	// (doctor's checkSettings parses the structure, not just substrings).
 	hooks := []string{
 		"session-start.sh", "user-prompt-submit.sh",
 		"pre-tool-write.sh", "skill-learnings-inject.sh", "skill-active.sh", "session-stop.sh",
 	}
-	lines := make([]string, 0, len(hooks))
-	for _, h := range hooks {
-		lines = append(lines, `"command": "~/.claude/hooks/v2/`+h+`"`)
+	shimEvent := map[string]string{
+		"session-start.sh": "SessionStart", "user-prompt-submit.sh": "UserPromptSubmit",
+		"pre-tool-write.sh": "PreToolUse", "skill-active.sh": "PreToolUse",
+		"skill-learnings-inject.sh": "PostToolUse", "session-stop.sh": "Stop",
 	}
-	settings := `{"hooks":{"_stub":[` + strings.Join(lines, ",") + `]}}`
+	byEvent := map[string][]string{}
+	for _, h := range hooks {
+		byEvent[shimEvent[h]] = append(byEvent[shimEvent[h]],
+			`{"hooks":[{"type":"command","command":"~/.claude/hooks/v2/`+h+`"}]}`)
+	}
+	var events []string
+	for ev, entries := range byEvent {
+		events = append(events, `"`+ev+`":[`+strings.Join(entries, ",")+`]`)
+	}
+	settings := `{"hooks":{` + strings.Join(events, ",") + `}}`
 	if err := os.WriteFile(filepath.Join(claude, "settings.json"),
 		[]byte(settings), 0o644); err != nil {
 		t.Fatal(err)

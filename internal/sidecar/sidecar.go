@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -62,7 +64,7 @@ func open(dbPath string, allowRecreate bool) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sidecar.Open: sql.Open: %w", err)
 	}
-	if _, err := db.Exec(Schema); err != nil {
+	if err := execBusyRetry(db, Schema); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("sidecar.Open: schema: %w", err)
 	}
@@ -70,7 +72,10 @@ func open(dbPath string, allowRecreate bool) (*Store, error) {
 	err = db.QueryRow(`SELECT v FROM meta WHERE k='schema_version'`).Scan(&v)
 	switch {
 	case err == sql.ErrNoRows:
-		if _, ierr := db.Exec(`INSERT INTO meta (k, v) VALUES ('schema_version', ?)`, schemaVersion); ierr != nil {
+		// OR IGNORE: two processes creating a fresh sidecar concurrently both
+		// see ErrNoRows and race to seed the version row; the loser must no-op,
+		// not fail on the UNIQUE constraint (review C3).
+		if ierr := execBusyRetry(db, `INSERT OR IGNORE INTO meta (k, v) VALUES ('schema_version', '`+schemaVersion+`')`); ierr != nil {
 			_ = db.Close()
 			return nil, fmt.Errorf("sidecar.Open: seed meta: %w", ierr)
 		}
@@ -88,6 +93,26 @@ func open(dbPath string, allowRecreate bool) (*Store, error) {
 		return open(dbPath, false)
 	}
 	return &Store{db: db}, nil
+}
+
+// execBusyRetry runs a statement, retrying on SQLITE_BUSY. The busy_timeout
+// PRAGMA does not cover the first-open DDL race (two processes creating the
+// schema on a fresh/recreated sidecar both fail fast with SQLITE_BUSY —
+// review C3). Bounded to ~1s total, well under the 5s busy_timeout, so a
+// genuinely stuck DB still surfaces its error.
+func execBusyRetry(db *sql.DB, stmt string) error {
+	var err error
+	for i := 0; i < 20; i++ {
+		if _, err = db.Exec(stmt); err == nil {
+			return nil
+		}
+		if !strings.Contains(strings.ToLower(err.Error()), "database is locked") &&
+			!strings.Contains(err.Error(), "SQLITE_BUSY") {
+			return err
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return err
 }
 
 // Close releases the database handle.

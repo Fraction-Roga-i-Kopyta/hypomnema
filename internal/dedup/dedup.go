@@ -329,7 +329,9 @@ func incrementRecurrence(path string) error {
 	if err := scanner.Err(); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(out.String()), 0o644)
+	// Atomic: a native memory file is user content not recoverable from the
+	// WAL, so a crash mid-write must not truncate it (review C5).
+	return pathutil.WriteFileAtomic(path, []byte(out.String()), 0o644)
 }
 
 func fileExists(p string) bool {

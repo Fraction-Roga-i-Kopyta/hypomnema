@@ -30,6 +30,10 @@ const maxTotalBytes = 8000
 // pull (memoryctl recall) so a recalled note obeys the same context budget.
 const MaxBodyBytes = maxBodyBytes
 
+// MaxTotalBytes is the whole-payload cap, exported so other envelope emitters
+// (skill-inject) enforce the same budget the injection render path does.
+const MaxTotalBytes = maxTotalBytes
+
 // CapBody bounds one record body to maxBytes at a UTF-8 rune boundary with a
 // visible truncation marker. Exported for the recall verb.
 func CapBody(body string, maxBytes int) string { return capBody(body, maxBytes) }
@@ -109,10 +113,12 @@ func candidates(in Input, files []native.MemFile, terms []string) []rank.Candida
 	projectSlug := native.SlugFromCWD(in.CWD)
 
 	s, err := sidecar.Open(sidePath)
-	if err != nil {
-		// SQLite state spans three files; removing only the main DB can leave
-		// a poisoned -wal/-shm that re-corrupts the fresh handle. Mirror the
-		// schema-mismatch wipe in sidecar.open.
+	if err != nil && shouldWipeSidecar(err) {
+		// Only wipe on genuine CORRUPTION. A transient error (e.g. SQLITE_BUSY
+		// from a concurrent Stop-hook creating the schema) must NOT delete the
+		// file — that would destroy a live sidecar out from under the other
+		// process (review R2). SQLite state spans three files; removing only the
+		// main DB can leave a poisoned -wal/-shm, so wipe all three.
 		for _, p := range []string{sidePath, sidePath + "-wal", sidePath + "-shm"} {
 			_ = os.Remove(p)
 		}
@@ -152,6 +158,23 @@ func candidates(in Input, files []native.MemFile, terms []string) []rank.Candida
 		}
 	}
 	return degradedCandidates(files, terms)
+}
+
+// shouldWipeSidecar reports whether a sidecar.Open error indicates genuine
+// on-disk corruption (safe to delete + rebuild) versus a transient/contention
+// error (must be retried, never deleted — the file may be a live DB another
+// process is mid-write on).
+func shouldWipeSidecar(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, sig := range []string{"not a database", "malformed", "sqlite_corrupt", "sqlite_notadb", "file is encrypted"} {
+		if strings.Contains(msg, sig) {
+			return true
+		}
+	}
+	return false
 }
 
 // scopeRecords keeps only rows owned by this project or the global store —

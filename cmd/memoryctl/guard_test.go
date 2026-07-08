@@ -146,3 +146,34 @@ func TestGuard_GlobalSecretsignoreWhitelists(t *testing.T) {
 		t.Errorf("whitelisted path must pass (exit 0), got %d", code)
 	}
 }
+
+func TestGuard_MultiEditScanned(t *testing.T) { // review S3
+	home := t.TempDir()
+	memDir := filepath.Join(home, ".claude", "memory")
+	os.MkdirAll(filepath.Join(memDir, "mistakes"), 0o755)
+	env := map[string]string{"CLAUDE_MEMORY_DIR": memDir}
+	fp := filepath.Join(memDir, "mistakes", "x.md")
+	stdin := `{"tool_name":"MultiEdit","tool_input":{"file_path":"` + fp +
+		`","edits":[{"old_string":"a","new_string":"harmless"},{"old_string":"b","new_string":"api_key: sk_live_abcd1234efgh"}]}}`
+	_, errOut, code := runStdin(t, env, stdin, "guard")
+	if code != 2 {
+		t.Fatalf("secret in a MultiEdit edit must block (exit 2), got %d", code)
+	}
+	if !strings.Contains(errOut, "Blocked") {
+		t.Errorf("expected Blocked message, got %q", errOut)
+	}
+}
+
+func TestGuard_NotebookEditScanned(t *testing.T) { // review S3
+	home := t.TempDir()
+	memDir := filepath.Join(home, ".claude", "memory")
+	os.MkdirAll(filepath.Join(memDir, "mistakes"), 0o755)
+	env := map[string]string{"CLAUDE_MEMORY_DIR": memDir}
+	fp := filepath.Join(memDir, "mistakes", "x.md")
+	stdin := `{"tool_name":"NotebookEdit","tool_input":{"file_path":"` + fp +
+		`","new_source":"password: hunter2hunter2"}}`
+	_, _, code := runStdin(t, env, stdin, "guard")
+	if code != 2 {
+		t.Fatalf("secret in NotebookEdit new_source must block (exit 2), got %d", code)
+	}
+}

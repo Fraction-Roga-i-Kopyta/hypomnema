@@ -10,9 +10,50 @@
 package pathutil
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 )
+
+// WriteFileAtomic writes data to path via a same-directory temp file + rename,
+// so a reader never observes a torn/empty file and a crash mid-write cannot
+// leave the target truncated (invariant I3). The temp file is cleaned up on
+// any failure before the rename.
+//
+// Unlike a bare os.Rename (which only needs directory write permission and so
+// would clobber a read-only target), WriteFileAtomic refuses to overwrite a
+// target whose own mode is read-only — preserving the "protected file blocks
+// the write" contract callers like dedup rely on.
+func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
+	if fi, err := os.Stat(path); err == nil && fi.Mode().IsRegular() && fi.Mode().Perm()&0o200 == 0 {
+		return fmt.Errorf("pathutil.WriteFileAtomic: target is read-only: %s", path)
+	}
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("pathutil.WriteFileAtomic: temp: %w", err)
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("pathutil.WriteFileAtomic: write: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("pathutil.WriteFileAtomic: close: %w", err)
+	}
+	if err := os.Chmod(tmpName, perm); err != nil {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("pathutil.WriteFileAtomic: chmod: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("pathutil.WriteFileAtomic: rename: %w", err)
+	}
+	return nil
+}
 
 // slugUnsafe replaces WAL-grammar-breaking characters (`|` is the
 // 4-column delimiter; `\n` and `\r` would split the line). Bash side

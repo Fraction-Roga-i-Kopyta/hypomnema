@@ -43,14 +43,9 @@ func newFixture(t *testing.T) (claude, mem, cwd string) {
 			t.Fatal(err)
 		}
 	}
-	// A minimal settings.json that lists every hypomnema v2 hook install.sh
-	// registers, so checkSettings is happy out of the box.
-	var hookLines []string
-	for _, cmd := range requiredHookCommands {
-		hookLines = append(hookLines, `"command": "~/.claude/hooks/v2/`+cmd+`"`)
-	}
-	settings := `{"hooks":{"_stub":[` + strings.Join(hookLines, ",") + `]}}`
-	if err := os.WriteFile(filepath.Join(claude, "settings.json"), []byte(settings), 0o644); err != nil {
+	// A valid settings.json wiring every shim under its correct event, so
+	// checkSettings (which parses the structure) is happy out of the box.
+	if err := os.WriteFile(filepath.Join(claude, "settings.json"), []byte(validSettingsJSON(nil)), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	// memoryctl binary stub — doctor only checks existence / non-dir.
@@ -68,6 +63,26 @@ func newFixture(t *testing.T) (claude, mem, cwd string) {
 		}
 	}
 	return claude, mem, cwd
+}
+
+// validSettingsJSON builds a real Claude Code settings.json wiring each
+// required shim under its correct hook event (per shimEvent). Shims named in
+// omit are left out — used to simulate a partial/broken registration.
+func validSettingsJSON(omit map[string]bool) string {
+	byEvent := map[string][]string{}
+	for _, shim := range requiredHookCommands {
+		if omit[shim] {
+			continue
+		}
+		ev := shimEvent[shim]
+		byEvent[ev] = append(byEvent[ev],
+			`{"hooks":[{"type":"command","command":"~/.claude/hooks/v2/`+shim+`"}]}`)
+	}
+	var events []string
+	for ev, entries := range byEvent {
+		events = append(events, `"`+ev+`":[`+strings.Join(entries, ",")+`]`)
+	}
+	return `{"hooks":{` + strings.Join(events, ",") + `}}`
 }
 
 // projDir returns the per-project native memory dir inside the fixture.
@@ -132,15 +147,8 @@ func TestRun_SettingsMissingHookCommandFails(t *testing.T) {
 	claude, mem, cwd := newFixture(t)
 	// Rewrite settings.json to omit session-stop.sh — verifies that a
 	// missing v2 shim is caught by checkSettings.
-	var lines []string
-	for _, cmd := range requiredHookCommands {
-		if cmd == "session-stop.sh" {
-			continue
-		}
-		lines = append(lines, `"command": "~/.claude/hooks/v2/`+cmd+`"`)
-	}
-	broken := `{"hooks":{"_stub":[` + strings.Join(lines, ",") + `]}}`
-	if err := os.WriteFile(filepath.Join(claude, "settings.json"), []byte(broken), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(claude, "settings.json"),
+		[]byte(validSettingsJSON(map[string]bool{"session-stop.sh": true})), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	r := Run(claude, mem, cwd)
@@ -467,8 +475,10 @@ func TestRequiredHookCommands_MatchInstallScript(t *testing.T) {
 		t.Fatalf("read %s: %v", installPath, err)
 	}
 	// Match every register_hook line that references the v2 shim directory.
-	// install.sh uses $HOME/.claude/hooks/v2/<name>.sh in register_hook calls.
-	re := regexp.MustCompile(`(?:~|\$HOME)/\.claude/hooks/v2/([a-z0-9-]+\.sh)`)
+	// install.sh uses $CLAUDE_DIR/hooks/v2/<name>.sh in register_hook calls
+	// ($CLAUDE_DIR defaults to ~/.claude; the v2.5.1 review O1 fix moved these
+	// off a hardcoded $HOME).
+	re := regexp.MustCompile(`(?:\$CLAUDE_DIR|~|\$HOME/\.claude)/hooks/v2/([a-z0-9-]+\.sh)`)
 	matches := re.FindAllStringSubmatch(string(data), -1)
 
 	fromInstall := map[string]struct{}{}

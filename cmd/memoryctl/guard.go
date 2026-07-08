@@ -30,9 +30,13 @@ func runGuard(args []string) {
 	raw, _ := io.ReadAll(os.Stdin)
 	var in struct {
 		ToolInput struct {
-			FilePath  string `json:"file_path"`
-			Content   string `json:"content"`
-			NewString string `json:"new_string"`
+			FilePath  string     `json:"file_path"`
+			Content   string     `json:"content"`    // Write
+			NewString string     `json:"new_string"` // Edit
+			NewSource string     `json:"new_source"` // NotebookEdit
+			Edits     []struct { // MultiEdit
+				NewString string `json:"new_string"`
+			} `json:"edits"`
 		} `json:"tool_input"`
 	}
 	if err := json.Unmarshal(raw, &in); err != nil {
@@ -53,11 +57,24 @@ func runGuard(args []string) {
 	if secrets.IgnoreMatch(rel, secrets.DefaultIgnoreFiles(memoryDir(), globalDir)...) {
 		os.Exit(0)
 	}
-	content := in.ToolInput.Content
-	if content == "" {
-		content = in.ToolInput.NewString
+	// Scan every candidate string the mutating tool carries. Write→content,
+	// Edit→new_string, NotebookEdit→new_source, MultiEdit→edits[].new_string.
+	// Missing a tool's field here would fail OPEN on a guarded path (review S3).
+	var b strings.Builder
+	for _, s := range []string{in.ToolInput.Content, in.ToolInput.NewString, in.ToolInput.NewSource} {
+		if s != "" {
+			b.WriteString(s)
+			b.WriteByte('\n')
+		}
 	}
-	if content == "" {
+	for _, e := range in.ToolInput.Edits {
+		if e.NewString != "" {
+			b.WriteString(e.NewString)
+			b.WriteByte('\n')
+		}
+	}
+	content := b.String()
+	if strings.TrimSpace(content) == "" {
 		os.Exit(0)
 	}
 	hits := secrets.Scan(content)
