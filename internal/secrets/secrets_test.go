@@ -3,6 +3,7 @@ package secrets
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -74,6 +75,29 @@ func TestScan_ValueBasedPatterns(t *testing.T) {
 		if got := Scan(c); len(got) != 0 {
 			t.Errorf("must not hit: %s → %v", c, got)
 		}
+	}
+}
+
+func TestScan_UnclosedFence(t *testing.T) {
+	// One orphan fence marker must not disable scanning for the rest of
+	// the document (review P1 #3 — a one-line gate bypass).
+	unclosed := "intro\n```\nsome code\napi_key: sk_live_abcd1234efgh\n"
+	if got := Scan(unclosed); len(got) == 0 {
+		t.Error("secret after an unclosed fence must be scanned")
+	}
+	// A properly closed fence keeps its exemption.
+	closed := "```\napi_key: sk_live_abcd1234efgh\n```\ntail text"
+	if got := Scan(closed); len(got) != 0 {
+		t.Errorf("properly fenced secret must stay ignored: %v", got)
+	}
+	// Closed pair earlier + orphan opener later: only the orphan region rescans.
+	mixed := "```\nfenced: sk_live_hidden12345\n```\nprose\n```\npassword: realSecret123\n"
+	got := Scan(mixed)
+	if len(got) != 1 {
+		t.Fatalf("want exactly the post-orphan secret, got %v", got)
+	}
+	if !strings.Contains(got[0], "password") {
+		t.Errorf("hit should be the password line, got %v", got)
 	}
 }
 
