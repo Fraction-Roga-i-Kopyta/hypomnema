@@ -15,6 +15,21 @@ import (
 var secretRe = regexp.MustCompile(`(?i)\b(api[_-]?key|apikey|aws[_-]?(?:access|secret)[_-]?key|secret|password|token)["'` + "`" + `]?\s*[:=]\s*["'` + "`" + `]?[^\s"'` + "`" + `]{8,}`)
 var inlineCodeRe = regexp.MustCompile("`[^`]*`")
 
+// valueRes are key-independent credential shapes: the value alone is
+// sufficient evidence regardless of what (if anything) names it. Each
+// pattern anchors on a vendor-fixed prefix or rigid structure so prose
+// mentioning the *concept* ("the ghp_ prefix") never matches.
+var valueRes = []*regexp.Regexp{
+	regexp.MustCompile(`\b(AKIA|ASIA)[0-9A-Z]{16}\b`),        // AWS access/STS key id
+	regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{16,}\b`),     // GitHub classic tokens
+	regexp.MustCompile(`\bgithub_pat_[A-Za-z0-9_]{22,}\b`),   // GitHub fine-grained PAT
+	regexp.MustCompile(`\bsk-ant-[A-Za-z0-9_-]{16,}`),        // Anthropic API key
+	regexp.MustCompile(`\bxox[bpars]-[A-Za-z0-9-]{10,}\b`),   // Slack tokens
+	regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`), // PEM private key block
+	regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`), // JWT (header.payload.sig — payload also starts eyJ)
+	regexp.MustCompile(`\b[a-z][a-z0-9+.-]*://[^\s:/@]+:[^\s@]+@`),                        // scheme://user:pass@ URL credentials
+}
+
 // Scan returns "line: fragment" hits for secret-looking tokens in content,
 // outside fenced and inline code. An empty result means clean.
 func Scan(content string) []string {
@@ -36,6 +51,11 @@ func Scan(content string) []string {
 		line = inlineCodeRe.ReplaceAllString(line, "")
 		if m := secretRe.FindString(line); m != "" {
 			hits = append(hits, fmt.Sprintf("%d: %s", n, m))
+		}
+		for _, re := range valueRes {
+			if m := re.FindString(line); m != "" {
+				hits = append(hits, fmt.Sprintf("%d: %s", n, m))
+			}
 		}
 	}
 	return hits

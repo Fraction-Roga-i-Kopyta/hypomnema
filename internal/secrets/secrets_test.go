@@ -46,6 +46,37 @@ func TestScan_QuotedValues(t *testing.T) {
 	}
 }
 
+func TestScan_ValueBasedPatterns(t *testing.T) {
+	hits := []string{
+		"the key is AKIAIOSFODNN7EXAMPLE",                                     // AWS access key id
+		"temp cred ASIAIOSFODNN7EXAMPLE",                                      // AWS STS key id
+		"ghp_abcdefghijklmnop123456789012345678",                              // GitHub classic PAT
+		"github_pat_11ABCDEFG0123456789_abcdefghijklmnopqrstuv",               // GitHub fine-grained PAT
+		"sk-ant-api03-abcdefghijklmnopqrstuv",                                 // Anthropic
+		"xoxb-1234567890-abcdefghijklm",                                       // Slack bot token
+		"-----BEGIN OPENSSH PRIVATE KEY-----",                                 // PEM block
+		"Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J", // JWT
+		"postgres://admin:s3cretpw@db.internal:5432/prod",                     // URL credentials
+	}
+	for _, c := range hits {
+		if got := Scan(c); len(got) == 0 {
+			t.Errorf("value-based secret must hit: %s", c)
+		}
+	}
+	clean := []string{
+		"we use AWS AKIA-prefixed key ids",                // prefix alone, no key body
+		"the ghp_ prefix marks GitHub tokens",             // prefix alone
+		"see https://docs.example.com/path?q=1",           // URL without credentials
+		"eyJ looks like base64 of '{\"' but is too short", // JWT prefix alone
+		"private key material must never be committed",    // prose
+	}
+	for _, c := range clean {
+		if got := Scan(c); len(got) != 0 {
+			t.Errorf("must not hit: %s → %v", c, got)
+		}
+	}
+}
+
 func TestIgnoreMatch(t *testing.T) {
 	dir := t.TempDir()
 	globalDir := filepath.Join(dir, "memory-global")
