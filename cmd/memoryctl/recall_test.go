@@ -58,10 +58,10 @@ func TestRecallVerb(t *testing.T) {
 	}
 
 	walB, _ := os.ReadFile(filepath.Join(memDir, ".wal"))
-	if !strings.Contains(string(walB), "|recall|docker.md|s9") {
+	if !strings.Contains(string(walB), "\x1fdocker.md|s9") {
 		t.Errorf("missing recall WAL event, got:\n%s", walB)
 	}
-	if strings.Contains(string(walB), "|recall|redis.md|") {
+	if strings.Contains(string(walB), "\x1fredis.md|") {
 		t.Errorf("index entries must not emit recall events:\n%s", walB)
 	}
 	list, _ := os.ReadFile(filepath.Join(memDir, ".runtime", "injected-s9.list"))
@@ -117,7 +117,7 @@ func TestRecallRepeatSameDayDedup(t *testing.T) {
 	run(t, env, "recall", "docker", "cache")
 	run(t, env, "recall", "docker", "cache")
 	walB, _ := os.ReadFile(filepath.Join(memDir, ".wal"))
-	if n := strings.Count(string(walB), "|recall|docker.md|s9"); n != 1 {
+	if n := strings.Count(string(walB), "\x1fdocker.md|s9"); n != 1 {
 		t.Errorf("same-day repeat recall must dedup: want 1 event, got %d\n%s", n, walB)
 	}
 }
@@ -238,7 +238,7 @@ func TestRecallStaleMarkerAndCliFallback(t *testing.T) {
 		t.Errorf("stale fact must carry the [stale] marker, got:\n%s", out)
 	}
 	walB, _ := os.ReadFile(filepath.Join(memDir, ".wal"))
-	if !strings.Contains(string(walB), "|recall|docker.md|cli") {
+	if !strings.Contains(string(walB), "\x1fdocker.md|cli") {
 		t.Errorf("want cli-fallback recall event, got:\n%s", walB)
 	}
 	if _, err := os.Stat(filepath.Join(memDir, ".runtime")); err == nil {

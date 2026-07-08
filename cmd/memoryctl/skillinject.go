@@ -90,9 +90,9 @@ func runSkillInject(_ []string) {
 		}
 		b.WriteString(entry)
 		if stdinSid != "" {
-			recordRecallWithSession(s.Slug, stdinSid)
+			recordRecallWithSession(s.Slug, s.Project, stdinSid)
 		} else {
-			recordRecall(s.Slug) // env-resolved sid for manual CLI invocations
+			recordRecall(s.Slug, s.Project) // env-resolved sid for manual CLI invocations
 		}
 	}
 

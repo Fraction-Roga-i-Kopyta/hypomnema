@@ -22,6 +22,27 @@ type agg struct {
 	sessions map[string]bool
 }
 
+// mergeFrom folds another aggregate into a (used to combine a fact's
+// project-qualified history with its grandfathered legacy bare-slug history).
+// nil src is a no-op. Session classifications union with useful-wins.
+func (a *agg) mergeFrom(src *agg) {
+	if src == nil {
+		return
+	}
+	a.injects += src.injects
+	a.pos += src.pos
+	a.neg += src.neg
+	if src.lastInject > a.lastInject {
+		a.lastInject = src.lastInject
+	}
+	if a.created == "" || (src.created != "" && src.created < a.created) {
+		a.created = src.created
+	}
+	for sess, useful := range src.sessions {
+		a.classify(sess, useful)
+	}
+}
+
 func (a *agg) classify(session string, useful bool) {
 	if a.sessions == nil {
 		a.sessions = map[string]bool{}
@@ -90,11 +111,14 @@ func reprojectIn(e dbtx, files []native.MemFile, walPath string, scope []string)
 	}
 
 	for _, f := range files {
-		// Look up by bare slug so v1 WAL (no .md) matches v2 native files (.md).
-		a := aggs[strings.TrimSuffix(f.Slug, ".md")]
-		if a == nil {
-			a = &agg{}
-		}
+		// Combine this file's project-qualified history (new events) with any
+		// legacy bare-slug history (grandfathered onto the current owner — M2).
+		// Same-basename files in two projects each get their own qualified
+		// aggregate, so their effectiveness no longer merges (review E5-deep).
+		bare := strings.TrimSuffix(f.Slug, ".md")
+		a := &agg{}
+		a.mergeFrom(aggs[native.QKey(f.Project, bare)]) // qualified (v2.10+)
+		a.mergeFrom(aggs[bare])                         // legacy bare slug
 		pos, neg := a.outcomes()
 		// An ambient rule shapes behaviour silently (language pref, security
 		// baseline, meta-policy) — going uncited is its NORMAL mode, not
@@ -186,17 +210,25 @@ func readWALAgg(walPath string) map[string]*agg {
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 1<<16), 1<<20)
 	for sc.Scan() {
-		date, event, slug, field4, ok := parseWALLine(sc.Text())
+		date, event, target, field4, ok := parseWALLine(sc.Text())
 		if !ok {
 			continue
 		}
-		// Normalise slug to bare form so v1 WAL entries (no .md suffix) and
-		// v2 WAL entries (with .md suffix) aggregate to the same key.
+		// Targets may be project-qualified (project\x1fslug, v2.10+) or a legacy
+		// bare slug (pre-v2.10). Key qualified events by QKey(project, bareslug)
+		// so two projects' same-basename facts aggregate separately; key legacy
+		// events by the bare slug alone — reproject grandfathers those onto the
+		// current owner(s). Normalise .md so v1/v2 slugs collapse.
+		project, slug, qualified := native.ParseQKey(target)
 		slug = strings.TrimSuffix(slug, ".md")
-		a := out[slug]
+		key := slug
+		if qualified {
+			key = native.QKey(project, slug)
+		}
+		a := out[key]
 		if a == nil {
 			a = &agg{}
-			out[slug] = a
+			out[key] = a
 		}
 		switch event {
 		case "inject":
