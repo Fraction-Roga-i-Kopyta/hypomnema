@@ -32,22 +32,42 @@ var valueRes = []*regexp.Regexp{
 
 // Scan returns "line: fragment" hits for secret-looking tokens in content,
 // outside fenced and inline code. An empty result means clean.
+//
+// Fences are resolved in a first pass so an UNCLOSED fence cannot exempt
+// the remainder of the document: an orphan opener (no matching closer by
+// EOF) is treated as plain text and everything after it is scanned. Only
+// properly paired fences retain the code-block exemption.
 func Scan(content string) []string {
-	var hits []string
-	sc := bufio.NewScanner(strings.NewReader(content))
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	lines := strings.Split(content, "\n")
+	protected := make([]bool, len(lines))
 	inFence := false
-	n := 0
-	for sc.Scan() {
-		n++
-		line := sc.Text()
+	fenceStart := -1
+	for i, line := range lines {
 		if strings.HasPrefix(line, "```") {
-			inFence = !inFence
+			if inFence {
+				inFence = false
+			} else {
+				inFence = true
+				fenceStart = i
+			}
+			protected[i] = true
 			continue
 		}
-		if inFence {
+		protected[i] = inFence
+	}
+	if inFence {
+		// Orphan opener: un-protect it and everything after it.
+		for i := fenceStart; i < len(lines); i++ {
+			protected[i] = false
+		}
+	}
+
+	var hits []string
+	for i, line := range lines {
+		if protected[i] {
 			continue
 		}
+		n := i + 1
 		line = inlineCodeRe.ReplaceAllString(line, "")
 		if m := secretRe.FindString(line); m != "" {
 			hits = append(hits, fmt.Sprintf("%d: %s", n, m))
