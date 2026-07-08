@@ -1,0 +1,6 @@
+# hypomnema-wal v2
+2026-07-01|inject|api-auth-skipped.md|sess-0701
+2026-07-01|trigger-useful|api-auth-skipped.md|sess-0701
+2026-07-02|inject|flaky-test-ci-local.md|sess-0702
+2026-07-02|trigger-silent|flaky-test-ci-local.md|sess-0702
+2026-07-03|outcome-positive|api-auth-skipped.md|sess-0703

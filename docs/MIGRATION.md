@@ -24,7 +24,7 @@ v0.8 is backward compatible. Existing memory files continue to work without edit
 
 8. **Docs:** `docs/QUICKSTART.md`, `docs/TROUBLESHOOTING.md`, `docs/FAQ.md`, `docs/MIGRATION.md`.
 
-9. **Interactive install wizard.** `./install.sh --discover` scans dev folders for git repos and proposes `projects.json` entries. `./install.sh --patch-claude-md` adds the four-line memory section to your global CLAUDE.md. `--dry-run` for preview.
+9. **Install flags.** `./install.sh --patch-claude-md` adds the four-line memory section to your global CLAUDE.md. `--dry-run` for preview. (The v1 `--discover` wizard was removed in v2.5.0 — v2 needs no project registration.)
 
 10. **Externalized constants.** `~/.claude/memory/.config.sh` overrides defaults (`MAX_FILES`, decay thresholds, etc.). `templates/.config.sh.example` provided.
 

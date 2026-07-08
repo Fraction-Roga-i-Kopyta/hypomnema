@@ -17,6 +17,14 @@ type Store struct {
 	db *sql.DB
 }
 
+// dbtx is the shared surface of *sql.DB and *sql.Tx the projection helpers
+// write through, so Reproject can run every statement inside one transaction
+// while the public Store methods keep operating on the raw handle.
+type dbtx interface {
+	Exec(query string, args ...any) (sql.Result, error)
+	Query(query string, args ...any) (*sql.Rows, error)
+}
+
 // Record is one row of the memory table — a native file plus hypomnema's
 // derived metadata.
 type Record struct {
@@ -105,11 +113,13 @@ func (s *Store) Get(slug string) (Record, bool, error) {
 }
 
 // Upsert inserts or replaces the memory row keyed by slug.
-func (s *Store) Upsert(r Record) error {
+func (s *Store) Upsert(r Record) error { return upsertIn(s.db, r) }
+
+func upsertIn(e dbtx, r Record) error {
 	if r.Status == "" {
 		r.Status = "active"
 	}
-	_, err := s.db.Exec(`
+	_, err := e.Exec(`
 INSERT INTO memory (slug, content_sha, type, name, description, project,
 	domains, created, last_injected, ref_count, status, effectiveness)
 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
@@ -128,8 +138,10 @@ ON CONFLICT(slug) DO UPDATE SET
 }
 
 // All returns every memory row, ordered by slug for stable output.
-func (s *Store) All() ([]Record, error) {
-	rows, err := s.db.Query(`SELECT slug, content_sha, type, name, description,
+func (s *Store) All() ([]Record, error) { return allIn(s.db) }
+
+func allIn(e dbtx) ([]Record, error) {
+	rows, err := e.Query(`SELECT slug, content_sha, type, name, description,
 		project, domains, created, last_injected, ref_count, status, effectiveness
 		FROM memory ORDER BY slug`)
 	if err != nil {

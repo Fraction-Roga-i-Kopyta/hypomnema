@@ -28,4 +28,5 @@ self-profile.md
 # Fixture corpora ship canonical .wal / .tfidf-index snapshots for
 # make test-fixtures — override the runtime-artefact patterns above.
 !fixtures/corpora/*/memory/.wal
+!fixtures/wal-clean/.wal
 !fixtures/corpora/*/memory/.tfidf-index

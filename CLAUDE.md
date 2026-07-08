@@ -249,7 +249,7 @@ You do NOT need to set ranks manually. Write good `keywords` and `domains`, let 
 
 ## Secrets detection
 
-`memoryctl guard` is the PreToolUse gate (matcher `Write|Edit`) on memory paths — the legacy `~/.claude/memory` tree, every native `~/.claude/projects/<slug>/memory/` store, and `~/.claude/memory-global/`. It blocks writes whose body contains a recognised credential pattern (`api_key` / `secret` / `password` / `token` / AWS key variants) outside fenced code blocks with value length ≥ 8. Blocked writes exit 2 with a stderr message naming the file and line.
+`memoryctl guard` is the PreToolUse gate (matcher `Write|Edit`) on memory paths — the legacy `~/.claude/memory` tree, every native `~/.claude/projects/<slug>/memory/` store, and `~/.claude/memory-global/`. It blocks writes whose body contains a recognised credential pattern outside fenced code blocks: key-based matches (`api_key` / `secret` / `password` / `token` followed by a value of ≥ 8 chars, quoted or unquoted) plus value-based matches (AWS `AKIA…`/`ASIA…` key ids, GitHub `ghp_…`/`github_pat_…` tokens, Anthropic `sk-ant-…` keys, Slack `xox*-…` tokens, PEM private-key blocks, JWTs, and `scheme://user:pass@` URLs). An unclosed code fence does not exempt the rest of the file. Blocked writes exit 2 with a stderr message naming the file and line.
 
 Escape hatches:
 - Whitelist a path permanently: add its glob to `~/.claude/memory-global/.secretsignore`.

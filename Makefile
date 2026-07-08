@@ -8,7 +8,11 @@ GO_FILES := $(shell find . -name '*.go' -not -path './vendor/*')
 # compilable. modernc.org/sqlite is pure Go, so this works.
 GO_BUILD := CGO_ENABLED=0 go build -trimpath -ldflags="-s -w"
 
-.PHONY: all build test test-go test-go-cover install clean help
+# Pinned so CI and local runs agree; bump deliberately.
+# v0.7.0 == staticcheck 2026.1 (supports Go 1.25).
+STATICCHECK_VERSION := v0.7.0
+
+.PHONY: all build test test-go test-go-cover lint install clean help
 
 all: build test
 
@@ -45,6 +49,9 @@ test-go-cover:
 	@echo "Profiles in ./coverage/. View HTML with:"
 	@echo "  go tool cover -html=coverage/cmd-memoryctl-subprocess.out"
 
+lint:
+	go run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) ./...
+
 install: build
 	@mkdir -p $${HOME}/.claude/bin
 	ln -sf "$(abspath $(MEMORYCTL))" $${HOME}/.claude/bin/memoryctl
@@ -60,5 +67,6 @@ help:
 	@echo "  test            — go test -race ./..."
 	@echo "  test-go         — same as test"
 	@echo "  test-go-cover   — Go tests + cmd/memoryctl subprocess coverage report"
+	@echo "  lint            — staticcheck $(STATICCHECK_VERSION) across the repo"
 	@echo "  install         — symlink bin/memoryctl into ~/.claude/bin/"
 	@echo "  clean           — remove bin/memoryctl"

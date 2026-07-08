@@ -38,8 +38,10 @@ func TestAcquire_TimesOutWhenHeld(t *testing.T) {
 	}
 	defer first.Release()
 
+	// 500ms budget: the original 60–80ms budgets flaked on loaded CI
+	// runners (2026-07-08 review P2) — scheduler jitter alone can eat 80ms.
 	cfg := LockConfig{
-		MaxWait:      80 * time.Millisecond,
+		MaxWait:      500 * time.Millisecond,
 		StaleAfter:   10 * time.Second,
 		PollInterval: 20 * time.Millisecond,
 	}
@@ -49,7 +51,7 @@ func TestAcquire_TimesOutWhenHeld(t *testing.T) {
 	if err != ErrTimeout {
 		t.Errorf("expected ErrTimeout, got %v", err)
 	}
-	if elapsed < 60*time.Millisecond {
+	if elapsed < 400*time.Millisecond {
 		t.Errorf("Acquire returned too quickly (%v) — didn't actually wait", elapsed)
 	}
 }
@@ -86,7 +88,7 @@ func TestAcquire_NoTakeoverWhenFresh(t *testing.T) {
 	defer first.Release()
 
 	cfg := LockConfig{
-		MaxWait:      80 * time.Millisecond,
+		MaxWait:      500 * time.Millisecond,
 		StaleAfter:   10 * time.Second, // held lock is 0s old
 		PollInterval: 20 * time.Millisecond,
 	}
@@ -109,7 +111,7 @@ func TestAcquirePath_AllowsNonWALResources(t *testing.T) {
 
 	// Second Acquire on same path must time out while l1 is held.
 	cfg := LockConfig{
-		MaxWait:      60 * time.Millisecond,
+		MaxWait:      500 * time.Millisecond,
 		StaleAfter:   10 * time.Second,
 		PollInterval: 20 * time.Millisecond,
 	}
@@ -130,8 +132,8 @@ func TestAcquire_ConcurrentCallersSerialize(t *testing.T) {
 	var mu sync.Mutex
 
 	cfg := LockConfig{
-		MaxWait:      2 * time.Second,
-		StaleAfter:   10 * time.Second,
+		MaxWait:      10 * time.Second, // generous: 8 contending workers under -race on a 2-core runner
+		StaleAfter:   30 * time.Second,
 		PollInterval: 5 * time.Millisecond,
 	}
 

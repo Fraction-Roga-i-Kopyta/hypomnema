@@ -73,7 +73,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
 # --- [1/3] Remove v2 shim files from ~/.claude/hooks/v2/ ---
 echo "[1/3] Removing v2 hook shims from $V2_HOOKS_DIR..."
 removed_shims=0
-for shim in session-start.sh user-prompt-submit.sh pre-tool-write.sh session-stop.sh; do
+# Keep in lockstep with install.sh's shim list and doctor's
+# requiredHookCommands (internal/doctor/doctor.go).
+for shim in session-start.sh user-prompt-submit.sh pre-tool-write.sh \
+            skill-learnings-inject.sh skill-active.sh session-stop.sh; do
   target="$V2_HOOKS_DIR/$shim"
   if [ -f "$target" ] || [ -L "$target" ]; then
     _run rm "$target"
