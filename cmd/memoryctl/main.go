@@ -79,6 +79,21 @@ Usage:
       file to memoryDir/.runtime/active-skill-<sid>. Lets the capture path
       tag skill-learnings with the correct skill after context compaction.
       Fail-safe: exits 0 on bad input or missing skill/session.
+  memoryctl migrate --dry-run | --execute | --rollback
+      Migrate the legacy v1 store to v2 native memory. --dry-run previews the
+      plan; --execute writes native files and backs up the v1 store to
+      memory.v1-backup-<date>; --rollback restores the newest such backup.
+  memoryctl rank [query words...]
+      Diagnostic: print the ranked candidate list (score breakdown) for the
+      current project + global scope against an ad-hoc query. Read-only.
+  memoryctl ab
+      Diagnostic: replay the WAL to compare ranked vs baseline retrieval
+      (A/B evidence). Read-only; see docs/measurements/.
+
+Hook verbs (invoked by the v2 shims, not run by hand): inject, close, guard,
+skill-inject, skill-active. Each reads a hook envelope on stdin and is
+fail-safe (exit 0 on bad input); guard is the exception — it exits 2 to block
+a secret-bearing write.
 
 Environment:
   CLAUDE_MEMORY_DIR       Memory root (default: ~/.claude/memory).

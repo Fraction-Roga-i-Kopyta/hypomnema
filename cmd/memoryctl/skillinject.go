@@ -128,10 +128,6 @@ func runSkillActive(_ []string) {
 	safe := pathutil.SafeFileName(sid)
 	dir := filepath.Join(memoryDir(), ".runtime")
 	_ = os.MkdirAll(dir, 0o755)
-	tmp := filepath.Join(dir, "active-skill-"+safe+".tmp")
-	final := filepath.Join(dir, "active-skill-"+safe)
-	if err := os.WriteFile(tmp, []byte(skill+"\n"), 0o644); err == nil {
-		_ = os.Rename(tmp, final) // atomic (I3)
-	}
+	_ = pathutil.WriteFileAtomic(filepath.Join(dir, "active-skill-"+safe), []byte(skill+"\n"), 0o644)
 	os.Exit(0)
 }

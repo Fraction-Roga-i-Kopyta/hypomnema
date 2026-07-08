@@ -56,55 +56,62 @@ func (atomicWriteChecker) Name() string { return "atomic writes for multi-line f
 // test fixture writers, ephemeral runtime state. Add to this list
 // only with a one-line justification in the comment.
 var approvedWriteFileSites = map[string]string{
-	"internal/dedup/dedup.go": "incrementRecurrence: read-modify-write under WAL lock; atomicity covered by lock",
+	"internal/wal/lock.go": "single-line ephemeral ownership token written inside the lock dir (itself the atomic primitive); nothing to tear",
 }
 
 func (c atomicWriteChecker) Check(repoRoot string) ([]Violation, error) {
-	internalDir := filepath.Join(repoRoot, "internal")
 	var violations []Violation
-	err := filepath.WalkDir(internalDir, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
+	// Cover cmd/ as well as internal/ — the writeSessionList non-atomic write
+	// that torn-read reproduced (review F5) lived in cmd/ and was invisible to
+	// an internal/-only walk.
+	for _, sub := range []string{"internal", "cmd"} {
+		root := filepath.Join(repoRoot, sub)
+		if _, err := os.Stat(root); os.IsNotExist(err) {
+			continue // a repo/fixture without this subtree is fine
 		}
-		if d.IsDir() {
-			return nil
-		}
-		// Only Go production sources — skip tests.
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		body, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		// Match the actual function call (paren immediately after the
-		// identifier) — this avoids false positives on comments,
-		// string literals, and identifier references that just mention
-		// the function name. Must NOT match `_ = os.WriteFile` discard
-		// patterns either (they are still calls); accepted because
-		// any production discard of WriteFile is itself a smell.
-		if !reWriteFileCall.MatchString(string(body)) {
-			return nil
-		}
-		rel, _ := filepath.Rel(repoRoot, path)
-		if reason, ok := approvedWriteFileSites[rel]; ok {
-			_ = reason // approved; skip
-			return nil
-		}
-		for i, line := range strings.Split(string(body), "\n") {
-			if reWriteFileCall.MatchString(line) {
-				violations = append(violations, Violation{
-					ID:       c.ID(),
-					Path:     fmt.Sprintf("%s:%d", rel, i+1),
-					Message:  "os.WriteFile in production code without approval — use os.CreateTemp + os.Rename or add to approvedWriteFileSites with justification",
-					Severity: "error",
-				})
+		err := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
 			}
+			if d.IsDir() {
+				return nil
+			}
+			// Only Go production sources — skip tests.
+			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
+			body, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			// Match the actual function call (paren immediately after the
+			// identifier) — this avoids false positives on comments,
+			// string literals, and identifier references that just mention
+			// the function name. Must NOT match `_ = os.WriteFile` discard
+			// patterns either (they are still calls); accepted because
+			// any production discard of WriteFile is itself a smell.
+			if !reWriteFileCall.MatchString(string(body)) {
+				return nil
+			}
+			rel, _ := filepath.Rel(repoRoot, path)
+			if _, ok := approvedWriteFileSites[rel]; ok {
+				return nil // approved; skip
+			}
+			for i, line := range strings.Split(string(body), "\n") {
+				if reWriteFileCall.MatchString(line) {
+					violations = append(violations, Violation{
+						ID:       c.ID(),
+						Path:     fmt.Sprintf("%s:%d", rel, i+1),
+						Message:  "os.WriteFile in production code without approval — use pathutil.WriteFileAtomic or add to approvedWriteFileSites with justification",
+						Severity: "error",
+					})
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
 		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
 	}
 	return violations, nil
 }
@@ -113,8 +120,10 @@ func (c atomicWriteChecker) Check(repoRoot string) ([]Violation, error) {
 
 type hookFailSafeChecker struct{}
 
-func (hookFailSafeChecker) ID() string   { return "I5" }
-func (hookFailSafeChecker) Name() string { return "fail-safe on hook errors (set -o pipefail, not -e/-u)" }
+func (hookFailSafeChecker) ID() string { return "I5" }
+func (hookFailSafeChecker) Name() string {
+	return "fail-safe on hook errors (set -o pipefail, not -e/-u)"
+}
 
 // approvedFailFastHooks lists hook scripts that legitimately use
 // `set -e` — currently the test runner and one-shot CLI helpers
