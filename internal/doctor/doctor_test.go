@@ -57,6 +57,16 @@ func newFixture(t *testing.T) (claude, mem, cwd string) {
 	if err := os.WriteFile(filepath.Join(claude, "bin", "memoryctl"), []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// Executable shim files — checkShimFiles verifies presence + exec bit.
+	shimDir := filepath.Join(claude, "hooks", "v2")
+	if err := os.MkdirAll(shimDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, cmd := range requiredHookCommands {
+		if err := os.WriteFile(filepath.Join(shimDir, cmd), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
 	return claude, mem, cwd
 }
 
@@ -521,4 +531,26 @@ func mustFindCheck(t *testing.T, r Report, name string, want Status) Check {
 	}
 	t.Fatalf("check %q not found in report; checks: %+v", name, r.Checks)
 	return Check{}
+}
+
+func TestRun_MissingShimFilesFail(t *testing.T) {
+	claude, mem, cwd := newFixture(t)
+	if err := os.RemoveAll(filepath.Join(claude, "hooks", "v2")); err != nil {
+		t.Fatal(err)
+	}
+	// Regression for the review's headline false-OK: settings.json still
+	// lists every hook, but the shim files themselves are gone.
+	mustFindCheck(t, Run(claude, mem, cwd), "shim_files_present", FAIL)
+}
+
+func TestRun_NonExecutableShimFails(t *testing.T) {
+	claude, mem, cwd := newFixture(t)
+	p := filepath.Join(claude, "hooks", "v2", "session-start.sh")
+	if err := os.Chmod(p, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := mustFindCheck(t, Run(claude, mem, cwd), "shim_files_present", FAIL)
+	if !strings.Contains(c.Detail, "not executable") {
+		t.Errorf("detail should name the non-executable shim, got %q", c.Detail)
+	}
 }
