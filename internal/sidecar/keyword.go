@@ -30,7 +30,7 @@ func populateKeywordsIn(e dbtx, files []native.MemFile) error {
 		text := f.Name + " " + f.Description + " " +
 			strings.Join(f.Keywords, " ") + " " + strings.Join(f.Domains, " ") + " " + f.Body
 		freq := map[string]int{}
-		for _, tok := range tokenize.Tokenize(text, nil) {
+		for _, tok := range tokenize.Relevance(text) {
 			freq[tok]++
 		}
 		for term, n := range freq {
