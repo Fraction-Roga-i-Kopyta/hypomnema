@@ -1,20 +1,16 @@
 ---
 type: mistake
-seed: true
+name: "source-url-rot-no-local-copy"
+description: "A URL without a local copy or archive is a promise, not a source — links rot within a few years"
 created: 2026-04-13
 status: active
-domains: [research, writing]
-keywords: [source, url, link rot, archive, citation, research]
 severity: major
 recurrence: 0
+scope: domain
+keywords: [source, url, link rot, archive, citation, research]
+domains: [research, writing]
 root-cause: "A URL without a local copy is not a source — it's a promise of a source. Sites are redesigned, articles get deleted, domains die; within 1–3 years a meaningful share of links are 404"
 prevention: "When you save a link, save a local copy at the same time (PDF / screenshot / markdown) OR archive via web.archive.org. Store the URL, the access date, and the snapshot together"
-decay_rate: never
-ref_count: 0
-triggers:
-  - "link rot"
-  - "source unavailable"
-scope: domain
 ---
 
 # Link rot: URL without a local copy

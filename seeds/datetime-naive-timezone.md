@@ -1,26 +1,16 @@
 ---
 type: mistake
-seed: true
+name: "datetime-naive-timezone"
+description: "Naive datetime.now() silently shifts across time zones and breaks comparisons with aware datetimes"
 created: 2026-04-13
 status: active
-domains: [code, data]
-keywords: [datetime, timezone, naive, utc, pytz, tz-aware]
 severity: major
 recurrence: 0
+scope: domain
+keywords: [datetime, timezone, naive, utc, pytz, tz-aware]
+domains: [code, data]
 root-cause: "datetime.now() without a timezone returns a naive object. Comparing it against an aware datetime either raises TypeError or — worse — gets silently interpreted in the server's local zone"
 prevention: "Always use datetime.now(tz=timezone.utc) or datetime.now(ZoneInfo('Europe/...')). Store UTC only in the database; convert at display time"
-decay_rate: never
-ref_count: 0
-triggers:
-  - "datetime timezone"
-  - "naive datetime"
-  - "offset-naive"
-  - "offset-aware"
-  - "datetime.now()"
-  - "can't compare offset"
-  - "tz-aware"
-  - "tz-naive"
-scope: domain
 ---
 
 # Datetime: naive vs aware and time zones

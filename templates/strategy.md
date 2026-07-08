@@ -1,19 +1,19 @@
 ---
 type: strategy
-project: global
+name: "short-slug-name"
+description: "one-line summary of the approach and when it applies"
 created: YYYY-MM-DD
 status: active
-ref_count: 0
-success_count: 1
-domains: []
-keywords: []
-# Either a single trigger or an array — both forms accepted.
-trigger: "one situational cue that should make Claude reach for this"
-# triggers:                # UNCOMMENT for multiple cues (delete the single `trigger:` above).
-#   - "first phrasing users type when this applies"
-#   - "second phrasing"
-                           # 4-6 phrases is the empirical sweet spot — see CLAUDE.md.
+success_count: 1           # bump each time the strategy works again
+keywords: [kw1, kw2]
+domains: [general]
 ---
+
+<!--
+Required v2 frontmatter: name, description, type. keywords should reflect
+the situation that should trigger retrieval of this strategy. Do NOT add
+ref_count, triggers, or project — they are sidecar-managed or derived.
+-->
 
 # Short name
 

@@ -1,24 +1,30 @@
 ---
 type: feedback
-project: global
+name: "short-slug-name"
+description: "one-line statement of the rule"
 created: YYYY-MM-DD
 status: active
-ref_count: 0
+keywords: [kw1, kw2]
 domains: [general]
-keywords: []
-evidence:                        # phrases that signal the rule was applied, for trigger-useful events
+evidence:
   - "phrase Claude would write when following the rule"
   - "another giveaway phrase"
-                                 # ≤5 phrases scores best — long lists rarely match verbatim
-                                 # and end up classified silent. See CLAUDE.md § evidence sizing.
-# precision_class: ambient       # UNCOMMENT for rules that shape behaviour silently
-                                 # (tone, language preference, security baseline). Excludes the
-                                 # file from the measurable-precision denominator so it doesn't
-                                 # drag the metric down as false noise. See README § Precision.
-# triggers:                      # UNCOMMENT for reactive injection on matching user prompts.
-#   - "prompt phrasing that should remind Claude of this rule"
-                                 # 4-6 phrases is the empirical sweet spot — 1-3 underperform.
+# precision_class: ambient   # optional — uncomment for rules that shape behaviour silently
 ---
+
+<!--
+Required v2 frontmatter: name, description, type. Do NOT add ref_count,
+triggers, or project — they are sidecar-managed or derived from the store.
+
+evidence: phrases that signal the rule was applied (case-insensitive
+substring), read by the close hook to emit trigger-useful. ≤5 phrases score
+best — long lists rarely match verbatim and get classified silent. Pick
+phrases Claude would actually write when applying the rule.
+
+precision_class: ambient marks rules that shape behaviour silently (tone,
+language preference, security baseline). Such files still inject and rank
+normally but are excluded from the self-profile precision denominator.
+-->
 
 One-sentence rule statement.
 

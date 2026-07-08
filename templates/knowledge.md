@@ -1,17 +1,19 @@
 ---
 type: knowledge
-project: global
+name: "short-slug-name"
+description: "one-line summary of the fact"
 created: YYYY-MM-DD
 status: active
-ref_count: 0
+keywords: [kw1, kw2]
 domains: [general]
-keywords: [kw1, kw2]             # tokens for SessionStart keyword-match scoring
-triggers:                        # phrases a user would type to ask about this topic.
-  - "replace this placeholder with a real user phrase"   # substring-matched, case-insensitive
-  - "delete examples you do not need — keep at least one real phrase"
-                                 # 4-6 phrases is the empirical sweet spot — see CLAUDE.md.
-# related: [other-slug, third:reinforces]   # UNCOMMENT to cluster-link. `:type` annotates the relationship.
+# related: [other-slug]     # optional — cluster-link to related knowledge/decision/note
 ---
+
+<!--
+Required v2 frontmatter: name, description, type. Do NOT add ref_count,
+triggers, or project — they are sidecar-managed or derived from the store.
+keywords + domains are the ranking signal; write real tokens.
+-->
 
 ## What
 

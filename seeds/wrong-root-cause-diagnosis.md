@@ -1,10 +1,16 @@
 ---
 type: mistake
-seed: true
+name: "wrong-root-cause-diagnosis"
+description: "Jumping to the first hypothesis without enumerating causes leads to cascading failed fixes"
 created: 2026-04-22
 status: active
-domains: [general]
+severity: major
+recurrence: 0
+scope: universal
 keywords: [debugging, hypothesis, root, cause, diagnosis, fix, cascade]
+domains: [general]
+root-cause: "Claude jumps to the first hypothesis without enumerating possible causes, leading to cascading failed fixes"
+prevention: "List 2-3 possible root causes before attempting the first fix; when a fix fails, return to the list instead of generating a new hypothesis on the fly"
 evidence:
   - "root cause"
   - "not just the first hypothesis"
@@ -21,13 +27,6 @@ evidence:
   - "shortlist"
   - "option a"
   - "option b"
-severity: major
-recurrence: 0
-root-cause: "Claude jumps to the first hypothesis without enumerating possible causes, leading to cascading failed fixes"
-prevention: "List 2-3 possible root causes before attempting the first fix; when a fix fails, return to the list instead of generating a new hypothesis on the fly"
-decay_rate: never
-ref_count: 0
-scope: universal
 ---
 
 # wrong-root-cause-diagnosis

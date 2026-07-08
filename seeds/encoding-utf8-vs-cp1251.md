@@ -1,24 +1,16 @@
 ---
 type: mistake
-seed: true
+name: "encoding-utf8-vs-cp1251"
+description: "Excel on Windows writes Cyrillic CSV as cp1251; utf-8 readers get garbage or UnicodeDecodeError"
 created: 2026-04-13
 status: active
-domains: [data]
-keywords: [encoding, utf8, cp1251, windows-1251, csv, excel, cyrillic]
 severity: minor
 recurrence: 0
+scope: domain
+keywords: [encoding, utf8, cp1251, windows-1251, csv, excel, cyrillic]
+domains: [data]
 root-cause: "Excel on Windows saves CSV in cp1251 (Windows-1251) for Cyrillic locales. pandas and most modern tools read as utf-8 by default — non-Latin text either decodes as garbage or raises UnicodeDecodeError"
 prevention: "When reading Cyrillic CSV from Excel, pass encoding='cp1251'. When writing for Excel, use to_csv(..., encoding='utf-8-sig') so Excel detects the BOM and opens it correctly"
-decay_rate: never
-ref_count: 0
-triggers:
-  - "encoding cp1251"
-  - "cyrillic csv"
-  - "unicodedecodeerror"
-  - "cyrillic input"
-  - "read_csv"
-  - "utf-8 decode"
-scope: domain
 ---
 
 # Encoding: UTF-8 vs CP1251 in CSV

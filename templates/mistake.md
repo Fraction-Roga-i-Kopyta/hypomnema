@@ -1,22 +1,25 @@
 ---
 type: mistake
-project: global
+name: "short-slug-name"
+description: "one-line summary of the mistake, shown in the MEMORY.md index and injection header"
 created: YYYY-MM-DD
 status: active
 severity: minor            # critical | major | minor
-recurrence: 1
-ref_count: 0
+recurrence: 1              # bump when the same mistake recurs
+scope: narrow              # universal | domain | narrow — informational: how broadly the lesson applies
+keywords: [kw1, kw2]
+domains: [general]
 root-cause: "One-line description of what went wrong."
 prevention: "One-line description of how to avoid next time."
-domains: [general]         # project domains this mistake applies to
-keywords: [kw1, kw2]       # tokens used for SessionStart keyword-match scoring
-triggers:                  # phrases the user would type when this mistake is relevant.
-  - "replace this placeholder with a real user phrase"   # substring-matched, case-insensitive
-  - "delete examples you do not need — keep at least one real phrase"
-                           # 4-6 phrases is the empirical sweet spot (~85% useful-rate at 4-6,
-                           # only ~12% at 1-3 because they match too narrowly). See CLAUDE.md.
-# scope: narrow            # UNCOMMENT to restrict injection to explicit keyword match only
 ---
+
+<!--
+Required v2 frontmatter: name, description, type. status is active|pinned
+(stale is sidecar-managed — never hand-set). Do NOT add ref_count,
+effectiveness, triggers, or project — ref_count/effectiveness are
+sidecar-managed and project is derived from the store location.
+keywords are the primary ranking signal — use real tokens, not placeholders.
+-->
 
 ## Context
 
