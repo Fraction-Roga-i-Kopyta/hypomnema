@@ -1,115 +1,81 @@
 ---
 name: memory-system
-description: Persistent memory system for Claude Code — mistakes, strategies, feedback, knowledge, lifecycle
+description: Persistent memory system for Claude Code (hypomnema v2) — ranked injection over native file memory: mistakes, strategies, feedback, knowledge, decisions, lifecycle
 ---
 
-# Hypomnema — Memory System
+# Hypomnema — Memory System (v2)
 
-You have a persistent file-based memory system at `~/.claude/memory/`. SessionStart hook automatically injects relevant context. Your job is to write to it when something worth remembering happens.
+Claude Code ships native file memory: markdown files under `~/.claude/projects/<slug>/memory/` (per-project) plus `~/.claude/memory-global/` (cross-project). Hypomnema adds ranked auto-injection, effectiveness measurement, decay, and a secrets gate on top. The authoritative protocol is the repo `CLAUDE.md` — this skill is a summary; when in doubt, read `CLAUDE.md`.
 
-## Memory Types
+## Stores are flat
 
-### mistakes/ — What went wrong
-Record when a bug, wrong approach, or repeated error is found.
+Type is encoded in the `type:` frontmatter field, **not** in a subdirectory. There are no `mistakes/` / `strategies/` / `continuity/` folders — every memory file sits directly in the store. Logical types: `mistake`, `strategy`, `feedback`, `knowledge`, `decision`, `note`, `project`, `continuity`.
 
-Frontmatter: `type: mistake`, `severity: minor|major|critical`, `recurrence: N`, `root-cause: "..."`, `prevention: "..."`, `domains: [general]`, `keywords: [...]`
+## Frontmatter schema
 
-Write immediately when a mistake is found. Increment `recurrence` if it happens again.
+Required on every file: `name`, `description`, `type`. Optional: `created` (YYYY-MM-DD), `status` (`active` | `pinned`), `keywords`, `domains`.
 
-### strategies/ — What worked
-Record when a successful approach is found that's worth repeating.
-
-Frontmatter: `type: strategy`, `trigger: "when to use"`, `success_count: N`, `domains: [general]`, `keywords: [...]`
-
-Body: numbered steps of the approach.
-
-### feedback/ — How to behave
-User preferences about communication, code style, workflow. Structured as:
-
-```
-Rule statement.
-
-**Why:** Context behind the rule.
-**How to apply:** When and where this kicks in.
+```yaml
+---
+type: mistake
+name: "short-slug"
+description: "one-liner shown in the index and injection header"
+created: 2026-05-01
+status: active
+keywords: [tag1, tag2]
+domains: [backend]
+---
 ```
 
-### knowledge/ — Domain facts
-Facts about infrastructure, APIs, tools that don't change often.
+**Never hand-set** `ref_count`, `effectiveness`, `injected`, or `referenced` — the sidecar manages them. **Do not use** `triggers`, `seed`, `decay_rate`, or a `project:` field: triggers are retired, seed/decay_rate are dead, and ownership is derived from which store the file lives in.
 
-### projects/ — Project overviews
-Brief description of each project: stack, key components, known issues.
+Type-specific fields:
+- **mistake** — `severity` (minor|major|critical), `recurrence` (int), `scope` (universal|domain|narrow, informational), `root-cause`, `prevention`
+- **strategy** — `success_count` (int)
+- **feedback** — `evidence:` (≤5 phrases Claude would write when applying the rule; read by the close hook to mark the file useful), optional `precision_class: ambient`
+- **knowledge / decision / note** — optional `related: [slug, …]`
 
-### continuity/ — Where we left off
-One file per project (`continuity/{project}.md`). Overwritten each session. Three lines:
-- Task: what was being worked on
-- Status: done / in-progress / blocked
-- Next: what to do next
+`evidence:` is type-agnostic — any injected file can carry it. Keep it short: long lists rarely match verbatim and get classified silent.
 
-### notes/ — Long-form knowledge and references
-Notes are injected by keyword/domain matching (cap: 2).
+## When to write
+
+| Signal | Type |
+|---|---|
+| Bug found, wrong approach taken, error repeated | `mistake` |
+| Approach that worked for a class of problems | `strategy` |
+| User corrects your approach or validates a non-obvious choice | `feedback` |
+| Domain fact / API detail not obvious from the code | `knowledge` |
+| Architecture / technology choice to defer to later | `decision` |
+| Stopped mid-task at session end (3 lines max) | `continuity` |
+
+A user rule that corrects a *repeated* mistake is written as `feedback` only — do not also write a `mistake` for the same rule (it duplicates signal).
+
+## When NOT to write
+
+Code patterns and conventions (read the code), git history (`git log`/`blame`), one-off bug fixes (they live in the code + commit message), conversation context, or anything already in a `CLAUDE.md`.
+
+## Injection and ranking
+
+`memoryctl inject` (SessionStart + UserPromptSubmit hooks) ranks all `active`/`pinned` files in the current project's store plus the global store, and injects the top-8 (2.5KB per body, 8KB total) once per session. You do not set ranks — write good `keywords` / `domains` / `description` and let the ranker score by overlap + recency + effectiveness. `session_keywords` come from prompt tokens, CWD basename, and git context.
 
 ## Lifecycle
 
-### Frontmatter fields
-- `injected: YYYY-MM-DD` — set on file creation, never updated (write-once)
-- `referenced: YYYY-MM-DD` — updated automatically by hook when file is injected into context
-- `status: active | pinned | stale | archived`
+`memoryctl close` runs after each turn (Stop hook): classifies the injected set `trigger-useful` / `trigger-silent` from evidence phrases or slug/name citation, recomputes effectiveness, and marks unused facts `stale` in the sidecar (age counts from last injection). `pinned` files and `continuity`/`project` facts never decay. No native content is ever mutated by hooks.
 
-### Automatic rotation (Stop hook)
-- `active` + no `referenced` update for N days → `stale` (N depends on type: mistakes=60, strategies=90, knowledge=90, feedback=45, notes/journal=30)
-- `stale` + no `referenced` update for 90 days → moved to `archive/`
-- `pinned` — never rotated, never archived
+## Pull retrieval
 
-### What to pin
-Critical mistakes with high recurrence, user profile, important references.
+Push injection ranks against the user's prompt and can't see what you hit mid-task. For an unfamiliar error/domain or a previously-solved-smelling decision:
 
-## Injection Pipeline
-
-SessionStart hook injects (in order):
-1. **Continuity** — last session context (if project detected)
-2. **Project overview** — current project description
-3. **Mistakes** — top 3 global + top 3 project-specific (scored by keywords, recurrence)
-4. **Feedback** — up to 6 behavioral rules (keyword + WAL scored)
-5. **Knowledge** — up to 4 domain facts (keyword + domain filtered)
-6. **Notes** — up to 2 long-form notes (keyword + domain filtered)
-7. **Strategies** — up to 4 proven approaches (keyword + WAL scored)
-
-Also generates `_agent_context.md` — compact summary for subagents.
-
-## Project Detection
-
-`projects.json` maps filesystem paths to project IDs:
-```json
-{"/Users/me/dev/myapp": "myapp"}
 ```
-Longest prefix match from `cwd`. Determines which project-specific files to inject.
+memoryctl recall "<3-6 query words>"
+```
 
-## When to Write
+The top match arrives with its body; runner-ups come as an index of paths to Read. Stale facts are included and revived on recall.
 
-| Signal | Action |
-|---|---|
-| Bug found, wrong approach taken | Write to `mistakes/` |
-| Successful approach worth repeating | Write to `strategies/` |
-| User corrects behavior or confirms approach | Write to `feedback/` |
-| Learned API/infrastructure fact | Write to `knowledge/` |
-| End of session with project work | Update `continuity/{project}.md` |
+## Secrets gate
 
-## When NOT to Write
-
-- Code, diffs, debug output → derivable from git
-- Conversation context → ephemeral
-- Anything already in CLAUDE.md → avoid duplication
-- File paths, project structure → derivable from filesystem
+`memoryctl guard` (PreToolUse:Write|Edit on memory paths) blocks credential patterns before they land in a file. Whitelist a path via `~/.claude/memory-global/.secretsignore`, or override once with `HYPOMNEMA_ALLOW_SECRETS=1`. Don't route around it by stripping values — whitelist the path or use an obvious placeholder.
 
 ## Subagents
 
-Subagents don't receive SessionStart injection. Include in their prompt:
-```
-Read ~/.claude/memory/_agent_context.md before starting.
-```
-
-## Consolidation
-
-Run `~/.claude/bin/memory-consolidate.sh` periodically to find:
-- Duplicate mistakes with same prevention
-- Stale mistakes (recurrence: 0, old)
+There is no auto-generated subagent context file (`_agent_context.md` was retired with v1). When you spawn a subagent, pass the relevant facts inline in its prompt.

@@ -2,7 +2,8 @@
 type: decision
 project: global
 created: 2026-04-15
-status: active
+status: superseded
+superseded-by: go-primary-bash-shims
 description: SessionStart uses a composite score optimised for recall; UserPromptSubmit uses a lexicographic priority key optimised for determinism.
 keywords: [scoring, recall, precision, ranking]
 domains: [architecture, retrieval]

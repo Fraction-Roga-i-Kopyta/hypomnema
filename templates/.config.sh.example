@@ -1,3 +1,9 @@
+# V1-LEGACY — NOT read by v2. The v2 memoryctl binary does not source this file
+# and none of these variables are honoured. Injection is a single ranked top-8
+# (see CLAUDE.md "How injection ranks files"); the per-type caps and trigger
+# knobs below belonged to the retired v1 bash hooks. Kept for historical
+# reference only; safe to delete.
+#
 # Hypomnema runtime configuration. Copy to ~/.claude/memory/.config.sh and edit.
 # Hooks source this file at startup; missing values fall back to built-in defaults.
 # All values are integers.

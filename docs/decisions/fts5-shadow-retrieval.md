@@ -2,7 +2,8 @@
 type: decision
 project: global
 created: 2026-04-20
-status: active
+status: superseded
+superseded-by: native-primary-sidecar
 description: FTS5 + BM25 runs alongside substring triggers as a fire-and-forget recall signal, not as an injection source.
 keywords: [fts5, recall, shadow, sqlite, observability]
 domains: [architecture, retrieval]

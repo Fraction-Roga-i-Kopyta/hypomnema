@@ -2,70 +2,87 @@
 
 ## Can I sync memory across machines?
 
-Yes. `~/.claude/memory/` is just markdown + JSON. Initialize it as a git repo and push to a private remote:
+Yes. Your memory content is plain markdown. The cleanest thing to version is
+the global store, which is nothing but `.md` files:
 
 ```bash
-cd ~/.claude/memory
+cd ~/.claude/memory-global
 git init
-cat > .gitignore <<EOF
-.wal
-.wal.lockd
-.tfidf-index
-.runtime/
-_agent_context.md
-EOF
 git add . && git commit -m "memory baseline"
 git remote add origin git@github.com:you/private-memory.git
 git push -u origin main
 ```
 
-On the second machine, clone instead of running install for the memory dir:
+On the second machine, clone into the same location:
 
 ```bash
-git clone git@github.com:you/private-memory.git ~/.claude/memory
+git clone git@github.com:you/private-memory.git ~/.claude/memory-global
 ```
 
-Then run `./install.sh` from the cloned hypomnema repo to set up the hook symlinks (memory dir already exists, will be left alone).
+Do **not** version the runtime metadata under `~/.claude/memory/` (`.wal`,
+`.sidecar.db`, `.runtime/`, `self-profile.md`) — it is per-machine and the
+sidecar is rebuildable with `memoryctl sidecar rebuild`. Per-project facts
+live under `~/.claude/projects/<slug>/memory/` and can be versioned the same
+way if you want them portable.
+
+Run `./install.sh` on each machine to wire up the hooks and `memoryctl`; it
+leaves existing memory directories alone.
 
 ## How do I fix a wrongly-recorded mistake?
 
-Edit the file in `~/.claude/memory/mistakes/<slug>.md` directly. Increment `recurrence` if you keep hitting it; flip `status` to `archived` if it stopped being relevant.
+Edit the file directly. Stores are flat, so the file is right there in the
+store — `~/.claude/memory-global/<slug>.md` for a global fact, or
+`~/.claude/projects/<slug>/memory/<slug>.md` for a project one. There is no
+`mistakes/` subdirectory.
 
-If the wrong file should not exist at all:
+Statuses you can hand-set are `active` and `pinned` (there is no `archived`
+status — `stale` is sidecar-managed, not written by hand). To retire a fact,
+either delete the file or just let it go stale from disuse:
 
 ```bash
-rm ~/.claude/memory/mistakes/<wrong-slug>.md
+rm ~/.claude/memory-global/<wrong-slug>.md
 ```
 
-The next Stop hook regenerates `MEMORY.md` and the TF-IDF index automatically.
+The next Stop hook regenerates `MEMORY.md` (or run `memoryctl reindex`). There
+is no TF-IDF index to rebuild.
 
 ## How does upgrading work?
 
 ```bash
 cd /path/to/hypomnema
 git pull
-./install.sh   # idempotent, re-symlinks hooks, leaves memory alone
+make build      # rebuild the binary if Go code changed
+./install.sh    # idempotent — re-installs shims, leaves memory alone
 ```
 
-If a release introduces a frontmatter field, `docs/MIGRATION.md` lists what to update. Existing files without the new field continue to work; the field's default applies.
+If a release introduces a frontmatter field, `docs/MIGRATION.md` lists what to
+update. Existing files without the new field keep working; the default applies.
 
 ## Is my memory shared with Anthropic?
 
-No. Hypomnema reads files locally and prepends them to the prompt your Claude Code session sends. The model sees the injected context but the files never leave your disk via hypomnema. (The model itself sees the prompt, of course — that's how injection works.)
+No. Hypomnema reads files locally and injects them into the context your
+Claude Code session sends. The model sees the injected context (that is how
+injection works), but the files never leave your disk via hypomnema.
 
 ## Can I exclude a project from memory?
 
-Two ways:
+There is no project-exclusion switch in v2 — no `projects.json`, no
+`.confidence-excludes`. Project scope is derived automatically from the working
+directory. In practice:
 
-1. Don't add it to `projects.json`. Hypomnema will still inject `project: global` mistakes/strategies but no project-specific content.
-2. Add the project root path to `~/.claude/memory/.confidence-excludes`. SessionStart skips injection entirely when CWD matches.
+- A project with no native memory files simply has nothing project-local to
+  inject. Global facts (`~/.claude/memory-global/`) still apply everywhere.
+- To silence memory in a directory entirely, disable the hypomnema hooks for
+  that machine/profile (uninstall, or remove the entries from
+  `settings.json`) — injection is all-or-nothing per install.
 
-## What's the difference between `injected` and `referenced` in frontmatter?
+## Is there an `injected:` / `referenced:` frontmatter field?
 
-- `injected: YYYY-MM-DD` — last date this file was placed in a session's `# Memory Context` block.
-- `referenced: YYYY-MM-DD` — last date a hook (any hook) read or wrote to the file.
-
-`referenced` updates more often. The two together let lifecycle rotation distinguish "actively used" from "just sitting there."
+No. Injection recency is tracked by the **sidecar**, not in frontmatter. The
+sidecar records `last_injected` per fact (from WAL `inject` events) and the
+ranker uses it for the recency term and for decay (age counts from last
+injection, falling back to `created`). You never hand-edit these — they are
+sidecar-managed like `ref_count` and `effectiveness`.
 
 ## How do I see what got injected last session?
 
@@ -73,30 +90,44 @@ Two ways:
 tail -50 ~/.claude/memory/.wal | grep inject
 ```
 
-Each line shows the date, event type, slug, and session ID.
+Each line is `date|event|slug|session`.
 
 ## I'm running multiple Claude Code clients concurrently
 
-Safe. WAL writes use `mkdir`-based locking; concurrent reads (v0.8+) also lock. The dedup list is per-session (filename includes session ID).
+Safe. WAL writes and feedback-loop reads are locked; per-session dedup state is
+keyed by session id.
 
 ## What does `scope: narrow` mean?
 
-A mistake or strategy with `scope: narrow` is only injected when the current prompt contains one of its `keywords`. `scope: universal` is always injected (subject to caps). `scope: domain` is injected when the current project's domain matches `domains:` in the file.
+In v2 `scope` (`universal` | `domain` | `narrow`) is **informational
+metadata** — it documents how broadly a lesson applies. It does **not** gate
+injection. The v1 substring-trigger mechanism is gone: the single ranker
+treats all tokens (keywords, name, description, body) as relevance signal, and
+every `active`/`pinned` fact in scope is a ranking candidate regardless of its
+`scope` value. Write good `keywords`/`domains` and let the ranker sort it out.
 
-Use `narrow` for very specific, easily-mismatched advice. Use `universal` for cross-cutting rules.
+## Why is hypomnema written in Go, not pure bash?
 
-## Why is hypomnema bash and not Python / Node?
-
-Zero install friction. Bash + jq + awk + perl are on every macOS and Linux out of the box. The hot paths (SessionStart injection, UserPromptSubmit trigger match, Stop hook outcome detection) are pure shell, so install.sh is three seconds of `ln -sf`. Fuzzy dedup and the FTS5 shadow pass are optional opt-ins via a Go binary (`make build`); without it, those features disable silently and the rest of the system works unchanged.
+It is Go-primary by design. The `memoryctl` binary is the mandatory engine —
+it does all the real work: ranking and injection, WAL accounting, Bayesian
+effectiveness, decay, the secrets gate, dedup, self-profile, `doctor`. The six
+files in `~/.claude/hooks/v2/` are ~5-line bash shims that read the hook
+envelope on stdin and pipe it to `memoryctl`; they contain no logic. This is
+the reverse of v1, where bash carried the hot paths and Go was an optional
+add-on. `install.sh` refuses to proceed without a built binary, so `make build`
+is a required install step, not an opt-in.
 
 ## How do I write memory in Cyrillic / Chinese / Greek?
 
-Just write it. As of v0.8, body tokenization uses perl `\w{4,}` with the `/u` flag — Unicode-aware for any script. No need to add explicit `evidence:` for non-ASCII memories.
+Just write it. The ranker's tokenizer is Unicode-aware, so non-ASCII memories
+rank normally with no special handling.
 
 ## How do I measure what hypomnema actually saved me?
 
 ```bash
-bash ~/.claude/bin/memory-self-profile.sh
+memoryctl self-profile
 ```
 
-Generates `~/.claude/memory/self-profile.md` with effectiveness scores, calibration metrics, and weak spots based on WAL events.
+Generates `~/.claude/memory/self-profile.md` with effectiveness scores,
+calibration metrics, and weak spots from the WAL. The Stop hook also
+regenerates it automatically each session.

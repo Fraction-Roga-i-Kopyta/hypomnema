@@ -221,8 +221,10 @@ This:
    ref_count, effectiveness history, and created dates.
 4. Prints a summary: migrated / pruned / routed to global vs project.
 
-For non-interactive environments, pass `--auto` to skip the confirmation
-prompt.
+`--execute` runs non-interactively — there is no confirmation prompt to
+skip, and no `--auto` flag exists. `memoryctl migrate` requires exactly
+one mode flag (`--dry-run`, `--execute`, or `--rollback`); invoked bare
+it exits 2 with `one of --dry-run | --execute | --rollback required`.
 
 **Step 3 — re-run install.sh**
 
@@ -243,9 +245,9 @@ memoryctl doctor
 ```
 
 Doctor confirms sidecar integrity, global store visibility, and that
-injection returns results. A parity check (`≥70% recall overlap vs v1
-behaviour on representative keywords`) is run automatically and printed
-in the report.
+injection returns results. There is **no** automated recall/parity check
+— v1 has no live implementation left to compare against, so doctor does
+not compute any "recall overlap vs v1" figure.
 
 ### Rollback
 
@@ -255,11 +257,15 @@ If anything looks wrong after migration:
 memoryctl migrate --rollback
 ```
 
-This restores `~/.claude/memory.v1-backup-<date>/` to
-`~/.claude/memory/`, re-registers the v1 hooks in `settings.json`, and
-removes the v2 shim registrations. The native-format files written
-during migration are left in place (they don't conflict with v1
-operation) but the v1 hooks won't read them.
+This restores the **newest** `~/.claude/memory.v1-backup-*` directory to
+`~/.claude/memory/`. Since v2.5.1+, rollback selects the most recent
+backup by its `YYYY-MM-DD` suffix (lexical order is chronological), not a
+path derived from today's date — so rollback works on any day, not only
+the day migration ran. Rollback restores the store **only**; it does not
+edit `settings.json`. To re-point Claude Code back at the v1 hooks, re-run
+`git checkout v1.1.2 && ./install.sh` (see the clean rollback below). The
+native-format files written during migration are left in place (they
+don't conflict with v1 operation) but the v1 hooks won't read them.
 
 Alternatively, a clean rollback to a known state:
 
@@ -280,10 +286,12 @@ project-scoped facts and `~/.claude/memory-global/` for global facts
 (name / description / type); the full hypomnema schema lives in the
 SQLite sidecar.
 
-**Metadata:** the SQLite sidecar (`~/.claude/memory/.hypomnema.db` in
-v1, per-project in v2) is now the authoritative index for ref_count,
-effectiveness, decay status, and keyword terms. It is derived and
-rebuildable; the WAL remains the event source of truth.
+**Metadata:** a single SQLite sidecar at `~/.claude/memory/.sidecar.db`
+(one file for the whole install — not per-project, and not the
+`.hypomnema.db` name some older docs used) is the authoritative index for
+ref_count, effectiveness, decay status, status, project, and keyword
+terms. It is derived and rebuildable (`memoryctl sidecar rebuild`); the
+WAL (`~/.claude/memory/.wal`) remains the event source of truth.
 
 **Hook implementation:** four bash hooks (session-start, user-prompt-submit,
 pre-tool-write, session-stop) are now ~10-line exec shims. All logic
@@ -309,13 +317,18 @@ signals, not pattern-match gates.
 - Global store (`~/.claude/memory-global/`) for cross-project facts.
 - `memoryctl ab` — A/B null-hypothesis harness (ranking beats random
   8–20×, n=49; see `docs/measurements/2026-05-29-v2-ranker-ab.md`).
-- Guided migration with dry-run, backup, rollback, and parity
-  verification.
+- Guided migration with dry-run, backup, and rollback (no parity
+  verification — there is no v1 implementation left to compare against).
 - Degraded-ranker mode: sidecar absent or corrupt → inject continues
   with overlap + recency only (ref_count / effectiveness neutral);
   exit 0 always.
 
-**Frontmatter compatibility:** `triggers:` / `trigger:` / `evidence:`
-fields in existing memory files are ignored (not an error). The ranker
-uses keyword overlap against name/description/body; those frontmatter
-fields provide no lift and do not need to be removed.
+**Frontmatter compatibility:** `triggers:` / `trigger:` fields in
+existing memory files are ignored by the ranker (not an error) — it scores
+on keyword overlap against name/description/body, so those two fields
+provide no lift and do not need to be removed. `evidence:` is **not**
+ignored: the close hook (`internal/closer`) reads it to classify each
+injected fact as `trigger-useful` vs `trigger-silent` (evidence-phrase or
+name/slug citation in the assistant's text), and that classification feeds
+effectiveness scoring. Keep `evidence:` on rules whose body tokens would be
+ambiguous.
