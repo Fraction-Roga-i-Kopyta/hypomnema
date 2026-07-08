@@ -2,7 +2,8 @@
 type: decision
 project: global
 created: 2026-04-22
-status: active
+status: superseded
+superseded-by: go-primary-bash-shims
 description: Bash is the reference implementation; Go hot paths are opt-in and gated by a byte-for-byte parity check in CI.
 keywords: [bash, go, parity, hybrid]
 domains: [architecture, build]
