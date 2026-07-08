@@ -12,7 +12,14 @@ import (
 	"strings"
 )
 
-var secretRe = regexp.MustCompile(`(?i)\b(api[_-]?key|apikey|aws[_-]?(?:access|secret)[_-]?key|secret|password|token)["'` + "`" + `]?\s*[:=]\s*["'` + "`" + `]?[^\s"'` + "`" + `]{8,}`)
+// secretRe matches a credential-looking KEY = VALUE. The key is any word
+// token that *contains* one of the credential words, so snake_case and
+// SCREAMING_SNAKE keys (db_password, client_secret, AWS_SECRET_ACCESS_KEY)
+// are covered — a `\b`-anchored keyword only matched bare/camelCase keys and
+// let the canonical config/env form through (v2.5.1 review S1). Word chars on
+// both sides of the credential word let the key carry arbitrary affixes; the
+// trailing `[:=]` + ≥8-char value keeps prose false-positives low.
+var secretRe = regexp.MustCompile(`(?i)[A-Za-z0-9_-]*(api[_-]?key|apikey|secret|password|passphrase|token)[A-Za-z0-9_-]*["'` + "`" + `]?\s*[:=]\s*["'` + "`" + `]?[^\s"'` + "`" + `]{8,}`)
 var inlineCodeRe = regexp.MustCompile("`[^`]*`")
 
 // valueRes are key-independent credential shapes: the value alone is
@@ -20,14 +27,28 @@ var inlineCodeRe = regexp.MustCompile("`[^`]*`")
 // pattern anchors on a vendor-fixed prefix or rigid structure so prose
 // mentioning the *concept* ("the ghp_ prefix") never matches.
 var valueRes = []*regexp.Regexp{
-	regexp.MustCompile(`\b(AKIA|ASIA)[0-9A-Z]{16}\b`),        // AWS access/STS key id
-	regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{16,}\b`),     // GitHub classic tokens
-	regexp.MustCompile(`\bgithub_pat_[A-Za-z0-9_]{22,}\b`),   // GitHub fine-grained PAT
-	regexp.MustCompile(`\bsk-ant-[A-Za-z0-9_-]{16,}`),        // Anthropic API key
-	regexp.MustCompile(`\bxox[bpars]-[A-Za-z0-9-]{10,}\b`),   // Slack tokens
-	regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`), // PEM private key block
+	regexp.MustCompile(`\b(AKIA|ASIA)[0-9A-Z]{16}\b`),                                     // AWS access/STS key id
+	regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{16,}\b`),                                  // GitHub classic tokens
+	regexp.MustCompile(`\bgithub_pat_[A-Za-z0-9_]{22,}\b`),                                // GitHub fine-grained PAT
+	regexp.MustCompile(`\bsk-ant-[A-Za-z0-9_-]{16,}`),                                     // Anthropic API key
+	regexp.MustCompile(`\bxox[bpars]-[A-Za-z0-9-]{10,}\b`),                                // Slack tokens
+	regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`),                              // PEM private key block
 	regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`), // JWT (header.payload.sig — payload also starts eyJ)
-	regexp.MustCompile(`\b[a-z][a-z0-9+.-]*://[^\s:/@]+:[^\s@]+@`),                        // scheme://user:pass@ URL credentials
+	regexp.MustCompile(`\b[a-z][a-z0-9+.-]*://[^\s:/@]+:[^\s@/]+@`),                       // scheme://user:pass@ URL credentials (password cannot span '/', else ordinary dev URLs like http://host:port/@scope match — review R1)
+}
+
+// fenceMarker reports whether line opens/closes a CommonMark code fence
+// (``` or ~~~), and returns the info-string that trails the marker run. The
+// info-string is markup, not exempt code content, so it is still scanned — a
+// secret parked as ```<secret> renders as an empty code block yet sits in
+// plaintext in the raw file (review S2).
+func fenceMarker(line string) (isFence bool, info string) {
+	for _, mark := range []string{"```", "~~~"} {
+		if strings.HasPrefix(line, mark) {
+			return true, strings.TrimLeft(line[len(mark):], "`~")
+		}
+	}
+	return false, ""
 }
 
 // Scan returns "line: fragment" hits for secret-looking tokens in content,
@@ -36,14 +57,16 @@ var valueRes = []*regexp.Regexp{
 // Fences are resolved in a first pass so an UNCLOSED fence cannot exempt
 // the remainder of the document: an orphan opener (no matching closer by
 // EOF) is treated as plain text and everything after it is scanned. Only
-// properly paired fences retain the code-block exemption.
+// properly paired fences retain the code-block exemption. Fence delimiter
+// lines are never exempt themselves — their info-string is scanned.
 func Scan(content string) []string {
 	lines := strings.Split(content, "\n")
 	protected := make([]bool, len(lines))
+	fenceInfo := make([]string, len(lines))
 	inFence := false
 	fenceStart := -1
 	for i, line := range lines {
-		if strings.HasPrefix(line, "```") {
+		if isFence, info := fenceMarker(line); isFence {
 			if inFence {
 				inFence = false
 			} else {
@@ -51,6 +74,7 @@ func Scan(content string) []string {
 				fenceStart = i
 			}
 			protected[i] = true
+			fenceInfo[i] = info
 			continue
 		}
 		protected[i] = inFence
@@ -63,20 +87,27 @@ func Scan(content string) []string {
 	}
 
 	var hits []string
-	for i, line := range lines {
-		if protected[i] {
-			continue
-		}
-		n := i + 1
-		line = inlineCodeRe.ReplaceAllString(line, "")
-		if m := secretRe.FindString(line); m != "" {
+	scan := func(n int, text string) {
+		text = inlineCodeRe.ReplaceAllString(text, "")
+		if m := secretRe.FindString(text); m != "" {
 			hits = append(hits, fmt.Sprintf("%d: %s", n, m))
 		}
 		for _, re := range valueRes {
-			if m := re.FindString(line); m != "" {
+			if m := re.FindString(text); m != "" {
 				hits = append(hits, fmt.Sprintf("%d: %s", n, m))
 			}
 		}
+	}
+	for i, line := range lines {
+		n := i + 1
+		if protected[i] {
+			// Still scan the info-string on a fence delimiter line.
+			if info := fenceInfo[i]; info != "" {
+				scan(n, info)
+			}
+			continue
+		}
+		scan(n, line)
 	}
 	return hits
 }
@@ -128,11 +159,29 @@ func matchIgnoreFile(path, rel string) bool {
 			negate = true
 			line = line[1:]
 		}
+		// An over-broad pattern (`*`, `**`, `**/*`) would whitelist the entire
+		// store, silently disabling the secret gate for good — and an agent can
+		// self-add one with a single non-secret write to `.secretsignore`
+		// (review S4). Ignore such patterns; per-file/glob patterns still work.
+		if isOverBroad(line) {
+			continue
+		}
 		if globToRe(line).MatchString(rel) {
 			matched = !negate
 		}
 	}
 	return matched
+}
+
+// isOverBroad reports whether a whitelist pattern matches (nearly) every path
+// in the store, which would neutralise the gate. Bare `*`, `**`, `**/*` and
+// runs of only `*`/`/` qualify.
+func isOverBroad(pattern string) bool {
+	switch pattern {
+	case "*", "**", "**/*", "*/**", "**/**":
+		return true
+	}
+	return strings.Trim(pattern, "*/") == ""
 }
 
 // globToRe converts a gitignore-subset pattern to an anchored regexp: ** →
