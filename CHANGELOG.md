@@ -1,5 +1,34 @@
 # Changelog
 
+## [2.9.0] — 2026-07-08
+
+Ranker quality (internal-audit P3a): two of the ranking loops the external and
+internal reviews flagged. Redeploy the binary; the sidecar recomputes
+effectiveness on the next reproject.
+
+### Fixed
+
+- **Stopwords are filtered from relevance tokens.** The `LoadStopwords` path was
+  dead code — every tokenization ran with no stopword set, so overlap (weight
+  3.0) counted common function words and a fact stuffed with them out-ranked a
+  genuinely relevant one. A built-in en+ru function-word set
+  (`tokenize.DefaultStopwords`) is now applied via `tokenize.Relevance()` at
+  every relevance site (keyword population + query: prompt, cwd, git context,
+  recall, rank), so a stopword can't enter overlap on either side. Content words
+  are untouched (corpus-common *content* terms are IDF's job, deferred).
+- **Ambient rules are no longer penalized for silence.** `precision_class:
+  ambient` (language prefs, security baselines, meta-policy) marks rules that
+  shape behaviour without being cited. Their `trigger-silent` events were
+  counted as negative evidence, spiralling effectiveness down until `effGate`
+  damped their ranking — the "poor get poorer" loop. Ambient rules now hold
+  at/above the neutral prior; explicit useful citations still raise them.
+
+### Deferred (design cycle)
+
+- IDF weighting of overlap (changes the score distribution — needs A/B) and
+  decoupling recency from mere injection (entangled with the honest
+  usefulness-signal rework, P3b) remain open.
+
 ## [2.8.0] — 2026-07-08
 
 Replaces the WAL lock with `flock(2)` (internal-audit design item C1). This is
