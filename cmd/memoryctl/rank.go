@@ -65,7 +65,7 @@ func runRank(args []string) {
 		fmt.Fprintf(os.Stderr, "rank: %v\n", err)
 		os.Exit(1)
 	}
-	terms := tokenize.Tokenize(query, nil)
+	terms := tokenize.Relevance(query)
 	overlap, err := s.OverlapScores(terms)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "rank: %v\n", err)
