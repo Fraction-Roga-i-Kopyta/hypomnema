@@ -1,4 +1,5 @@
 {
+  "_comment": "V1-LEGACY, unused by v2. Nothing in the v2 codebase reads this file — domains now live in each memory file's `domains:` frontmatter, not in a central map. Kept only as a historical reference; safe to delete.",
   "my-project": ["backend", "frontend"],
   "example-api": ["backend", "db"],
   "example-ui": ["frontend", "css"]

@@ -1,5 +1,43 @@
 # Changelog
 
+## [2.7.0] — 2026-07-08
+
+Documentation release: the "burn v1 out of the docs" pass (internal-audit
+Priority 2). No code or behavior change — but the docs finally describe the
+system that actually ships. Before this, ~9 of 10 `docs/` files described the
+deleted v1 bash system in the present tense, a fresh `git clone` following
+`QUICKSTART` could not install (the binary is built, not checked in, and the
+docs called the build "optional"), and the shipped templates/seeds produced
+files that violate the v2 memory schema.
+
+### Documentation
+
+- **README + QUICKSTART**: `make build` is documented as the required first
+  step; 6 shims/hooks (not 4); ranker formula includes `effGate`; install
+  section matches real behavior; singular `type:` values + `skill-learning`;
+  the "8–20×" A/B number carries its circularity caveat.
+- **ARCHITECTURE / EVENTS / hooks-contract / FORMAT**: rewritten from v1
+  (700-line bash hooks, `hooks/lib/`, FTS5, negation windows, two pipelines,
+  `.config.sh`, PreCompact, quotas, 9-directory tree) to the real v2 (6 thin
+  shims, one merged ranker, flat native + global stores, actual WAL vocabulary,
+  the v2 frontmatter contract). FORMAT.md §5 (WAL grammar) kept — it matches code.
+- **CONFIGURATION / TROUBLESHOOTING / FAQ**: deleted the fictional `.config.sh`
+  and nonexistent verbs (`decisions review`, `evidence learn`); documented the
+  real env knobs and decay thresholds; centered troubleshooting on
+  `memoryctl doctor`; stated honestly that v2 has no WAL compaction.
+- **INVARIANTS / MIGRATION / ADRs**: corrected the automation status (I1 CI
+  WAL-validate, I3/I5 Go checkers); removed the nonexistent `migrate --auto`
+  flag and the fictional doctor parity check; indexed all 15 ADRs and flipped 7
+  retired-mechanic ADRs to `superseded`.
+- **SECURITY / CONTRIBUTING**: named the real v2 mitigations (guard
+  path-boundary, `internal/secrets` gate with the v2.5.1 pattern set,
+  `.secretsignore` + `HYPOMNEMA_ALLOW_SECRETS`); real build/test/lint/CI workflow.
+- **templates/ + seeds/ + skills/memory-system.md**: regenerated to valid v2
+  frontmatter (required `name`/`description`/`type`; no v1 `triggers`/`seed`/
+  `decay_rate`/`ref_count`/`project`). Verified via the real collector — all 15
+  files parse as valid v2 native memory. The `memory-system` skill no longer
+  mis-trains agents with v1 mechanics.
+
 ## [2.6.0] — 2026-07-08
 
 Effectiveness-signal data-quality release (internal-audit cluster E1–E5). The

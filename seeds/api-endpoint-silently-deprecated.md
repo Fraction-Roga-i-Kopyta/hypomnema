@@ -1,24 +1,16 @@
 ---
 type: mistake
-seed: true
+name: "api-endpoint-silently-deprecated"
+description: "Third-party endpoints can return 200/204 while silently no longer performing the action"
 created: 2026-04-13
 status: active
-domains: [api]
-keywords: [api, deprecated, endpoint, silent, 200, 204, status, atlassian, side-effect]
 severity: major
 recurrence: 0
+scope: domain
+keywords: [api, deprecated, endpoint, silent, 200, 204, status, atlassian, side-effect]
+domains: [api]
 root-cause: "Vendors (Atlassian, Google, Stripe) often disable an endpoint while keeping 200/204 responses for backwards compatibility — the action no longer happens but the client code sees 'success' and never alerts"
 prevention: "After any write request to a third-party API, do a read-check that the change actually happened. Regularly reconcile the endpoints you use against the vendor's changelog / deprecation page"
-decay_rate: never
-ref_count: 0
-triggers:
-  - "api deprecated"
-  - "endpoint 200 not working"
-  - "endpoint returns 204"
-  - "endpoint returns 200 but"
-  - "but no effect"
-  - "api silent failure"
-scope: domain
 ---
 
 # API: endpoint silently deprecated

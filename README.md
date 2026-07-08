@@ -4,11 +4,11 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/Fraction-Roga-i-Kopyta/hypomnema?include_prereleases&sort=semver)](https://github.com/Fraction-Roga-i-Kopyta/hypomnema/releases)
 
-**Governance and ranking layer for Claude Code's native file memory — a Go engine (`memoryctl`) + 4 thin shims. No cloud, no embeddings.** Claude Code now ships native file memory; hypomnema adds ranked auto-injection, effectiveness measurement, decay, and a global store that native lacks.
+**Governance and ranking layer for Claude Code's native file memory — a Go engine (`memoryctl`) + 6 thin shims. No cloud, no embeddings.** Claude Code now ships native file memory; hypomnema adds ranked auto-injection, effectiveness measurement, decay, and a global store that native lacks.
 
-> **Status:** v2.1; native-primary. Requires Claude Code ≥ v2.1.59 with auto-memory enabled. v1.x stays on its tag for older Claude Code installs — see [MIGRATION.md](docs/MIGRATION.md) for the v1.x → v2.x upgrade path.
+> **Status:** v2.6.0; native-primary. Requires Claude Code ≥ v2.1.59 (native file memory). v1.x stays on its tag for older Claude Code installs — see [MIGRATION.md](docs/MIGRATION.md) for the v1.x → v2.x upgrade path.
 >
-> **Platforms:** macOS (primary, daily-driver) and Linux (`ubuntu-latest`), both covered by CI. The shim layer requires only `bash` + `jq`; all logic runs in the Go binary. Windows: WSL only, native unsupported.
+> **Platforms:** macOS (primary, daily-driver) and Linux (`ubuntu-latest`), both covered by CI. The core is the Go binary; the shims are ~5-line `sh` marshallers. Windows: WSL only, native unsupported.
 >
 > _Not affiliated with or endorsed by Anthropic. Hypomnema is an independent project that integrates with Claude Code's public hook API._
 
@@ -47,7 +47,13 @@ Hypomnema adds:
 | No global store | Native memory is per-project only; hypomnema owns `~/.claude/memory-global/` for facts that travel across every project (language rules, universal debugging patterns) |
 | No migration path | `memoryctl migrate` converts a v1.x hypomnema store to native format + sidecar in one shot |
 
-A/B replay on the maintainer's corpus (n=49 sessions, temporal-holdout): ranked injection recovers **8–20× more useful memories** per budget slot than random selection on static signals alone — and the live ranker adds keyword-overlap on top. See [`docs/measurements/2026-05-29-v2-ranker-ab.md`](docs/measurements/2026-05-29-v2-ranker-ab.md).
+An A/B replay on the maintainer's corpus suggested ranked injection recovers
+several times more useful memories per budget slot than a random baseline.
+Treat that number as indicative, not proven: the ground-truth labels
+(`trigger-useful`) can only exist for facts the ranker itself injected, so the
+comparison measures agreement with past injection policy more than retrieval
+quality against an unbiased oracle, and the lift scales with the candidate-pool
+size. See [`docs/measurements/2026-05-29-v2-ranker-ab.md`](docs/measurements/2026-05-29-v2-ranker-ab.md) for the method and caveats.
 
 ## Architecture at a glance
 
@@ -59,11 +65,12 @@ A/B replay on the maintainer's corpus (n=49 sessions, temporal-holdout): ranked 
 └───────────────▲───────────────────────────▲─────────────────┘
        read-only │ (content)       write-intercept │ (guard)
 ┌────────────────┴───────────────────────────┴────────────────┐
-│  hypomnema v2 — memoryctl (Go) + 4 thin bash shims          │
+│  hypomnema v2 — memoryctl (Go) + 6 thin sh shims            │
 │                                                             │
 │  inject ──► additionalContext (ranked top-K)                │
-│  close  ──► outcomes → WAL → effectiveness/decay → profile  │
-│  guard  ──► secrets gate + dedup (PreToolUse:Write|Edit)    │
+│  close  ──► classify → WAL → effectiveness/decay → profile  │
+│  guard  ──► secrets gate (PreToolUse:Write|Edit)            │
+│  skill-inject/skill-active ──► per-skill learnings          │
 │  migrate──► one-shot v1 conversion + pruning                │
 │                                                             │
 │  WAL (append-only text) = source of truth for events        │
@@ -72,16 +79,21 @@ A/B replay on the maintainer's corpus (n=49 sessions, temporal-holdout): ranked 
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**Four hook events, four shims** — each ~10 lines, zero logic, pure marshalling:
+**Six hook events, six shims** — each ~5 lines, zero logic, pure marshalling:
 
-| Event | Shim | What memoryctl does |
+| Event (matcher) | Shim | What memoryctl does |
 |---|---|---|
-| `SessionStart` | `session-start.sh` | Detect project + domains + keywords → rank native facts → inject top-K via `additionalContext` |
-| `UserPromptSubmit` | `user-prompt-submit.sh` | Re-rank with prompt tokens added to keywords → inject anything not yet in session |
-| `PreToolUse:Write\|Edit` (memory path) | `pre-tool-write.sh` | `guard`: secrets scan → exit 2 on credential pattern; fuzzy dedup → warn |
-| `Stop` | `session-stop.sh` | `close`: classify injected set (evidence/citation) → WAL → recompute effectiveness/decay → regenerate `MEMORY.md` index + self-profile |
+| `SessionStart` | `session-start.sh` | Detect project + git context + keywords → rank native facts → inject top-K via `additionalContext` |
+| `UserPromptSubmit` | `user-prompt-submit.sh` | Re-rank with prompt tokens added → inject anything not yet in session |
+| `PreToolUse:Write\|Edit` | `pre-tool-write.sh` | `guard`: secrets scan on memory-path writes → exit 2 on a credential pattern |
+| `PreToolUse:Skill` | `skill-active.sh` | Record which skill just activated (marker for the capture path) |
+| `PostToolUse:Skill` | `skill-learnings-inject.sh` | `skill-inject`: surface accumulated learnings for the activated skill |
+| `Stop` | `session-stop.sh` | `close`: classify the injected set (evidence/citation) → WAL → recompute effectiveness/decay → regenerate `MEMORY.md` + self-profile |
 
-The project's native `MEMORY.md` index is regenerated from native files on close; the ranked facts arrive separately through `additionalContext` — we don't fight the harness for the index channel.
+Fuzzy dedup for near-duplicate mistakes is available as the `memoryctl dedup`
+verb but is not wired as a hook in v2. The project's native `MEMORY.md` index is
+regenerated from native files on close; ranked facts arrive separately through
+`additionalContext` — we don't fight the harness for the index channel.
 
 ## How injection ranks files
 
@@ -89,13 +101,18 @@ A single relevance ranker (merged from the two v1 pipelines) scores every candid
 
 ```
 score = 3.0 × overlap(keywords, file keywords+name+description+body)
-      + 1.0 × log10(1 + ref_count)     # diminishing-returns on heavily-injected records
+      + 1.0 × log10(1 + ref_count) × effGate   # popularity, GATED by proven usefulness
       + 2.0 × recency                  # 1/(1 + days/30) from last injection (fallback created)
       + 2.0 × effectiveness            # Bayesian (pos+1)/(pos+neg+2) — neutral 0.5 until signal lands
       + 1.0 × project boost            # project-local facts beat global ones on ties
+
+effGate = clamp(2 × effectiveness, 0, 1)       # 1.0 at the prior 0.5; only damps unearned volume
 ```
 
-The blend is additive and zero-safe: a brand-new fact with `ref_count=0` and no outcome history is still injectable — it scores on overlap, its frontmatter `created` recency and the neutral prior, not zero. Status filter: `active` and `pinned` only; `stale` is skipped (down-ranked in sidecar, still on disk). Scope filter: only the current project's facts plus the global store inject — other projects' rows never leak in. The result is a flat top-8, capped at 2.5KB per body and 8KB total (Claude Code diverts larger hook payloads to a file the model never sees inline), and each fact injects at most once per session.
+Since v2.4.0 the `ref_count` reward is gated by `effGate`, so a fact injected
+hundreds of times that rarely proved useful can't coast on volume — the gate is
+neutral at the Bayesian prior and only *damps* unearned popularity, never
+amplifies. The blend is additive and zero-safe: a brand-new fact with `ref_count=0` and no outcome history is still injectable — it scores on overlap, its frontmatter `created` recency and the neutral prior, not zero. Status filter: `active` and `pinned` only; `stale` is skipped (down-ranked in sidecar, still on disk). Scope filter: only the current project's facts plus the global store inject — other projects' rows never leak in. The result is a flat top-8, capped at 2.5KB per body and 8KB total (Claude Code diverts larger hook payloads to a file the model never sees inline), and each fact injects at most once per session.
 
 Keyword overlap is the primary signal. Keywords come from git context (branch name, changed filenames, recent commit messages, CWD basename) plus prompt tokens, on both events. The old substring-trigger mechanism is gone; the ranker treats all tokens as relevance signal, not imperative triggers.
 
@@ -109,18 +126,22 @@ ref_count/recency, and — if it had gone stale — comes back to life.
 
 ## What gets remembered
 
-| Type | What |
+| `type:` | What |
 |------|------|
-| **mistakes** | Bugs, wrong approaches, repeated errors |
-| **strategies** | Proven approaches that worked |
+| **mistake** | Bugs, wrong approaches, repeated errors |
+| **strategy** | Proven approaches that worked |
 | **feedback** | Behavioral rules (why + how to apply) |
 | **knowledge** | Domain facts, API docs, infrastructure |
-| **decisions** | Architecture & technology choices |
-| **notes** | Long-form knowledge, references |
-| **projects** | Project description, stack, known issues |
+| **decision** | Architecture & technology choices |
+| **note** | Long-form knowledge, references |
+| **project** | Project description, stack, known issues |
 | **continuity** | "Where we left off" last session |
+| **skill-learning** | Usage-learned knowledge bound to a skill (`skill:` field), injected when that skill activates |
 
-All types compete in one ranked top-8 — there are no per-type quotas; type balance emerges from relevance. `continuity` and `project` facts are exempt from staleness rotation.
+The kind is the singular `type:` frontmatter value, not a subdirectory — the
+stores are flat. All types compete in one ranked top-8 — there are no per-type
+quotas; type balance emerges from relevance. `continuity` and `project` facts
+are exempt from staleness rotation.
 
 ### Example: a mistake
 
@@ -159,31 +180,31 @@ Sweet spot: daily-driver Claude Code users (v2.1.59+) who want visible, editable
 
 ## Install
 
-**Requires Claude Code ≥ v2.1.59 with auto-memory enabled.**
+**Requires Claude Code ≥ v2.1.59 (native file memory).**
 
 ```bash
 git clone https://github.com/Fraction-Roga-i-Kopyta/hypomnema.git
 cd hypomnema
-./install.sh
+make build       # compiles ./bin/memoryctl — the binary is not checked in
+./install.sh     # refuses to run if bin/memoryctl is missing
+memoryctl doctor # verify: all checks OK
 ```
 
-The installer:
-- Checks CC version and auto-memory gate (fails with an actionable message if not met)
-- Builds `memoryctl` Go binary (`go build ./cmd/memoryctl`)
-- Places 4 shims in `~/.claude/hooks/`
-- Patches `~/.claude/settings.json` with hook entries (backs up first)
-- Creates `~/.claude/memory-global/` for global facts
-- Converts `seeds/` to native format and distributes them
+`./install.sh`:
+- Verifies Claude Code ≥ v2.1.59 and that `settings.json` is valid JSON — before touching anything.
+- Symlinks the pre-built `memoryctl` into `~/.claude/bin/`.
+- Copies the 6 hook shims into `~/.claude/hooks/v2/` and registers them in `~/.claude/settings.json` (timestamped backup first).
+- Creates `~/.claude/memory-global/` for global facts.
 
-**Upgrading from v1.x:** run `memoryctl migrate --dry-run` first — it shows what will be kept, pruned, and routed to global vs. project store. Then `memoryctl migrate` to execute (backs up the old store, does NOT delete it). See [docs/MIGRATION.md](docs/MIGRATION.md).
+**Upgrading from v1.x:** run `memoryctl migrate --dry-run` first — it shows what will be kept, pruned, and routed to global vs. project store. Then `memoryctl migrate --execute` (backs up the old store, does NOT delete it). See [docs/MIGRATION.md](docs/MIGRATION.md).
 
-**Upgrading v2.x:** `cd /path/to/hypomnema && git pull && ./install.sh --skip-base`
+**Upgrading v2.x:** `cd /path/to/hypomnema && git pull && make build && ./install.sh`
 
 ### Requirements
 
-- Claude Code ≥ v2.1.59 (auto-memory enabled)
-- Go 1.22+ (for `memoryctl` build)
-- bash, jq (shims only)
+- Claude Code ≥ v2.1.59 (native file memory)
+- Go 1.25+ and `make` (to build `memoryctl` — mandatory, not optional)
+- `jq` (install.sh edits settings.json)
 
 ### Uninstalling
 
@@ -292,11 +313,11 @@ Claude Code subagents don't receive SessionStart injection, and there is no auto
 
 **Why native files as the store, not a custom directory?** Claude Code's harness already injects `MEMORY.md` for the model — the file format is stable, the harness reads it for free. Owning a separate store meant a schema fork and two systems of record. Native is the substrate; sidecar is the metadata layer.
 
-**Why a Go binary, not bash?** The hot path (inject) needs to parse hundreds of files, run ranking, and return before the hook timeout. Go eliminates the bash 3.2/awk/sed portability tax, is testable with table-driven unit tests, and is benchmarkable. The four shims that remain in bash are ~10 lines each — marshalling only.
+**Why a Go binary, not bash?** The hot path (inject) needs to parse hundreds of files, run ranking, and return before the hook timeout. Go eliminates the bash 3.2/awk/sed portability tax, is testable with table-driven unit tests, and is benchmarkable. The six shims that remain in bash are ~5 lines each — marshalling only.
 
 **Why a sidecar, not frontmatter?** Native frontmatter is the content contract (harness reads it). Embedding hypomnema metadata there would pollute the harness format and require careful merge logic on every `git pull`. SQLite sidecar is a derivative — the WAL is the truth, the sidecar is a fast query projection that can be rebuilt anytime.
 
-**Why keyword overlap, not embeddings?** At hundreds of files and tens of KB, keyword matching covers the primary injection path. The A/B result (8–20× lift over random on static signals alone) shows the ranker earns its keep without semantic similarity. No network calls, no hidden costs, no ML dependencies.
+**Why keyword overlap, not embeddings?** At hundreds of files and tens of KB, keyword matching covers the primary injection path. A replay against a random baseline suggests the ranker earns its keep without semantic similarity (with the measurement caveats noted above). No network calls, no hidden costs, no ML dependencies.
 
 **Why a global store?** Native memory is per-project only. Rules like "always respond in Russian" or "list 2-3 root causes before the first fix" apply everywhere. `~/.claude/memory-global/` is hypomnema-owned, injected alongside project-local facts, with the same ranking pipeline.
 

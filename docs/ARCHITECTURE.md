@@ -1,386 +1,248 @@
 # Architecture
 
-Map of how hypomnema turns Claude Code hook events into memory retrieval
-and back into memory growth. Read this before editing a hook; refer to
-it when reviewing a PR that touches control flow.
+Map of how hypomnema v2 turns Claude Code hook events into ranked memory
+injection and back into effectiveness measurement. Read this before editing a
+shim or a `memoryctl` verb; refer to it when reviewing a PR that touches
+control flow.
 
-The code side of truth is `hooks/`, `hooks/lib/`, and `internal/` (Go).
-This document explains *how they fit together*; it does not replace the
-code or the per-release CHANGELOG.
+The code side of truth is `hooks/v2/` (thin shims), `cmd/memoryctl/` (CLI
+entrypoints), and `internal/` (the Go engine). This document explains *how they
+fit together*; it does not replace the code, `CLAUDE.md` (the agent protocol),
+or the per-release CHANGELOG.
 
-## The five hook events
+> **v2 in one line.** The Go binary `memoryctl` is primary and mandatory. Each
+> hook is a ~5-line shell shim that `exec`s a `memoryctl` verb. There is no
+> bash logic, no `hooks/lib/`, no FTS5, and no second scoring pipeline — all
+> retired with v1 (see git tag `v1.1.2`).
 
-Claude Code emits five hook events. Hypomnema binds one script to each:
+## The hooks
 
-| Event | Script | Purpose | Size |
-|---|---|---|---|
-| `SessionStart` | `hooks/session-start.sh` | Scan memory, score, inject top-N into context | ~700 lines, critical path |
-| `UserPromptSubmit` | `hooks/user-prompt-submit.sh` | Substring trigger match + parallel FTS5 shadow | ~300 lines, reactive |
-| `PreToolUse:Write` | `hooks/memory-dedup.sh` | Fuzzy dedup via `memoryctl dedup check` | Thin wrapper |
-| `Stop` | `hooks/session-stop.sh` | Evidence match + outcome detection + lifecycle rotation | ~700 lines, feedback loop |
-| `PreCompact` | `hooks/memory-precompact.sh` | Warn "save insights before context compression" | 45 lines, nudge only |
+`install.sh` copies six shims into `~/.claude/hooks/v2/` and registers them in
+`settings.json`. Each shim resolves `memoryctl` (fail-open: `exit 0` if the
+binary is absent) and `exec`s one verb, forwarding stdin (the hook envelope)
+and preserving the exit code.
 
-All five hooks are installed as symlinks under `~/.claude/hooks/` by
-`install.sh`. Settings.json wires them by filename into the hook
-dispatcher.
+| Event | Matcher | Shim | Verb | Purpose |
+|---|---|---|---|---|
+| `SessionStart` | — | `session-start.sh` | `inject --event=SessionStart` | Rank native facts, inject top-K into `additionalContext` |
+| `UserPromptSubmit` | — | `user-prompt-submit.sh` | `inject --event=UserPromptSubmit` | Reactive re-rank with prompt tokens; inject newly-relevant facts |
+| `PreToolUse` | `Write\|Edit` | `pre-tool-write.sh` | `guard` | Secrets gate on memory-path writes (`exit 2` blocks) |
+| `PreToolUse` | `Skill` | `skill-active.sh` | `skill-active` | Record the activated skill for this session |
+| `PostToolUse` | `Skill` | `skill-learnings-inject.sh` | `skill-inject` | Inject accumulated skill-learning facts for that skill |
+| `Stop` | — | `session-stop.sh` | `close` | Attribute outcomes → WAL → effectiveness/decay → self-profile |
+
+There is **no `PreCompact` hook** (retired with v1). The shims carry zero
+logic; everything below happens inside `memoryctl`.
 
 ## End-to-end data flow
 
 ```
-SessionStart ────────────────────────────────────────────────┐
-   ▼                                                          │
-   detect_project (projects.json, longest-prefix match)       │
-   detect_domains (projects-domains.json + CWD heuristics)    │
-   scan memory/{mistakes,strategies,feedback,knowledge,       │
-                decisions,notes,projects,continuity}          │
-   score_records:                                             │
-     keyword_hits×3 + project_boost + wal_bonus(0-10)         │
-     + strategy_bonus + tfidf(body, capped) − noise_penalty   │
-   filter:                                                    │
-     status ∈ {active, pinned}                                │
-     domains ∩ current domains                                │
-     project ∈ {current, global}                              │
-     recurrence ≥ threshold                                   │
-   select:                                                    │
-     3 global + 3 project mistakes (hardcoded)                │
-     12/10/8-slot flex pool for other types (adaptive         │
-       based on keyword signal strength)                      │
-   inject as `# Memory Context` block in additionalContext    │
-   WAL: inject event per file (Hebbian access frequency)      │
-   perl -pi: frontmatter[referenced, ref_count] updated       │
-   background:                                                │
-     regen-memory-index.sh (writes MEMORY.md for              │
-       auto-memory directory, not core hypomnema)             │
-     /tmp/.claude-session-<sid> marker (timestamp anchor      │
-       for Stop hook)                                         │
-                                                              │
-UserPromptSubmit (per prompt) ────────────────────────────────┤
-   ▼                                                          │
-   substring trigger match:                                   │
-     for each file.triggers:                                  │
-       if phrase ∈ prompt                                     │
-       and no negation in ±40-char window                     │
-       (ru: не/без/уже/нет/нету/игнор,                        │
-        en: already/fixed/skip/no/don't/ignore/without):      │
-         → candidate                                          │
-   priority key (stable sort, descending on each level):      │
-     project_rank → status (pinned > active) →                │
-     severity → recency(by created) →                         │
-     log₁₀(ref_count) → recurrence → raw ref_count            │
-   inject top MAX_TRIGGERED (default 4)                       │
-   WAL: trigger-match                                         │
-   parallel (detached, fail-safe):                            │
-     memoryctl fts shadow <prompt> <session> <injected-list>  │
-     BM25 body match over SQLite FTS5 index                   │
-     WAL: shadow-miss for files FTS found that substring      │
-       pipeline missed — observational, not injected          │
-                                                              │
-Claude responds (0 or more turns) ────────────────────────────┤
-                                                              │
-PreToolUse → Write to mistakes/*.md ──────────────────────────┤
-   ▼                                                          │
-   memoryctl dedup check <file> (Go, required since v0.10.0)  │
-     parse root-cause from proposed content                   │
-     scan existing mistakes/*.md                              │
-     token_set_ratio (rapidfuzz semantics, pure-Go port)      │
-     ≥80% similarity: exit 2 (block), WAL dedup-blocked       │
-     70-80% similarity: allow + WAL dedup-candidate           │
-     <70%: silent allow (no WAL event)                        │
-                                                              │
-PostToolUse → Write to mistakes/*.md ─────────────────────────┤
-   ▼                                                          │
-   memoryctl dedup check again (same binary, different flag)  │
-     if ≥80%: increment existing.recurrence, delete new file, │
-              WAL dedup-merged                                │
-     else: allow                                              │
-                                                              │
-PreCompact (before context compression) ──────────────────────┤
-   ▼                                                          │
-   systemMessage: "save insights before compression"          │
-   stronger message if nothing written this session           │
-   one-way nudge — cannot block compaction                    │
-                                                              │
-Stop (session end) ───────────────────────────────────────────┤
-   ▼                                                          │
-   read ASSIST_TEXT (aggregated during session)               │
-   for each injected file:                                    │
-     evidence = frontmatter[evidence:] array                  │
-               || evidence_from_body (4+ char tokens,         │
-                  stop-words filtered, UTF-8 aware)           │
-     threshold = 1 (frontmatter) || 2 (body fallback)         │
-     hits = phrases matched in ASSIST_TEXT (case-insensitive  │
-            substring)                                        │
-     hits ≥ threshold → WAL trigger-useful                    │
-     hits < threshold → WAL trigger-silent                    │
-     evidence empty  → WAL evidence-empty + trigger-silent    │
-   error-detected-{low,med,high} per tool-error pattern       │
-   outcome detection (cross-ref injected mistakes):           │
-     ¬error-detected(slug) → outcome-positive                 │
-     error-detected(slug)  → outcome-negative                 │
-     new mistake file written this session → outcome-new      │
-   clean-session (0 tool errors, non-trivial duration)        │
-   cascade-review (2+ errors from related mistakes)           │
-   strategy-used (injected strategy + clean session)          │
-   strategy-gap (clean session, no strategy injected)         │
-   rotation:                                                  │
-     age > stale_days && status=active → status=stale         │
-     age > archive_days && status=stale → mv to archive/      │
-     (stale/archive days per-type, decay_rate overrides)      │
-   reminders (appended to additionalContext):                 │
-     CONTINUITY if last continuity update is stale            │
-     ERRORS if tool errors detected                           │
-     STRATEGIES if clean session > 10 min                     │
-   background: _agent_context.md regenerate for subagents     │
-   ───────────────────────────────────────────────────────────┘
+SessionStart ──► memoryctl inject --event=SessionStart ─────────┐
+   project.Detect(cwd) + domains.Infer(git)                     │
+   keywords ← prompt-absent: cwd basename, branch, changed      │
+             filenames, recent commit subjects                  │
+   native.List(project store + global store)                    │
+   sidecar reproject if content_sha / mtime drift               │
+   rank.TopK(keywords, candidates)  ── pure, I/O-free           │
+     filter: status ∈ {active, pinned}; scope ∈ {project,global}│
+   emit top-8 (≤2.5KB/body, ≤8KB total) as `# Memory Context`   │
+     in additionalContext JSON                                  │
+   WAL: inject|<slug>|<session>  (one line per injected fact)   │
+   write per-session injected-set (.runtime/injected-<sid>.list)│
+                                                                │
+UserPromptSubmit ──► inject --event=UserPromptSubmit ───────────┤
+   same ranker; keywords += prompt tokens (reactive relevance)  │
+   inject only facts newly entering the top-8 this session      │
+   WAL: inject|<slug>|<session>                                 │
+                                                                │
+PreToolUse(Write|Edit) ──► guard ──────────────────────────────┤
+   only on memory paths (legacy ~/.claude/memory, every native  │
+     projects/<slug>/memory/, and memory-global/)               │
+   secrets.Scan(candidate strings): credential outside a fenced │
+     code block → exit 2 + stderr (blocks the write)            │
+   .secretsignore glob or HYPOMNEMA_ALLOW_SECRETS=1 → exit 0    │
+   scanner error → fail-open (exit 0)                           │
+                                                                │
+PreToolUse(Skill) ──► skill-active ────────────────────────────┤
+   record activated skill name in .runtime/ (so PostToolUse can │
+     tag skill-learning facts to the right skill)               │
+                                                                │
+PostToolUse(Skill) ──► skill-inject ───────────────────────────┤
+   inject skill-learning facts for the just-activated skill     │
+   WAL: recall|<slug>|<session>  (joins the injected-set)       │
+                                                                │
+Stop ──► close ────────────────────────────────────────────────┤
+   read the session transcript (JSONL) for assistant text       │
+   closer.Classify(injected-set): evidence phrase / name cite   │
+     hit → trigger-useful ; miss → trigger-silent               │
+     (skipped entirely if the transcript was unreadable —       │
+      never fabricate silent evidence for a whole session)      │
+   WAL: trigger-useful|<slug>, trigger-silent|<slug>            │
+   WAL: session-metrics (error_count/tool_calls/duration)       │
+   WAL: session-close|<sid>                                     │
+   sidecar.Reproject: ref_count, effectiveness, last_injected   │
+   sidecar.MarkStale: decay by age from last-injection          │
+   memindex.Write: regenerate this project's native MEMORY.md   │
+   profile.Generate: self-profile.md                            │
+   ── no native content is ever mutated by a hook ──────────────┘
 ```
 
-## Two scoring pipelines
+### Dedup (CLI verb, not a default hook)
 
-The code has **two independent scoring systems**. They are not
-interchangeable — they solve different problems.
+`memoryctl dedup check <file>` fuzzy-compares a proposed `mistake` file's
+`root-cause` against existing mistakes (`internal/dedup` + `internal/fuzzy`,
+a pure-Go rapidfuzz token-set port). At/above the merge threshold it blocks
+(pre-tool) or merges into the existing file's `recurrence` and deletes the new
+one (post-tool); a lower candidate threshold emits an advisory note. It emits
+`dedup-blocked` / `dedup-merged` / `dedup-candidate`. It is a real verb but is
+**not** wired into the six installed hooks — invoke it explicitly.
 
-### SessionStart: composite score (recall-optimised)
+## The relevance ranker (one pipeline)
 
-```
-score = keyword_hits × 3
-      + project_boost × 1              (file.project == current project)
-      + wal_spaced_repetition (0–10)   (Hebbian access bonus)
-      + strategy_bonus (min(success_count × 2, 6))
-      + tfidf_body_match × 2 (capped)  (only for records with no keywords)
-      − 3 if record matches no active signals (noise penalty)
-```
-
-Applied after filtering. Feeds into adaptive quotas. Goal: cast a wide
-net, then prune to what's contextually relevant.
-
-Source: `hooks/lib/score-records.sh`.
-
-### UserPromptSubmit: priority key (precision-optimised)
-
-Stable lexicographic sort, descending at each level:
+v2 merged v1's two scoring systems (composite-score `SessionStart` +
+substring-trigger `UserPromptSubmit` with ±40-char negation windows) into a
+single pure ranker in `internal/rank`. The authoritative formula lives in
+`CLAUDE.md`; reproduced here:
 
 ```
-1. project_rank     (current > global > other project)
-2. status           (pinned > active)
-3. severity         (critical > major > minor > unset)
-4. recency(created) (≤7d > ≤30d > ≤90d > older)
-5. log₁₀(ref_count) (diminishing-returns bucket: 0, 1, 2, 3+)
-6. recurrence       (higher wins)
-7. ref_count        (raw value, final tiebreaker)
+score = 3.0 × overlap(session_keywords, file keywords+name+description+body)
+      + 1.0 × log10(1 + ref_count) × effGate   # popularity, gated by usefulness
+      + 2.0 × recency                  # 1/(1 + days/30) from last injection (fallback created)
+      + 2.0 × effectiveness            # Bayesian (pos+1)/(pos+neg+2); neutral 0.5 until signal
+      + 1.0 if project-local           # project facts outrank global on ties
+
+effGate = clamp(2 × effectiveness, 0, 1)   # 1.0 at the prior (0.5); only damps, never amplifies
 ```
 
-Applied to substring-trigger matches only. Deterministic ordering.
-Goal: if a trigger fires, the injection is "reliable in the strong
-sense" — same prompt, same match, same ranking, every time.
+**Additive and zero-safe.** No single zero signal annihilates a candidate — a
+brand-new fact with `ref_count=0` and no outcomes gets the neutral effectiveness
+prior (0.5) and its frontmatter `created` as recency, so it is injectable from
+day one. The `effGate` term scales `ref_count` by proven usefulness so a fact
+injected hundreds of times that rarely helped cannot coast on volume; it is
+neutral at the prior and capped at 1.0, so it only *damps* unearned popularity.
 
-Source: `hooks/user-prompt-submit.sh`.
+**Filters:** `status ∈ {active, pinned}` (sidecar-managed `stale` excluded);
+scope = current project's store + the global store only (other projects never
+inject); result cap top-8, ≤8KB total, once per session per fact. `session_keywords`
+come from prompt tokens, cwd basename, and git context (branch, changed
+filenames, recent commit subjects) on both `SessionStart` and `UserPromptSubmit`.
 
-### Why two
+Pull retrieval (`memoryctl recall "<query>"`) runs the same ranker on an
+explicit query, includes `stale` facts (marked `[stale]`, reviving on recall),
+and joins the result into the session's injected-set for `close` to classify.
 
-Context assembly (SessionStart) wants relevance, including partial
-matches. Reactive matching (UserPromptSubmit) wants determinism, so
-replay tools like `scripts/replay-runner.sh` can measure precision
-reliably. Conflating them breaks one or the other.
+## Stores
 
-## Library structure (`hooks/lib/`)
+Content lives in **native memory files** — flat markdown with YAML frontmatter,
+one logical `type:` field, no subdirectories:
 
-Hooks are thin glue. Heavy logic lives in 8 pure-function libraries:
-
-| File | Purpose | Lines |
+| Location | Scope | Owner |
 |---|---|---|
-| `build-context.sh` | Context assembly for SessionStart | 353 |
-| `parse-memory.sh` | Frontmatter parser + file lookup | 225 |
-| `score-records.sh` | Scoring formulas (SessionStart) | 128 |
-| `evidence-extract.sh` | Evidence phrases (frontmatter + body fallback) | 96 |
-| `wal-lock.sh` | Mkdir-atomicity lock on WAL writes | 73 |
-| `load-config.sh` | **Safe parser** for `.config.sh` (not source) | 68 |
-| `stat-helpers.sh` | BSD vs GNU stat portability | 32 |
-| `detect-project.sh` | Longest-prefix project slug | 28 |
+| `~/.claude/projects/<slug>/memory/` | per-project | Claude Code harness (native) |
+| `~/.claude/memory-global/` | global (applies in every project) | hypomnema (native-format) |
 
-All are explicitly marked as pure functions with no side effects (except
-`wal-lock.sh`, which manages a filesystem lock). Each can be unit-tested
-by sourcing it with a mock `$MEMORY_DIR`.
+Native memory is per-project only; the global store is the structural piece
+hypomnema adds. `inject` unions both at runtime.
 
-`load-config.sh` is a security-critical design choice: `.config.sh` is
-writable by any process with access to the memory directory, including
-Claude itself via the Write tool. `source`-ing it would let a malicious
-or mistaken Claude put arbitrary code in `.config.sh` and have it run
-at every session start. The safe parser only extracts integer
-assignments and rejects anything else.
+hypomnema's own metadata and runtime live under `~/.claude/memory/`:
 
-## WAL event taxonomy
-
-The write-ahead log (`~/.claude/memory/.wal`) is the sole observability
-surface. Every hook emits events; nothing reads them except
-`self-profile.md` aggregation and `shadow-miss` tuning.
-
-| Class | Events |
+| Path | Role |
 |---|---|
-| Observability | `inject`, `cluster-load`, `trigger-match`, `shadow-miss` |
-| Feedback loop | `trigger-useful`, `trigger-silent`, `evidence-empty` |
-| Outcomes | `outcome-positive`, `outcome-negative`, `outcome-new` |
-| Session meta | `session-metrics`, `clean-session`, `strategy-used`, `strategy-gap`, `cascade-review`, `error-detected-{low,med,high}` |
-| Lifecycle | `rotation-summary`, `rotation-stale`, `rotation-archive`, `strategy-rescored` |
-| Dedup | `dedup-blocked`, `dedup-merged`, `dedup-candidate` |
+| `.wal` | Append-only text event log — **the source of truth** |
+| `.sidecar.db` | SQLite projection (metadata: ref_count, effectiveness, status, keywords). **Rebuildable** from `.wal` + native frontmatter |
+| `self-profile.md` | Precision report regenerated on `close` |
+| `.runtime/` | Per-session injected-set lists, active-skill marker |
 
-Invariants:
+The sidecar is a cache, not a replica: delete it and `memoryctl sidecar rebuild`
+(or the next `close`) reprojects it from the WAL plus a native-frontmatter scan.
+`content_sha` relinks a row when a file is edited or renamed so a fact's
+identity — and its ref_count/effectiveness history — survives the change.
 
-- **Append-only.** Nothing in hypomnema rewrites WAL lines. Corrections
-  are additions, not edits.
-- **Locked.** `wal-lock.sh` uses `mkdir` atomicity (POSIX, no `flock`
-  dependency) so concurrent hook processes don't interleave partial
-  lines.
-- **Pipe-delimited, 4 fields.** `YYYY-MM-DD|event-type|slug-or-data|session-id`.
-  Session id sanitised (`|` → `_`) to prevent field-count corruption.
-- **WAL is a decision/measurement log, not an event store.** Slugs are
-  recorded; memory file bodies are not. Restoring memory state requires
-  the markdown files themselves — WAL alone is insufficient. Downstream
-  consumers (`memory-analytics.sh`, `memory-self-profile.sh`,
-  `score-records.sh`) treat the log as a projection source, not a
-  canonical replica of `~/.claude/memory/`.
-- **Auto-generated derivative views are never indexed.** The FTS sync
-  (both bash and Go) excludes `self-profile.md`, `_agent_context.md`,
-  `MEMORY.md` by basename. Indexing them would close a strange-loop —
-  shadow recall surfaces "0% precision" from self-profile as retrievable
-  knowledge, Claude treats it as injected advice, writes regen'd memory,
-  and self-profile is re-indexed on next Stop. The list lives in
-  `internal/fts/sync.go` (`isDerivativeView`) and `bin/memory-fts-sync.sh`
-  (`_EXCLUDES`); parity test `TestIsDerivativeView` pins it.
+## Go packages (`internal/`)
 
-Event format is not versioned. Schema changes require a coordinated
-cutover documented in `docs/MIGRATION.md`.
+One package, one responsibility. `memoryctl` (in `cmd/memoryctl/`) wires them.
 
-## Go binary (optional hot path)
+| Package | Responsibility |
+|---|---|
+| `native` | Native-store adapter — the only code that knows the native format: enumerate/parse files, resolve the project memory dir from cwd. Content is **read-only** |
+| `sidecar` | SQLite projection — schema, upserts, reproject, rank queries, `MarkStale`. Only place with SQLite |
+| `wal` | Append-only event log; `Append`/`AppendStrict`, `SanitizeField`, lock acquisition. Four-column invariant enforced |
+| `rank` | The pure relevance ranker (formula above). No I/O, no storage imports → trivially unit-testable and A/B-able |
+| `inject` | Orchestrator: keywords → `native.List` → `sidecar` → `rank.TopK` → JSON |
+| `closer` | Stop path: transcript classify → WAL → reproject/decay → profile |
+| `dedup` + `fuzzy` | Fuzzy dedup on write (token-set ratio) |
+| `secrets` | Secrets gate (credential patterns, `.secretsignore`) |
+| `tokenize` | Unicode-aware tokenizer (salvaged from v1's TF-IDF; Cyrillic/CJK/Greek participate, not just Latin) |
+| `profile` | `self-profile.md` generation from WAL aggregation |
+| `doctor` | Health check (`memoryctl doctor`) |
+| `migrate` | One-shot v1 → v2 conversion + pruning |
+| `memindex` | Renders the native `MEMORY.md` index (flat slug links) |
+| `pathutil` | Shared slug/filename sanitisers |
+| `ab` | Offline A/B harness: replay historical WAL, ranked-top-K vs dump-all on `trigger-useful` proxy |
+| `invariants` | Automated checks for the mechanically-checkable rules in `docs/INVARIANTS.md` |
+| `jsonl` | Streams the session-transcript JSONL, extracting assistant-authored text for evidence classification |
 
-`memoryctl` is an optional Go binary built via `make build`. It
-delegates hot paths that are bad fits for bash: SQLite FTS5 access,
-UTF-8-correct token filtering, single-pass WAL aggregation.
+### `memoryctl` command surface
 
-| Subcommand | Bash fallback | Ported in |
-|---|---|---|
-| `dedup check` | **None** (required since v0.10.0) | v0.10.0 (from Python) |
-| `fts shadow` / `fts sync` / `fts query` | `bin/memory-fts-*.sh` | v0.9.0 |
-| `self-profile` | `bin/memory-self-profile.sh` | v0.10.0 |
-
-**Contract:** byte-for-byte output parity between bash and Go
-implementations, enforced by `scripts/parity-check.sh`. CI runs parity
-checks on every push. Breaking parity is a release blocker.
-
-The bash fallbacks exist so that:
-
-- Users who never ran `make build` still get a working system
-  (minus dedup, since v0.10.0).
-- Hook internals remain readable without going through Go code.
-- Parity-check acts as a dual-implementation oracle — if Go and bash
-  disagree, one of them is wrong.
+`inject`, `close`, `guard`, `recall`, `skill-inject`, `skill-active` (hook hot
+paths); `dedup check`, `migrate`, `doctor`, `self-profile`, `sidecar
+rebuild|show`, `wal`, `audit`, `rank`, `reindex`, `ab` (manual / maintenance).
 
 ## Invariants (code-level contracts)
 
-These are the rules that shouldn't break silently. Breaking one is
-either a bug or an explicit architectural decision that needs an ADR
-in `decisions/`.
+The full list with rationale is `docs/INVARIANTS.md`; `internal/invariants`
+mechanically checks the ones that can be. The load-bearing ones:
 
-1. **Body is agent-owned, frontmatter auto-fields are hook-owned.**
-   Hooks run `perl -pi -e` only within the frontmatter block (guarded
-   by `$in_fm` flag) and only touch `referenced`, `ref_count`,
-   `status`. Body text is never modified by a hook.
+1. **Native content is agent-owned; hooks are read-only on it.** No hook ever
+   edits a memory file's body or frontmatter. The one hook-managed native file
+   is a project's `MEMORY.md` index, regenerated wholesale on `close`.
+2. **Write-by-agent, read-by-hook.** Agents create memory files via the Write
+   tool; hooks only react to existing files.
+3. **Append-only WAL.** Never rewritten; corrections are new events.
+4. **Four-column WAL.** `date|event|target|session`; pipes/newlines in source
+   data are replaced with `_` before write (`wal.SanitizeField`).
+5. **Sidecar is derivable.** State is reconstructable from WAL + native
+   frontmatter; the WAL is authoritative, the DB is a cache.
+6. **No network.** Zero HTTP/curl anywhere in `internal/`, `cmd/`, or the
+   shims. Hypomnema is entirely offline.
+7. **Silent-fail.** A hook never breaks the session: any internal error in
+   `inject`/`close` exits 0. The *only* non-zero exit is `guard` on a detected
+   secret (`exit 2`); even a scanner crash fails open.
 
-2. **Write-by-agent, read-by-hook.** Hooks never create new memory
-   files. Agents (Claude) create them via the Write tool. Hooks only
-   react to existing files.
+## Secrets gate
 
-3. **Append-only WAL.** Never rewrite; corrections are new events.
+`memoryctl guard` (PreToolUse `Write|Edit`) scans the candidate write content
+for credential patterns outside fenced code blocks: key-based
+(`api_key`/`secret`/`password`/`token` + a ≥8-char value) and value-based (AWS
+`AKIA…`/`ASIA…`, GitHub `ghp_…`/`github_pat_…`, Anthropic `sk-ant-…`, Slack
+`xox*-…`, PEM private keys, JWTs, `scheme://user:pass@` URLs). A hit exits 2
+with a stderr line naming the file. Escape hatches: a glob in
+`~/.claude/memory-global/.secretsignore`, or `HYPOMNEMA_ALLOW_SECRETS=1` for a
+single invocation.
 
-4. **Parity contract.** Bash and Go implementations of the same
-   subcommand produce byte-for-byte identical output.
+## Retired in v1 (see git tag `v1.1.2`)
 
-5. **No network calls.** Zero `curl`/`wget`/`net/http` in `hooks/`,
-   `internal/`, or `cmd/`. Hypomnema is entirely offline.
+A reader coming from v1 docs will look for these — all removed in v2, verify by
+`ls`/grep rather than assuming they exist:
 
-6. **No secret-material in `.config.sh`.** It's parsed, not sourced,
-   to prevent arbitrary-code execution via Write-tool content.
-
-## Known sharp edges
-
-Architectural debt worth knowing before touching these files. Items
-with `→ v0.10.2` are tracked for the next PATCH release plan
-(`docs/plans/2026-04-22-v0.10.2.md`).
-
-### Shell hooks
-
-- **`session-stop.sh` is 700 lines and mixes evidence match,
-  outcome detection, rotation, and reminders.** Decomposition to
-  `hooks/lib/` is partially done (`evidence-extract.sh`) but not
-  finished. A split into `outcome-detection.sh`, `rotation.sh`,
-  `reminder-builder.sh` would help. → v0.10.2
-
-- **Reminders (CONTINUITY / ERRORS / STRATEGIES) are hardcoded in
-  Stop.** Cannot be disabled independently. Candidate for
-  configuration in `.config.sh`.
-
-- **Two scoring systems are not documented side-by-side.** Until this
-  file, a reader had to find `score-records.sh` and
-  `user-prompt-submit.sh` independently to understand the contrast.
-
-- **Project slug derivation** is done in multiple places
-  (`detect-project.sh`, `regen-memory-index.sh`). v0.10.1 unified the
-  path-derivation convention (`-$(echo $PWD | tr / -)`) but older
-  code may still assume the hardcoded form.
-
-- **`memory-index.sh` TF-IDF tokenizer is Latin-only.** The regex
-  `[^a-zA-Z\300-\377]` strips Cyrillic, CJK, Greek, and Arabic.
-  Records without a `keywords:` field whose bodies are in those
-  scripts silently stay out of the TF-IDF index. Note: the Go FTS5
-  tokenizer (`internal/fts/tokenize.go`) uses `unicode.IsLetter` and
-  handles the full Unicode Letter class correctly, so bash and Go
-  *disagree* on tokenization — a latent parity gap. → v0.10.2
-
-- **`memory-analytics.sh` thresholds and the Laplace-smoothing
-  formula are undocumented.** `eff = (pc + 1) / (pc + nc + 2)` is
-  Bayesian mean with pseudo-counts; `0.7` / `0.3` / `3` / `5` are the
-  winner / noise / min-injects thresholds. Not exposed to
-  `.config.sh`; operators can't tune analytics without editing awk.
-  → v0.10.2
-
-- **`memory-outcome.sh` inline-parses `related:` / `instance_of:`
-  instead of using `parse-memory.sh`.** 15 lines of frontmatter
-  logic duplicated. Fragile if the schema gains syntax variants.
-  → v0.10.2
-
-### Go internals
-
-- **`internal/fts/sync.go` drift check uses `SUM(mtime) + COUNT(*)`
-  as a cheap hash.** Two files swapping mtimes produces the same
-  sum — the pathological case goes unnoticed until the next real
-  drift. Not a bug, a best-effort compromise; comment could be
-  clearer.
-
-- **`internal/fuzzy/fuzzy.go:159` uses insertion sort for token
-  set dedup.** O(N²) for large inputs. For root-cause strings of
-  10–30 words this is fine; if ever fed arbitrary-length content,
-  swap to `sort.Strings`. Design note, not a bug.
-
-### Installer / distribution
-
-- **`uninstall.sh` is hand-rolled while `install.sh` is
-  directory-driven.** Every new hook or binary needs a parallel
-  uninstall edit that's easy to miss. v0.10.1 caught three such
-  misses; a directory-driven uninstall refactor is in v0.10.2.
-  → v0.10.2
-
-- **`RELEASE_CHECKLIST.md` Docker bootstrap references `uv` install.**
-  v0.10.0 removed the uv dependency; the clean-VM test in the
-  checklist still says `curl -LsSf https://astral.sh/uv/install.sh`.
-  Update to install `go` instead. → v0.10.2
+- **Five 700-line bash hooks + `hooks/lib/` libraries** → six ~5-line shims + Go.
+- **Two scoring pipelines** (composite-score + priority-key) → one `rank`.
+- **Substring triggers + ±40-char negation windows** → tokens are relevance signal.
+- **FTS5 shadow retrieval** (`internal/fts`, `bin/memory-fts-*.sh`, `shadow-miss`) → gone.
+- **TF-IDF body scoring / cold-start gates** → gone (Unicode tokenizer salvaged into `tokenize`).
+- **`.config.sh` safe-parser, `projects.json` longest-prefix detection** → project derived from cwd.
+- **`_agent_context.md`** subagent file → pass facts inline in the subagent prompt.
+- **`PreCompact` nudge hook, per-type quotas (3+3/12/10/8), rotation to `archive/`** → decay is down-rank-in-sidecar; balance emerges from relevance.
+- **`scripts/parity-check.sh` bash↔Go parity contract** → Go is the single implementation.
 
 ## Cross-references
 
-- Directory-level layout of `~/.claude/memory/` and decay policy:
-  `CLAUDE.md` (project root).
-- Frontmatter field schema per type: `CLAUDE.md` → `docs/FORMAT.md`.
-- Hook contract surface (inputs, outputs, exit codes):
-  `docs/hooks-contract.md`.
-- Tunable parameters: `docs/CONFIGURATION.md`.
-- Decision records: `decisions/` in the user's memory dir; template
-  in `templates/decision.md`.
-- Release discipline: `docs/maintenance/RELEASE_CHECKLIST.md`.
+- Agent protocol, frontmatter schema, ranker formula, writing rules — `CLAUDE.md` (repo root).
+- v2 design rationale — `docs/specs/2026-05-28-v2-native-memory-design.md`.
+- WAL event registry — `docs/EVENTS.md`.
+- WAL grammar — `docs/FORMAT.md`.
+- Invariant list — `docs/INVARIANTS.md`.
+- Hook contract surface (inputs, outputs, exit codes) — `docs/hooks-contract.md`.
+- Tunable parameters — `docs/CONFIGURATION.md`.
+- v1.x → v2 migration — `docs/MIGRATION.md`.
+- A/B ranker evidence — `docs/measurements/2026-05-29-v2-ranker-ab.md`.
