@@ -2,7 +2,8 @@
 type: decision
 project: global
 created: 2026-04-24
-status: active
+status: superseded
+superseded-by: native-primary-sidecar
 description: Adaptive quota pool of 12 slots shared across feedback/knowledge/strategies/decisions/notes, shrinking to 10 or 8 when keyword signal is strong. Per-type mistake cap stays at 3+3. This ADR records the thresholds and the reason they sit where they sit.
 keywords: [quotas, pool, keywords, signal]
 domains: [ranking]
@@ -14,6 +15,12 @@ review-triggers:
     source: self-profile
   - after: "2027-04-24"
 ---
+
+> **Superseded (v2.0): per-type quota pool removed.** v2 injects a single
+> relevance-ranked **top-8** across all types with no per-type slots — type
+> balance emerges from score alone. The adaptive 12/10/8 pool and the 3+3
+> mistake cap no longer exist. See `docs/decisions/native-primary-sidecar.md`
+> and `docs/specs/2026-05-28-v2-native-memory-design.md`.
 
 ## What
 

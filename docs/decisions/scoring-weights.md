@@ -2,7 +2,8 @@
 type: decision
 project: global
 created: 2026-04-24
-status: active
+status: superseded
+superseded-by: native-primary-sidecar
 description: The five SessionStart scoring components use fixed weights (keyword ×3, project ×1, WAL 0-10, strategy +6 cap, TF-IDF ×2 capped, noise −3). This ADR justifies keeping them as-is rather than calibrating from first principles, and sets the conditions that would force a revisit.
 keywords: [scoring, weights, calibration, priority]
 domains: [ranking]

@@ -2,7 +2,8 @@
 type: decision
 project: global
 created: 2026-04-24
-status: active
+status: superseded
+superseded-by: native-primary-sidecar
 description: Complex scoring components (Bayesian effectiveness, TF-IDF body match) stay dormant until the corpus accumulates enough outcome signal to make their weights meaningful, and the dormant state is visible to both user and agent.
 keywords: [scoring, cold-start, bayesian, tfidf, dormant, calibration]
 domains: [ranking]

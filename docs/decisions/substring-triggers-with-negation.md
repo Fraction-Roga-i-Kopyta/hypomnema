@@ -2,7 +2,8 @@
 type: decision
 project: global
 created: 2026-04-12
-status: active
+status: superseded
+superseded-by: go-primary-bash-shims
 description: Reactive injection uses case-insensitive substring match on `triggers:` phrases with a ±40-character negation window, not regex or embeddings.
 keywords: [triggers, substring, negation, matching]
 domains: [retrieval]
