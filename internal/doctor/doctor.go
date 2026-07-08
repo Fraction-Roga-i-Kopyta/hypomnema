@@ -11,6 +11,7 @@ package doctor
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -347,21 +348,41 @@ func checkMemoryctl(claudeDir string) Check {
 	// If that's present the PATH question is moot for hypomnema itself;
 	// PATH only matters for users running `memoryctl ...` in a shell.
 	local := filepath.Join(claudeDir, "bin", "memoryctl")
-	if info, err := os.Stat(local); err == nil && !info.IsDir() {
-		if _, err := exec.LookPath("memoryctl"); err != nil {
-			return Check{
-				Name:   "memoryctl_available",
-				Status: WARN,
-				Detail: local + " present but not on $PATH — shell invocations won't find it",
-			}
+	info, err := os.Stat(local)
+	if err != nil || info.IsDir() {
+		return Check{
+			Name:   "memoryctl_available",
+			Status: WARN,
+			Detail: "memoryctl binary not built — run `make build` then ./install.sh",
 		}
-		return Check{Name: "memoryctl_available", Status: OK, Detail: local}
 	}
-	return Check{
-		Name:   "memoryctl_available",
-		Status: WARN,
-		Detail: "memoryctl binary not built — run `make build` then ./install.sh (dedup/fts-sync will fall back to bash)",
+	// Present, but is it a working binary? os.Stat alone let a symlink to a
+	// text file read as healthy — verify the exec bit AND that it actually
+	// runs (review: doctor did not smoke-test the binary/shims).
+	if info.Mode()&0o111 == 0 {
+		return Check{
+			Name:   "memoryctl_available",
+			Status: WARN,
+			Detail: local + " present but not executable — re-run `make build && ./install.sh`",
+		}
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if rerr := exec.CommandContext(ctx, local, "--help").Run(); rerr != nil {
+		return Check{
+			Name:   "memoryctl_available",
+			Status: WARN,
+			Detail: local + " present but does not run (`--help` failed) — rebuild it: " + rerr.Error(),
+		}
+	}
+	if _, err := exec.LookPath("memoryctl"); err != nil {
+		return Check{
+			Name:   "memoryctl_available",
+			Status: WARN,
+			Detail: local + " present but not on $PATH — shell invocations won't find it",
+		}
+	}
+	return Check{Name: "memoryctl_available", Status: OK, Detail: local}
 }
 
 // checkCorpus enumerates the v2 native corpus (per-project + global, merged

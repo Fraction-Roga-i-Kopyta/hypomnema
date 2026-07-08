@@ -3,6 +3,7 @@ package doctor
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -50,4 +51,18 @@ func TestCheckShimFiles_DirectoryFails(t *testing.T) { // review R3
 	os.Remove(p)
 	os.Mkdir(p, 0o755) // a directory has exec bits — must not count as a present shim
 	mustFindCheck(t, Run(claude, mem, cwd), "shim_files_present", FAIL)
+}
+
+func TestCheckMemoryctl_NonExecutableFails(t *testing.T) { // review: doctor smoke-test
+	claude, mem, cwd := newFixture(t)
+	// Replace the stub binary with a NON-executable text file (mirrors a
+	// symlink to a text file — doctor previously reported OK on os.Stat alone).
+	p := filepath.Join(claude, "bin", "memoryctl")
+	os.Remove(p)
+	os.WriteFile(p, []byte("not a real binary\n"), 0o644)
+	c := mustFindCheck(t, Run(claude, mem, cwd), "memoryctl_available", WARN)
+	// A present-but-broken binary must not read as healthy.
+	if !strings.Contains(c.Detail, "not executable") && !strings.Contains(c.Detail, "does not run") {
+		t.Errorf("a non-executable memoryctl should be flagged, got %q", c.Detail)
+	}
 }

@@ -58,25 +58,44 @@ func (s *Store) OverlapScores(queryTerms []string) (map[string]int, error) {
 	if len(uniq) == 0 {
 		return out, nil
 	}
-	placeholders := strings.TrimRight(strings.Repeat("?,", len(uniq)), ",")
-	args := make([]any, len(uniq))
-	for i, t := range uniq {
-		args[i] = t
+	// Chunk the IN(...) list: SQLite caps bound variables at 32766, and a big
+	// prompt + git status can tokenize past that, which errored and (in the
+	// injection caller) zeroed all overlap (review E6). Terms are unique and
+	// partitioned across chunks, so per-slug distinct-term counts sum exactly.
+	const maxVars = 30000
+	for start := 0; start < len(uniq); start += maxVars {
+		end := start + maxVars
+		if end > len(uniq) {
+			end = len(uniq)
+		}
+		batch := uniq[start:end]
+		placeholders := strings.TrimRight(strings.Repeat("?,", len(batch)), ",")
+		args := make([]any, len(batch))
+		for i, t := range batch {
+			args[i] = t
+		}
+		if err := s.overlapBatch(out, placeholders, args); err != nil {
+			return nil, err
+		}
 	}
+	return out, nil
+}
+
+func (s *Store) overlapBatch(out map[string]int, placeholders string, args []any) error {
 	rows, err := s.db.Query(
 		`SELECT slug, COUNT(DISTINCT term) FROM keyword WHERE term IN (`+placeholders+`) GROUP BY slug`,
 		args...)
 	if err != nil {
-		return nil, fmt.Errorf("sidecar.OverlapScores: %w", err)
+		return fmt.Errorf("sidecar.OverlapScores: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var slug string
 		var n int
 		if err := rows.Scan(&slug, &n); err != nil {
-			return nil, fmt.Errorf("sidecar.OverlapScores: scan: %w", err)
+			return fmt.Errorf("sidecar.OverlapScores: scan: %w", err)
 		}
-		out[slug] = n
+		out[slug] += n // accumulate: chunks partition the (disjoint) term set
 	}
-	return out, rows.Err()
+	return rows.Err()
 }

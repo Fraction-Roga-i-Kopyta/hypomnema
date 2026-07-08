@@ -1,5 +1,35 @@
 # Changelog
 
+## [2.7.1] — 2026-07-08
+
+The deferred local bugfixes from the internal audit — correctness fixes with no
+format or behavior-semantics change. (The deeper design items — WAL project
+attribution for a composite key, the flock lock rewrite, and the ranker's
+usefulness-signal rework — remain deferred to their own design cycle.)
+
+### Fixed
+
+- **Overlap query is chunked** (audit E6). `OverlapScores` built one `IN(...)`
+  over every query term; a large prompt plus `git status` could tokenize past
+  SQLite's 32766 bound-variable limit, which errored and got swallowed in the
+  injection path — silently zeroing all keyword overlap. The list is now
+  chunked at 30000, and injection degrades to empty overlap explicitly on any
+  query error instead of dropping it.
+- **`migrate` no longer claims "sidecar rebuilt" when it wasn't.** The sidecar
+  rebuild step is a rebuildable projection, so its failure doesn't fail the
+  migration — but `Execute` now returns whether it succeeded and the CLI warns
+  you to run `memoryctl sidecar rebuild` instead of reporting success.
+- **`doctor` smoke-tests the binary.** `memoryctl_available` verified only that
+  a file existed at `~/.claude/bin/memoryctl`; a symlink to a text file read as
+  healthy. It now checks the exec bit and actually runs `memoryctl --help`.
+
+### Changed
+
+- The sidecar `keyword` reproject now persists the `domains` CSV into each row
+  (audit E7, data half). This does **not** activate domain filtering — the
+  ranker's domain filter stays inert (`Query.Domains` is empty); wiring it is a
+  behavior change left to the design cycle.
+
 ## [2.7.0] — 2026-07-08
 
 Documentation release: the "burn v1 out of the docs" pass (internal-audit
