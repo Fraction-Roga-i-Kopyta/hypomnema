@@ -427,3 +427,34 @@ func TestRecallRevivesStale(t *testing.T) {
 		t.Errorf("fresh recall must keep fact out of stale, got %q", r.Status)
 	}
 }
+
+func TestReproject_ErrorRollsBackOutcomeClear(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, ".sidecar.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.db.Exec(
+		`INSERT INTO outcome (slug, ts, kind) VALUES ('x','2026-07-01','positive')`); err != nil {
+		t.Fatal(err)
+	}
+	// A directory as walPath: readWALAgg swallows its read error by design
+	// (partial history is acceptable), but replayOutcomes propagates it —
+	// so Reproject fails AFTER `DELETE FROM outcome` has already run.
+	walDir := filepath.Join(dir, "wal-as-dir")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err = Reproject(s, []native.MemFile{{Slug: "a.md", Project: "p"}}, walDir, []string{"p"})
+	if err == nil {
+		t.Fatal("expected Reproject to fail on an unreadable WAL path")
+	}
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM outcome`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("failed Reproject lost outcome rows (have %d, want 1) — projection is not transactional", n)
+	}
+}

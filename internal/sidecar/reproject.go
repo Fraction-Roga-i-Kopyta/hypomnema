@@ -61,10 +61,31 @@ func (a *agg) outcomes() (pos, neg int) {
 // other projects are never touched — that is the cross-project tombstoning
 // fix. Same-name files in two projects still share one row (slug is the PK);
 // last writer wins until a composite key lands.
+//
+// The whole projection runs in ONE transaction: Reproject fires on every
+// Stop hook, so concurrent injects must never observe a half-rebuilt
+// sidecar, a crash mid-rebuild must not leave outcome empty, and one commit
+// replaces thousands of per-statement fsyncs per turn.
 func Reproject(s *Store, files []native.MemFile, walPath string, scope []string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("sidecar.Reproject: begin: %w", err)
+	}
+	// No-op after Commit; on any early return it discards the partial rebuild.
+	defer func() { _ = tx.Rollback() }()
+	if err := reprojectIn(tx, files, walPath, scope); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sidecar.Reproject: commit: %w", err)
+	}
+	return nil
+}
+
+func reprojectIn(e dbtx, files []native.MemFile, walPath string, scope []string) error {
 	aggs := readWALAgg(walPath)
 
-	if _, err := s.db.Exec(`DELETE FROM outcome`); err != nil {
+	if _, err := e.Exec(`DELETE FROM outcome`); err != nil {
 		return fmt.Errorf("sidecar.Reproject: clear outcome: %w", err)
 	}
 
@@ -101,7 +122,7 @@ func Reproject(s *Store, files []native.MemFile, walPath string, scope []string)
 			Status:        status,
 			Effectiveness: eff,
 		}
-		if err := s.Upsert(rec); err != nil {
+		if err := upsertIn(e, rec); err != nil {
 			return fmt.Errorf("sidecar.Reproject: upsert %s: %w", f.Slug, err)
 		}
 	}
@@ -116,26 +137,26 @@ func Reproject(s *Store, files []native.MemFile, walPath string, scope []string)
 		keep[f.Slug] = true
 		inScope[f.Project] = true
 	}
-	existing, err := s.All()
+	existing, err := allIn(e)
 	if err != nil {
 		return fmt.Errorf("sidecar.Reproject: reconcile list: %w", err)
 	}
 	for _, r := range existing {
 		if !keep[r.Slug] && r.Status != "deleted" && inScope[r.Project] {
-			if _, err := s.db.Exec(`UPDATE memory SET status='deleted' WHERE slug=?`, r.Slug); err != nil {
+			if _, err := e.Exec(`UPDATE memory SET status='deleted' WHERE slug=?`, r.Slug); err != nil {
 				return fmt.Errorf("sidecar.Reproject: mark deleted %s: %w", r.Slug, err)
 			}
 			// Drop the dead row's keywords so it stops matching overlap queries.
-			if _, err := s.db.Exec(`DELETE FROM keyword WHERE slug=?`, r.Slug); err != nil {
+			if _, err := e.Exec(`DELETE FROM keyword WHERE slug=?`, r.Slug); err != nil {
 				return fmt.Errorf("sidecar.Reproject: clear keywords %s: %w", r.Slug, err)
 			}
 		}
 	}
 
-	if err := replayOutcomes(s, walPath); err != nil {
+	if err := replayOutcomes(e, walPath); err != nil {
 		return fmt.Errorf("sidecar.Reproject: outcomes: %w", err)
 	}
-	if err := s.PopulateKeywords(files); err != nil {
+	if err := populateKeywordsIn(e, files); err != nil {
 		return fmt.Errorf("sidecar.Reproject: keywords: %w", err)
 	}
 	return nil
@@ -210,7 +231,7 @@ func readWALAgg(walPath string) map[string]*agg {
 	return out
 }
 
-func replayOutcomes(s *Store, walPath string) error {
+func replayOutcomes(e dbtx, walPath string) error {
 	f, err := os.Open(walPath)
 	if err != nil {
 		return nil
@@ -224,7 +245,7 @@ func replayOutcomes(s *Store, walPath string) error {
 			continue
 		}
 		if event == "outcome-positive" || event == "outcome-negative" {
-			if _, err := s.db.Exec(`INSERT INTO outcome (slug, ts, kind) VALUES (?,?,?)`,
+			if _, err := e.Exec(`INSERT INTO outcome (slug, ts, kind) VALUES (?,?,?)`,
 				slug, date, strings.TrimPrefix(event, "outcome-")); err != nil {
 				return fmt.Errorf("sidecar.replayOutcomes: insert %s: %w", slug, err)
 			}

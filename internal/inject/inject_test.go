@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 )
 
 func setup(t *testing.T) (memDir, projDir, home string) {
@@ -365,5 +367,23 @@ func TestExportedCapBody(t *testing.T) {
 	}
 	if !strings.HasSuffix(got, "…(truncated)") {
 		t.Fatal("missing truncation marker")
+	}
+}
+
+func TestCandidates_CorruptSidecarSiblingsRemoved(t *testing.T) {
+	dir := t.TempDir()
+	side := filepath.Join(dir, ".sidecar.db")
+	for _, p := range []string{side, side + "-wal", side + "-shm"} {
+		if err := os.WriteFile(p, []byte("not a database"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files := []native.MemFile{{Slug: "a.md", Project: "global", Type: "note", Status: "active"}}
+	Candidates(dir, "/work/proj", files, []string{"a"})
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if data, err := os.ReadFile(side + suffix); err == nil &&
+			strings.Contains(string(data), "not a database") {
+			t.Errorf("poisoned .sidecar.db%s survived the corrupt-sidecar fallback", suffix)
+		}
 	}
 }

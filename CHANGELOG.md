@@ -1,5 +1,61 @@
 # Changelog
 
+## [2.5.0] — 2026-07-08
+
+Hardening release closing the Priority-1 findings of the 2026-07-08 external
+review: the secret-gate P0 (quoted values bypassed detection) plus the
+operational false-OKs in install/doctor, non-transactional Reproject,
+unbounded git calls, and missing CI gates. No format, schema, or API changes;
+redeploy the binary and re-run ./install.sh.
+
+### Fixed
+
+- **Secret gate detects quoted keys and values** (P0). `password: "…"`,
+  `api_key = '…'`, `"token": "…"` previously produced zero hits — the value
+  regex required a non-quote first character. One optional quote is now
+  allowed around the key and before the value.
+- **An unclosed code fence no longer disables secret scanning to EOF.** Orphan
+  fence openers are treated as plain text; only properly paired fences keep
+  the code-block exemption.
+- **Reproject runs in a single transaction.** Concurrent injects never see a
+  half-rebuilt sidecar, a crash mid-rebuild cannot leave `outcome` empty, and
+  one commit replaces thousands of per-statement fsyncs on every Stop hook.
+- **Git calls in keyword extraction are bounded (500ms total + WaitDelay).**
+  A git hung on a lock or network mount — or a child process holding the
+  output pipe — degrades to "no git signal" instead of stalling the
+  SessionStart hook.
+- **Corrupt-sidecar recovery wipes `-wal`/`-shm` siblings**, matching the
+  schema-mismatch path — a poisoned WAL file no longer re-corrupts the fresh DB.
+- **install.sh validates settings.json up front and fails loudly.** A corrupt
+  settings.json previously let the installer print "Done" with zero hooks
+  registered (reproduced in sandbox). The Claude Code version gate now also
+  runs before any file is copied, hook registration dies loudly on jq
+  failure, and `--dry-run` no longer trips an arithmetic syntax error on
+  stale symlinks.
+- **"Next steps" recommends `memoryctl doctor`** — `memoryctl status` never existed.
+- **uninstall.sh removes all six shims** (the two Skill shims were left behind).
+- **doctor verifies shim files exist and are executable** (`shim_files_present`);
+  substring-matching settings.json alone reported a wiped hooks/v2/ as healthy.
+- **Lock tests use 500ms+ wall-clock budgets** — the 60–80ms budgets were the
+  source of irreproducible CI flakes.
+
+### Added
+
+- **Value-based secret patterns**: AWS `AKIA…`/`ASIA…`, GitHub `ghp_…`/
+  `github_pat_…`, Anthropic `sk-ant-…`, Slack `xox*-…`, PEM private-key blocks,
+  JWTs, and `scheme://user:pass@` connection strings.
+- **`scripts/install_test.sh`** — sandboxed install/uninstall integration test
+  (corrupt settings, dry-run upgrade, full shim lifecycle); runs in CI on both OSes.
+- **CI gates**: `hooks/v2/shims_test.sh`, the install sandbox test, a WAL
+  grammar check against `fixtures/wal-clean/`, and staticcheck (`make lint`,
+  pinned v0.7.0 / 2026.1).
+
+### Removed
+
+- **`install.sh --discover`.** The wizard called `memoryctl project add`, which
+  has never existed; v2 derives per-project stores from the working directory,
+  so there is nothing to register. The flag now exits with an explanation.
+
 ## [2.4.0] — 2026-06-28
 
 Earned-popularity ranking. The `ref_count` term in the injection ranker is now

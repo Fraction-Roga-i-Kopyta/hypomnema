@@ -10,7 +10,7 @@
 jq --arg pwd "$PWD" '.[$pwd]' ~/.claude/memory/projects.json
 ```
 
-If the result is `null`, add the project: edit `projects.json` or re-run `./install.sh --discover`.
+If the result is `null`, note this check is v1-only: v2 has no `projects.json` — per-project stores are derived automatically from the working directory (`--discover` was removed in v2.5.0).
 
 **Check 3: there is anything to inject.** Run:
 

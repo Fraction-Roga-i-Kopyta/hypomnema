@@ -21,14 +21,15 @@ fi
 
 # --- Flag parsing ---
 DRY_RUN=0
-DISCOVER=0
 PATCH_CLAUDE_MD=0
 SKIP_BASE=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run)         DRY_RUN=1; shift ;;
-    --discover)        DISCOVER=1; shift ;;
+    --discover)
+      _die "--discover was removed in v2.5.0: v2 tracks projects automatically (per-project native stores are derived from the working directory) — no registration step exists or is needed"
+      ;;
     --patch-claude-md) PATCH_CLAUDE_MD=1; shift ;;
     --skip-base)       SKIP_BASE=1; shift ;;
     --help|-h)
@@ -40,8 +41,6 @@ v2 shims into ~/.claude/hooks/v2/, registers them in settings.json, symlinks
 memoryctl into ~/.claude/bin/). Idempotent — safe to re-run after upgrades.
 
 Options:
-  --discover         Interactive wizard: scan ~/Development, ~/code,
-                     ~/projects, ~/src for git repos and register them.
   --patch-claude-md  Append a four-line memory section to ~/.claude/CLAUDE.md
                      (idempotent — checks for existing marker).
   --dry-run          Print what would happen; make no changes.
@@ -49,10 +48,10 @@ Options:
   --help             Show this message.
 
 Examples:
-  ./install.sh                                # base install
-  ./install.sh --discover --patch-claude-md   # base + wizard + claude-md patch
-  ./install.sh --skip-base --discover         # only run wizard (already installed)
-  ./install.sh --discover --dry-run           # preview discover, no writes
+  ./install.sh                                  # base install
+  ./install.sh --patch-claude-md                # base + claude-md patch
+  ./install.sh --skip-base --patch-claude-md    # only patch (already installed)
+  ./install.sh --dry-run                        # preview, no writes
 EOF
       exit 0
       ;;
@@ -75,6 +74,43 @@ HOOKS_DIR="${CLAUDE_DIR}/hooks"
 BIN_DIR="${CLAUDE_DIR}/bin"
 SETTINGS="${CLAUDE_DIR}/settings.json"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# --- Pre-flight gates: everything that can refuse the install must fire
+# --- BEFORE any file is created, copied, or patched. ---
+
+# settings.json must be valid JSON before we back it up or patch it — a
+# corrupt file lets every jq registration below fail while the installer
+# still prints "Done" (2026-07-08 review P1 #7, reproduced in sandbox).
+if [ -f "$SETTINGS" ] && ! jq empty "$SETTINGS" >/dev/null 2>&1; then
+  _die "settings.json is not valid JSON: $SETTINGS — fix it (or restore a ${SETTINGS}.backup-hypomnema-* copy), then re-run"
+fi
+
+# Claude Code version gate (best-effort): v2 needs native memory (>= 2.1.59).
+# Runs pre-flight so an unsupported install refuses before copying anything.
+if command -v claude >/dev/null 2>&1; then
+  _cc_ver=$(claude --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+  if [ -n "$_cc_ver" ]; then
+    _cc_major=$(echo "$_cc_ver" | cut -d. -f1)
+    _cc_minor=$(echo "$_cc_ver" | cut -d. -f2)
+    _cc_patch=$(echo "$_cc_ver" | cut -d. -f3)
+    # Require >= 2.1.59
+    _needs_upgrade=0
+    if [ "$_cc_major" -lt 2 ]; then _needs_upgrade=1
+    elif [ "$_cc_major" -eq 2 ] && [ "$_cc_minor" -lt 1 ]; then _needs_upgrade=1
+    elif [ "$_cc_major" -eq 2 ] && [ "$_cc_minor" -eq 1 ] && [ "$_cc_patch" -lt 59 ]; then _needs_upgrade=1
+    fi
+    if [ "$_needs_upgrade" -eq 1 ]; then
+      echo "" >&2
+      echo "ERROR: hypomnema v2 requires Claude Code v2.1.59+ (native memory)." >&2
+      echo "  You have $_cc_ver. Upgrade Claude Code, or use hypomnema v1.x (git checkout v1.1.2)." >&2
+      exit 1
+    fi
+    echo "Claude Code version: $_cc_ver (>= 2.1.59 OK)"
+  fi
+else
+  echo "WARNING: could not verify Claude Code version; v2 needs v2.1.59+"
+fi
+# --- /Pre-flight gates ---
 
 if [ "$SKIP_BASE" -eq 0 ]; then
 
@@ -138,7 +174,13 @@ _sweep_stale_links() {
       *) continue ;;
     esac
     [ -e "$target" ] && continue
-    _run rm "$path"
+    # stdout of this function IS its return value (a count) — the dry-run
+    # notice must go to stderr or it corrupts the caller's arithmetic.
+    if [ "$DRY_RUN" -eq 1 ]; then
+      echo "[dry-run] rm $path" >&2
+    else
+      rm "$path"
+    fi
     swept=$((swept + 1))
   done < <(find "$dir" -mindepth 1 -maxdepth 1 2>/dev/null)
   echo "$swept"
@@ -150,33 +192,8 @@ if [ "$stale_total" -gt 0 ]; then
   echo "  Swept $stale_total stale symlink(s) left by previous versions"
 fi
 
-# --- [4/4] Claude Code version gate + settings.json ---
+# --- [4/4] settings.json ---
 echo "[4/4] Patching settings.json..."
-
-# CC-version gate (best-effort)
-if command -v claude >/dev/null 2>&1; then
-  _cc_ver=$(claude --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-  if [ -n "$_cc_ver" ]; then
-    _cc_major=$(echo "$_cc_ver" | cut -d. -f1)
-    _cc_minor=$(echo "$_cc_ver" | cut -d. -f2)
-    _cc_patch=$(echo "$_cc_ver" | cut -d. -f3)
-    # Require >= 2.1.59
-    _needs_upgrade=0
-    if [ "$_cc_major" -lt 2 ]; then _needs_upgrade=1
-    elif [ "$_cc_major" -eq 2 ] && [ "$_cc_minor" -lt 1 ]; then _needs_upgrade=1
-    elif [ "$_cc_major" -eq 2 ] && [ "$_cc_minor" -eq 1 ] && [ "$_cc_patch" -lt 59 ]; then _needs_upgrade=1
-    fi
-    if [ "$_needs_upgrade" -eq 1 ]; then
-      echo "" >&2
-      echo "ERROR: hypomnema v2 requires Claude Code v2.1.59+ (native memory)." >&2
-      echo "  You have $_cc_ver. Upgrade Claude Code, or use hypomnema v1.x (git checkout v1.1.2)." >&2
-      exit 1
-    fi
-    echo "  Claude Code version: $_cc_ver (>= 2.1.59 OK)"
-  fi
-else
-  echo "  WARNING: could not verify Claude Code version; v2 needs v2.1.59+"
-fi
 
 if [ ! -f "$SETTINGS" ]; then
   if [ "$DRY_RUN" -eq 1 ]; then
@@ -225,7 +242,8 @@ register_hook() {
   fi
   jq --arg ev "$event" --argjson entry "$entry" \
      '.hooks[$ev] = ((.hooks[$ev] // []) + [$entry])' \
-     "$SETTINGS" > "${SETTINGS}.tmp" && mv "${SETTINGS}.tmp" "$SETTINGS"
+     "$SETTINGS" > "${SETTINGS}.tmp" && mv "${SETTINGS}.tmp" "$SETTINGS" \
+     || _die "failed to register $label in $SETTINGS"
   echo "  Added $label"
 }
 
@@ -249,79 +267,13 @@ echo "=== Done ==="
 echo ""
 echo "Next steps:"
 echo "  1. Restart Claude Code (hooks take effect on next launch)"
-echo "  2. Run: memoryctl status"
+echo "  2. Run: memoryctl doctor   (verifies the install end-to-end)"
 [ -d "$HOME/.claude/memory" ] && echo "  3. When ready: memoryctl migrate  (to move v1 -> v2 store)"
 echo ""
 echo "Backup saved: ${SETTINGS}.backup-hypomnema"
 
 fi  # /SKIP_BASE
 
-# ---------- Optional: --discover wizard ----------
-discover_projects() {
-  echo ""
-  echo "=== Discover wizard ==="
-  local roots=("$HOME/Development" "$HOME/code" "$HOME/projects" "$HOME/src")
-  local found=()
-  for root in "${roots[@]}"; do
-    [ -d "$root" ] || continue
-    while IFS= read -r repo; do
-      found+=("$repo")
-    done < <(find "$root" -maxdepth 3 -type d -name .git 2>/dev/null | sed 's|/.git$||')
-  done
-
-  if [ ${#found[@]} -eq 0 ]; then
-    echo "No git repos found in standard dev folders (${roots[*]})."
-    return 0
-  fi
-
-  echo "Found ${#found[@]} git repos. For each: [y]es to track, [n]o to skip, [q]uit."
-  echo ""
-  local accepted=()
-  for repo in "${found[@]}"; do
-    local slug
-    slug=$(basename "$repo")
-    printf "  %s  (slug: %s) [y/n/q]: " "$repo" "$slug"
-    if [ "$DRY_RUN" -eq 1 ]; then
-      echo "[dry-run]"
-      accepted+=("$repo:$slug")
-      continue
-    fi
-    read -r ans </dev/tty || ans="n"
-    case "$ans" in
-      y|Y) accepted+=("$repo:$slug") ;;
-      q|Q) break ;;
-      *) ;;
-    esac
-  done
-
-  if [ ${#accepted[@]} -eq 0 ]; then
-    echo ""
-    echo "Nothing selected."
-    return 0
-  fi
-
-  # Register with memoryctl if available, otherwise print instructions
-  if command -v memoryctl >/dev/null 2>&1 || [ -x "$BIN_DIR/memoryctl" ]; then
-    local mc="${HYPOMNEMA_MEMORYCTL:-$BIN_DIR/memoryctl}"
-    for entry in "${accepted[@]}"; do
-      local path="${entry%:*}"
-      local slug="${entry##*:}"
-      if [ "$DRY_RUN" -eq 1 ]; then
-        echo "[dry-run] would register project: $path (slug: $slug)"
-      else
-        "$mc" project add --path "$path" --slug "$slug" 2>/dev/null || \
-          echo "  (could not register $slug via memoryctl — add manually)"
-      fi
-    done
-  else
-    echo "memoryctl not found — add these projects manually:"
-    for entry in "${accepted[@]}"; do
-      echo "  memoryctl project add --path '${entry%:*}' --slug '${entry##*:}'"
-    done
-  fi
-  echo ""
-  echo "Registered ${#accepted[@]} project(s)."
-}
 
 # ---------- Optional: --patch-claude-md ----------
 patch_claude_md() {
@@ -354,9 +306,6 @@ BLOCK
   fi
 }
 
-if [ "$DISCOVER" -eq 1 ]; then
-  discover_projects
-fi
 if [ "$PATCH_CLAUDE_MD" -eq 1 ]; then
   patch_claude_md
 fi

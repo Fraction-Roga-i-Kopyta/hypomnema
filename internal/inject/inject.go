@@ -110,7 +110,12 @@ func candidates(in Input, files []native.MemFile, terms []string) []rank.Candida
 
 	s, err := sidecar.Open(sidePath)
 	if err != nil {
-		_ = os.Remove(sidePath)
+		// SQLite state spans three files; removing only the main DB can leave
+		// a poisoned -wal/-shm that re-corrupts the fresh handle. Mirror the
+		// schema-mismatch wipe in sidecar.open.
+		for _, p := range []string{sidePath, sidePath + "-wal", sidePath + "-shm"} {
+			_ = os.Remove(p)
+		}
 		s, err = sidecar.Open(sidePath)
 	}
 	if err == nil {

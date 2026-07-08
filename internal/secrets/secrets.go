@@ -12,30 +12,70 @@ import (
 	"strings"
 )
 
-var secretRe = regexp.MustCompile(`(?i)\b(api[_-]?key|apikey|aws[_-]?(?:access|secret)[_-]?key|secret|password|token)\s*[:=]\s*[^\s"'` + "`" + `]{8,}`)
+var secretRe = regexp.MustCompile(`(?i)\b(api[_-]?key|apikey|aws[_-]?(?:access|secret)[_-]?key|secret|password|token)["'` + "`" + `]?\s*[:=]\s*["'` + "`" + `]?[^\s"'` + "`" + `]{8,}`)
 var inlineCodeRe = regexp.MustCompile("`[^`]*`")
+
+// valueRes are key-independent credential shapes: the value alone is
+// sufficient evidence regardless of what (if anything) names it. Each
+// pattern anchors on a vendor-fixed prefix or rigid structure so prose
+// mentioning the *concept* ("the ghp_ prefix") never matches.
+var valueRes = []*regexp.Regexp{
+	regexp.MustCompile(`\b(AKIA|ASIA)[0-9A-Z]{16}\b`),        // AWS access/STS key id
+	regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{16,}\b`),     // GitHub classic tokens
+	regexp.MustCompile(`\bgithub_pat_[A-Za-z0-9_]{22,}\b`),   // GitHub fine-grained PAT
+	regexp.MustCompile(`\bsk-ant-[A-Za-z0-9_-]{16,}`),        // Anthropic API key
+	regexp.MustCompile(`\bxox[bpars]-[A-Za-z0-9-]{10,}\b`),   // Slack tokens
+	regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`), // PEM private key block
+	regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`), // JWT (header.payload.sig — payload also starts eyJ)
+	regexp.MustCompile(`\b[a-z][a-z0-9+.-]*://[^\s:/@]+:[^\s@]+@`),                        // scheme://user:pass@ URL credentials
+}
 
 // Scan returns "line: fragment" hits for secret-looking tokens in content,
 // outside fenced and inline code. An empty result means clean.
+//
+// Fences are resolved in a first pass so an UNCLOSED fence cannot exempt
+// the remainder of the document: an orphan opener (no matching closer by
+// EOF) is treated as plain text and everything after it is scanned. Only
+// properly paired fences retain the code-block exemption.
 func Scan(content string) []string {
-	var hits []string
-	sc := bufio.NewScanner(strings.NewReader(content))
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	lines := strings.Split(content, "\n")
+	protected := make([]bool, len(lines))
 	inFence := false
-	n := 0
-	for sc.Scan() {
-		n++
-		line := sc.Text()
+	fenceStart := -1
+	for i, line := range lines {
 		if strings.HasPrefix(line, "```") {
-			inFence = !inFence
+			if inFence {
+				inFence = false
+			} else {
+				inFence = true
+				fenceStart = i
+			}
+			protected[i] = true
 			continue
 		}
-		if inFence {
+		protected[i] = inFence
+	}
+	if inFence {
+		// Orphan opener: un-protect it and everything after it.
+		for i := fenceStart; i < len(lines); i++ {
+			protected[i] = false
+		}
+	}
+
+	var hits []string
+	for i, line := range lines {
+		if protected[i] {
 			continue
 		}
+		n := i + 1
 		line = inlineCodeRe.ReplaceAllString(line, "")
 		if m := secretRe.FindString(line); m != "" {
 			hits = append(hits, fmt.Sprintf("%d: %s", n, m))
+		}
+		for _, re := range valueRes {
+			if m := re.FindString(line); m != "" {
+				hits = append(hits, fmt.Sprintf("%d: %s", n, m))
+			}
 		}
 	}
 	return hits
