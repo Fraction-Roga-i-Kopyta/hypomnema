@@ -80,8 +80,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # settings.json must be valid JSON before we back it up or patch it — a
 # corrupt file lets every jq registration below fail while the installer
-# still prints "Done" (2026-07-08 review P1 #7, reproduced in sandbox).
-if [ -f "$SETTINGS" ] && ! jq empty "$SETTINGS" >/dev/null 2>&1; then
+# still prints "Done" (2026-07-08 review P1 #7, reproduced in sandbox). Only
+# the base install touches settings.json, so --skip-base skips this gate
+# (a flagged-actions-only run must not abort on an unrelated corrupt file).
+if [ "$SKIP_BASE" -eq 0 ] && [ -f "$SETTINGS" ] && ! jq empty "$SETTINGS" >/dev/null 2>&1; then
   _die "settings.json is not valid JSON: $SETTINGS — fix it (or restore a ${SETTINGS}.backup-hypomnema-* copy), then re-run"
 fi
 
@@ -153,6 +155,11 @@ else
   for shim in session-start.sh user-prompt-submit.sh pre-tool-write.sh skill-learnings-inject.sh skill-active.sh session-stop.sh; do
     src="$SCRIPT_DIR/hooks/v2/$shim"
     if [ -f "$src" ]; then
+      # rm -f first: a leftover DANGLING symlink at the dest makes `cp` follow
+      # it and fail ("No such file or directory"), which under `set -e` aborts
+      # the installer mid-way — after memoryctl is linked but before hooks are
+      # wired (review R5). Removing the dest makes cp write a fresh regular file.
+      rm -f "$V2_HOOKS_DIR/$shim"
       cp "$src" "$V2_HOOKS_DIR/$shim"
       chmod +x "$V2_HOOKS_DIR/$shim"
     else
@@ -247,17 +254,23 @@ register_hook() {
   echo "  Added $label"
 }
 
-register_hook SessionStart     ""      "$HOME/.claude/hooks/v2/session-start.sh"           15 "SessionStart (hypomnema v2)"
-register_hook UserPromptSubmit ""      "$HOME/.claude/hooks/v2/user-prompt-submit.sh"      10 "UserPromptSubmit (hypomnema v2)"
-register_hook PreToolUse       "Write|Edit" "$HOME/.claude/hooks/v2/pre-tool-write.sh"      10 "PreToolUse secrets gate (hypomnema v2)"
-register_hook PostToolUse      "Skill" "$HOME/.claude/hooks/v2/skill-learnings-inject.sh"  10 "PostToolUse(Skill) skill learnings (hypomnema v2)"
-register_hook PreToolUse       "Skill" "$HOME/.claude/hooks/v2/skill-active.sh"             10 "PreToolUse(Skill) active-skill marker (hypomnema v2)"
-register_hook Stop             ""      "$HOME/.claude/hooks/v2/session-stop.sh"            10 "Stop (hypomnema v2)"
+register_hook SessionStart     ""      "$CLAUDE_DIR/hooks/v2/session-start.sh"           15 "SessionStart (hypomnema v2)"
+register_hook UserPromptSubmit ""      "$CLAUDE_DIR/hooks/v2/user-prompt-submit.sh"      10 "UserPromptSubmit (hypomnema v2)"
+register_hook PreToolUse       "Write|Edit" "$CLAUDE_DIR/hooks/v2/pre-tool-write.sh"      10 "PreToolUse secrets gate (hypomnema v2)"
+register_hook PostToolUse      "Skill" "$CLAUDE_DIR/hooks/v2/skill-learnings-inject.sh"  10 "PostToolUse(Skill) skill learnings (hypomnema v2)"
+register_hook PreToolUse       "Skill" "$CLAUDE_DIR/hooks/v2/skill-active.sh"             10 "PreToolUse(Skill) active-skill marker (hypomnema v2)"
+register_hook Stop             ""      "$CLAUDE_DIR/hooks/v2/session-stop.sh"            10 "Stop (hypomnema v2)"
 
-# Upgrade hint: existing v1 store
-if [ -d "$HOME/.claude/memory" ]; then
+# Upgrade hint: existing v1 store. Detect by v1 SUBDIRECTORIES — in v2 the
+# $CLAUDE_DIR/memory dir always exists (it holds .wal/.sidecar.db runtime), so
+# testing the dir alone nagged every v2 user to "migrate" on each run.
+_has_v1_store=0
+for d in mistakes strategies feedback knowledge decisions notes; do
+  [ -d "$CLAUDE_DIR/memory/$d" ] && _has_v1_store=1
+done
+if [ "$_has_v1_store" -eq 1 ]; then
   echo ""
-  echo "  NOTE: Existing v1 store detected at ~/.claude/memory/."
+  echo "  NOTE: Existing v1 store detected at $CLAUDE_DIR/memory/."
   echo "  Run 'memoryctl migrate --dry-run' to preview the v1->v2 migration"
   echo "  (see docs/MIGRATION.md for details)."
 fi
@@ -268,7 +281,7 @@ echo ""
 echo "Next steps:"
 echo "  1. Restart Claude Code (hooks take effect on next launch)"
 echo "  2. Run: memoryctl doctor   (verifies the install end-to-end)"
-[ -d "$HOME/.claude/memory" ] && echo "  3. When ready: memoryctl migrate  (to move v1 -> v2 store)"
+[ "$_has_v1_store" -eq 1 ] && echo "  3. When ready: memoryctl migrate --execute  (to move v1 -> v2 store)"
 echo ""
 echo "Backup saved: ${SETTINGS}.backup-hypomnema"
 
@@ -279,7 +292,7 @@ fi  # /SKIP_BASE
 patch_claude_md() {
   echo ""
   echo "=== Patch ~/.claude/CLAUDE.md ==="
-  local f="$HOME/.claude/CLAUDE.md"
+  local f="$CLAUDE_DIR/CLAUDE.md"
   local marker="<!-- hypomnema-section -->"
   if [ -f "$f" ] && grep -q "$marker" "$f"; then
     echo "$f already contains hypomnema section — skipping."
@@ -290,9 +303,9 @@ patch_claude_md() {
 
 <!-- hypomnema-section -->
 ## Memory (hypomnema)
-- Storage: `~/.claude/memory-global/` — read schema in the hypomnema repo `CLAUDE.md`.
-- SessionStart hook auto-injects relevant mistakes, strategies, feedback.
-- When you learn something durable: write to `mistakes/`, `strategies/`, or `feedback/` per the protocol.
+- Global store: `~/.claude/memory-global/`; per-project: `~/.claude/projects/<slug>/memory/`. Stores are FLAT — the kind is the `type:` frontmatter field, not a subdirectory.
+- SessionStart + UserPromptSubmit hooks auto-inject the most relevant facts; `memoryctl recall "<query>"` pulls on demand.
+- When you learn something durable, write a native memory file with `name:`, `description:`, `type:` (mistake | strategy | feedback | knowledge | decision | note) — see the hypomnema repo `CLAUDE.md` for the schema.
 <!-- /hypomnema-section -->
 BLOCK
 )

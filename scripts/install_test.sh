@@ -85,6 +85,79 @@ else
   _ok "--discover rejected"
 fi
 
+# --- 6. Custom CLAUDE_DIR: hooks registered with the $CD prefix, not $HOME ---
+CD="$(_sandbox customdir)"
+echo '{}' > "$CD/settings.json"
+CLAUDE_DIR="$CD" "$REPO/install.sh" >/dev/null 2>&1 || _fail "custom-dir install failed"
+cmd0=$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$CD/settings.json")
+case "$cmd0" in
+  "$CD"/*) _ok "hooks registered under \$CLAUDE_DIR" ;;
+  *)       _fail "hook command points outside \$CLAUDE_DIR: $cmd0" ;;
+esac
+
+# --- 7. --patch-claude-md writes v2 text (flat stores/type:), not v1 dirs ---
+CD="$(_sandbox patchmd)"
+echo '{}' > "$CD/settings.json"
+CLAUDE_DIR="$CD" "$REPO/install.sh" --skip-base --patch-claude-md >/dev/null 2>&1 || _fail "patch-claude-md failed"
+if grep -q 'write to `mistakes/`' "$CD/CLAUDE.md" 2>/dev/null; then
+  _fail "--patch-claude-md still injects v1 subdirectory instructions"
+elif grep -q 'type:' "$CD/CLAUDE.md" 2>/dev/null; then
+  _ok "--patch-claude-md writes v2 instructions"
+else
+  _fail "--patch-claude-md produced no recognizable section"
+fi
+
+# --- 8. uninstall removes the CLAUDE.md section it added (O3) ---
+CD="$(_sandbox unpatch)"
+echo '{}' > "$CD/settings.json"
+CLAUDE_DIR="$CD" "$REPO/install.sh" --patch-claude-md >/dev/null 2>&1 || _fail "install (unpatch case) failed"
+CLAUDE_DIR="$CD" "$REPO/uninstall.sh" >/dev/null 2>&1 || _fail "uninstall (unpatch case) failed"
+if grep -q "hypomnema-section" "$CD/CLAUDE.md" 2>/dev/null; then
+  _fail "uninstall left the hypomnema section in CLAUDE.md"
+else
+  _ok "uninstall removed the CLAUDE.md section"
+fi
+
+# --- 9. uninstall preserves a user's own hooks/v2 registration (O5) ---
+CD="$(_sandbox custhook)"
+echo '{}' > "$CD/settings.json"
+CLAUDE_DIR="$CD" "$REPO/install.sh" >/dev/null 2>&1 || _fail "install (custhook case) failed"
+# Add a user hook under the same hooks/v2 prefix.
+jq '.hooks.PreCompact = [{"hooks":[{"type":"command","command":"'"$CD"'/hooks/v2/my-own-hook.sh"}]}]' \
+  "$CD/settings.json" > "$CD/s.tmp" && mv "$CD/s.tmp" "$CD/settings.json"
+CLAUDE_DIR="$CD" "$REPO/uninstall.sh" >/dev/null 2>&1 || _fail "uninstall (custhook case) failed"
+if grep -q "my-own-hook.sh" "$CD/settings.json"; then
+  _ok "uninstall preserved the user's custom hook"
+else
+  _fail "uninstall stripped the user's own hooks/v2 hook"
+fi
+
+# --- 10. --purge-memory --yes also removes runtime state (O6) ---
+CD="$(_sandbox purge)"
+echo '{}' > "$CD/settings.json"
+CLAUDE_DIR="$CD" "$REPO/install.sh" >/dev/null 2>&1 || _fail "install (purge case) failed"
+mkdir -p "$CD/memory/.runtime"
+: > "$CD/memory/.wal"; : > "$CD/memory/.sidecar.db"; : > "$CD/memory/self-profile.md"
+CLAUDE_DIR="$CD" "$REPO/uninstall.sh" --purge-memory --yes >/dev/null 2>&1 || _fail "purge uninstall failed"
+leftover=""
+for a in .wal .sidecar.db self-profile.md .runtime; do
+  [ -e "$CD/memory/$a" ] && leftover="$leftover $a"
+done
+[ -z "$leftover" ] && _ok "--purge-memory removed runtime state" || _fail "--purge-memory left runtime state:$leftover"
+
+# --- 11. uninstall --dry-run makes no changes and spews no garbage (R4) ---
+CD="$(_sandbox undry)"
+echo '{}' > "$CD/settings.json"
+CLAUDE_DIR="$CD" "$REPO/install.sh" >/dev/null 2>&1 || _fail "install (undry case) failed"
+out=$(CLAUDE_DIR="$CD" "$REPO/uninstall.sh" --dry-run 2>&1)
+if echo "$out" | grep -qi "syntax error"; then
+  _fail "uninstall --dry-run emitted a syntax error"
+elif [ ! -f "$CD/hooks/v2/session-start.sh" ]; then
+  _fail "uninstall --dry-run actually removed a shim"
+else
+  _ok "uninstall --dry-run"
+fi
+
 echo ""
 if [ "$FAILS" -gt 0 ]; then
   echo "install_test: $FAILS failure(s)"
