@@ -1,5 +1,36 @@
 # Changelog
 
+## [2.10.0] — 2026-07-08
+
+Per-project effectiveness (internal-audit E5-deep). The deepest of the deferred
+items: same-basename facts in different projects no longer merge their
+statistics. Redeploy the binary; the sidecar rebuilds on the next reproject
+(schema v3→v4). No WAL rewrite — old events are grandfathered.
+
+### Fixed
+
+- **Effectiveness / ref_count / recency are now per (slug, project).** The
+  sidecar `memory` primary key was the bare slug, and WAL events targeted a
+  bare slug with no project, so a `continuity.md` / `notes.md` in project A and
+  the same-named file in project B collapsed to one row and one aggregate —
+  merging their history. (v2.6.0 fixed the keyword-table clobber; this fixes the
+  stats/PK merge.) The memory PK is now composite `(slug, project)`, and WAL
+  events (`inject`, `recall`, `trigger-useful`, `trigger-silent`) carry a
+  project-qualified target `project␟slug` (`␟` = ASCII unit separator — can't
+  occur in a filename/cwd slug, isn't the WAL delimiter, and keeps the slug
+  greppable). `wal validate` accepts qualified targets.
+
+### Notes
+
+- The fact's project is resolved with project-local winning over global on a
+  basename tie (matching injection scope). `dedup-*` targets stay bare — they
+  aren't read into the effectiveness aggregate.
+- **Migration is automatic and non-destructive:** legacy bare-slug WAL events
+  (≤ v2.9) are grandfathered onto whichever project currently owns the slug at
+  reproject; the append-only WAL is never rewritten. Same-basename facts that
+  already had cross-project history keep that history merged for the *old*
+  events only — all new events are project-clean, so the merge fades.
+
 ## [2.9.0] — 2026-07-08
 
 Ranker quality (internal-audit P3a): two of the ranking loops the external and
