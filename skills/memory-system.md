@@ -21,11 +21,17 @@ type: mistake
 name: "short-slug"
 description: "one-liner shown in the index and injection header"
 created: 2026-05-01
-status: active
+status: candidate   # agent-originated facts start as candidate; user-dictated rules use active|pinned
 keywords: [tag1, tag2]
 domains: [backend]
 ---
 ```
+
+**Candidate lifecycle:** a `candidate` fact injects normally and graduates to
+`active` (sidecar-managed) on its first useful citation; `doctor` flags
+candidates that stay silent ≥5 sessions. Retire dead facts with
+`memoryctl retire <slug> --reason "..." [--superseded-by <ref>]` — recall
+then shows a tombstone redirect instead of silently forgetting.
 
 **Never hand-set** `ref_count`, `effectiveness`, `injected`, or `referenced` — the sidecar manages them. **Do not use** `triggers`, `seed`, `decay_rate`, or a `project:` field: triggers are retired, seed/decay_rate are dead, and ownership is derived from which store the file lives in.
 

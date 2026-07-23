@@ -255,20 +255,22 @@ Pull-side retrieval: rank current project + global memory against an ad-hoc quer
 
 ## Lifecycle
 
-`memoryctl close` down-ranks stale facts in the sidecar (no mutation of native content). Staleness counts from the **last injection** (fallback `created`), so facts in active rotation never age out. An explicit archiving command (`memoryctl gc`) is planned but not shipped yet — stale facts simply stop injecting while staying on disk.
+`memoryctl close` down-ranks stale facts in the sidecar (no mutation of native content). Staleness counts from the **last injection** (fallback `created`), so facts in active rotation never age out. Explicit archiving ships as `memoryctl retire <slug> [--reason ...] [--superseded-by <ref>]`: the file moves into the store's `.archive/`, and `recall` renders a tombstone redirect (`[retired <date> → successor]`) instead of silently forgetting; `memoryctl revive` undoes it. The full lifecycle is closed by three more verbs: agent-written facts start as `status: candidate` and graduate on their first useful citation; `memoryctl ablate` runs a per-fact holdout that measures whether behavior survives without the injection; `memoryctl promote` (report-only) suggests which facts have outgrown prose memory — a recurring mistake wants a hook/lint/test, an always-useful fact wants CLAUDE.md, an internalized one wants retirement.
 
-| Type | Stale after | Archive-eligible after (planned `gc`) |
-|------|-------------|----------------------|
-| mistakes | 60 days | 180 days |
-| strategies | 90 days | 180 days |
-| knowledge | 90 days | 365 days |
-| decisions | 90 days | 365 days |
-| feedback | 45 days | 120 days |
-| notes | 30 days | 90 days |
-| projects | never | never |
-| continuity | never | never |
+| Type | Stale after |
+|------|-------------|
+| mistakes | 60 days |
+| strategies | 90 days |
+| knowledge | 90 days |
+| decisions | 90 days |
+| feedback | 45 days |
+| notes | 30 days |
+| projects | never |
+| continuity | never |
 
-`pinned` facts never decay automatically.
+`pinned` facts never decay automatically. Retirement is never age-triggered —
+it is an explicit decision: `doctor` hints at stale facts worth retiring, and
+`memoryctl promote` names the candidates with evidence.
 
 ## Frontmatter schema
 

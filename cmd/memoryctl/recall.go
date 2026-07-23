@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -92,11 +93,65 @@ func runRecall(args []string) {
 	}
 	if len(kept) == 0 {
 		fmt.Println("no matches")
+		fmt.Print(renderTombstones(terms))
 		return
 	}
 
 	recordRecall(kept[0].Slug, kept[0].Project)
 	fmt.Print(renderRecall(kept[0], kept[1:], bySlug))
+	fmt.Print(renderTombstones(terms))
+}
+
+// renderTombstones scans the project + global .archive/ dirs for retired
+// facts matching any query term and renders index-only tombstone lines.
+// Retired facts never re-enter injection; surfacing the tombstone here is
+// what makes retirement a redirect instead of a silent disappearance.
+func renderTombstones(terms []string) string {
+	want := map[string]bool{}
+	for _, t := range terms {
+		want[t] = true
+	}
+	home := filepath.Dir(claudeDir())
+	var b strings.Builder
+	for _, store := range []string{
+		native.ProjectMemoryDir(home, projectCWD()),
+		native.GlobalMemoryDir(home),
+	} {
+		files, err := native.List(filepath.Join(store, ".archive"))
+		if err != nil {
+			continue
+		}
+		for _, f := range files {
+			if !tombstoneMatches(f, want) {
+				continue
+			}
+			if b.Len() == 0 {
+				b.WriteString("\nRetired (tombstones):\n")
+			}
+			succ := f.SupersededBy
+			if succ == "" {
+				succ = "no successor"
+			}
+			reason := ""
+			if f.RetireReason != "" {
+				reason = " (reason: " + f.RetireReason + ")"
+			}
+			fmt.Fprintf(&b, "  - %s [retired %s → %s]%s\n    %s\n",
+				strings.TrimSuffix(f.Slug, ".md"), f.Retired, succ, reason, f.Path)
+		}
+	}
+	return b.String()
+}
+
+func tombstoneMatches(f native.MemFile, want map[string]bool) bool {
+	text := f.Name + " " + f.Description + " " +
+		strings.Join(f.Keywords, " ") + " " + strings.Join(f.Domains, " ")
+	for _, tok := range tokenize.Relevance(text) {
+		if want[tok] {
+			return true
+		}
+	}
+	return false
 }
 
 // recordRecall logs the pull delivery to the WAL and unions the slug into
