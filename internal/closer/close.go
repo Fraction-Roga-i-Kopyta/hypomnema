@@ -76,6 +76,33 @@ func Run(in Input) (Result, error) {
 			line := fmt.Sprintf("%s|candidate-confirmed|%s|%s", in.Today, target, sid)
 			wal.Append(in.MemoryDir, line, "|candidate-confirmed|"+target+"|")
 		}
+		// Ablation observation: facts withheld this session get the same
+		// evidence classification, but the verdict flows to holdout-hit/miss
+		// (ablate report), never to trigger events — a fact cannot earn or
+		// lose effectiveness in a session where the model never saw it.
+		// A fact also present in the injected set was delivered anyway by a
+		// pull path (recall/skill-inject) — the model saw it, the
+		// observation is contaminated, so it is excluded here.
+		holdout := readHoldoutSet(in.MemoryDir, in.SessionID)
+		if len(holdout) > 0 {
+			wasInjected := make(map[string]bool, len(injected))
+			for _, s := range injected {
+				wasInjected[s] = true
+			}
+			clean := holdout[:0]
+			for _, s := range holdout {
+				if !wasInjected[s] {
+					clean = append(clean, s)
+				}
+			}
+			hits, misses := Classify(clean, names, evidence, sess.Text)
+			for _, slug := range hits {
+				appendWAL(in.MemoryDir, in.Today, "holdout-hit", qualify(projectOf, slug), sid)
+			}
+			for _, slug := range misses {
+				appendWAL(in.MemoryDir, in.Today, "holdout-miss", qualify(projectOf, slug), sid)
+			}
+		}
 	}
 	metrics := fmt.Sprintf("%s|session-metrics|domains:_global_,error_count:%d,tool_calls:%d,duration:%ds|%s",
 		in.Today, sess.ToolErrors, sess.ToolCalls, sess.DurationSec, sid)
@@ -105,8 +132,17 @@ func Run(in Input) (Result, error) {
 }
 
 func readInjectedSet(memDir, sessionID string) []string {
-	b, err := os.ReadFile(filepath.Join(memDir, ".runtime",
+	return readRuntimeList(filepath.Join(memDir, ".runtime",
 		"injected-"+pathutil.SafeFileName(sessionID)+".list"))
+}
+
+func readHoldoutSet(memDir, sessionID string) []string {
+	return readRuntimeList(filepath.Join(memDir, ".runtime",
+		"holdout-"+pathutil.SafeFileName(sessionID)+".list"))
+}
+
+func readRuntimeList(path string) []string {
+	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil
 	}
