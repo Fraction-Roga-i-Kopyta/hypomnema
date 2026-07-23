@@ -1,11 +1,13 @@
 # Changelog
 
-## [Unreleased]
+## [2.11.0] — 2026-07-23
 
 Harness lifecycle, complete (4 milestones; spec:
 `docs/specs/2026-07-23-harness-lifecycle-design.md`). The fact lifecycle is
 now a closed loop: `candidate → active → (ablation check) → promote to a
-durable owner | retire with a tombstone`.
+durable owner | retire with a tombstone`. Ideas adapted from
+lopopolo/harness-engineering (CC BY 4.0). Redeploy the binary; the sidecar
+rebuilds itself on the next reproject (schema v4→v5). No WAL rewrite.
 
 ### Added
 
