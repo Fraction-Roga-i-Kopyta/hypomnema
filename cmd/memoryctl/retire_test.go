@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/inject"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 )
 
@@ -125,5 +126,34 @@ func TestStripTombstone_BlockScalarSurvives(t *testing.T) {
 	}
 	if strings.Contains(got, "retired: 2026-07-23") || strings.Contains(got, "superseded-by: real") {
 		t.Fatalf("top-level tombstone keys survived:\n%s", got)
+	}
+}
+
+// TestPersistHoldoutSkips: one holdout-skip per fact per session (repeat
+// prompts dedup via the runtime list); the final observation session
+// (remaining==1) also emits ablate-stop:expired.
+func TestPersistHoldoutSkips(t *testing.T) {
+	home := t.TempDir()
+	memDir := filepath.Join(home, "memory")
+	if err := os.MkdirAll(memDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_MEMORY_DIR", memDir)
+	t.Setenv("HYPOMNEMA_TODAY", "2026-07-23")
+
+	res := inject.Result{
+		HoldoutSkipped:   []string{"fading.md"},
+		HoldoutRemaining: map[string]int{"fading.md": 1},
+		ProjectBySlug:    map[string]string{"fading.md": "projA"},
+	}
+	persistHoldoutSkips(res, "sess-1")
+	persistHoldoutSkips(res, "sess-1") // second prompt, same session — no-op
+	walB, _ := os.ReadFile(filepath.Join(memDir, ".wal"))
+	if got := strings.Count(string(walB), "|holdout-skip|"); got != 1 {
+		t.Fatalf("holdout-skip lines = %d, want 1 (session dedup):\n%s", got, walB)
+	}
+	if !strings.Contains(string(walB), "|ablate-stop|") ||
+		!strings.Contains(string(walB), ":expired") {
+		t.Fatalf("missing ablate-stop:expired on final session:\n%s", walB)
 	}
 }
