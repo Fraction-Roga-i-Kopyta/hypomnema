@@ -48,11 +48,21 @@ type: mistake | strategy | feedback | knowledge | decision | project | continuit
 name: "short-slug"           # sidecar key; kebab-case
 description: "one-liner"     # shown in MEMORY.md index and injection headers
 created: YYYY-MM-DD          # you set — recency signal for ranking
-status: active | pinned      # stale is sidecar-managed, not hand-set
+status: active | pinned | candidate  # stale/retired are sidecar-managed, not hand-set
 keywords: [tag1, tag2, tag3] # primary ranking signal
 domains: [domain1, domain2]  # domain filter — use kebab-case for multi-word
 ---
 ```
+
+**Candidate corroboration.** Agent-originated facts (a mistake, strategy, or
+knowledge you decided to record from your own observation) start as
+`status: candidate` — they inject normally (zero-safe) but must earn `active`
+via a first useful citation. User-dictated rules (feedback, decisions the
+user gave you) start `active` or `pinned` as before. Graduation is
+sidecar-managed: the close hook emits `candidate-confirmed` on the first
+useful citation; you never edit the frontmatter back yourself. `doctor`
+flags candidates with ≥5 silent sessions and none useful — retire those or
+rewrite their keywords/evidence.
 
 `ref_count` and `effectiveness` are sidecar-managed — `memoryctl` reads and updates them. Do not set them manually.
 
@@ -208,6 +218,13 @@ At session end, if you stopped mid-task. Three lines max: what you were doing, c
 - Anything already documented in CLAUDE.md files (project or global).
 
 ## Lifecycle
+
+The full loop: `candidate → active → (ablation check) → promote to a durable
+owner or retire with a tombstone`. Retirement (`memoryctl retire <slug>
+[--reason ...] [--superseded-by <ref>]`) moves the file into the store's
+`.archive/`, stamps tombstone frontmatter, and leaves a redirect: `recall`
+shows `[retired <date> → successor]` instead of silently forgetting.
+`memoryctl revive <slug>` undoes it.
 
 `memoryctl close` runs after every turn (Claude Code fires Stop per turn):
 - Classifies the session's injected set as `trigger-useful` / `trigger-silent` (evidence phrases or slug/name citation in assistant text) and writes the events to the WAL.

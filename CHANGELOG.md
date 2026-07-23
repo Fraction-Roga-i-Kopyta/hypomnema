@@ -2,10 +2,20 @@
 
 ## [Unreleased]
 
-Harness-lifecycle milestone 1 of 4 (spec:
+Harness-lifecycle milestones 1–2 of 4 (spec:
 `docs/specs/2026-07-23-harness-lifecycle-design.md`).
 
 ### Added
+
+- **Candidate corroboration (soft path).** `status: candidate` is a valid
+  author-set status for agent-originated facts: they inject normally
+  (zero-safe preserved) but graduate to `active` only on their first useful
+  citation — the close hook emits a `candidate-confirmed` WAL event (once
+  per fact, WAL-deduped) and the sidecar owns the transition; content files
+  are never rewritten. `doctor` gains a `candidate_corroboration` check
+  flagging candidates with ≥5 silent sessions and none useful, and the
+  corpus check now hints at `memoryctl retire` when stale facts exist.
+  Agent protocol updated (CLAUDE.md, skills/memory-system.md, templates).
 
 - **`memoryctl retire <slug> [--reason ...] [--superseded-by <ref>]` /
   `memoryctl revive <slug>`.** Retirement moves the fact's file into the
