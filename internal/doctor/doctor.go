@@ -143,12 +143,93 @@ func Run(claudeDir, memoryDir, cwd string) Report {
 		checkOpenQuanta(filepath.Join(memoryDir, ".wal"), now),
 		checkSidecar(memoryDir, now),
 		checkCorpusQuality(claudeDir, cwd),
+		checkCandidates(memoryDir, claudeDir, cwd),
 	)
 	return r
 }
 
 // --- Individual checks. Each returns a single Check and never fails the
 // whole pass; a missing prerequisite degrades gracefully. ---
+
+// candidateSilentMin is how many silent sessions (with zero useful ones) a
+// candidate accrues before doctor flags it as never-corroborated.
+const candidateSilentMin = 5
+
+// checkCandidates flags candidate facts that keep injecting without ever
+// being applied: ≥candidateSilentMin trigger-silent sessions and no
+// trigger-useful / candidate-confirmed. Suggests retire or a keyword
+// rewrite. WARN-only — corroboration failure is advice, not breakage.
+func checkCandidates(memoryDir, claudeHome, cwd string) Check {
+	type tally struct {
+		useful, silent int
+		confirmed      bool
+	}
+	// Keyed by the qualified project\x1fslug when the target carries a
+	// project (bare slug only as legacy fallback) — a same-basename fact in
+	// another project must not pollute this candidate's tally.
+	byKey := map[string]*tally{}
+	if f, err := os.Open(filepath.Join(memoryDir, ".wal")); err == nil {
+		defer f.Close()
+		sc := bufio.NewScanner(f)
+		sc.Buffer(make([]byte, 0, 1<<16), 1<<20)
+		seen := map[string]bool{} // slug+session+kind dedup (close fires per turn)
+		for sc.Scan() {
+			parts := strings.SplitN(strings.TrimRight(sc.Text(), "\r"), "|", 4)
+			if len(parts) != 4 {
+				continue
+			}
+			event := parts[1]
+			project, slug, qualified := native.ParseQKey(parts[2])
+			slug = strings.TrimSuffix(slug, ".md")
+			key := slug
+			if qualified {
+				key = native.QKey(project, slug)
+			}
+			t := byKey[key]
+			if t == nil {
+				t = &tally{}
+				byKey[key] = t
+			}
+			switch event {
+			case "trigger-useful":
+				if k := key + "\x00" + parts[3] + "\x00u"; !seen[k] {
+					seen[k] = true
+					t.useful++
+				}
+			case "trigger-silent":
+				if k := key + "\x00" + parts[3] + "\x00s"; !seen[k] {
+					seen[k] = true
+					t.silent++
+				}
+			case "candidate-confirmed":
+				t.confirmed = true
+			}
+		}
+	}
+	var flagged []string
+	for _, mf := range native.Collect(claudeHome, cwd) {
+		if mf.Status != "candidate" {
+			continue
+		}
+		bare := strings.TrimSuffix(mf.Slug, ".md")
+		t := byKey[native.QKey(mf.Project, bare)]
+		if t == nil {
+			t = byKey[bare] // legacy bare-slug events
+		}
+		if t != nil && !t.confirmed && t.useful == 0 && t.silent >= candidateSilentMin {
+			flagged = append(flagged, bare)
+		}
+	}
+	sort.Strings(flagged)
+	if len(flagged) == 0 {
+		return Check{Name: "candidate_corroboration", Status: OK,
+			Detail: "no uncorroborated candidates"}
+	}
+	return Check{Name: "candidate_corroboration", Status: WARN,
+		Detail: fmt.Sprintf("%d candidate(s) never corroborated after ≥%d silent sessions: %s — retire or rewrite keywords/evidence",
+			len(flagged), candidateSilentMin, strings.Join(flagged, ", ")),
+		Extra: map[string]interface{}{"slugs": flagged}}
+}
 
 func checkClaudeDir(dir string) Check {
 	if info, err := os.Stat(dir); err == nil && info.IsDir() {
@@ -429,6 +510,9 @@ func checkCorpus(claudeDir, memoryDir, cwd string) Check {
 	}
 	detail := fmt.Sprintf("%d total (%s); %d pinned, %d stale",
 		total, strings.Join(parts, " "), pinned, stale)
+	if stale > 0 {
+		detail += " — consider `memoryctl retire <slug>` for stale facts that should not return"
+	}
 	status := OK
 	if total == 0 {
 		status = WARN

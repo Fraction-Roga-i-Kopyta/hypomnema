@@ -67,6 +67,20 @@ Usage:
       "recall" WAL event for the delivered fact and unions it into the
       session's injected list. Includes stale facts (marked [stale]) —
       recalling one revives it.
+  memoryctl promote
+      Report-only promotion ladder: mistakes that recurred despite memory
+      (-> hook/lint/test), facts useful in every recent session (-> CLAUDE.md),
+      internalized ablation survivors and never-corroborated candidates
+      (-> retire). Prints evidence + the closing retire command; mutates
+      nothing. Exit 0 always (cron-safe).
+  memoryctl retire <slug> [--reason "..."] [--superseded-by <ref>]
+      Retire a fact: move its file to the store's .archive/, stamp tombstone
+      frontmatter (retired/retire-reason/superseded-by), emit a "retire" WAL
+      event. The sidecar projects the row as status=retired; recall shows a
+      tombstone pointing at the successor. Undo with "memoryctl revive".
+  memoryctl revive <slug>
+      Move a retired fact back into its live store, strip the tombstone
+      keys, and emit a "revive" WAL event.
   memoryctl skill-inject
       PostToolUse hook verb. Reads a hook envelope from stdin, extracts
       tool_input.skill, retrieves skill-learning facts bound to that skill,
@@ -89,6 +103,12 @@ Usage:
   memoryctl ab
       Diagnostic: replay the WAL to compare ranked vs baseline retrieval
       (A/B evidence). Read-only; see docs/measurements/.
+  memoryctl ablate <slug> [--sessions N] | stop <slug> | report [<slug>]
+      Per-fact ablation: withhold the fact from injection for N would-have-
+      injected sessions (default 5) while the close hook records whether the
+      behavior held without it (holdout-hit/miss). "report" prints observed
+      sessions, hit-rate, and a verdict hint. Requires a live sidecar; in
+      degraded (no-sidecar) mode the holdout quietly suspends.
 
 Hook verbs (invoked by the v2 shims, not run by hand): inject, close, guard,
 skill-inject, skill-active. Each reads a hook envelope on stdin and is
@@ -160,12 +180,20 @@ func main() {
 		runRank(os.Args[2:])
 	case "recall":
 		runRecall(os.Args[2:])
+	case "retire":
+		runRetire(os.Args[2:])
+	case "revive":
+		runRevive(os.Args[2:])
 	case "skill-inject":
 		runSkillInject(os.Args[2:])
 	case "skill-active":
 		runSkillActive(os.Args[2:])
 	case "ab":
 		runAB(os.Args[2:])
+	case "ablate":
+		runAblate(os.Args[2:])
+	case "promote":
+		runPromote(os.Args[2:])
 	case "guard":
 		runGuard(os.Args[2:])
 	case "reindex":
