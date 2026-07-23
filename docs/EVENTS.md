@@ -50,6 +50,7 @@ Exactly these events are written by v2 code. Producers verified by grep of
 | `dedup-candidate` | `<new-slug>~<existing-slug>` (`~` sub-delim) | `memoryctl dedup check` — `internal/dedup` | informational | soft-similarity, below the merge threshold |
 | `retire` | `<qslug>[><successor>][:<reason>]` | `memoryctl retire` (`cmd/memoryctl/retire.go`) | `internal/sidecar` reproject (status=retired) | `<qslug>` = project-qualified slug; successor/reason use the `>`/`:` sub-delims, whitespace collapsed to `_` |
 | `revive` | `<qslug>` | `memoryctl revive` (`cmd/memoryctl/retire.go`) | `internal/sidecar` reproject (cancels retirement) | |
+| `candidate-confirmed` | `<qslug>` | `memoryctl close` — `internal/closer` | `internal/sidecar` reproject (candidate→active); `internal/doctor` | emitted once per fact (WAL dedup); graduation of a soft-corroboration candidate |
 
 > **Dedup is not a default hook.** `memoryctl dedup check` is a real verb that
 > emits the three `dedup-*` events, but the six installed shims do not wire it —
