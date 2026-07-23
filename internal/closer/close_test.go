@@ -90,3 +90,38 @@ func TestRun_SessionMetricsFromTranscript(t *testing.T) {
 		t.Errorf("WAL missing %q:\n%s", want, wal)
 	}
 }
+
+// TestRun_CandidateConfirmed: a candidate fact cited in the transcript gets
+// a candidate-confirmed WAL event alongside trigger-useful; an uncited
+// candidate does not.
+func TestRun_CandidateConfirmed(t *testing.T) {
+	home := t.TempDir()
+	memDir := filepath.Join(home, ".claude", "memory")
+	projDir := filepath.Join(home, ".claude", "projects", "-tmp-proj", "memory")
+	os.MkdirAll(filepath.Join(memDir, ".runtime"), 0o755)
+	os.MkdirAll(projDir, 0o755)
+	os.WriteFile(filepath.Join(projDir, "cited.md"),
+		[]byte("---\nname: cited-rule\ntype: mistake\nstatus: candidate\n---\nbody\n"), 0o644)
+	os.WriteFile(filepath.Join(projDir, "quiet.md"),
+		[]byte("---\nname: quiet-rule\ntype: mistake\nstatus: candidate\n---\nbody\n"), 0o644)
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
+	os.WriteFile(filepath.Join(memDir, ".runtime", "injected-s1.list"),
+		[]byte("cited.md\nquiet.md\n"), 0o600)
+	tx := filepath.Join(home, "t.jsonl")
+	os.WriteFile(tx, []byte(`{"type":"assistant","sessionId":"s1","message":{"content":[{"type":"text","text":"applied cited-rule here"}]}}`+"\n"), 0o644)
+
+	if _, err := Run(Input{
+		SessionID: "s1", CWD: "/tmp/proj", TranscriptPath: tx,
+		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir, Today: "2026-07-23",
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	wal, _ := os.ReadFile(filepath.Join(memDir, ".wal"))
+	w := string(wal)
+	if !strings.Contains(w, "|candidate-confirmed|") || !strings.Contains(w, "\x1fcited.md|s1") {
+		t.Fatalf("missing candidate-confirmed for cited fact:\n%s", w)
+	}
+	if strings.Contains(w, "candidate-confirmed|-tmp-proj\x1fquiet.md") {
+		t.Fatalf("silent candidate must not confirm:\n%s", w)
+	}
+}

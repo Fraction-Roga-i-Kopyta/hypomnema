@@ -38,7 +38,7 @@ type Result struct {
 func Run(in Input) (Result, error) {
 	var res Result
 	injected := readInjectedSet(in.MemoryDir, in.SessionID)
-	names, evidence := slugMeta(in.ClaudeHome, in.CWD)
+	names, evidence, status := slugMeta(in.ClaudeHome, in.CWD)
 
 	sess, sErr := jsonl.ReadSession(in.TranscriptPath)
 
@@ -64,6 +64,17 @@ func Run(in Input) (Result, error) {
 		}
 		for _, slug := range silent {
 			appendWAL(in.MemoryDir, in.Today, "trigger-silent", qualify(projectOf, slug), sid)
+		}
+		for _, slug := range useful {
+			if status[slug] != "candidate" {
+				continue
+			}
+			// Graduation: first useful citation confirms the candidate. The
+			// dedupKey makes the WAL record it exactly once per fact —
+			// repeats add nothing for the reader (confirmed = seen ≥ 1).
+			target := wal.SanitizeField(qualify(projectOf, slug))
+			line := fmt.Sprintf("%s|candidate-confirmed|%s|%s", in.Today, target, sid)
+			wal.Append(in.MemoryDir, line, "|candidate-confirmed|"+target+"|")
 		}
 	}
 	metrics := fmt.Sprintf("%s|session-metrics|domains:_global_,error_count:%d,tool_calls:%d,duration:%ds|%s",
@@ -112,16 +123,18 @@ func collectNative(claudeHome, cwd string) []native.MemFile {
 	return native.Collect(claudeHome, cwd)
 }
 
-func slugMeta(claudeHome, cwd string) (names map[string]string, evidence map[string][]string) {
+func slugMeta(claudeHome, cwd string) (names map[string]string, evidence map[string][]string, status map[string]string) {
 	names = map[string]string{}
 	evidence = map[string][]string{}
+	status = map[string]string{}
 	for _, f := range collectNative(claudeHome, cwd) {
 		names[f.Slug] = f.Name
+		status[f.Slug] = f.Status
 		if len(f.Evidence) > 0 {
 			evidence[f.Slug] = f.Evidence
 		}
 	}
-	return names, evidence
+	return names, evidence, status
 }
 
 func appendWAL(memDir, day, event, slug, sid string) {
