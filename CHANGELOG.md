@@ -2,10 +2,23 @@
 
 ## [Unreleased]
 
-Harness-lifecycle milestones 1–2 of 4 (spec:
+Harness-lifecycle milestones 1–3 of 4 (spec:
 `docs/specs/2026-07-23-harness-lifecycle-design.md`).
 
 ### Added
+
+- **Per-fact ablation: `memoryctl ablate <slug> [--sessions N]` /
+  `ablate stop` / `ablate report`.** A holdout withholds the fact from
+  injection for N would-have-injected sessions (the next-ranked fact fills
+  the slot, so the budget stays full); the close hook classifies the
+  transcript anyway — evidence present without injection → `holdout-hit`
+  (the rule is internalized; the memory may be redundant), absent →
+  `holdout-miss` (the memory is doing work). Neither feeds Bayesian
+  effectiveness. Holdout is session-sticky and pull-contamination-aware
+  (a fact delivered via recall mid-ablation is excluded from that session's
+  observation). Sidecar schema v5 adds the WAL-derived `holdout_remaining`
+  column; events `ablate-start`/`ablate-stop`/`holdout-skip`/`holdout-hit`/
+  `holdout-miss` registered in `docs/EVENTS.md`.
 
 - **Candidate corroboration (soft path).** `status: candidate` is a valid
   author-set status for agent-originated facts: they inject normally
