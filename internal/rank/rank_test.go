@@ -268,3 +268,14 @@ func has(s []Scored, slug string) bool {
 	}
 	return false
 }
+
+// TestRank_CandidateInjectable: candidate facts rank like active ones —
+// the soft-corroboration path keeps zero-safe injection.
+func TestRank_CandidateInjectable(t *testing.T) {
+	got := Rank(Query{Today: "2026-07-23"}, []Candidate{
+		{Slug: "c.md", Status: "candidate", Effectiveness: 0.5},
+	}, 0)
+	if len(got) != 1 {
+		t.Fatalf("candidate excluded from ranking: %v", got)
+	}
+}

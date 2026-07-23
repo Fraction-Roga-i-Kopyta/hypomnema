@@ -24,6 +24,24 @@ type agg struct {
 	// no later revive — reproject preserves the distinction from 'deleted'
 	// (hand-removed file) so a rebuilt sidecar keeps the deliberate decision.
 	retired bool
+	// confirmed is true once a candidate-confirmed event was seen —
+	// graduation of a soft-corroboration candidate is WAL-derived.
+	confirmed bool
+}
+
+// graduated reports whether a candidate fact has earned active status: an
+// explicit confirmation event, or any useful evidence (belt and braces —
+// the event is the primary signal, usefulness covers a lost event).
+func (a *agg) graduated() bool {
+	if a.confirmed || a.pos > 0 {
+		return true
+	}
+	for _, useful := range a.sessions {
+		if useful {
+			return true
+		}
+	}
+	return false
 }
 
 // mergeFrom folds another aggregate into a (used to combine a fact's
@@ -46,6 +64,7 @@ func (a *agg) mergeFrom(src *agg) {
 		a.classify(sess, useful)
 	}
 	a.retired = a.retired || src.retired
+	a.confirmed = a.confirmed || src.confirmed
 }
 
 func (a *agg) classify(session string, useful bool) {
@@ -141,11 +160,16 @@ func reprojectIn(e dbtx, files []native.MemFile, walPath string, scope []string)
 		if created == "" {
 			created = a.created
 		}
-		// Only "pinned" is honoured from frontmatter (it exempts the row from
-		// decay); every other lifecycle state is sidecar-owned.
+		// Only "pinned" and (until graduation) "candidate" are honoured from
+		// frontmatter; every other lifecycle state is sidecar-owned. A
+		// candidate whose WAL carries a confirmation projects as active —
+		// the content file is never rewritten (same pattern as stale).
 		status := "active"
-		if f.Status == "pinned" {
+		switch {
+		case f.Status == "pinned":
 			status = "pinned"
+		case f.Status == "candidate" && !a.graduated():
+			status = "candidate"
 		}
 		rec := Record{
 			Slug:        f.Slug,
@@ -316,6 +340,8 @@ func readWALAgg(walPath string) map[string]*agg {
 			a.retired = true
 		case "revive":
 			a.retired = false
+		case "candidate-confirmed":
+			a.confirmed = true
 		}
 		if a.created == "" || date < a.created {
 			a.created = date
