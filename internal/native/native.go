@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -29,6 +30,7 @@ type MemFile struct {
 	Retired        string // frontmatter: retired (YYYY-MM-DD) — tombstone stamp, set by `memoryctl retire`
 	RetireReason   string // frontmatter: retire-reason
 	SupersededBy   string // frontmatter: superseded-by — canonical successor (slug or free text)
+	Recurrence     int    // frontmatter: recurrence — mistake repeat counter (0 when absent/unparseable)
 	ContentSHA     string // sha256 of full file bytes — rename/edit detection
 	Body           string // markdown body, frontmatter stripped
 	Project        string // owning store: cwd slug or GlobalProject — set by Collect, not parsed from the file
@@ -67,6 +69,12 @@ func parseFile(path string) (MemFile, error) {
 	}
 	fm, body := splitFrontmatter(string(raw))
 	sum := sha256.Sum256(raw)
+	rec := 0
+	if v := fm["recurrence"]; v != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			rec = n
+		}
+	}
 	return MemFile{
 		Slug:           filepath.Base(path),
 		Path:           path,
@@ -83,6 +91,7 @@ func parseFile(path string) (MemFile, error) {
 		Retired:        fm["retired"],
 		RetireReason:   fm["retire-reason"],
 		SupersededBy:   fm["superseded-by"],
+		Recurrence:     rec,
 		ContentSHA:     hex.EncodeToString(sum[:]),
 		Body:           body,
 	}, nil
