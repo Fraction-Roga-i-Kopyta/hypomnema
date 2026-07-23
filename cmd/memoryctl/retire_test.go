@@ -208,3 +208,29 @@ func TestAblateStartAndStop(t *testing.T) {
 		t.Fatalf("ablate-stop missing:\n%s", walB)
 	}
 }
+
+func TestPromoteVerb(t *testing.T) {
+	env, store, _, _ := retireFixture(t)
+	// A high-recurrence mistake → mechanical suggestion.
+	if err := os.WriteFile(filepath.Join(store, "repeat.md"),
+		[]byte("---\ntype: mistake\nname: repeat\nrecurrence: 3\nstatus: active\n---\nx\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, code := run(t, env, "promote")
+	if code != 0 {
+		t.Fatalf("promote exit=%d stderr=%s", code, errOut)
+	}
+	if !strings.Contains(out, "mechanical") || !strings.Contains(out, "memoryctl retire repeat") {
+		t.Fatalf("promote output missing mechanical suggestion:\n%s", out)
+	}
+}
+
+func TestPromoteVerb_EmptyCorpus(t *testing.T) {
+	env, store, _, factPath := retireFixture(t)
+	_ = store
+	os.Remove(factPath)
+	out, _, code := run(t, env, "promote")
+	if code != 0 || !strings.Contains(out, "no promotion candidates") {
+		t.Fatalf("exit=%d out=%s", code, out)
+	}
+}
