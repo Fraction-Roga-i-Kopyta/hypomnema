@@ -67,6 +67,14 @@ Usage:
       "recall" WAL event for the delivered fact and unions it into the
       session's injected list. Includes stale facts (marked [stale]) —
       recalling one revives it.
+  memoryctl retire <slug> [--reason "..."] [--superseded-by <ref>]
+      Retire a fact: move its file to the store's .archive/, stamp tombstone
+      frontmatter (retired/retire-reason/superseded-by), emit a "retire" WAL
+      event. The sidecar projects the row as status=retired; recall shows a
+      tombstone pointing at the successor. Undo with "memoryctl revive".
+  memoryctl revive <slug>
+      Move a retired fact back into its live store, strip the tombstone
+      keys, and emit a "revive" WAL event.
   memoryctl skill-inject
       PostToolUse hook verb. Reads a hook envelope from stdin, extracts
       tool_input.skill, retrieves skill-learning facts bound to that skill,
@@ -160,6 +168,10 @@ func main() {
 		runRank(os.Args[2:])
 	case "recall":
 		runRecall(os.Args[2:])
+	case "retire":
+		runRetire(os.Args[2:])
+	case "revive":
+		runRevive(os.Args[2:])
 	case "skill-inject":
 		runSkillInject(os.Args[2:])
 	case "skill-active":
