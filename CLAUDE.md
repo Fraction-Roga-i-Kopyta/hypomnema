@@ -230,7 +230,7 @@ shows `[retired <date> → successor]` instead of silently forgetting.
 - Classifies the session's injected set as `trigger-useful` / `trigger-silent` (evidence phrases or slug/name citation in assistant text) and writes the events to the WAL.
 - Recomputes effectiveness from the WAL: `(pos+1)/(pos+neg+2)` over legacy `outcome-*` events **plus** one trigger observation per (slug, session) — useful wins over silent within a session.
 - Marks facts `stale` in the sidecar when unused past their type threshold — age counts from **last injection** (fallback `created`), so facts in rotation stay alive. No native content mutation.
-- Archiving (physical move out of the store) is planned but not shipped; stale facts simply stop injecting.
+- Archiving ships as `memoryctl retire` (see the lifecycle loop above): the file moves to the store's `.archive/`, the sidecar row becomes `retired`, and recall shows a tombstone redirect. Stale facts that were never retired simply stop injecting.
 - `status: pinned` files and `continuity`/`project` facts never decay.
 
 ## How injection ranks files

@@ -2,10 +2,22 @@
 
 ## [Unreleased]
 
-Harness-lifecycle milestones 1–3 of 4 (spec:
-`docs/specs/2026-07-23-harness-lifecycle-design.md`).
+Harness lifecycle, complete (4 milestones; spec:
+`docs/specs/2026-07-23-harness-lifecycle-design.md`). The fact lifecycle is
+now a closed loop: `candidate → active → (ablation check) → promote to a
+durable owner | retire with a tombstone`.
 
 ### Added
+
+- **`memoryctl promote` — report-only promotion ladder.** Scans frontmatter
+  + WAL for facts that have outgrown prose memory: `mistake` with
+  `recurrence ≥ 2` (prose failed twice → suggest a hook/lint/test), facts
+  useful in the last 5 classified sessions (needed every time → suggest
+  CLAUDE.md), completed ablations with ≥ 75% hit-rate (internalized →
+  suggest retire), never-corroborated candidates (≥ 5 silent, 0 useful →
+  retire or rewrite). One suggestion per fact, highest consequence wins;
+  each prints its evidence and the closing `memoryctl retire` command.
+  Mutates nothing; exit 0 always.
 
 - **Per-fact ablation: `memoryctl ablate <slug> [--sessions N]` /
   `ablate stop` / `ablate report`.** A holdout withholds the fact from
