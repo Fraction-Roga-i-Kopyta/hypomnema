@@ -529,3 +529,55 @@ func TestReproject_RetiredStatus(t *testing.T) {
 		t.Fatalf("after revive: status = %q, want deleted", r.Status)
 	}
 }
+
+// TestReproject_CandidateGraduation: frontmatter status=candidate projects
+// as sidecar status=candidate until the WAL carries a confirmation
+// (candidate-confirmed event or any trigger-useful session), then active.
+func TestReproject_CandidateGraduation(t *testing.T) {
+	dir := t.TempDir()
+	walPath := filepath.Join(dir, ".wal")
+	q := native.QKey("projA", "newbie")
+	if err := os.WriteFile(walPath,
+		[]byte("2026-07-20|inject|"+q+"|s1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(filepath.Join(dir, ".sidecar.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	files := []native.MemFile{{Slug: "newbie.md", Project: "projA", Status: "candidate", Type: "mistake"}}
+	if err := Reproject(s, files, walPath, []string{"projA"}); err != nil {
+		t.Fatal(err)
+	}
+	if r, _, _ := s.Get("newbie.md"); r.Status != "candidate" {
+		t.Fatalf("status = %q, want candidate", r.Status)
+	}
+
+	appendLine(t, walPath, "2026-07-21|candidate-confirmed|"+q+"|s2")
+	if err := Reproject(s, files, walPath, []string{"projA"}); err != nil {
+		t.Fatal(err)
+	}
+	if r, _, _ := s.Get("newbie.md"); r.Status != "active" {
+		t.Fatalf("after confirm event: status = %q, want active", r.Status)
+	}
+
+	// Graduation also follows plain usefulness (belt and braces for a lost
+	// confirmation event): fresh store, trigger-useful only.
+	s2, err := Open(filepath.Join(dir, ".sidecar2.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	wal2 := filepath.Join(dir, ".wal2")
+	if err := os.WriteFile(wal2,
+		[]byte("2026-07-20|inject|"+q+"|s1\n2026-07-20|trigger-useful|"+q+"|s1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Reproject(s2, files, wal2, []string{"projA"}); err != nil {
+		t.Fatal(err)
+	}
+	if r, _, _ := s2.Get("newbie.md"); r.Status != "active" {
+		t.Fatalf("after useful session: status = %q, want active", r.Status)
+	}
+}
