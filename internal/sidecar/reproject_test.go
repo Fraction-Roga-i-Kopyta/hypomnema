@@ -458,3 +458,74 @@ func TestReproject_ErrorRollsBackOutcomeClear(t *testing.T) {
 		t.Fatalf("failed Reproject lost outcome rows (have %d, want 1) — projection is not transactional", n)
 	}
 }
+
+// appendLine appends one WAL line (test helper).
+func appendLine(t *testing.T, path, line string) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(line + "\n"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestReproject_RetiredStatus: a fact with a `retire` WAL event and a missing
+// native file projects as status='retired', not 'deleted'; a later `revive`
+// event cancels the retirement (missing file then projects as 'deleted').
+// Retirement must also survive a from-scratch rebuild (empty sidecar).
+func TestReproject_RetiredStatus(t *testing.T) {
+	dir := t.TempDir()
+	walPath := filepath.Join(dir, ".wal")
+	q := native.QKey("projA", "old-fact")
+	wal := "2026-07-01|inject|" + q + "|s1\n" +
+		"2026-07-20|retire|" + q + ">new-owner:promoted_to_hook|cli\n"
+	if err := os.WriteFile(walPath, []byte(wal), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(filepath.Join(dir, ".sidecar.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	// Row exists from a previous projection; file now absent from `files`.
+	if err := s.Upsert(Record{Slug: "old-fact.md", Project: "projA", Status: "active"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Reproject(s, nil, walPath, []string{"projA"}); err != nil {
+		t.Fatal(err)
+	}
+	r, ok, _ := s.Get("old-fact.md")
+	if !ok || r.Status != "retired" {
+		t.Fatalf("status = %q (ok=%v), want retired", r.Status, ok)
+	}
+
+	// From-scratch rebuild: a fresh sidecar with the same WAL and no files
+	// must still know the retirement was deliberate.
+	s2, err := Open(filepath.Join(dir, ".sidecar2.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	if err := Reproject(s2, nil, walPath, []string{"projA"}); err != nil {
+		t.Fatal(err)
+	}
+	r, ok, _ = s2.Get("old-fact.md")
+	if !ok || r.Status != "retired" {
+		t.Fatalf("from-scratch: status = %q (ok=%v), want retired row inserted", r.Status, ok)
+	}
+
+	// Revive cancels: missing file then falls back to plain deletion.
+	appendLine(t, walPath, "2026-07-21|revive|"+q+"|cli")
+	if err := s.Upsert(Record{Slug: "old-fact.md", Project: "projA", Status: "active"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Reproject(s, nil, walPath, []string{"projA"}); err != nil {
+		t.Fatal(err)
+	}
+	if r, _, _ := s.Get("old-fact.md"); r.Status != "deleted" {
+		t.Fatalf("after revive: status = %q, want deleted", r.Status)
+	}
+}
