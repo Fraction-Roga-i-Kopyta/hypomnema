@@ -99,7 +99,14 @@ func doRetire(slug, reason, successor string) {
 	if reason != "" {
 		target += ":" + strings.Join(strings.Fields(reason), "_")
 	}
-	emitLifecycleEvent("retire", target)
+	if err := emitLifecycleEvent("retire", target); err != nil {
+		// All-or-nothing: an archived file WITHOUT a retire event would
+		// reconcile as 'deleted' (not 'retired') and block a repeat retire —
+		// restore the live file so the verb can simply be re-run.
+		_ = os.WriteFile(f.Path, raw, 0o644)
+		_ = os.Remove(dst)
+		fatalf("retire: wal append: %v (fact left untouched)", err)
+	}
 	refreshProjectIndex(dir)
 }
 
@@ -128,7 +135,12 @@ func doRevive(slug string) {
 		if store == native.GlobalMemoryDir(home) {
 			project = native.GlobalProject
 		}
-		emitLifecycleEvent("revive", native.QKey(project, strings.TrimSuffix(want, ".md")))
+		// A failed revive event is self-healing (file presence wins at the
+		// next reproject: the upsert loop writes frontmatter status), so a
+		// WAL error here is reported but the restore is not rolled back.
+		if err := emitLifecycleEvent("revive", native.QKey(project, strings.TrimSuffix(want, ".md"))); err != nil {
+			fmt.Fprintf(os.Stderr, "memoryctl revive: wal append: %v (file restored; sidecar heals at next close)\n", err)
+		}
 		refreshProjectIndex(store)
 		return
 	}
@@ -186,7 +198,10 @@ func stampTombstone(content, day, reason, successor string) string {
 	return "---\n" + keys.String() + "---\n" + content
 }
 
-// stripTombstone removes the three tombstone keys from the frontmatter block.
+// stripTombstone removes the three tombstone keys from the frontmatter
+// block. Only column-0 keys count — an indented line is block-scalar
+// continuation content, never a top-level key (mirrors splitFrontmatter's
+// G2 rule), so "  superseded-by: x" inside a `root-cause: |` body survives.
 func stripTombstone(content string) string {
 	lines := strings.Split(content, "\n")
 	if strings.TrimRight(lines[0], " \t\r") != "---" {
@@ -198,7 +213,7 @@ func stripTombstone(content string) string {
 		if i > 0 && inFM && strings.TrimRight(ln, " \t\r") == "---" {
 			inFM = false
 		}
-		if i > 0 && inFM {
+		if i > 0 && inFM && len(ln) > 0 && ln[0] != ' ' && ln[0] != '\t' {
 			k := strings.TrimSpace(strings.SplitN(ln, ":", 2)[0])
 			if k == "retired" || k == "retire-reason" || k == "superseded-by" {
 				continue
@@ -222,8 +237,9 @@ func archivePath(archDir, base string) string {
 }
 
 // emitLifecycleEvent appends one lifecycle WAL row with the CLI's session
-// identity (HYPOMNEMA_SESSION_ID → CLAUDE_CODE_SESSION_ID → "cli").
-func emitLifecycleEvent(event, target string) {
+// identity (HYPOMNEMA_SESSION_ID → CLAUDE_CODE_SESSION_ID → "cli"). The
+// error is returned so callers can roll back file moves (all-or-nothing).
+func emitLifecycleEvent(event, target string) error {
 	sid := os.Getenv("HYPOMNEMA_SESSION_ID")
 	if sid == "" {
 		sid = os.Getenv("CLAUDE_CODE_SESSION_ID")
@@ -233,9 +249,7 @@ func emitLifecycleEvent(event, target string) {
 	}
 	line := fmt.Sprintf("%s|%s|%s|%s", today(), event,
 		wal.SanitizeField(target), wal.SanitizeField(sid))
-	if err := wal.AppendStrict(memoryDir(), line, ""); err != nil {
-		fatalf("%s: wal append: %v", event, err)
-	}
+	return wal.AppendStrict(memoryDir(), line, "")
 }
 
 // refreshProjectIndex regenerates MEMORY.md when dir is the project store

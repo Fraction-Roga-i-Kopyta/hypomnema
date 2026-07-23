@@ -113,3 +113,17 @@ func TestRetire_AmbiguousAcrossStores(t *testing.T) {
 		t.Fatalf("expected ambiguity error listing stores: %s", errOut)
 	}
 }
+
+// TestStripTombstone_BlockScalarSurvives: an indented "superseded-by:" line
+// inside a block scalar is continuation content, not a top-level key —
+// stripTombstone must leave it alone (mirrors splitFrontmatter's G2 rule).
+func TestStripTombstone_BlockScalarSurvives(t *testing.T) {
+	in := "---\nname: x\nroot-cause: |\n  superseded-by: not-a-key\nretired: 2026-07-23\nsuperseded-by: real\n---\nbody\n"
+	got := stripTombstone(in)
+	if !strings.Contains(got, "  superseded-by: not-a-key") {
+		t.Fatalf("block-scalar content was stripped:\n%s", got)
+	}
+	if strings.Contains(got, "retired: 2026-07-23") || strings.Contains(got, "superseded-by: real") {
+		t.Fatalf("top-level tombstone keys survived:\n%s", got)
+	}
+}
