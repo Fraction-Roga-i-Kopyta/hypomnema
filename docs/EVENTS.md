@@ -48,6 +48,8 @@ Exactly these events are written by v2 code. Producers verified by grep of
 | `dedup-blocked` | `<new-slug>><existing-slug>` (`>` sub-delim) | `memoryctl dedup check` (pre-tool) — `internal/dedup` | informational (`doctor` tolerates) | see note below |
 | `dedup-merged` | `<new-slug>><existing-slug>` | `memoryctl dedup check` (post-tool) — `internal/dedup` | informational | emitted only after the on-disk recurrence bump succeeds |
 | `dedup-candidate` | `<new-slug>~<existing-slug>` (`~` sub-delim) | `memoryctl dedup check` — `internal/dedup` | informational | soft-similarity, below the merge threshold |
+| `retire` | `<qslug>[><successor>][:<reason>]` | `memoryctl retire` (`cmd/memoryctl/retire.go`) | `internal/sidecar` reproject (status=retired) | `<qslug>` = project-qualified slug; successor/reason use the `>`/`:` sub-delims, whitespace collapsed to `_` |
+| `revive` | `<qslug>` | `memoryctl revive` (`cmd/memoryctl/retire.go`) | `internal/sidecar` reproject (cancels retirement) | |
 
 > **Dedup is not a default hook.** `memoryctl dedup check` is a real verb that
 > emits the three `dedup-*` events, but the six installed shims do not wire it —
