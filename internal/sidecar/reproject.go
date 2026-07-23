@@ -27,6 +27,23 @@ type agg struct {
 	// confirmed is true once a candidate-confirmed event was seen —
 	// graduation of a soft-corroboration candidate is WAL-derived.
 	confirmed bool
+	// Per-fact ablation state, derived from the latest ablate-start run.
+	holdoutN       int             // sessions requested by the latest ablate-start
+	holdoutStopped bool            // ablate-stop seen after the latest start
+	holdoutSkips   map[string]bool // distinct sessions with holdout-skip after the latest start
+}
+
+// holdoutRemaining is the live holdout budget: sessions requested minus
+// distinct sessions already observed, zero once stopped or exhausted.
+func (a *agg) holdoutRemaining() int {
+	if a.holdoutN == 0 || a.holdoutStopped {
+		return 0
+	}
+	rem := a.holdoutN - len(a.holdoutSkips)
+	if rem < 0 {
+		return 0
+	}
+	return rem
 }
 
 // graduated reports whether a candidate fact has earned active status: an
@@ -65,6 +82,16 @@ func (a *agg) mergeFrom(src *agg) {
 	}
 	a.retired = a.retired || src.retired
 	a.confirmed = a.confirmed || src.confirmed
+	if src.holdoutN > 0 && a.holdoutN == 0 {
+		a.holdoutN = src.holdoutN
+	}
+	a.holdoutStopped = a.holdoutStopped || src.holdoutStopped
+	for s := range src.holdoutSkips {
+		if a.holdoutSkips == nil {
+			a.holdoutSkips = map[string]bool{}
+		}
+		a.holdoutSkips[s] = true
+	}
 }
 
 func (a *agg) classify(session string, useful bool) {
@@ -182,12 +209,13 @@ func reprojectIn(e dbtx, files []native.MemFile, walPath string, scope []string)
 			// NOT activate domain filtering — Query.Domains stays empty, so
 			// rank.domainOK still passes everything; wiring the filter is a
 			// behaviour change left for a design cycle.
-			Domains:       strings.Join(f.Domains, ","),
-			Created:       created,
-			LastInjected:  a.lastInject,
-			RefCount:      a.injects,
-			Status:        status,
-			Effectiveness: eff,
+			Domains:          strings.Join(f.Domains, ","),
+			Created:          created,
+			LastInjected:     a.lastInject,
+			RefCount:         a.injects,
+			Status:           status,
+			Effectiveness:    eff,
+			HoldoutRemaining: a.holdoutRemaining(),
 		}
 		if err := upsertIn(e, rec); err != nil {
 			return fmt.Errorf("sidecar.Reproject: upsert %s: %w", f.Slug, err)
@@ -342,6 +370,26 @@ func readWALAgg(walPath string) map[string]*agg {
 			a.retired = false
 		case "candidate-confirmed":
 			a.confirmed = true
+		case "ablate-start":
+			// The raw target tail carries ":<sessions>".
+			n := 5
+			if i := strings.LastIndexByte(target, ':'); i >= 0 {
+				if v, err := strconv.Atoi(target[i+1:]); err == nil && v > 0 {
+					n = v
+				}
+			}
+			a.holdoutN, a.holdoutStopped, a.holdoutSkips = n, false, map[string]bool{}
+		case "ablate-stop":
+			a.holdoutStopped = true
+		case "holdout-skip":
+			if a.holdoutN > 0 && !a.holdoutStopped {
+				if a.holdoutSkips == nil {
+					a.holdoutSkips = map[string]bool{}
+				}
+				a.holdoutSkips[field4] = true
+			}
+			// holdout-hit / holdout-miss are deliberately NOT handled: they are
+			// ablate-report observations and must never feed pos/neg.
 		}
 		if a.created == "" || date < a.created {
 			a.created = date
