@@ -8,6 +8,7 @@ import (
 
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/memindex"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/pathutil"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/wal"
 )
 
@@ -84,7 +85,7 @@ func doRetire(slug, reason, successor string) {
 		fatalf("retire: mkdir %s: %v", archDir, err)
 	}
 	dst := archivePath(archDir, filepath.Base(f.Path))
-	if err := os.WriteFile(dst, []byte(stamped), 0o644); err != nil {
+	if err := pathutil.WriteFileAtomic(dst, []byte(stamped), 0o644); err != nil {
 		fatalf("retire: write %s: %v", dst, err)
 	}
 	if err := os.Remove(f.Path); err != nil {
@@ -103,7 +104,7 @@ func doRetire(slug, reason, successor string) {
 		// All-or-nothing: an archived file WITHOUT a retire event would
 		// reconcile as 'deleted' (not 'retired') and block a repeat retire —
 		// restore the live file so the verb can simply be re-run.
-		_ = os.WriteFile(f.Path, raw, 0o644)
+		_ = pathutil.WriteFileAtomic(f.Path, raw, 0o644)
 		_ = os.Remove(dst)
 		fatalf("retire: wal append: %v (fact left untouched)", err)
 	}
@@ -127,7 +128,7 @@ func doRevive(slug string) {
 		if _, err := os.Stat(dst); err == nil {
 			fatalf("revive: %s already exists in the live store", dst)
 		}
-		if err := os.WriteFile(dst, []byte(stripTombstone(string(raw))), 0o644); err != nil {
+		if err := pathutil.WriteFileAtomic(dst, []byte(stripTombstone(string(raw))), 0o644); err != nil {
 			fatalf("revive: write %s: %v", dst, err)
 		}
 		_ = os.Remove(src)
