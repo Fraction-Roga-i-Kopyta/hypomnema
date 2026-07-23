@@ -164,7 +164,10 @@ func checkCandidates(memoryDir, claudeHome, cwd string) Check {
 		useful, silent int
 		confirmed      bool
 	}
-	byBare := map[string]*tally{}
+	// Keyed by the qualified project\x1fslug when the target carries a
+	// project (bare slug only as legacy fallback) — a same-basename fact in
+	// another project must not pollute this candidate's tally.
+	byKey := map[string]*tally{}
 	if f, err := os.Open(filepath.Join(memoryDir, ".wal")); err == nil {
 		defer f.Close()
 		sc := bufio.NewScanner(f)
@@ -176,21 +179,25 @@ func checkCandidates(memoryDir, claudeHome, cwd string) Check {
 				continue
 			}
 			event := parts[1]
-			_, slug, _ := native.ParseQKey(parts[2])
+			project, slug, qualified := native.ParseQKey(parts[2])
 			slug = strings.TrimSuffix(slug, ".md")
-			t := byBare[slug]
+			key := slug
+			if qualified {
+				key = native.QKey(project, slug)
+			}
+			t := byKey[key]
 			if t == nil {
 				t = &tally{}
-				byBare[slug] = t
+				byKey[key] = t
 			}
 			switch event {
 			case "trigger-useful":
-				if k := slug + "\x00" + parts[3] + "\x00u"; !seen[k] {
+				if k := key + "\x00" + parts[3] + "\x00u"; !seen[k] {
 					seen[k] = true
 					t.useful++
 				}
 			case "trigger-silent":
-				if k := slug + "\x00" + parts[3] + "\x00s"; !seen[k] {
+				if k := key + "\x00" + parts[3] + "\x00s"; !seen[k] {
 					seen[k] = true
 					t.silent++
 				}
@@ -205,7 +212,10 @@ func checkCandidates(memoryDir, claudeHome, cwd string) Check {
 			continue
 		}
 		bare := strings.TrimSuffix(mf.Slug, ".md")
-		t := byBare[bare]
+		t := byKey[native.QKey(mf.Project, bare)]
+		if t == nil {
+			t = byKey[bare] // legacy bare-slug events
+		}
 		if t != nil && !t.confirmed && t.useful == 0 && t.silent >= candidateSilentMin {
 			flagged = append(flagged, bare)
 		}

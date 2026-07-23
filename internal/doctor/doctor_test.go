@@ -590,6 +590,12 @@ func TestCheckCandidates(t *testing.T) {
 	}
 	// fresh.md: one silent session only — under the threshold.
 	wal.WriteString("2026-07-11|trigger-silent|-tmp-proj\x1ffresh.md|s1\n")
+	// A same-basename fact in ANOTHER project: its useful citation must not
+	// mask dud's flag, and its silents must not inflate fresh's tally.
+	wal.WriteString("2026-07-11|trigger-useful|-other-proj\x1fdud.md|x1\n")
+	for i := 1; i <= 5; i++ {
+		fmt.Fprintf(&wal, "2026-07-1%d|trigger-silent|-other-proj\x1ffresh.md|x%d\n", i, i)
+	}
 	if err := os.WriteFile(filepath.Join(memDir, ".wal"), []byte(wal.String()), 0o644); err != nil {
 		t.Fatal(err)
 	}
