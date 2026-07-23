@@ -26,6 +26,9 @@ type MemFile struct {
 	// shapes behaviour silently (language pref, security baseline, meta-policy);
 	// such rules are not penalised in effectiveness for going uncited.
 	PrecisionClass string
+	Retired        string // frontmatter: retired (YYYY-MM-DD) — tombstone stamp, set by `memoryctl retire`
+	RetireReason   string // frontmatter: retire-reason
+	SupersededBy   string // frontmatter: superseded-by — canonical successor (slug or free text)
 	ContentSHA     string // sha256 of full file bytes — rename/edit detection
 	Body           string // markdown body, frontmatter stripped
 	Project        string // owning store: cwd slug or GlobalProject — set by Collect, not parsed from the file
@@ -77,6 +80,9 @@ func parseFile(path string) (MemFile, error) {
 		Evidence:       splitList(fm["evidence"]),
 		Skill:          fm["skill"],
 		PrecisionClass: fm["precision_class"],
+		Retired:        fm["retired"],
+		RetireReason:   fm["retire-reason"],
+		SupersededBy:   fm["superseded-by"],
 		ContentSHA:     hex.EncodeToString(sum[:]),
 		Body:           body,
 	}, nil
