@@ -3,6 +3,7 @@ package doctor
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -562,5 +563,50 @@ func TestRun_NonExecutableShimFails(t *testing.T) {
 	c := mustFindCheck(t, Run(claude, mem, cwd), "shim_files_present", FAIL)
 	if !strings.Contains(c.Detail, "not executable") {
 		t.Errorf("detail should name the non-executable shim, got %q", c.Detail)
+	}
+}
+
+// TestCheckCandidates: a candidate with ≥5 silent sessions and 0 useful
+// flags WARN naming the slug; a confirmed or fresh candidate does not.
+func TestCheckCandidates(t *testing.T) {
+	home := t.TempDir()
+	claudeHome := filepath.Join(home, ".claude")
+	memDir := filepath.Join(claudeHome, "memory")
+	cwd := "/tmp/proj"
+	projDir := filepath.Join(claudeHome, "projects", "-tmp-proj", "memory")
+	for _, d := range []string{memDir, projDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	os.WriteFile(filepath.Join(projDir, "dud.md"),
+		[]byte("---\nname: dud\ntype: mistake\nstatus: candidate\n---\nx\n"), 0o644)
+	os.WriteFile(filepath.Join(projDir, "fresh.md"),
+		[]byte("---\nname: fresh\ntype: mistake\nstatus: candidate\n---\nx\n"), 0o644)
+	q := "-tmp-proj\x1fdud.md"
+	var wal strings.Builder
+	for i := 1; i <= 5; i++ {
+		fmt.Fprintf(&wal, "2026-07-1%d|trigger-silent|%s|s%d\n", i, q, i)
+	}
+	// fresh.md: one silent session only — under the threshold.
+	wal.WriteString("2026-07-11|trigger-silent|-tmp-proj\x1ffresh.md|s1\n")
+	if err := os.WriteFile(filepath.Join(memDir, ".wal"), []byte(wal.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	c := checkCandidates(memDir, claudeHome, cwd)
+	if c.Status != WARN || !strings.Contains(c.Detail, "dud") {
+		t.Fatalf("got %+v, want WARN naming dud", c)
+	}
+	if strings.Contains(c.Detail, "fresh") {
+		t.Fatalf("fresh candidate must not flag: %+v", c)
+	}
+
+	// A confirmation clears the flag.
+	f, _ := os.OpenFile(filepath.Join(memDir, ".wal"), os.O_APPEND|os.O_WRONLY, 0o644)
+	f.WriteString("2026-07-16|candidate-confirmed|" + q + "|s6\n")
+	f.Close()
+	if c := checkCandidates(memDir, claudeHome, cwd); c.Status != OK {
+		t.Fatalf("confirmed candidate must not flag: %+v", c)
 	}
 }
