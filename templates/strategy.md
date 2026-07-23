@@ -3,7 +3,7 @@ type: strategy
 name: "short-slug-name"
 description: "one-line summary of the approach and when it applies"
 created: YYYY-MM-DD
-status: active
+status: candidate   # agent-originated facts start as candidate; user-dictated rules use active|pinned
 success_count: 1           # bump each time the strategy works again
 keywords: [kw1, kw2]
 domains: [general]

@@ -41,9 +41,11 @@ func CapBody(body string, maxBytes int) string { return capBody(body, maxBytes) 
 // Candidates assembles ranker-ready candidates for an ad-hoc query against
 // the project+global scope — the same sidecar-backed assembly (self-healing
 // reproject, degraded native-only fallback) the injection pipeline uses.
-// Exported for the recall verb.
+// Exported for the recall verb (pull ignores holdout: an explicit query
+// answers regardless of an ablation in flight).
 func Candidates(memoryDir, cwd string, files []native.MemFile, terms []string) []rank.Candidate {
-	return candidates(Input{MemoryDir: memoryDir, CWD: cwd}, files, terms)
+	c, _ := candidates(Input{MemoryDir: memoryDir, CWD: cwd}, files, terms)
+	return c
 }
 
 // Input is everything Run needs (parsed by the memoryctl inject verb).
@@ -58,6 +60,13 @@ type Input struct {
 	MaxK            int
 	MaxBytes        int      // total render budget; <=0 → maxTotalBytes
 	AlreadyInjected []string // slugs already injected this session — never re-rendered
+	// HoldoutSession lists slugs already withheld earlier THIS session.
+	// Holdout is session-sticky: the Stop hook re-derives holdout_remaining
+	// per turn, so a fact whose budget hit zero on this session's first
+	// prompt would otherwise re-inject on the second and contaminate its
+	// own final observation. These slugs stay withheld regardless of the
+	// sidecar's current budget.
+	HoldoutSession []string
 }
 
 // Result is the rendered context plus the slugs injected.
@@ -67,8 +76,14 @@ type Result struct {
 	// ProjectBySlug maps each injected slug to its owning project (cwd slug or
 	// GlobalProject), so the caller can write project-qualified WAL events
 	// (review E5-deep). Project-local wins over global on a basename tie —
-	// matching scopeRecords' preference.
+	// matching scopeRecords' preference. Covers HoldoutSkipped slugs too.
 	ProjectBySlug map[string]string
+	// HoldoutSkipped lists held-out facts that ranked inside the top-K and
+	// were withheld (would-have-injected).
+	HoldoutSkipped []string
+	// HoldoutRemaining is each skipped fact's remaining session budget as of
+	// this ranking (BEFORE the current session is counted).
+	HoldoutRemaining map[string]int
 }
 
 // Run orchestrates a single injection: keywords → native files → ranked
@@ -84,13 +99,36 @@ func Run(in Input) (Result, error) {
 		bySlug[f.Slug] = f
 	}
 	terms := Keywords(in.CWD, in.Prompt)
-	cands := candidates(in, files, terms)
+	cands, held := candidates(in, files, terms)
+	if held == nil {
+		held = map[string]int{} // defense in depth — candidates never returns nil
+	}
+	for _, s := range in.HoldoutSession {
+		if held[s] == 0 {
+			held[s] = 1 // session-sticky: withheld earlier this session stays withheld
+		}
+	}
 	if in.MaxK <= 0 {
 		in.MaxK = 8
 	}
-	ranked := rank.Rank(rank.Query{
+	rankedAll := rank.Rank(rank.Query{
 		Terms: terms, Today: in.Today, Project: native.SlugFromCWD(in.CWD),
-	}, cands, in.MaxK)
+	}, cands, 0)
+	// Top-K with holdout refill: a held-out fact inside the window is
+	// withheld (recorded as would-have-injected) and the next-ranked fact
+	// takes its slot — the injection budget stays full during an ablation.
+	var ranked []rank.Scored
+	var skipped []string
+	for _, sc := range rankedAll {
+		if len(ranked) >= in.MaxK {
+			break
+		}
+		if held[sc.Slug] > 0 {
+			skipped = append(skipped, sc.Slug)
+			continue
+		}
+		ranked = append(ranked, sc)
+	}
 	if len(in.AlreadyInjected) > 0 {
 		seen := make(map[string]bool, len(in.AlreadyInjected))
 		for _, s := range in.AlreadyInjected {
@@ -116,8 +154,8 @@ func Run(in Input) (Result, error) {
 			localSlug[f.Slug] = true
 		}
 	}
-	projectBySlug := make(map[string]string, len(injected))
-	for _, slug := range injected {
+	projectBySlug := make(map[string]string, len(injected)+len(skipped))
+	for _, slug := range append(append([]string{}, injected...), skipped...) {
 		// Prefer the project-local owner over global on a basename tie
 		// (matches scopeRecords / bySlug rendering preference).
 		if localSlug[slug] {
@@ -126,10 +164,20 @@ func Run(in Input) (Result, error) {
 			projectBySlug[slug] = f.Project
 		}
 	}
-	return Result{Markdown: md, Injected: injected, ProjectBySlug: projectBySlug}, nil
+	res := Result{Markdown: md, Injected: injected, ProjectBySlug: projectBySlug,
+		HoldoutSkipped: skipped, HoldoutRemaining: map[string]int{}}
+	for _, s := range skipped {
+		res.HoldoutRemaining[s] = held[s]
+	}
+	return res, nil
 }
 
-func candidates(in Input, files []native.MemFile, terms []string) []rank.Candidate {
+// candidates returns ranker-ready candidates plus the holdout budgets
+// (slug → HoldoutRemaining) for rows under an active ablation. Both return
+// values are always non-nil-safe for writing: the degraded native-only path
+// returns an empty map (ablation quietly suspends without a sidecar —
+// best-effort posture), never nil.
+func candidates(in Input, files []native.MemFile, terms []string) ([]rank.Candidate, map[string]int) {
 	sidePath := filepath.Join(in.MemoryDir, ".sidecar.db")
 	walPath := filepath.Join(in.MemoryDir, ".wal")
 	projectSlug := native.SlugFromCWD(in.CWD)
@@ -173,7 +221,11 @@ func candidates(in Input, files []native.MemFile, terms []string) []rank.Candida
 				overlap = map[string]int{}
 			}
 			out := make([]rank.Candidate, 0, len(scoped))
+			held := map[string]int{}
 			for _, r := range scoped {
+				if r.HoldoutRemaining > 0 {
+					held[r.Slug] = r.HoldoutRemaining
+				}
 				out = append(out, rank.Candidate{
 					Slug: r.Slug, Type: r.Type, Project: r.Project,
 					Domains: splitCSV(r.Domains), RefCount: r.RefCount,
@@ -182,10 +234,10 @@ func candidates(in Input, files []native.MemFile, terms []string) []rank.Candida
 					Overlap: overlap[r.Slug],
 				})
 			}
-			return out
+			return out, held
 		}
 	}
-	return degradedCandidates(files, terms)
+	return degradedCandidates(files, terms), map[string]int{}
 }
 
 // shouldWipeSidecar reports whether a sidecar.Open error indicates genuine

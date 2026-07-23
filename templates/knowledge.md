@@ -3,7 +3,7 @@ type: knowledge
 name: "short-slug-name"
 description: "one-line summary of the fact"
 created: YYYY-MM-DD
-status: active
+status: candidate   # agent-originated facts start as candidate; user-dictated rules use active|pinned
 keywords: [kw1, kw2]
 domains: [general]
 # related: [other-slug]     # optional — cluster-link to related knowledge/decision/note

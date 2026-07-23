@@ -48,11 +48,21 @@ type: mistake | strategy | feedback | knowledge | decision | project | continuit
 name: "short-slug"           # sidecar key; kebab-case
 description: "one-liner"     # shown in MEMORY.md index and injection headers
 created: YYYY-MM-DD          # you set — recency signal for ranking
-status: active | pinned      # stale is sidecar-managed, not hand-set
+status: active | pinned | candidate  # stale/retired are sidecar-managed, not hand-set
 keywords: [tag1, tag2, tag3] # primary ranking signal
 domains: [domain1, domain2]  # domain filter — use kebab-case for multi-word
 ---
 ```
+
+**Candidate corroboration.** Agent-originated facts (a mistake, strategy, or
+knowledge you decided to record from your own observation) start as
+`status: candidate` — they inject normally (zero-safe) but must earn `active`
+via a first useful citation. User-dictated rules (feedback, decisions the
+user gave you) start `active` or `pinned` as before. Graduation is
+sidecar-managed: the close hook emits `candidate-confirmed` on the first
+useful citation; you never edit the frontmatter back yourself. `doctor`
+flags candidates with ≥5 silent sessions and none useful — retire those or
+rewrite their keywords/evidence.
 
 `ref_count` and `effectiveness` are sidecar-managed — `memoryctl` reads and updates them. Do not set them manually.
 
@@ -209,11 +219,18 @@ At session end, if you stopped mid-task. Three lines max: what you were doing, c
 
 ## Lifecycle
 
+The full loop: `candidate → active → (ablation check) → promote to a durable
+owner or retire with a tombstone`. Retirement (`memoryctl retire <slug>
+[--reason ...] [--superseded-by <ref>]`) moves the file into the store's
+`.archive/`, stamps tombstone frontmatter, and leaves a redirect: `recall`
+shows `[retired <date> → successor]` instead of silently forgetting.
+`memoryctl revive <slug>` undoes it.
+
 `memoryctl close` runs after every turn (Claude Code fires Stop per turn):
 - Classifies the session's injected set as `trigger-useful` / `trigger-silent` (evidence phrases or slug/name citation in assistant text) and writes the events to the WAL.
 - Recomputes effectiveness from the WAL: `(pos+1)/(pos+neg+2)` over legacy `outcome-*` events **plus** one trigger observation per (slug, session) — useful wins over silent within a session.
 - Marks facts `stale` in the sidecar when unused past their type threshold — age counts from **last injection** (fallback `created`), so facts in rotation stay alive. No native content mutation.
-- Archiving (physical move out of the store) is planned but not shipped; stale facts simply stop injecting.
+- Archiving ships as `memoryctl retire` (see the lifecycle loop above): the file moves to the store's `.archive/`, the sidecar row becomes `retired`, and recall shows a tombstone redirect. Stale facts that were never retired simply stop injecting.
 - `status: pinned` files and `continuity`/`project` facts never decay.
 
 ## How injection ranks files

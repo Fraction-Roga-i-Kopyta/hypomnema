@@ -61,10 +61,12 @@ func Rank(q Query, cands []Candidate, k int) []Scored {
 	today := parseDay(q.Today)
 	out := make([]Scored, 0, len(cands))
 	for _, c := range cands {
-		// Allowlist: active/pinned are always injectable; stale joins only
+		// Allowlist: active/pinned are always injectable; candidate (an
+		// agent-written fact pending corroboration) injects normally —
+		// zero-safe — and graduates via the close hook; stale joins only
 		// for the pull path (Query.IncludeStale). Everything else (deleted,
-		// archived, superseded, unknown) is excluded.
-		allowed := c.Status == "active" || c.Status == "pinned" ||
+		// retired, unknown) is excluded.
+		allowed := c.Status == "active" || c.Status == "pinned" || c.Status == "candidate" ||
 			(q.IncludeStale && c.Status == "stale")
 		if !allowed {
 			continue

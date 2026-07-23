@@ -16,8 +16,10 @@ var staleDays = map[string]int{
 // MarkStale flips active rows older than their type's stale threshold to
 // status='stale' (down-rank, not removed). Age is measured from the last
 // injection (actual use), falling back to created — a fact in active rotation
-// never goes stale just because its file is old. pinned/stale/deleted are
-// left alone. Returns the number newly marked. `today` is YYYY-MM-DD.
+// never goes stale just because its file is old. pinned/stale/deleted/
+// retired are left alone; candidate rows are exempt by construction (the
+// WHERE status='active' filter) — an uncorroborated candidate is doctor's
+// concern, not decay's. Returns the number newly marked. `today` is YYYY-MM-DD.
 func (s *Store) MarkStale(today string) (int, error) {
 	t0, err := time.Parse("2006-01-02", today)
 	if err != nil {
