@@ -257,8 +257,8 @@ func TestOpen_RecreatesOnSchemaVersionMismatch(t *testing.T) {
 	if err := s2.db.QueryRow(`SELECT v FROM meta WHERE k='schema_version'`).Scan(&v); err != nil {
 		t.Fatalf("read schema_version: %v", err)
 	}
-	if v != "4" {
-		t.Errorf("schema_version = %q, want 4", v)
+	if v != "5" {
+		t.Errorf("schema_version = %q, want 5", v)
 	}
 	if _, ok, _ := s2.Get("old.md"); ok {
 		t.Error("rows from an old schema generation must not survive (projection is rebuildable)")
@@ -579,5 +579,69 @@ func TestReproject_CandidateGraduation(t *testing.T) {
 	}
 	if r, _, _ := s2.Get("newbie.md"); r.Status != "active" {
 		t.Fatalf("after useful session: status = %q, want active", r.Status)
+	}
+}
+
+// TestReproject_Holdout: ablate-start begins a holdout budget; each distinct
+// holdout-skip session consumes one; ablate-stop (or exhaustion) ends it.
+func TestReproject_Holdout(t *testing.T) {
+	dir := t.TempDir()
+	walPath := filepath.Join(dir, ".wal")
+	q := native.QKey("projA", "fact")
+	lines := "2026-07-01|ablate-start|" + q + ":3|cli\n" +
+		"2026-07-02|holdout-skip|" + q + "|s1\n" +
+		"2026-07-03|holdout-skip|" + q + "|s2\n" +
+		"2026-07-03|holdout-skip|" + q + "|s2\n" // same session — no double count
+	if err := os.WriteFile(walPath, []byte(lines), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(filepath.Join(dir, ".sidecar.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	files := []native.MemFile{{Slug: "fact.md", Project: "projA", Status: "active"}}
+	if err := Reproject(s, files, walPath, []string{"projA"}); err != nil {
+		t.Fatal(err)
+	}
+	if r, _, _ := s.Get("fact.md"); r.HoldoutRemaining != 1 {
+		t.Fatalf("HoldoutRemaining = %d, want 1", r.HoldoutRemaining)
+	}
+
+	appendLine(t, walPath, "2026-07-04|ablate-stop|"+q+":manual|cli")
+	if err := Reproject(s, files, walPath, []string{"projA"}); err != nil {
+		t.Fatal(err)
+	}
+	if r, _, _ := s.Get("fact.md"); r.HoldoutRemaining != 0 {
+		t.Fatalf("after stop: HoldoutRemaining = %d, want 0", r.HoldoutRemaining)
+	}
+}
+
+// TestReproject_HoldoutEventsDontTouchEffectiveness: holdout-hit/miss are
+// observation events for the ablate report — they must never feed the
+// Bayesian pos/neg (the fact was not injected in those sessions).
+func TestReproject_HoldoutEventsDontTouchEffectiveness(t *testing.T) {
+	dir := t.TempDir()
+	walPath := filepath.Join(dir, ".wal")
+	q := native.QKey("projA", "fact")
+	lines := "2026-07-01|ablate-start|" + q + ":2|cli\n" +
+		"2026-07-02|holdout-skip|" + q + "|s1\n" +
+		"2026-07-02|holdout-hit|" + q + "|s1\n" +
+		"2026-07-03|holdout-skip|" + q + "|s2\n" +
+		"2026-07-03|holdout-miss|" + q + "|s2\n"
+	if err := os.WriteFile(walPath, []byte(lines), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(filepath.Join(dir, ".sidecar.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	files := []native.MemFile{{Slug: "fact.md", Project: "projA", Status: "active"}}
+	if err := Reproject(s, files, walPath, []string{"projA"}); err != nil {
+		t.Fatal(err)
+	}
+	if r, _, _ := s.Get("fact.md"); r.Effectiveness != 0.5 {
+		t.Fatalf("effectiveness = %v, want the untouched 0.5 prior", r.Effectiveness)
 	}
 }
