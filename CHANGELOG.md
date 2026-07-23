@@ -1,5 +1,30 @@
 # Changelog
 
+## [Unreleased]
+
+Harness-lifecycle milestone 1 of 4 (spec:
+`docs/specs/2026-07-23-harness-lifecycle-design.md`).
+
+### Added
+
+- **`memoryctl retire <slug> [--reason ...] [--superseded-by <ref>]` /
+  `memoryctl revive <slug>`.** Retirement moves the fact's file into the
+  store's `.archive/` subdirectory, stamps tombstone frontmatter
+  (`retired`/`retire-reason`/`superseded-by`), and emits a `retire` WAL
+  event; the sidecar projects the row as `status=retired` — distinct from
+  `deleted` (a hand-removed file) and surviving a from-scratch rebuild.
+  `recall` renders matching archived facts as tombstone index lines
+  (`[retired <date> → <successor>]`), never as bodies — retirement is a
+  redirect, not a silent disappearance. New WAL events `retire`/`revive`
+  registered in `docs/EVENTS.md`.
+
+### Fixed
+
+- **Deletion reconciliation is now keyed by (slug, project).** A
+  same-basename file in another project no longer shields this project's
+  dead row from being tombstoned, and the status/keyword updates are scoped
+  to the owning project.
+
 ## [2.10.0] — 2026-07-08
 
 Per-project effectiveness (internal-audit E5-deep). The deepest of the deferred
