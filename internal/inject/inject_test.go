@@ -431,8 +431,33 @@ func TestRun_HoldoutSkip(t *testing.T) {
 		t.Fatalf("skipped fact must carry its project: %v", res.ProjectBySlug)
 	}
 
-	// Session-sticky: no sidecar budget, but the session list says withheld.
+	// Session-sticky: rebuild the sidecar from an EMPTY WAL so the stored
+	// budget is genuinely zero (with rows present the self-heal reproject
+	// does not rerun, and the phase-1 budget would mask this mechanism).
 	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
+	for _, sfx := range []string{"", "-wal", "-shm"} {
+		os.Remove(filepath.Join(memDir, ".sidecar.db"+sfx))
+	}
+	// Control: without HoldoutSession the fact injects again.
+	res, err = Run(Input{
+		Event: "UserPromptSubmit", SessionID: "s1",
+		CWD: "/tmp/proj", Prompt: "fix the docker cache",
+		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir,
+		Today: "2026-07-23", MaxK: 2,
+	})
+	if err != nil {
+		t.Fatalf("Run(control): %v", err)
+	}
+	found := false
+	for _, s := range res.Injected {
+		if s == "docker.md" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("control run must deliver docker.md (budget 0): %v", res.Injected)
+	}
+	// With HoldoutSession the same ranking withholds it.
 	res, err = Run(Input{
 		Event: "UserPromptSubmit", SessionID: "s1",
 		CWD: "/tmp/proj", Prompt: "fix the docker cache",
