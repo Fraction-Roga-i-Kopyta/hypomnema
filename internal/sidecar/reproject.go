@@ -20,6 +20,10 @@ type agg struct {
 	// was trigger-useful in that session (useful wins over silent — close
 	// runs every turn, so a fact silent at turn 1 may be cited at turn 5).
 	sessions map[string]bool
+	// retired is true when the WAL carries a retire event for the slug with
+	// no later revive — reproject preserves the distinction from 'deleted'
+	// (hand-removed file) so a rebuilt sidecar keeps the deliberate decision.
+	retired bool
 }
 
 // mergeFrom folds another aggregate into a (used to combine a fact's
@@ -41,6 +45,7 @@ func (a *agg) mergeFrom(src *agg) {
 	for sess, useful := range src.sessions {
 		a.classify(sess, useful)
 	}
+	a.retired = a.retired || src.retired
 }
 
 func (a *agg) classify(session string, useful bool) {
@@ -165,29 +170,64 @@ func reprojectIn(e dbtx, files []native.MemFile, walPath string, scope []string)
 		}
 	}
 
-	// Scoped deletion reconciliation (see doc comment above).
+	// Scoped deletion reconciliation (see doc comment above). keep is keyed
+	// by the composite (project, slug) — a same-basename file in another
+	// project must not shield this project's dead row from reconciliation.
 	inScope := make(map[string]bool, len(scope)+4)
 	for _, p := range scope {
 		inScope[p] = true
 	}
 	keep := make(map[string]bool, len(files))
 	for _, f := range files {
-		keep[f.Slug] = true
+		keep[native.QKey(f.Project, f.Slug)] = true
 		inScope[f.Project] = true
 	}
+
+	// A retired fact's file lives in .archive/ and is absent from `files`,
+	// so the upsert loop never writes its row — yet a rebuilt sidecar must
+	// still know the retirement was deliberate (tombstones survive rebuild).
+	// Insert minimal retired rows from the WAL aggregates. Only qualified
+	// aggregates carry a project (retire events postdate qualification), and
+	// only in-scope projects are touched (scoped-reconciliation invariant).
+	for key, a := range aggs {
+		if !a.retired {
+			continue
+		}
+		project, bare, qualified := native.ParseQKey(key)
+		if !qualified || !inScope[project] {
+			continue
+		}
+		slug := bare + ".md"
+		if keep[native.QKey(project, slug)] {
+			continue // file is back in the live store (hand-restored) — live row wins
+		}
+		if err := upsertIn(e, Record{Slug: slug, Project: project, Status: "retired",
+			Created: a.created, LastInjected: a.lastInject, RefCount: a.injects}); err != nil {
+			return fmt.Errorf("sidecar.Reproject: retired row %s: %w", slug, err)
+		}
+	}
+
 	existing, err := allIn(e)
 	if err != nil {
 		return fmt.Errorf("sidecar.Reproject: reconcile list: %w", err)
 	}
 	for _, r := range existing {
-		if !keep[r.Slug] && r.Status != "deleted" && inScope[r.Project] {
-			if _, err := e.Exec(`UPDATE memory SET status='deleted' WHERE slug=?`, r.Slug); err != nil {
-				return fmt.Errorf("sidecar.Reproject: mark deleted %s: %w", r.Slug, err)
-			}
-			// Drop the dead row's keywords so it stops matching overlap queries.
-			if _, err := e.Exec(`DELETE FROM keyword WHERE slug=?`, r.Slug); err != nil {
-				return fmt.Errorf("sidecar.Reproject: clear keywords %s: %w", r.Slug, err)
-			}
+		if keep[native.QKey(r.Project, r.Slug)] || r.Status == "deleted" || r.Status == "retired" || !inScope[r.Project] {
+			continue
+		}
+		status := "deleted"
+		bare := strings.TrimSuffix(r.Slug, ".md")
+		if a := aggs[native.QKey(r.Project, bare)]; a != nil && a.retired {
+			status = "retired"
+		} else if a := aggs[bare]; a != nil && a.retired {
+			status = "retired"
+		}
+		if _, err := e.Exec(`UPDATE memory SET status=? WHERE slug=? AND project=?`, status, r.Slug, r.Project); err != nil {
+			return fmt.Errorf("sidecar.Reproject: mark %s %s: %w", status, r.Slug, err)
+		}
+		// Drop the dead row's keywords so it stops matching overlap queries.
+		if _, err := e.Exec(`DELETE FROM keyword WHERE slug=? AND project=?`, r.Slug, r.Project); err != nil {
+			return fmt.Errorf("sidecar.Reproject: clear keywords %s: %w", r.Slug, err)
 		}
 	}
 
@@ -220,6 +260,12 @@ func readWALAgg(walPath string) map[string]*agg {
 		// events by the bare slug alone — reproject grandfathers those onto the
 		// current owner(s). Normalise .md so v1/v2 slugs collapse.
 		project, slug, qualified := native.ParseQKey(target)
+		// Lifecycle events carry sub-delimited extras (">successor",
+		// ":reason") in the slug part — strip them before keying.
+		switch event {
+		case "retire", "revive", "ablate-start", "ablate-stop":
+			slug = trimTargetExtras(slug)
+		}
 		slug = strings.TrimSuffix(slug, ".md")
 		key := slug
 		if qualified {
@@ -266,6 +312,10 @@ func readWALAgg(walPath string) map[string]*agg {
 			a.classify(field4, true)
 		case "trigger-silent", "trigger-silent-retro":
 			a.classify(field4, false)
+		case "retire":
+			a.retired = true
+		case "revive":
+			a.retired = false
 		}
 		if a.created == "" || date < a.created {
 			a.created = date
@@ -301,6 +351,16 @@ func replayOutcomes(e dbtx, walPath string) error {
 		return fmt.Errorf("sidecar.replayOutcomes: scan: %w", err)
 	}
 	return nil
+}
+
+// trimTargetExtras strips sub-delimited extras (">successor", ":reason",
+// ":N") from a WAL target's slug part, leaving the bare aggregation key.
+// Used for retire/revive/ablate-start/ablate-stop targets.
+func trimTargetExtras(s string) string {
+	if i := strings.IndexAny(s, ">:"); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
 
 // parseWALLine splits a 4-column WAL line "DATE|EVENT|SLUG|FIELD4". FIELD4 is
