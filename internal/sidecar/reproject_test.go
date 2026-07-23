@@ -257,8 +257,8 @@ func TestOpen_RecreatesOnSchemaVersionMismatch(t *testing.T) {
 	if err := s2.db.QueryRow(`SELECT v FROM meta WHERE k='schema_version'`).Scan(&v); err != nil {
 		t.Fatalf("read schema_version: %v", err)
 	}
-	if v != "4" {
-		t.Errorf("schema_version = %q, want 4", v)
+	if v != schemaVersion {
+		t.Errorf("schema_version = %q, want current %q", v, schemaVersion)
 	}
 	if _, ok, _ := s2.Get("old.md"); ok {
 		t.Error("rows from an old schema generation must not survive (projection is rebuildable)")
@@ -456,5 +456,192 @@ func TestReproject_ErrorRollsBackOutcomeClear(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("failed Reproject lost outcome rows (have %d, want 1) — projection is not transactional", n)
+	}
+}
+
+// appendLine appends one WAL line (test helper).
+func appendLine(t *testing.T, path, line string) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(line + "\n"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestReproject_RetiredStatus: a fact with a `retire` WAL event and a missing
+// native file projects as status='retired', not 'deleted'; a later `revive`
+// event cancels the retirement (missing file then projects as 'deleted').
+// Retirement must also survive a from-scratch rebuild (empty sidecar).
+func TestReproject_RetiredStatus(t *testing.T) {
+	dir := t.TempDir()
+	walPath := filepath.Join(dir, ".wal")
+	q := native.QKey("projA", "old-fact")
+	wal := "2026-07-01|inject|" + q + "|s1\n" +
+		"2026-07-20|retire|" + q + ">new-owner:promoted_to_hook|cli\n"
+	if err := os.WriteFile(walPath, []byte(wal), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(filepath.Join(dir, ".sidecar.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	// Row exists from a previous projection; file now absent from `files`.
+	if err := s.Upsert(Record{Slug: "old-fact.md", Project: "projA", Status: "active"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Reproject(s, nil, walPath, []string{"projA"}); err != nil {
+		t.Fatal(err)
+	}
+	r, ok, _ := s.Get("old-fact.md")
+	if !ok || r.Status != "retired" {
+		t.Fatalf("status = %q (ok=%v), want retired", r.Status, ok)
+	}
+
+	// From-scratch rebuild: a fresh sidecar with the same WAL and no files
+	// must still know the retirement was deliberate.
+	s2, err := Open(filepath.Join(dir, ".sidecar2.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	if err := Reproject(s2, nil, walPath, []string{"projA"}); err != nil {
+		t.Fatal(err)
+	}
+	r, ok, _ = s2.Get("old-fact.md")
+	if !ok || r.Status != "retired" {
+		t.Fatalf("from-scratch: status = %q (ok=%v), want retired row inserted", r.Status, ok)
+	}
+
+	// Revive cancels: missing file then falls back to plain deletion.
+	appendLine(t, walPath, "2026-07-21|revive|"+q+"|cli")
+	if err := s.Upsert(Record{Slug: "old-fact.md", Project: "projA", Status: "active"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Reproject(s, nil, walPath, []string{"projA"}); err != nil {
+		t.Fatal(err)
+	}
+	if r, _, _ := s.Get("old-fact.md"); r.Status != "deleted" {
+		t.Fatalf("after revive: status = %q, want deleted", r.Status)
+	}
+}
+
+// TestReproject_CandidateGraduation: frontmatter status=candidate projects
+// as sidecar status=candidate until the WAL carries a confirmation
+// (candidate-confirmed event or any trigger-useful session), then active.
+func TestReproject_CandidateGraduation(t *testing.T) {
+	dir := t.TempDir()
+	walPath := filepath.Join(dir, ".wal")
+	q := native.QKey("projA", "newbie")
+	if err := os.WriteFile(walPath,
+		[]byte("2026-07-20|inject|"+q+"|s1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(filepath.Join(dir, ".sidecar.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	files := []native.MemFile{{Slug: "newbie.md", Project: "projA", Status: "candidate", Type: "mistake"}}
+	if err := Reproject(s, files, walPath, []string{"projA"}); err != nil {
+		t.Fatal(err)
+	}
+	if r, _, _ := s.Get("newbie.md"); r.Status != "candidate" {
+		t.Fatalf("status = %q, want candidate", r.Status)
+	}
+
+	appendLine(t, walPath, "2026-07-21|candidate-confirmed|"+q+"|s2")
+	if err := Reproject(s, files, walPath, []string{"projA"}); err != nil {
+		t.Fatal(err)
+	}
+	if r, _, _ := s.Get("newbie.md"); r.Status != "active" {
+		t.Fatalf("after confirm event: status = %q, want active", r.Status)
+	}
+
+	// Graduation also follows plain usefulness (belt and braces for a lost
+	// confirmation event): fresh store, trigger-useful only.
+	s2, err := Open(filepath.Join(dir, ".sidecar2.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	wal2 := filepath.Join(dir, ".wal2")
+	if err := os.WriteFile(wal2,
+		[]byte("2026-07-20|inject|"+q+"|s1\n2026-07-20|trigger-useful|"+q+"|s1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Reproject(s2, files, wal2, []string{"projA"}); err != nil {
+		t.Fatal(err)
+	}
+	if r, _, _ := s2.Get("newbie.md"); r.Status != "active" {
+		t.Fatalf("after useful session: status = %q, want active", r.Status)
+	}
+}
+
+// TestReproject_Holdout: ablate-start begins a holdout budget; each distinct
+// holdout-skip session consumes one; ablate-stop (or exhaustion) ends it.
+func TestReproject_Holdout(t *testing.T) {
+	dir := t.TempDir()
+	walPath := filepath.Join(dir, ".wal")
+	q := native.QKey("projA", "fact")
+	lines := "2026-07-01|ablate-start|" + q + ":3|cli\n" +
+		"2026-07-02|holdout-skip|" + q + "|s1\n" +
+		"2026-07-03|holdout-skip|" + q + "|s2\n" +
+		"2026-07-03|holdout-skip|" + q + "|s2\n" // same session — no double count
+	if err := os.WriteFile(walPath, []byte(lines), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(filepath.Join(dir, ".sidecar.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	files := []native.MemFile{{Slug: "fact.md", Project: "projA", Status: "active"}}
+	if err := Reproject(s, files, walPath, []string{"projA"}); err != nil {
+		t.Fatal(err)
+	}
+	if r, _, _ := s.Get("fact.md"); r.HoldoutRemaining != 1 {
+		t.Fatalf("HoldoutRemaining = %d, want 1", r.HoldoutRemaining)
+	}
+
+	appendLine(t, walPath, "2026-07-04|ablate-stop|"+q+":manual|cli")
+	if err := Reproject(s, files, walPath, []string{"projA"}); err != nil {
+		t.Fatal(err)
+	}
+	if r, _, _ := s.Get("fact.md"); r.HoldoutRemaining != 0 {
+		t.Fatalf("after stop: HoldoutRemaining = %d, want 0", r.HoldoutRemaining)
+	}
+}
+
+// TestReproject_HoldoutEventsDontTouchEffectiveness: holdout-hit/miss are
+// observation events for the ablate report — they must never feed the
+// Bayesian pos/neg (the fact was not injected in those sessions).
+func TestReproject_HoldoutEventsDontTouchEffectiveness(t *testing.T) {
+	dir := t.TempDir()
+	walPath := filepath.Join(dir, ".wal")
+	q := native.QKey("projA", "fact")
+	lines := "2026-07-01|ablate-start|" + q + ":2|cli\n" +
+		"2026-07-02|holdout-skip|" + q + "|s1\n" +
+		"2026-07-02|holdout-hit|" + q + "|s1\n" +
+		"2026-07-03|holdout-skip|" + q + "|s2\n" +
+		"2026-07-03|holdout-miss|" + q + "|s2\n"
+	if err := os.WriteFile(walPath, []byte(lines), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(filepath.Join(dir, ".sidecar.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	files := []native.MemFile{{Slug: "fact.md", Project: "projA", Status: "active"}}
+	if err := Reproject(s, files, walPath, []string{"projA"}); err != nil {
+		t.Fatal(err)
+	}
+	if r, _, _ := s.Get("fact.md"); r.Effectiveness != 0.5 {
+		t.Fatalf("effectiveness = %v, want the untouched 0.5 prior", r.Effectiveness)
 	}
 }

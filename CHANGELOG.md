@@ -1,5 +1,65 @@
 # Changelog
 
+## [Unreleased]
+
+Harness lifecycle, complete (4 milestones; spec:
+`docs/specs/2026-07-23-harness-lifecycle-design.md`). The fact lifecycle is
+now a closed loop: `candidate → active → (ablation check) → promote to a
+durable owner | retire with a tombstone`.
+
+### Added
+
+- **`memoryctl promote` — report-only promotion ladder.** Scans frontmatter
+  + WAL for facts that have outgrown prose memory: `mistake` with
+  `recurrence ≥ 2` (prose failed twice → suggest a hook/lint/test), facts
+  useful in the last 5 classified sessions (needed every time → suggest
+  CLAUDE.md), completed ablations with ≥ 75% hit-rate (internalized →
+  suggest retire), never-corroborated candidates (≥ 5 silent, 0 useful →
+  retire or rewrite). One suggestion per fact, highest consequence wins;
+  each prints its evidence and the closing `memoryctl retire` command.
+  Mutates nothing; exit 0 always.
+
+- **Per-fact ablation: `memoryctl ablate <slug> [--sessions N]` /
+  `ablate stop` / `ablate report`.** A holdout withholds the fact from
+  injection for N would-have-injected sessions (the next-ranked fact fills
+  the slot, so the budget stays full); the close hook classifies the
+  transcript anyway — evidence present without injection → `holdout-hit`
+  (the rule is internalized; the memory may be redundant), absent →
+  `holdout-miss` (the memory is doing work). Neither feeds Bayesian
+  effectiveness. Holdout is session-sticky and pull-contamination-aware
+  (a fact delivered via recall mid-ablation is excluded from that session's
+  observation). Sidecar schema v5 adds the WAL-derived `holdout_remaining`
+  column; events `ablate-start`/`ablate-stop`/`holdout-skip`/`holdout-hit`/
+  `holdout-miss` registered in `docs/EVENTS.md`.
+
+- **Candidate corroboration (soft path).** `status: candidate` is a valid
+  author-set status for agent-originated facts: they inject normally
+  (zero-safe preserved) but graduate to `active` only on their first useful
+  citation — the close hook emits a `candidate-confirmed` WAL event (once
+  per fact, WAL-deduped) and the sidecar owns the transition; content files
+  are never rewritten. `doctor` gains a `candidate_corroboration` check
+  flagging candidates with ≥5 silent sessions and none useful, and the
+  corpus check now hints at `memoryctl retire` when stale facts exist.
+  Agent protocol updated (CLAUDE.md, skills/memory-system.md, templates).
+
+- **`memoryctl retire <slug> [--reason ...] [--superseded-by <ref>]` /
+  `memoryctl revive <slug>`.** Retirement moves the fact's file into the
+  store's `.archive/` subdirectory, stamps tombstone frontmatter
+  (`retired`/`retire-reason`/`superseded-by`), and emits a `retire` WAL
+  event; the sidecar projects the row as `status=retired` — distinct from
+  `deleted` (a hand-removed file) and surviving a from-scratch rebuild.
+  `recall` renders matching archived facts as tombstone index lines
+  (`[retired <date> → <successor>]`), never as bodies — retirement is a
+  redirect, not a silent disappearance. New WAL events `retire`/`revive`
+  registered in `docs/EVENTS.md`.
+
+### Fixed
+
+- **Deletion reconciliation is now keyed by (slug, project).** A
+  same-basename file in another project no longer shields this project's
+  dead row from being tombstoned, and the status/keyword updates are scoped
+  to the owning project.
+
 ## [2.10.0] — 2026-07-08
 
 Per-project effectiveness (internal-audit E5-deep). The deepest of the deferred

@@ -387,3 +387,90 @@ func TestCandidates_CorruptSidecarSiblingsRemoved(t *testing.T) {
 		}
 	}
 }
+
+// TestRun_HoldoutSkip: a held-out fact that ranks inside the top-K is
+// dropped from delivery, reported in HoldoutSkipped, and its slot is filled
+// by the next-ranked fact. Session-sticky: Input.HoldoutSession withholds
+// even when the sidecar budget reads zero.
+func TestRun_HoldoutSkip(t *testing.T) {
+	memDir, projDir, home := setup(t)
+	os.WriteFile(filepath.Join(projDir, "docker.md"),
+		[]byte("---\nname: Docker cache\ntype: mistake\nkeywords: [docker, cache]\n---\ndocker layer cache stale\n"), 0o644)
+	os.WriteFile(filepath.Join(projDir, "sql.md"),
+		[]byte("---\nname: SQL index\ntype: knowledge\n---\npostgres index plan\n"), 0o644)
+	os.WriteFile(filepath.Join(projDir, "redis.md"),
+		[]byte("---\nname: Redis ttl\ntype: knowledge\n---\nredis ttl\n"), 0o644)
+	q := "-tmp-proj\x1fdocker"
+	os.WriteFile(filepath.Join(memDir, ".wal"),
+		[]byte("2026-07-01|ablate-start|"+q+":2|cli\n"), 0o644)
+
+	res, err := Run(Input{
+		Event: "UserPromptSubmit", SessionID: "s1",
+		CWD: "/tmp/proj", Prompt: "fix the docker cache",
+		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir,
+		Today: "2026-07-23", MaxK: 2,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for _, s := range res.Injected {
+		if s == "docker.md" {
+			t.Fatalf("held-out fact was delivered: %v", res.Injected)
+		}
+	}
+	if len(res.Injected) != 2 {
+		t.Fatalf("slot not refilled: Injected=%v, want 2 facts", res.Injected)
+	}
+	if len(res.HoldoutSkipped) != 1 || res.HoldoutSkipped[0] != "docker.md" {
+		t.Fatalf("HoldoutSkipped = %v, want [docker.md]", res.HoldoutSkipped)
+	}
+	if res.HoldoutRemaining["docker.md"] != 2 {
+		t.Fatalf("HoldoutRemaining = %v, want docker.md:2", res.HoldoutRemaining)
+	}
+	if res.ProjectBySlug["docker.md"] == "" {
+		t.Fatalf("skipped fact must carry its project: %v", res.ProjectBySlug)
+	}
+
+	// Session-sticky: rebuild the sidecar from an EMPTY WAL so the stored
+	// budget is genuinely zero (with rows present the self-heal reproject
+	// does not rerun, and the phase-1 budget would mask this mechanism).
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
+	for _, sfx := range []string{"", "-wal", "-shm"} {
+		os.Remove(filepath.Join(memDir, ".sidecar.db"+sfx))
+	}
+	// Control: without HoldoutSession the fact injects again.
+	res, err = Run(Input{
+		Event: "UserPromptSubmit", SessionID: "s1",
+		CWD: "/tmp/proj", Prompt: "fix the docker cache",
+		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir,
+		Today: "2026-07-23", MaxK: 2,
+	})
+	if err != nil {
+		t.Fatalf("Run(control): %v", err)
+	}
+	found := false
+	for _, s := range res.Injected {
+		if s == "docker.md" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("control run must deliver docker.md (budget 0): %v", res.Injected)
+	}
+	// With HoldoutSession the same ranking withholds it.
+	res, err = Run(Input{
+		Event: "UserPromptSubmit", SessionID: "s1",
+		CWD: "/tmp/proj", Prompt: "fix the docker cache",
+		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir,
+		Today: "2026-07-23", MaxK: 2,
+		HoldoutSession: []string{"docker.md"},
+	})
+	if err != nil {
+		t.Fatalf("Run(sticky): %v", err)
+	}
+	for _, s := range res.Injected {
+		if s == "docker.md" {
+			t.Fatalf("session-sticky holdout was delivered: %v", res.Injected)
+		}
+	}
+}

@@ -3,7 +3,7 @@ type: mistake
 name: "short-slug-name"
 description: "one-line summary of the mistake, shown in the MEMORY.md index and injection header"
 created: YYYY-MM-DD
-status: active
+status: candidate   # agent-originated facts start as candidate; user-dictated rules use active|pinned
 severity: minor            # critical | major | minor
 recurrence: 1              # bump when the same mistake recurs
 scope: narrow              # universal | domain | narrow — informational: how broadly the lesson applies

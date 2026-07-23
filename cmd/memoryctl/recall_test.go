@@ -250,3 +250,44 @@ func TestRecallStaleMarkerAndCliFallback(t *testing.T) {
 		}
 	}
 }
+
+// TestRecall_RetiredTombstone: an archived fact matching the query surfaces
+// as a tombstone index line (never a body render), pointing at its successor
+// — including on the "no matches" path.
+func TestRecall_RetiredTombstone(t *testing.T) {
+	env, _, projDir := recallFixture(t)
+	arch := filepath.Join(projDir, ".archive")
+	if err := os.MkdirAll(arch, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tomb := "---\nname: gone\ntype: mistake\ndescription: old docker rule\n" +
+		"keywords: [docker]\nretired: 2026-07-01\nretire-reason: superseded\n" +
+		"superseded-by: new-owner\n---\nold body text\n"
+	if err := os.WriteFile(filepath.Join(arch, "gone.md"), []byte(tomb), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, errOut, code := run(t, env, "recall", "docker")
+	if code != 0 {
+		t.Fatalf("recall exit=%d stderr=%s", code, errOut)
+	}
+	if !strings.Contains(out, "retired 2026-07-01") || !strings.Contains(out, "new-owner") {
+		t.Fatalf("tombstone missing from recall output:\n%s", out)
+	}
+	// Index line only, never a body render.
+	if strings.Contains(out, "## gone") || strings.Contains(out, "old body text") {
+		t.Fatalf("retired fact must render as a tombstone line, not a body:\n%s", out)
+	}
+
+	// No-live-matches path still shows the tombstone: query a term only the
+	// archived fact carries.
+	os.WriteFile(filepath.Join(arch, "gone.md"),
+		[]byte(strings.Replace(tomb, "[docker]", "[zanzibar]", 1)), 0o644)
+	out, _, code = run(t, env, "recall", "zanzibar")
+	if code != 0 {
+		t.Fatalf("recall exit=%d", code)
+	}
+	if !strings.Contains(out, "no matches") || !strings.Contains(out, "gone") {
+		t.Fatalf("tombstone must print after no matches:\n%s", out)
+	}
+}

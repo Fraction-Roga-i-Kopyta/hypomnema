@@ -50,12 +50,16 @@ func runInject(args []string) {
 		Event: event, SessionID: in.SessionID, CWD: in.CWD, Prompt: in.Prompt,
 		ClaudeHome: claudeDir(), MemoryDir: memoryDir(), Today: today(), MaxK: 8,
 		AlreadyInjected: already,
+		HoldoutSession:  readListFile(holdoutListPath(in.SessionID)),
 	})
 	if err != nil {
 		os.Exit(0)
 	}
 	if len(res.Injected) > 0 && in.SessionID != "" {
 		persistInjected(already, res.Injected, res.ProjectBySlug, in.SessionID)
+	}
+	if in.SessionID != "" {
+		persistHoldoutSkips(res, in.SessionID)
 	}
 	emitEnvelope(event, res.Markdown)
 	os.Exit(0)
@@ -73,7 +77,12 @@ func readInjectedList(sessionID string) []string {
 	if sessionID == "" {
 		return nil
 	}
-	b, err := os.ReadFile(sessionListPath(sessionID))
+	return readListFile(sessionListPath(sessionID))
+}
+
+// readListFile reads a newline-delimited slug list; a missing file is nil.
+func readListFile(path string) []string {
+	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil
 	}
@@ -84,6 +93,50 @@ func readInjectedList(sessionID string) []string {
 		}
 	}
 	return out
+}
+
+func holdoutListPath(sessionID string) string {
+	return filepath.Join(memoryDir(), ".runtime",
+		"holdout-"+pathutil.SafeFileName(sessionID)+".list")
+}
+
+// persistHoldoutSkips records each held-out fact's would-have-injected
+// observation: one holdout-skip WAL event per fact per session (the runtime
+// list dedups repeat prompts), plus the session list the close hook reads to
+// classify behaviour-without-injection. The final observation session also
+// closes the experiment with ablate-stop:expired.
+func persistHoldoutSkips(res inject.Result, sessionID string) {
+	if len(res.HoldoutSkipped) == 0 {
+		return
+	}
+	if err := os.MkdirAll(filepath.Join(memoryDir(), ".runtime"), 0o755); err != nil {
+		return // fail-safe: no list means a repeat emission at worst
+	}
+	union := readListFile(holdoutListPath(sessionID))
+	already := make(map[string]bool, len(union))
+	for _, s := range union {
+		already[s] = true
+	}
+	day, sid := today(), wal.SanitizeField(sessionID)
+	for _, slug := range res.HoldoutSkipped {
+		if already[slug] {
+			continue
+		}
+		target := wal.SanitizeField(slug)
+		if p := res.ProjectBySlug[slug]; p != "" {
+			target = native.QKey(p, target)
+		}
+		wal.Append(memoryDir(), fmt.Sprintf("%s|holdout-skip|%s|%s", day, target, sid), "")
+		if res.HoldoutRemaining[slug] == 1 {
+			// This was the last budgeted observation — close the experiment.
+			wal.Append(memoryDir(), fmt.Sprintf("%s|ablate-stop|%s:expired|%s", day, target, sid), "")
+		}
+		union = append(union, slug)
+	}
+	if len(union) > 0 {
+		_ = pathutil.WriteFileAtomic(holdoutListPath(sessionID),
+			[]byte(strings.Join(union, "\n")+"\n"), 0o600)
+	}
 }
 
 func persistInjected(already, slugs []string, projectBySlug map[string]string, sessionID string) {
@@ -142,7 +195,8 @@ func pruneRuntimeLists(dir string) {
 	cutoff := time.Now().Add(-7 * 24 * time.Hour)
 	for _, e := range entries {
 		name := e.Name()
-		if !strings.HasPrefix(name, "injected-") || !strings.HasSuffix(name, ".list") {
+		if (!strings.HasPrefix(name, "injected-") && !strings.HasPrefix(name, "holdout-")) ||
+			!strings.HasSuffix(name, ".list") {
 			continue
 		}
 		if info, err := e.Info(); err == nil && info.ModTime().Before(cutoff) {
