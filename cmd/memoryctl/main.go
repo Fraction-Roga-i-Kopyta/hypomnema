@@ -97,6 +97,12 @@ Usage:
   memoryctl ab
       Diagnostic: replay the WAL to compare ranked vs baseline retrieval
       (A/B evidence). Read-only; see docs/measurements/.
+  memoryctl ablate <slug> [--sessions N] | stop <slug> | report [<slug>]
+      Per-fact ablation: withhold the fact from injection for N would-have-
+      injected sessions (default 5) while the close hook records whether the
+      behavior held without it (holdout-hit/miss). "report" prints observed
+      sessions, hit-rate, and a verdict hint. Requires a live sidecar; in
+      degraded (no-sidecar) mode the holdout quietly suspends.
 
 Hook verbs (invoked by the v2 shims, not run by hand): inject, close, guard,
 skill-inject, skill-active. Each reads a hook envelope on stdin and is
@@ -178,6 +184,8 @@ func main() {
 		runSkillActive(os.Args[2:])
 	case "ab":
 		runAB(os.Args[2:])
+	case "ablate":
+		runAblate(os.Args[2:])
 	case "guard":
 		runGuard(os.Args[2:])
 	case "reindex":
