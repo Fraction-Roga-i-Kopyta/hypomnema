@@ -146,11 +146,20 @@ memoryctl ablate report [<slug>]
   injected** (holdout-skip sessions), not wall-clock sessions — a fact that
   never ranks provides no ablation signal. `inject` emits
   `ablate-stop|<slug>:expired` on expiry.
+- Holdout is **session-sticky**: once a fact was withheld in a session it
+  stays withheld for the whole session, even though the Stop hook (which
+  fires per turn) re-derives `holdout_remaining` mid-session — otherwise the
+  final observation session would re-inject the fact on its second prompt
+  and contaminate its own measurement. The session's holdout list is the
+  authority for the rest of that session.
 - `close`: for each held-out fact with a `holdout-skip` this session, run
   the same evidence classification used for injected facts against the
   transcript: evidence present → `holdout-hit`, absent → `holdout-miss`.
   These do NOT feed Bayesian effectiveness (the fact was not injected;
-  penalizing it for silence would corrupt the posterior).
+  penalizing it for silence would corrupt the posterior). Facts that also
+  appear in the session's injected set (delivered by a pull path — `recall`
+  or `skill-inject` — during the holdout) are excluded from holdout
+  classification: the model saw them, so the observation is contaminated.
 
 **Report.** `ablate report <slug>`:
 ```
