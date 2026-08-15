@@ -97,7 +97,7 @@ Usage:
       Migrate the legacy v1 store to v2 native memory. --dry-run previews the
       plan; --execute writes native files and backs up the v1 store to
       memory.v1-backup-<date>; --rollback restores the newest such backup.
-  memoryctl rank [query words...]
+  memoryctl rank --query "<words>" [--project P] [--k N]
       Diagnostic: print the ranked candidate list (score breakdown) for the
       current project + global scope against an ad-hoc query. Read-only.
   memoryctl ab

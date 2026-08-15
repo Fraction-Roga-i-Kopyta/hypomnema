@@ -231,7 +231,8 @@ func candidates(in Input, files []native.MemFile, terms []string) ([]rank.Candid
 					Domains: splitCSV(r.Domains), RefCount: r.RefCount,
 					Effectiveness: r.Effectiveness, Status: r.Status,
 					Created: r.Created, LastInjected: r.LastInjected,
-					Overlap: overlap[r.Slug],
+					LastUseful: r.LastUseful,
+					Overlap:    overlap[r.Slug],
 				})
 			}
 			return out, held
