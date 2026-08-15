@@ -245,7 +245,7 @@ The shims activate on next session start.
 
 `memoryctl close` regenerates `self-profile.md` on every close (Stop fires per turn) from WAL events. Five sections: meta-signals (total sessions, outcome-positive/negative counts, trigger-useful vs trigger-silent), intuition signal (silent-applied/trigger-useful ratio), strengths (top strategies by success_count), weaknesses (top mistakes by recurrence), and calibration (domains by error rate). Never edit manually — it's a pure function of WAL.
 
-Run `memoryctl doctor` for a health snapshot: sidecar drift, WAL anomalies, stale facts due for down-rank, global store coverage.
+Run `memoryctl doctor` for a health snapshot: sidecar drift, WAL anomalies, stale facts due for down-rank, global store coverage, **facts larger than the 2.5 KB injection cap** (they inject as a header plus a marker; split or retire them).
 
 ## Pull retrieval
 
@@ -254,6 +254,8 @@ memoryctl recall <query words...> [--k N]
 ```
 
 Pull-side retrieval: rank current project + global memory against an ad-hoc query; print the best fact's body (2.5KB cap) plus an index of runner-ups with file paths (default 6 results total). Writes a `recall` WAL event for the delivered fact and unions it into the session's injected list. Includes stale facts (marked `[stale]`) — recalling one revives it.
+
+A truncated injection ends with `…(truncated — N B total; full text: <path>)` — read that file for the rest; `memoryctl recall` serves a ranked, equally capped excerpt.
 
 ## Lifecycle
 

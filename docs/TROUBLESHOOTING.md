@@ -141,6 +141,15 @@ producing citation events, so they are excluded from the precision denominator
 on purpose. If the rule *should* produce visible citations, remove
 `precision_class: ambient` and add `evidence:` phrases.
 
+### An injected fact ends with `…(truncated — N B total; full text: <path>)`
+
+Bodies are capped at 2 500 B per record so the whole payload stays under the
+8 KB inline limit. The marker names the total size and the file's absolute
+path — read it for the rest (`memoryctl recall` applies the same cap to its
+top hit). `memoryctl doctor` lists such facts under `oversized_facts` — split
+them into focused facts, or retire the journal-like ones and keep a short
+summary.
+
 ## Two Claude Code sessions running at once
 
 Safe. WAL writes and the feedback-loop reads are locked. The per-session
