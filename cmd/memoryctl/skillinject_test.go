@@ -176,6 +176,40 @@ func TestSkillActiveSanitizesSessionID(t *testing.T) {
 	}
 }
 
+// TestSkillInjectMarkerNamesSizeAndPath is a regression test for the marker
+// gaining a size + full-text-path hint: a capped skill-learning body must
+// tell the model how big it really is and where to Read the rest.
+func TestSkillInjectMarkerNamesSizeAndPath(t *testing.T) {
+	env := skillFixture(t)
+	globalDir := filepath.Join(env["CLAUDE_HOME"], "memory-global")
+	name := "big-commit-learning"
+	body := strings.Repeat("x", 3000)
+	c := "---\ntype: skill-learning\nname: " + name +
+		"\ndescription: big learning\nskill: commit\nstatus: active\ncreated: 2026-06-14\n---\n\n" + body + "\n"
+	path := filepath.Join(globalDir, name+".md")
+	if err := os.WriteFile(path, []byte(c), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stdin := `{"session_id":"s9","tool_input":{"skill":"commit"}}`
+	stdout, _, exit := runStdin(t, env, stdin, "skill-inject")
+	if exit != 0 {
+		t.Fatalf("exit=%d, want 0", exit)
+	}
+	var out struct {
+		HookSpecificOutput struct {
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &out); err != nil {
+		t.Fatalf("bad envelope: %v\n%s", err, stdout)
+	}
+	marker := "…(truncated — 3000 B total; full text: " + path
+	if !strings.Contains(out.HookSpecificOutput.AdditionalContext, marker) {
+		t.Fatalf("want marker %q in additionalContext, got: %s", marker, out.HookSpecificOutput.AdditionalContext)
+	}
+}
+
 func TestSkillInject_TotalBudgetBounded(t *testing.T) { // review H2
 	home := t.TempDir()
 	globalDir := filepath.Join(home, ".claude", "memory-global")
