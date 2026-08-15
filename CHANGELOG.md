@@ -28,6 +28,14 @@
   line now shows the real `--query` flag. Evidence:
   `docs/measurements/2026-08-16-v2.12-recency-basis.md`.
 
+### Added
+
+- **`doctor` `oversized_facts`.** Warns when a fact's body exceeds the 2 500 B
+  injection cap (64 of 107 files in one live scope did) and lists the five
+  largest. The truncation marker now reads
+  `…(truncated — N B total; full text: <absolute path>)` and is counted
+  inside the per-record cap.
+
 ## [2.11.0] — 2026-07-23
 
 Harness lifecycle, complete (4 milestones; spec:
