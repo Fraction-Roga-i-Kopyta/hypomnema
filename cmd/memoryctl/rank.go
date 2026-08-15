@@ -88,13 +88,18 @@ func runRank(args []string) {
 			Status:        r.Status,
 			Created:       r.Created,
 			LastInjected:  r.LastInjected,
+			LastUseful:    r.LastUseful,
 			Overlap:       overlap[r.Slug],
 		})
 	}
 
 	q := rank.Query{Terms: terms, Project: project, Today: today()}
 	for _, sc := range rank.Rank(q, cands, k) {
-		fmt.Printf("%-40s score=%.3f overlap=%d ref=%d eff=%.2f\n",
-			sc.Slug, sc.Score, sc.Overlap, sc.RefCount, sc.Effectiveness)
+		useful := sc.LastUseful
+		if useful == "" {
+			useful = "-"
+		}
+		fmt.Printf("%-40s score=%.3f overlap=%d ref=%d eff=%.2f useful=%s\n",
+			sc.Slug, sc.Score, sc.Overlap, sc.RefCount, sc.Effectiveness, useful)
 	}
 }

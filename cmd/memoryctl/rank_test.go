@@ -51,4 +51,7 @@ func TestRankVerb(t *testing.T) {
 	if si != -1 && di > si {
 		t.Errorf("docker.md should rank above sql.md for 'docker cache'; got:\n%s", out)
 	}
+	if !strings.Contains(out, "useful=") {
+		t.Errorf("rank output must show the recency basis column useful=; got:\n%s", out)
+	}
 }

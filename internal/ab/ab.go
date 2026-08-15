@@ -34,6 +34,7 @@ type Signal struct {
 	Pos        int
 	Neg        int
 	LastInject string
+	LastUseful string
 }
 
 // ParseWAL reads a WAL file into events (file order). Blank/comment/malformed
@@ -128,6 +129,10 @@ func SignalsBefore(events []Event, date string) map[string]Signal {
 			s.Pos++
 		case "outcome-negative":
 			s.Neg++
+		case "trigger-useful":
+			if e.Date > s.LastUseful {
+				s.LastUseful = e.Date
+			}
 		}
 		out[e.Slug] = s
 	}
