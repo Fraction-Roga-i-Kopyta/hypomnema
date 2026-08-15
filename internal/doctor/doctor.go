@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/inject"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/sidecar"
 )
@@ -143,6 +144,7 @@ func Run(claudeDir, memoryDir, cwd string) Report {
 		checkOpenQuanta(filepath.Join(memoryDir, ".wal"), now),
 		checkSidecar(memoryDir, now),
 		checkCorpusQuality(claudeDir, cwd),
+		checkOversized(claudeDir, cwd),
 		checkCandidates(memoryDir, claudeDir, cwd),
 	)
 	return r
@@ -671,6 +673,48 @@ func checkCorpusQuality(claudeDir, cwd string) Check {
 		Status: status,
 		Detail: detail,
 		Extra:  extra,
+	}
+}
+
+// checkOversized flags facts whose body exceeds the per-record injection cap:
+// the model only ever sees the first inject.MaxBodyBytes of such a fact (a
+// header and a truncation marker), so the fact should be split or retired.
+func checkOversized(claudeDir, cwd string) Check {
+	const name = "oversized_facts"
+	type item struct {
+		slug string
+		size int
+	}
+	var over []item
+	for _, f := range native.Collect(claudeDir, cwd) {
+		if n := len(f.Body); n > inject.MaxBodyBytes {
+			over = append(over, item{f.Slug, n})
+		}
+	}
+	if len(over) == 0 {
+		return Check{Name: name, Status: OK,
+			Detail: fmt.Sprintf("all bodies within the %d B injection cap", inject.MaxBodyBytes)}
+	}
+	sort.Slice(over, func(i, j int) bool {
+		if over[i].size != over[j].size {
+			return over[i].size > over[j].size
+		}
+		return over[i].slug < over[j].slug
+	})
+	top := over
+	if len(top) > 5 {
+		top = top[:5]
+	}
+	parts := make([]string, 0, len(top))
+	for _, it := range top {
+		parts = append(parts, fmt.Sprintf("%s (%d B)", it.slug, it.size))
+	}
+	return Check{
+		Name:   name,
+		Status: WARN,
+		Detail: fmt.Sprintf("%d fact(s) exceed the %d B injection cap and inject truncated: %s — split them into focused facts, or retire the journal-like ones (the truncation marker names the file path for the full text)",
+			len(over), inject.MaxBodyBytes, strings.Join(parts, ", ")),
+		Extra: map[string]interface{}{"oversized_count": len(over), "cap_bytes": inject.MaxBodyBytes},
 	}
 }
 
