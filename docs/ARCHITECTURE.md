@@ -107,7 +107,7 @@ single pure ranker in `internal/rank`. The authoritative formula lives in
 ```
 score = 3.0 × overlap(session_keywords, file keywords+name+description+body)
       + 1.0 × log10(1 + ref_count) × effGate   # popularity, gated by usefulness
-      + 2.0 × recency                  # 1/(1 + days/30) from last injection (fallback created)
+      + 2.0 × recency                  # 1/(1 + days/30) from last USEFUL citation (trigger-useful; fallback created)
       + 2.0 × effectiveness            # Bayesian (pos+1)/(pos+neg+2); neutral 0.5 until signal
       + 1.0 if project-local           # project facts outrank global on ties
 

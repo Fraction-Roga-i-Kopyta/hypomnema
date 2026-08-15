@@ -78,11 +78,15 @@ directory. In practice:
 
 ## Is there an `injected:` / `referenced:` frontmatter field?
 
-No. Injection recency is tracked by the **sidecar**, not in frontmatter. The
-sidecar records `last_injected` per fact (from WAL `inject` events) and the
-ranker uses it for the recency term and for decay (age counts from last
-injection, falling back to `created`). You never hand-edit these — they are
-sidecar-managed like `ref_count` and `effectiveness`.
+No. Both recency and decay are tracked by the **sidecar**, not in
+frontmatter, but from different columns. The ranker's recency term uses
+`last_useful` — the date of the latest `trigger-useful` event for that fact
+(a `recall` delivery does not set it by itself; the fact still has to be
+cited as useful at close), falling back to frontmatter `created` if the fact
+has never been useful yet. Decay (staleness) still uses `last_injected`
+(from WAL `inject` events) — a fact the ranker stops injecting ages out on
+its own. You never hand-edit either column — they are sidecar-managed like
+`ref_count` and `effectiveness`.
 
 ## How do I see what got injected last session?
 
