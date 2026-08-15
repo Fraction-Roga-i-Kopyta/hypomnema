@@ -73,6 +73,8 @@ top-level key. Rules:
   the G2 protection still holds.
 - Block-style lists under a promoted key (`metadata:\n  keywords:\n    - a`)
   are collapsed the same way as top-level block lists.
+- A blank/whitespace-only line is a no-op anywhere in the frontmatter (it
+  does not close the `metadata:` block).
 - Promotion applies to every consumer of `native.Parse` — sidecar reproject,
   inject, close, doctor, memindex, guard, migrate.
 
@@ -84,7 +86,7 @@ are open strings already; doctor's `corpus_counts` lists whatever it finds).
 effect. `doctor` detail for `corpus_frontmatter_quality` gains
 `nested_metadata_count` in `extra` for observability.
 
-**Docs.** CLAUDE.md "Tolerated syntax variants" + README frontmatter section:
+**Docs.** CLAUDE.md "Tolerated syntax variants" + README frontmatter section + FORMAT.md §3.2/§3.3:
 `metadata:`-nested `type/created/status/keywords/domains` are read as if
 top-level; top-level preferred. Global `~/.claude/CLAUDE.md` memory section:
 one line that both shapes work.
@@ -95,12 +97,19 @@ one line that both shapes work.
 `schemaVersion = "6"` → existing sidecar recreated on open (existing
 mechanism). `Record.LastUseful` added; `upsertIn` writes it.
 
-**Reproject.** `agg.lastUseful` = max date over `trigger-useful` and `recall`
-events for the fact (qualified + legacy bare key, same merge as `lastInject`).
-Rationale for `recall`: a pull by the agent is a deliberate use, and it is
-already what revives a stale fact. `candidate-confirmed` is implied by the
-`trigger-useful` that triggers it. `holdout-hit/miss` never count (unchanged
-principle: no signal from sessions where the model did not see the fact).
+**Reproject.** `agg.lastUseful` = max date over `trigger-useful` events for
+the fact (qualified + legacy bare key, same merge as `lastInject`). `recall`
+does NOT count: the same event kind is written by `skill-inject` (a push on
+skill activation, not the model's pull), and a recalled fact joins the
+session's injected set anyway, so an actual use surfaces as `trigger-useful`
+at close. `candidate-confirmed` is implied by the `trigger-useful` that
+triggers it. `holdout-hit/miss` never count (unchanged principle: no signal
+from sessions where the model did not see the fact).
+
+**Docs.** Every statement that recency (or `created`'s fallback) comes from
+injection is rewritten: README, CLAUDE.md, ARCHITECTURE, FAQ (`last_injected`
+answer), FORMAT (`created` row); EVENTS `trigger-useful` consumer column
+gains `last_useful`.
 
 **Ranker.** `rank.Candidate.LastUseful` added; `recency()` uses
 `LastUseful`, fallback `Created`; `LastInjected` is no longer read by
@@ -109,8 +118,9 @@ be its recency input. Weights unchanged (`wRecency` 2.0, 30-day scale).
 
 **Callers.** `inject` (`internal/inject/inject.go:233`), `rank` verb
 (`cmd/memoryctl/rank.go:90`), `ab` replay (`internal/ab/replay.go:47` +
-`SignalsBefore` gains `LastUseful` from `trigger-useful`/`recall` events
-before the session date) all populate `LastUseful`. `rank` verb prints
+`SignalsBefore` gains `LastUseful` from `trigger-useful` events strictly
+before the session date — nothing else in the replay changes, so the
+before/after arms differ only in the recency basis) all populate `LastUseful`. `rank` verb prints
 `useful=<date|->` per row; its usage text is corrected to
 `memoryctl rank --query "<words>" [--project P] [--k N]`.
 
@@ -121,8 +131,12 @@ Simulation on the live sidecar: switching MarkStale to last-useful would
 stale 46/270 immediately; the current rule stales 0 — the difference is
 exactly the set the ranker should demote first, not archive.
 
-**Evidence.** `memoryctl ab` before and after (same WAL, `HYPOMNEMA_TODAY`
-pinned) → `docs/measurements/2026-08-16-v2.12-recency-basis.md`. Live
+**Evidence.** `memoryctl ab` before and after (same WAL, seed 1) →
+`docs/measurements/2026-08-16-v2.12-recency-basis.md`. The "before" arm is
+captured from the installed v2.11.0 binary BEFORE any schema-v6 code runs
+against the live install (`~/.claude/bin/memoryctl` symlinks the repo's
+`bin/memoryctl`, so `make build`/`make install` on the branch would swap the
+live hooks — neither is run until merge). Live
 `memoryctl rank --query …` breakdown for three prompts (this session's
 Russian question, a git-flavoured prompt, an empty SessionStart) before/after
 as qualitative evidence in the same doc.
@@ -135,12 +149,19 @@ five largest (`size slug`), OK when none. Suggests `recall` for full text
 and "split or retire" as the fix.
 
 **Truncation marker.** `inject.capBody` emits
-`…(truncated: <shown>/<total> B — full text: memoryctl recall <name>)`
-instead of the bare `…(truncated)`; the marker's own bytes stay inside the
-per-body cap so the 8 KB total budget is unaffected. Same helper serves
-`recall`'s top-body cap.
+`…(truncated — <total> B total; full text: <absolute file path>)` instead of
+the bare `…(truncated)`. The path is the honest pointer: the model can `Read`
+it directly, whereas `memoryctl recall` caps its top hit with the same helper
+and ranks by name/body tokens (a slug is not indexed). The marker's own bytes
+are counted inside the per-body cap so the 8 KB total budget is unaffected;
+a budget too small to hold the marker keeps the legacy `…(truncated)`. The
+same helper serves `recall`'s top-body cap and `skill-inject`.
 
-**Content-ops (operator, after `make install`; approved 2026-08-16):**
+**Content-ops (operator, after `make install`; approved 2026-08-16).**
+`memoryctl` resolves the project store from `CLAUDE_PROJECT_CWD`, else the
+working directory — run every command below from the repo root
+(`/Users/akamash/Development/hypomnema`), never from inside the memory dir,
+and use absolute paths for file moves:
 
 | File | Store | Op |
 |---|---|---|
@@ -164,8 +185,9 @@ classification rows: `|trigger-useful|<target>|<sid>`,
 one row per (event, fact, session). A fact silent on turn 1 and useful on
 turn 5 yields one silent row and one useful row — `reproject.classify`
 already resolves that as useful-wins, so no reader changes.
-`session-metrics` and `session-close` stay per turn (doctor `open_quanta`
-reads them). `wal.Append`'s dedup scan is tail-bounded (256 KiB); with the
+`session-metrics` and `session-close` stay per turn — no reader depends on
+their multiplicity either (profile keys sessions as a set), and the per-turn
+metrics row is the only record of turn count. `wal.Append`'s dedup scan is tail-bounded (256 KiB); with the
 amplification gone a session's rows fit comfortably in that window. Existing
 WAL rows are not compacted in this run.
 
