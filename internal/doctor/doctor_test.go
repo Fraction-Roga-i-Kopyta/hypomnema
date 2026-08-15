@@ -638,3 +638,30 @@ func TestCheckCorpusQuality_CountsNestedMetadata(t *testing.T) {
 		t.Errorf("nested_metadata_count = %v, want 1", c.Extra["nested_metadata_count"])
 	}
 }
+
+func TestCheckOversized(t *testing.T) {
+	home := t.TempDir()
+	claudeHome := filepath.Join(home, ".claude")
+	cwd := "/tmp/proj"
+	projDir := filepath.Join(claudeHome, "projects", "-tmp-proj", "memory")
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(projDir, "small.md"),
+		[]byte("---\nname: small\ntype: note\n---\nshort\n"), 0o644)
+	if c := checkOversized(claudeHome, cwd); c.Status != OK {
+		t.Fatalf("all-small corpus must be OK: %+v", c)
+	}
+	os.WriteFile(filepath.Join(projDir, "huge.md"),
+		[]byte("---\nname: huge\ntype: note\n---\n"+strings.Repeat("z", 3000)+"\n"), 0o644)
+	c := checkOversized(claudeHome, cwd)
+	if c.Status != WARN || !strings.Contains(c.Detail, "huge.md (3000 B)") || !strings.Contains(c.Detail, "file path") {
+		t.Fatalf("want WARN naming huge.md with its size: %+v", c)
+	}
+	if strings.Contains(c.Detail, "small.md") {
+		t.Errorf("small file must not be listed: %s", c.Detail)
+	}
+	if got, _ := c.Extra["oversized_count"].(int); got != 1 {
+		t.Errorf("oversized_count = %v, want 1", c.Extra["oversized_count"])
+	}
+}
