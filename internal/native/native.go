@@ -118,7 +118,10 @@ func splitList(v string) []string {
 // key->value map and returns the trimmed body. Tolerates a UTF-8 BOM, CRLF
 // endings, quoted scalars, and trailing whitespace on the closing fence —
 // matching the existing bash parser's tolerances. An unterminated fence yields
-// an empty map + the whole content as body.
+// an empty map + the whole content as body. Children of a top-level
+// "metadata:" key are promoted to top-level keys (Claude Code's native memory
+// instructions nest type/created/status there); a column-0 key wins on
+// collision.
 func splitFrontmatter(s string) (map[string]string, string) {
 	fm := map[string]string{}
 	s = strings.TrimPrefix(s, "\xef\xbb\xbf")
@@ -137,6 +140,12 @@ func splitFrontmatter(s string) (map[string]string, string) {
 		return fm, strings.TrimSpace(s)
 	}
 	listKey := "" // key whose block-style list items we are accumulating
+	// inMeta/metaIndent track a `metadata:` block whose direct children are
+	// promoted to top-level keys — Claude Code's native memory instructions
+	// nest type/created/status there. Only `metadata` promotes; a top-level
+	// key of the same name wins in either order.
+	inMeta := false
+	metaIndent := -1
 	for _, ln := range lines[1:end] {
 		ln = strings.TrimRight(ln, "\r")
 		// Block-style list item under the pending key: collapse into the
@@ -150,13 +159,29 @@ func splitFrontmatter(s string) (map[string]string, string) {
 			}
 			continue
 		}
-		// An INDENTED line that isn't a block-list item is continuation content
-		// of a block scalar (`root-cause: |`, `description: >`) — never a
-		// top-level key. Parsing its `prose: text` as a key silently overwrote
-		// real frontmatter like description/name (review G2). Top-level keys are
-		// always at column 0.
-		if len(ln) > 0 && (ln[0] == ' ' || ln[0] == '\t') {
-			continue
+		if strings.TrimSpace(ln) == "" {
+			continue // blank line: no-op, never closes a metadata block
+		}
+		indent := 0
+		for indent < len(ln) && (ln[indent] == ' ' || ln[indent] == '\t') {
+			indent++
+		}
+		if indent == 0 {
+			inMeta, metaIndent = false, -1
+		} else {
+			// An INDENTED line that isn't a block-list item is continuation
+			// content of a block scalar (`root-cause: |`, `description: >`) —
+			// never a top-level key (review G2). The one exception is a direct
+			// child of `metadata:`; deeper lines inside it are prose again.
+			if !inMeta {
+				continue
+			}
+			if metaIndent < 0 {
+				metaIndent = indent
+			}
+			if indent != metaIndent {
+				continue
+			}
 		}
 		idx := strings.IndexByte(ln, ':')
 		if idx <= 0 {
@@ -165,9 +190,19 @@ func splitFrontmatter(s string) (map[string]string, string) {
 		}
 		key := strings.TrimSpace(ln[:idx])
 		val := strings.Trim(strings.TrimSpace(ln[idx+1:]), `"'`)
+		if indent > 0 {
+			// Promoted metadata child: never overwrite a column-0 key.
+			if _, exists := fm[key]; exists {
+				listKey = ""
+				continue
+			}
+		}
 		fm[key] = val
 		if val == "" {
 			listKey = key
+			if indent == 0 && key == "metadata" {
+				inMeta = true
+			}
 		} else {
 			listKey = ""
 		}
