@@ -16,6 +16,12 @@
   180/90 d. Doctor reports `nested_metadata_count` under
   `corpus_frontmatter_quality`.
 
+- **Stop-hook WAL write-amplification.** `close` fires per turn and re-wrote
+  every fact's `trigger-useful/silent` (and `holdout-hit/miss`) row each time
+  — one live session produced 16 341 `trigger-silent` rows. Rows now carry a
+  per-(event, fact, session) dedup key; a changed verdict still lands. No
+  reader changes: all already collapsed rows per (fact, session).
+
 ### Changed
 
 - **Ranking recency now follows the model's use, not the ranker's output.**
