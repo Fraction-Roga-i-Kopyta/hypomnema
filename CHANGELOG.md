@@ -1,5 +1,21 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **Frontmatter nested under `metadata:` is now read.** Claude Code's native
+  memory instructions write `metadata:\n  type: …`; the parser skipped every
+  indented line, so 52% of the live corpus (168/325 sidecar rows) had no
+  type/status/created for hypomnema — candidates projected as active,
+  continuity/project lost their decay exemption, decay used the unknown-type
+  threshold. Direct children of `metadata:` are promoted; a column-0 key wins
+  on collision; block-scalar prose is still ignored. A blank line inside the
+  frontmatter is now a no-op everywhere (it used to terminate a block-style
+  list). `user`/`reference` (harness type names) get stale thresholds
+  180/90 d. Doctor reports `nested_metadata_count` under
+  `corpus_frontmatter_quality`.
+
 ## [2.11.0] — 2026-07-23
 
 Harness lifecycle, complete (4 milestones; spec:
