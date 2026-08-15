@@ -146,7 +146,7 @@ as qualitative evidence in the same doc.
 
 **Doctor `oversized_facts`.** New check: files in scope (current project +
 global) whose body exceeds `inject.MaxBodyBytes`. WARN with count and the
-five largest (`size slug`), OK when none. Points at the file path (the
+five largest (`slug (N B)`), OK when none. Points at the file path (the
 truncation marker's full-text route) and "split or retire" as the fix.
 
 **Truncation marker.** `inject.capBody` emits
@@ -182,7 +182,10 @@ in scope, `oversized_facts` WARN with a shorter list, `candidate_corroboration` 
 `closer.Run` passes a dedup key to `wal.Append` for the per-fact
 classification rows: `|trigger-useful|<target>|<sid>`,
 `|trigger-silent|<target>|<sid>`, `|holdout-hit|<target>|<sid>`,
-`|holdout-miss|<target>|<sid>` (target = sanitised qualified slug). Effect:
+`|holdout-miss|<target>|<sid>` (target = sanitised qualified slug; the WAL
+dedup scan is a per-line substring match, so a session id that is a proper
+prefix of another could in theory suppress a row — impossible for the UUID
+session ids Claude Code issues, accepted). Effect:
 one row per (event, fact, session). A fact silent on turn 1 and useful on
 turn 5 yields one silent row and one useful row — `reproject.classify`
 already resolves that as useful-wins, so no reader changes.
