@@ -616,3 +616,25 @@ func TestCheckCandidates(t *testing.T) {
 		t.Fatalf("confirmed candidate must not flag: %+v", c)
 	}
 }
+
+func TestCheckCorpusQuality_CountsNestedMetadata(t *testing.T) {
+	home := t.TempDir()
+	claudeHome := filepath.Join(home, ".claude")
+	cwd := "/tmp/proj"
+	projDir := filepath.Join(claudeHome, "projects", "-tmp-proj", "memory")
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(projDir, "flat.md"),
+		[]byte("---\nname: flat\ntype: mistake\nstatus: active\n---\nx\n"), 0o644)
+	os.WriteFile(filepath.Join(projDir, "nested.md"),
+		[]byte("---\nname: nested\nmetadata:\n  type: mistake\n  status: active\n---\nx\n"), 0o644)
+
+	c := checkCorpusQuality(claudeHome, cwd)
+	if c.Status != OK {
+		t.Fatalf("nested metadata is tolerated, not a quality issue: %+v", c)
+	}
+	if got, _ := c.Extra["nested_metadata_count"].(int); got != 1 {
+		t.Errorf("nested_metadata_count = %v, want 1", c.Extra["nested_metadata_count"])
+	}
+}
