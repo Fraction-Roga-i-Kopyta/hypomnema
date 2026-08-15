@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS memory (
   domains       TEXT,
   created       TEXT,
   last_injected TEXT,
+  last_useful   TEXT,
   ref_count     INTEGER NOT NULL DEFAULT 0,
   status        TEXT NOT NULL DEFAULT 'active',
   effectiveness REAL NOT NULL DEFAULT 0.5,

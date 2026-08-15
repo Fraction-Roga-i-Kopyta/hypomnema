@@ -40,8 +40,8 @@ Exactly these events are written by v2 code. Producers verified by grep of
 | event | target shape | producer (verb) | consumer | notes |
 |---|---|---|---|---|
 | `inject` | `<slug>` | `memoryctl inject` — `SessionStart` + `UserPromptSubmit` shims (`cmd/memoryctl/inject.go` → `persistInjected`) | `internal/sidecar` reproject (ref_count, last_injected); `internal/closer` via the session injected-set | one line per injected fact per delivery |
-| `recall` | `<slug>` | `memoryctl recall` (pull CLI) and `skill-inject` (`cmd/memoryctl/recall.go`) | `internal/sidecar` reproject; `internal/closer` (joined into injected-set) | same-day repeat of one fact in one session dedups to a single ref bump |
-| `trigger-useful` | `<slug>` | `memoryctl close` — `internal/closer` (`Classify`) | `internal/sidecar` (effectiveness `pos`); `internal/profile` | evidence phrase or name/slug cited in assistant transcript text |
+| `recall` | `<slug>` | `memoryctl recall` (pull CLI) and `skill-inject` (`cmd/memoryctl/recall.go`) | `internal/sidecar` reproject; `internal/closer` (joined into injected-set) | same-day repeat of one fact in one session dedups to a single ref bump; does NOT feed last_useful (delivery, not use) |
+| `trigger-useful` | `<slug>` | `memoryctl close` — `internal/closer` (`Classify`) | `internal/sidecar` (effectiveness `pos`); `internal/profile`; sidecar last_useful (ranking recency) | evidence phrase or name/slug cited in assistant transcript text |
 | `trigger-silent` | `<slug>` | `memoryctl close` — `internal/closer` (`Classify`) | `internal/sidecar` (effectiveness `neg`); `internal/profile` | injected fact went uncited; skipped if the transcript was unreadable |
 | `session-metrics` | `domains:_global_,error_count:N,tool_calls:M,duration:Ss` (`$3`); session id (`$4`) | `memoryctl close` — `internal/closer` | `internal/profile` (rollup); tolerated by `ab`, `doctor` | one per closed session |
 | `session-close` | `<session_id>` (in both `$3` and `$4`) | `memoryctl close` — `internal/closer` | session-boundary marker; `internal/profile` | emitted for any error count |
