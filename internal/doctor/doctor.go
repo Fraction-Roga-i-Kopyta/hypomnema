@@ -585,6 +585,37 @@ func fmStatus(path string) (present bool, value string) {
 	return false, ""
 }
 
+// fmHasNestedMetadata reports whether the file's frontmatter opens a
+// column-0 `metadata:` block (Claude Code's native nesting). The parser
+// promotes its children, so this is observability, not a defect.
+func fmHasNestedMetadata(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 8*1024), 64*1024)
+	fmCount := 0
+	for sc.Scan() {
+		line := sc.Text()
+		if strings.TrimRight(line, " \t\r") == "---" {
+			fmCount++
+			if fmCount >= 2 {
+				break
+			}
+			continue
+		}
+		if fmCount != 1 {
+			continue
+		}
+		if strings.TrimRight(line, " \t\r") == "metadata:" {
+			return true
+		}
+	}
+	return false
+}
+
 // checkCorpusQuality surfaces frontmatter issues the ranking pipeline cannot
 // act on but the user probably didn't mean. In v2 the only such issue is a
 // `status:` line present but empty — the status filter then drops the file
@@ -596,10 +627,14 @@ func fmStatus(path string) (present bool, value string) {
 func checkCorpusQuality(claudeDir, cwd string) Check {
 	const name = "corpus_frontmatter_quality"
 	var emptyStatus []string
+	nested := 0
 	for _, f := range native.Collect(claudeDir, cwd) {
 		present, value := fmStatus(f.Path)
 		if present && value == "" {
 			emptyStatus = append(emptyStatus, f.Slug)
+		}
+		if fmHasNestedMetadata(f.Path) {
+			nested++
 		}
 	}
 	sort.Strings(emptyStatus)
@@ -614,7 +649,8 @@ func checkCorpusQuality(claudeDir, cwd string) Check {
 	}
 
 	extra := map[string]interface{}{
-		"empty_status_count": len(emptyStatus),
+		"empty_status_count":    len(emptyStatus),
+		"nested_metadata_count": nested,
 	}
 	if hint != "" {
 		extra["hint"] = hint
