@@ -189,8 +189,11 @@ func TestRecallTruncatesLongBody(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit=%d", code)
 	}
-	if !strings.Contains(out, "…(truncated)") {
+	if !strings.Contains(out, "…(truncated") {
 		t.Error("long body must carry the truncation marker")
+	}
+	if !strings.Contains(out, "full text: ") || !strings.Contains(out, "big.md") {
+		t.Errorf("truncation marker must name the full-text path; got:\n%s", out)
 	}
 }
 
