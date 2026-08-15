@@ -39,6 +39,7 @@ type Record struct {
 	Domains       string
 	Created       string
 	LastInjected  string
+	LastUseful    string // latest trigger-useful date — the model's use signal (v6); "" until first useful citation
 	RefCount      int
 	Status        string
 	Effectiveness float64
@@ -53,10 +54,12 @@ type Record struct {
 // per-scope). v3 (v2.6.0) added a `project` column to the keyword table so a
 // per-project Reproject clears only its own rows for a same-basename slug.
 // v4 (v2.10.0) made the memory PK composite (slug, project). v5 added
-// `holdout_remaining` for per-fact ablation. Open wipes a sidecar written by
+// `holdout_remaining` for per-fact ablation. v6 (v2.12.0) added last_useful
+// (latest trigger-useful date) so recency can follow the model's use rather
+// than the ranker's own injections. Open wipes a sidecar written by
 // a different generation — the sidecar is a derived projection, so the wipe
 // only costs the next Reproject.
-const schemaVersion = "5"
+const schemaVersion = "6"
 
 // Open opens (creating if needed) the sidecar DB at dbPath and applies the
 // schema. Mirrors internal/fts: modernc.org/sqlite, busy_timeout, WAL journal.
@@ -130,12 +133,12 @@ func (s *Store) Close() error { return s.db.Close() }
 // such row exists.
 func (s *Store) Get(slug string) (Record, bool, error) {
 	row := s.db.QueryRow(`SELECT slug, content_sha, type, name, description,
-		project, domains, created, last_injected, ref_count, status, effectiveness,
+		project, domains, created, last_injected, last_useful, ref_count, status, effectiveness,
 		holdout_remaining
 		FROM memory WHERE slug = ?`, slug)
 	var r Record
 	err := row.Scan(&r.Slug, &r.ContentSHA, &r.Type, &r.Name, &r.Description,
-		&r.Project, &r.Domains, &r.Created, &r.LastInjected, &r.RefCount,
+		&r.Project, &r.Domains, &r.Created, &r.LastInjected, &r.LastUseful, &r.RefCount,
 		&r.Status, &r.Effectiveness, &r.HoldoutRemaining)
 	if err == sql.ErrNoRows {
 		return Record{}, false, nil
@@ -155,18 +158,19 @@ func upsertIn(e dbtx, r Record) error {
 	}
 	_, err := e.Exec(`
 INSERT INTO memory (slug, content_sha, type, name, description, project,
-	domains, created, last_injected, ref_count, status, effectiveness,
+	domains, created, last_injected, last_useful, ref_count, status, effectiveness,
 	holdout_remaining)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(slug, project) DO UPDATE SET
 	content_sha=excluded.content_sha, type=excluded.type, name=excluded.name,
 	description=excluded.description, project=excluded.project,
 	domains=excluded.domains, created=excluded.created,
-	last_injected=excluded.last_injected, ref_count=excluded.ref_count,
+	last_injected=excluded.last_injected, last_useful=excluded.last_useful,
+	ref_count=excluded.ref_count,
 	status=excluded.status, effectiveness=excluded.effectiveness,
 	holdout_remaining=excluded.holdout_remaining`,
 		r.Slug, r.ContentSHA, r.Type, r.Name, r.Description, r.Project,
-		r.Domains, r.Created, r.LastInjected, r.RefCount, r.Status, r.Effectiveness,
+		r.Domains, r.Created, r.LastInjected, r.LastUseful, r.RefCount, r.Status, r.Effectiveness,
 		r.HoldoutRemaining)
 	if err != nil {
 		return fmt.Errorf("sidecar.Upsert: %w", err)
@@ -179,7 +183,7 @@ func (s *Store) All() ([]Record, error) { return allIn(s.db) }
 
 func allIn(e dbtx) ([]Record, error) {
 	rows, err := e.Query(`SELECT slug, content_sha, type, name, description,
-		project, domains, created, last_injected, ref_count, status, effectiveness,
+		project, domains, created, last_injected, last_useful, ref_count, status, effectiveness,
 		holdout_remaining
 		FROM memory ORDER BY slug`)
 	if err != nil {
@@ -190,7 +194,7 @@ func allIn(e dbtx) ([]Record, error) {
 	for rows.Next() {
 		var r Record
 		if err := rows.Scan(&r.Slug, &r.ContentSHA, &r.Type, &r.Name,
-			&r.Description, &r.Project, &r.Domains, &r.Created, &r.LastInjected,
+			&r.Description, &r.Project, &r.Domains, &r.Created, &r.LastInjected, &r.LastUseful,
 			&r.RefCount, &r.Status, &r.Effectiveness, &r.HoldoutRemaining); err != nil {
 			return nil, fmt.Errorf("sidecar.All: scan: %w", err)
 		}
