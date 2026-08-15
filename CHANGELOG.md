@@ -16,6 +16,18 @@
   180/90 d. Doctor reports `nested_metadata_count` under
   `corpus_frontmatter_quality`.
 
+### Changed
+
+- **Ranking recency now follows the model's use, not the ranker's output.**
+  `recency` decays from the latest `trigger-useful` date (new sidecar
+  column `last_useful`, schema v5→v6, rebuilt from WAL) with `created` as the
+  fallback; `last_injected` no longer feeds the score. Injection had been its
+  own recency signal, so heavily-injected never-useful facts (ref 619 /
+  eff 0.04) refreshed themselves every session. `MarkStale` still measures
+  from last injection. `memoryctl rank` prints `useful=<date>` and its usage
+  line now shows the real `--query` flag. Evidence:
+  `docs/measurements/2026-08-16-v2.12-recency-basis.md`.
+
 ## [2.11.0] — 2026-07-23
 
 Harness lifecycle, complete (4 milestones; spec:

@@ -102,12 +102,14 @@ A single relevance ranker (merged from the two v1 pipelines) scores every candid
 ```
 score = 3.0 × overlap(keywords, file keywords+name+description+body)
       + 1.0 × log10(1 + ref_count) × effGate   # popularity, GATED by proven usefulness
-      + 2.0 × recency                  # 1/(1 + days/30) from last injection (fallback created)
+      + 2.0 × recency                  # 1/(1 + days/30) from last USEFUL citation (trigger-useful; fallback created)
       + 2.0 × effectiveness            # Bayesian (pos+1)/(pos+neg+2) — neutral 0.5 until signal lands
       + 1.0 × project boost            # project-local facts beat global ones on ties
 
 effGate = clamp(2 × effectiveness, 0, 1)       # 1.0 at the prior 0.5; only damps unearned volume
 ```
+
+Recency tracks the model's use, not the ranker's own output: it decays from the latest `trigger-useful` date (sidecar `last_useful`), never from `last_injected`, so a fact can't refresh its own recency merely by being injected.
 
 Since v2.4.0 the `ref_count` reward is gated by `effGate`, so a fact injected
 hundreds of times that rarely proved useful can't coast on volume — the gate is

@@ -71,7 +71,7 @@ Every memory file is Markdown opening with a YAML frontmatter block delimited by
 | `type` | yes | enum | `mistake \| strategy \| feedback \| knowledge \| decision \| note \| project \| continuity \| skill-learning`. |
 | `name` | yes | string | Sidecar key; kebab-case slug. |
 | `description` | yes | string | One-line summary; shown in the `MEMORY.md` index and injection headers. |
-| `created` | no | `YYYY-MM-DD` | You set it — recency signal for ranking. Falls back to injection recency when absent. |
+| `created` | no | `YYYY-MM-DD` | You set it — novelty signal: recency uses it only until the fact earns a useful citation (`last_useful` then takes precedence); when absent, the WAL-earliest date is substituted. |
 | `status` | no | enum | `active \| pinned`. `pinned` protects from decay. `stale` is **sidecar-managed** — never hand-set it. |
 | `keywords` | no | list | Primary ranking signal. Inline `[a, b]` or block `- a` form. |
 | `domains` | no | list | Domain filter; kebab-case for multi-word. Same forms as `keywords`. |

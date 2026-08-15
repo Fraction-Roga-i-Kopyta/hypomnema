@@ -242,12 +242,21 @@ score is an additive blend — no single zero signal annihilates a candidate:
 ```
 score = 3.0 × overlap(session_keywords, file keywords+name+description+body)
       + 1.0 × log10(1 + ref_count) × effGate   # popularity, GATED by proven usefulness
-      + 2.0 × recency                  # 1/(1 + days/30) from last injection (fallback created)
+      + 2.0 × recency                  # 1/(1 + days/30) from last USEFUL citation (trigger-useful; fallback created)
       + 2.0 × effectiveness            # Bayesian (pos+1)/(pos+neg+2); neutral 0.5 until signal lands
       + 1.0 if project-local           # project facts outrank global ones on ties
 
 effGate = clamp(2 × effectiveness, 0, 1)   # 1.0 at the prior (0.5); only damps, never amplifies
 ```
+
+**Recency is the model's signal, not the ranker's.** Recency decays from the
+last `trigger-useful` date (sidecar `last_useful`), falling back to
+frontmatter `created`. `recall` deliveries do not count — the same event is
+written by `skill-inject` as a push, and a recalled fact that is actually
+used surfaces as `trigger-useful` at close. It does not use `last_injected`: injection is the
+ranker's own output, and keying recency on it let every pick refresh itself.
+Staleness (`MarkStale`) still counts from last injection — a fact the ranker
+demotes stops being injected and then ages out; nothing is staled by fiat.
 
 **Earned popularity:** the `ref_count` term is scaled by `effGate` so a fact
 injected hundreds of times that rarely proved useful cannot coast on volume.
