@@ -74,7 +74,8 @@ top-level key. Rules:
 - Block-style lists under a promoted key (`metadata:\n  keywords:\n    - a`)
   are collapsed the same way as top-level block lists.
 - A blank/whitespace-only line is a no-op anywhere in the frontmatter (it
-  does not close the `metadata:` block).
+  does not close the `metadata:` block, and — a deliberate, YAML-conformant
+  change — no longer terminates a top-level block-style list either).
 - Promotion applies to every consumer of `native.Parse` — sidecar reproject,
   inject, close, doctor, memindex, guard, migrate.
 
@@ -145,8 +146,8 @@ as qualitative evidence in the same doc.
 
 **Doctor `oversized_facts`.** New check: files in scope (current project +
 global) whose body exceeds `inject.MaxBodyBytes`. WARN with count and the
-five largest (`size slug`), OK when none. Suggests `recall` for full text
-and "split or retire" as the fix.
+five largest (`size slug`), OK when none. Points at the file path (the
+truncation marker's full-text route) and "split or retire" as the fix.
 
 **Truncation marker.** `inject.capBody` emits
 `…(truncated — <total> B total; full text: <absolute file path>)` instead of
