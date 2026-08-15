@@ -106,6 +106,10 @@ Reflecting the actual parser (`internal/native.go` `splitFrontmatter`):
   (surrounding single/double quotes stripped).
 - **Block-style lists** (`keywords:` on its own line, then `  - a` / `  - b`)
   collapse into the same comma-joined value as inline `[a, b]`.
+- **`metadata:` block** (`metadata:` on its own line, then indented `type:` /
+  `created:` / `status:` / `keywords:` / `domains:` …): direct children are
+  promoted to top-level keys; a column-0 key of the same name wins. This is
+  the shape Claude Code's native memory instructions produce.
 
 ### 3.3 Not supported
 
@@ -116,7 +120,7 @@ Reflecting the actual parser (`internal/native.go` `splitFrontmatter`):
 - **Unclosed frontmatter** (no second `---`). No fields are parsed; the whole
   document is treated as body, so the file carries no ranking metadata.
 - Top-level keys must sit at **column 0**; indented `key: value` lines are read
-  as block-scalar continuation and ignored, not as frontmatter keys.
+  as block-scalar continuation and ignored, not as frontmatter keys. The single exception is the direct children of a top-level `metadata:` key (§3.2).
 
 ---
 

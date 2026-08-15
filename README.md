@@ -276,7 +276,7 @@ it is an explicit decision: `doctor` hints at stale facts worth retiring, and
 
 Native files carry minimal frontmatter (name/description/type) — that's what the harness requires. Hypomnema-specific metadata (ref_count, effectiveness, status, keywords, domains) lives in the SQLite sidecar, keyed by file slug. The sidecar is a derived projection: delete it and `memoryctl` rebuilds from WAL + native frontmatter scan.
 
-Fields you write in the native file:
+Fields you write in the native file: Claude Code's own memory instructions nest `type` (and sometimes `created`/`status`) under a `metadata:` key — hypomnema reads that shape as equivalent to the flat one below.
 
 ```yaml
 ---

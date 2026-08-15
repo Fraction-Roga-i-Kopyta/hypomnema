@@ -70,6 +70,7 @@ rewrite their keywords/evidence.
 - Tab after a key (`status:\tactive`) works the same as a space
 - Quoted scalars (`status: "active"`) are unquoted on read
 - Block-style arrays collapse into a single list the same way as inline `[api, auth]`
+- Claude Code's native nesting (`metadata:` with indented `type:` / `created:` / `status:` / `keywords:` / `domains:`) is read as if those keys were top-level; a column-0 key wins on collision. Prefer top-level when you write by hand.
 - Multi-line block scalars (`root-cause: |`) are **not** supported — use a single-line scalar or put the prose in the body
 
 ## Type-specific fields
