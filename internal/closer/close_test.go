@@ -186,3 +186,62 @@ func mustRead(t *testing.T, path string) []byte {
 	}
 	return b
 }
+
+// close runs on every Stop (per turn). The per-fact classification rows must
+// be written once per (event, fact, session), not once per turn — one live
+// session had written 16 341 trigger-silent rows for a dozen facts.
+func TestRun_ClassificationRowsOncePerSession(t *testing.T) {
+	home := t.TempDir()
+	memDir := filepath.Join(home, ".claude", "memory")
+	projDir := filepath.Join(home, ".claude", "projects", "-tmp-proj", "memory")
+	os.MkdirAll(filepath.Join(memDir, ".runtime"), 0o755)
+	os.MkdirAll(projDir, 0o755)
+	os.WriteFile(filepath.Join(projDir, "cited.md"),
+		[]byte("---\nname: cited-rule\ntype: mistake\n---\nbody\n"), 0o644)
+	os.WriteFile(filepath.Join(projDir, "quiet.md"),
+		[]byte("---\nname: quiet-rule\ntype: mistake\n---\nbody\n"), 0o644)
+	os.WriteFile(filepath.Join(projDir, "held.md"),
+		[]byte("---\nname: held-rule\ntype: mistake\n---\nbody\n"), 0o644)
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
+	os.WriteFile(filepath.Join(memDir, ".runtime", "injected-s1.list"), []byte("cited.md\nquiet.md\n"), 0o600)
+	os.WriteFile(filepath.Join(memDir, ".runtime", "holdout-s1.list"), []byte("held.md\n"), 0o600)
+	tx := filepath.Join(home, "t.jsonl")
+	os.WriteFile(tx, []byte(`{"type":"assistant","sessionId":"s1","message":{"content":[{"type":"text","text":"applied cited-rule here"}]}}`+"\n"), 0o644)
+	in := Input{SessionID: "s1", CWD: "/tmp/proj", TranscriptPath: tx,
+		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir, Today: "2026-08-16"}
+
+	for turn := 0; turn < 3; turn++ { // three Stop events in one session
+		if _, err := Run(in); err != nil {
+			t.Fatalf("Run #%d: %v", turn, err)
+		}
+	}
+	wal, _ := os.ReadFile(filepath.Join(memDir, ".wal"))
+	w := string(wal)
+	count := func(sub string) int { return strings.Count(w, sub) }
+	if n := count("|trigger-useful|-tmp-proj\x1fcited.md|s1"); n != 1 {
+		t.Errorf("trigger-useful rows for cited = %d, want 1:\n%s", n, w)
+	}
+	if n := count("|trigger-silent|-tmp-proj\x1fquiet.md|s1"); n != 1 {
+		t.Errorf("trigger-silent rows for quiet = %d, want 1:\n%s", n, w)
+	}
+	if n := count("|holdout-miss|-tmp-proj\x1fheld.md|s1"); n != 1 {
+		t.Errorf("holdout-miss rows for held = %d, want 1:\n%s", n, w)
+	}
+	// Per-turn bookkeeping rows are intentionally NOT deduped (doctor reads them).
+	if n := count("|session-close|s1|s1"); n != 3 {
+		t.Errorf("session-close rows = %d, want 3 (one per turn)", n)
+	}
+	// A verdict that changes later in the session still lands: silent → useful.
+	os.WriteFile(tx, []byte(`{"type":"assistant","sessionId":"s1","message":{"content":[{"type":"text","text":"applied cited-rule and quiet-rule"}]}}`+"\n"), 0o644)
+	if _, err := Run(in); err != nil {
+		t.Fatal(err)
+	}
+	wal, _ = os.ReadFile(filepath.Join(memDir, ".wal"))
+	w = string(wal)
+	if n := count("|trigger-useful|-tmp-proj\x1fquiet.md|s1"); n != 1 {
+		t.Errorf("quiet became useful: want exactly one useful row, got %d", n)
+	}
+	if n := count("|trigger-silent|-tmp-proj\x1fquiet.md|s1"); n != 1 {
+		t.Errorf("earlier silent row stays (useful-wins is the reader's job), got %d", n)
+	}
+}

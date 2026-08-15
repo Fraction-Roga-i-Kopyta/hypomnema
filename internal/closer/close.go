@@ -173,9 +173,16 @@ func slugMeta(claudeHome, cwd string) (names map[string]string, evidence map[str
 	return names, evidence, status
 }
 
+// appendWAL writes one classification row, deduplicated per (event, target,
+// session): close runs on every Stop, and re-emitting the same verdict each
+// turn only inflates the WAL (every reader already collapses rows per
+// (slug, session) with useful-wins). A verdict that changes later in the
+// session — silent at turn 1, useful at turn 5 — has a different key and
+// still lands.
 func appendWAL(memDir, day, event, slug, sid string) {
-	line := fmt.Sprintf("%s|%s|%s|%s", day, event, wal.SanitizeField(slug), sid)
-	wal.Append(memDir, line, "")
+	target := wal.SanitizeField(slug)
+	line := fmt.Sprintf("%s|%s|%s|%s", day, event, target, sid)
+	wal.Append(memDir, line, "|"+event+"|"+target+"|"+sid)
 }
 
 // projectBySlug maps each in-scope fact's slug to its owning project, project-
