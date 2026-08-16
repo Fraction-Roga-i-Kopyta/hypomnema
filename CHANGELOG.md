@@ -1,6 +1,15 @@
 # Changelog
 
-## [Unreleased]
+## [2.12.0] — 2026-08-16
+
+Memory signal hygiene (4 milestones; spec:
+`docs/specs/2026-08-16-memory-signal-hygiene-design.md`). A live audit found
+that half the corpus was typeless for the parser, that ranking recency was
+keyed on the ranker's own injections, that oversized facts injected as
+headers, and that the Stop hook re-wrote its classification rows every turn.
+Redeploy the binary; the sidecar rebuilds itself on the next reproject
+(schema v5→v6). No WAL rewrite. Run B (honest usefulness signal — P3b) is the
+follow-up.
 
 ### Fixed
 
