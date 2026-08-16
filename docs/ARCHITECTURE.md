@@ -80,7 +80,8 @@ Stop ──► close ───────────────────�
    WAL: trigger-useful|<slug>, trigger-silent|<slug>            │
    WAL: session-metrics (error_count/tool_calls/duration)       │
    WAL: session-close|<sid>                                     │
-   sidecar.Reproject: ref_count, effectiveness, last_injected   │
+   sidecar.Reproject: ref_count, effectiveness,                 │
+     last_injected, last_useful                                 │
    sidecar.MarkStale: decay by age from last-injection          │
    memindex.Write: regenerate this project's native MEMORY.md   │
    profile.Generate: self-profile.md                            │
