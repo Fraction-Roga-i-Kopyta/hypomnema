@@ -80,7 +80,7 @@ func runSkillInject(_ []string) {
 	fmt.Fprintf(&b, "Accumulated learnings for skill `%s` (apply alongside the skill):\n\n", skill)
 	for _, s := range scored {
 		f := bySlug[s.Slug]
-		entry := fmt.Sprintf("- %s\n", inject.CapBody(f.Body, inject.MaxBodyBytes))
+		entry := fmt.Sprintf("- %s\n", inject.CapBody(f.Body, inject.MaxBodyBytes, inject.PathHint(f)))
 		// Honour the same total budget as injection: an oversized envelope is
 		// diverted to a file the model never reads inline, so learnings past the
 		// budget would silently never surface (review H2). Stop before overflow,

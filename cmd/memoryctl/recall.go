@@ -213,7 +213,7 @@ func renderRecall(top rank.Scored, rest []rank.Scored, bySlug map[string]native.
 	}
 	fmt.Fprintf(&b, "## %s (%s, score %.2f)%s\n", title, typ, top.Score, staleMark(top.Status))
 	if f.Body != "" {
-		b.WriteString(inject.CapBody(f.Body, inject.MaxBodyBytes))
+		b.WriteString(inject.CapBody(f.Body, inject.MaxBodyBytes, inject.PathHint(f)))
 		b.WriteString("\n")
 	}
 	if len(rest) == 0 {

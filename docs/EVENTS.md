@@ -40,9 +40,9 @@ Exactly these events are written by v2 code. Producers verified by grep of
 | event | target shape | producer (verb) | consumer | notes |
 |---|---|---|---|---|
 | `inject` | `<slug>` | `memoryctl inject` — `SessionStart` + `UserPromptSubmit` shims (`cmd/memoryctl/inject.go` → `persistInjected`) | `internal/sidecar` reproject (ref_count, last_injected); `internal/closer` via the session injected-set | one line per injected fact per delivery |
-| `recall` | `<slug>` | `memoryctl recall` (pull CLI) and `skill-inject` (`cmd/memoryctl/recall.go`) | `internal/sidecar` reproject; `internal/closer` (joined into injected-set) | same-day repeat of one fact in one session dedups to a single ref bump |
-| `trigger-useful` | `<slug>` | `memoryctl close` — `internal/closer` (`Classify`) | `internal/sidecar` (effectiveness `pos`); `internal/profile` | evidence phrase or name/slug cited in assistant transcript text |
-| `trigger-silent` | `<slug>` | `memoryctl close` — `internal/closer` (`Classify`) | `internal/sidecar` (effectiveness `neg`); `internal/profile` | injected fact went uncited; skipped if the transcript was unreadable |
+| `recall` | `<slug>` | `memoryctl recall` (pull CLI) and `skill-inject` (`cmd/memoryctl/recall.go`) | `internal/sidecar` reproject; `internal/closer` (joined into injected-set) | same-day repeat of one fact in one session dedups to a single ref bump; does NOT feed last_useful (delivery, not use) |
+| `trigger-useful` | `<slug>` | `memoryctl close` — `internal/closer` (`Classify`) | `internal/sidecar` (effectiveness `pos`); `internal/profile`; sidecar last_useful (ranking recency) | evidence phrase or name/slug cited in assistant transcript text; written once per (fact, session) — a later changed verdict adds its own row |
+| `trigger-silent` | `<slug>` | `memoryctl close` — `internal/closer` (`Classify`) | `internal/sidecar` (effectiveness `neg`); `internal/profile` | injected fact went uncited; skipped if the transcript was unreadable; written once per (fact, session) — a later changed verdict adds its own row |
 | `session-metrics` | `domains:_global_,error_count:N,tool_calls:M,duration:Ss` (`$3`); session id (`$4`) | `memoryctl close` — `internal/closer` | `internal/profile` (rollup); tolerated by `ab`, `doctor` | one per closed session |
 | `session-close` | `<session_id>` (in both `$3` and `$4`) | `memoryctl close` — `internal/closer` | session-boundary marker; `internal/profile` | emitted for any error count |
 | `dedup-blocked` | `<new-slug>><existing-slug>` (`>` sub-delim) | `memoryctl dedup check` (pre-tool) — `internal/dedup` | informational (`doctor` tolerates) | see note below |
@@ -54,8 +54,8 @@ Exactly these events are written by v2 code. Producers verified by grep of
 | `ablate-start` | `<qslug>:<sessions>` | `memoryctl ablate` (`cmd/memoryctl/ablate.go`) | `internal/sidecar` reproject (holdout_remaining); `ablate report` | begins a per-fact holdout |
 | `ablate-stop` | `<qslug>:<manual\|expired>` | `memoryctl ablate stop`; `memoryctl inject` on exhaustion | `internal/sidecar` reproject; `ablate report` | |
 | `holdout-skip` | `<qslug>` | `memoryctl inject` (`persistHoldoutSkips`) | `internal/sidecar` reproject (budget); `ablate report` | one per fact per session; fact ranked top-K but was withheld |
-| `holdout-hit` | `<qslug>` | `memoryctl close` — `internal/closer` | `ablate report` | evidence present WITHOUT injection; never feeds effectiveness |
-| `holdout-miss` | `<qslug>` | `memoryctl close` — `internal/closer` | `ablate report` | evidence absent without injection; never feeds effectiveness |
+| `holdout-hit` | `<qslug>` | `memoryctl close` — `internal/closer` | `ablate report` | evidence present WITHOUT injection; never feeds effectiveness; written once per (fact, session) — a later changed verdict adds its own row |
+| `holdout-miss` | `<qslug>` | `memoryctl close` — `internal/closer` | `ablate report` | evidence absent without injection; never feeds effectiveness; written once per (fact, session) — a later changed verdict adds its own row |
 
 > **Dedup is not a default hook.** `memoryctl dedup check` is a real verb that
 > emits the three `dedup-*` events, but the six installed shims do not wire it —

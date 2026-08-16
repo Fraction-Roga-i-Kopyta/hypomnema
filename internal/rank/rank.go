@@ -23,6 +23,7 @@ type Candidate struct {
 	Status        string
 	Created       string // YYYY-MM-DD, may be ""
 	LastInjected  string // YYYY-MM-DD, may be ""
+	LastUseful    string // YYYY-MM-DD, may be "" — latest trigger-useful citation (v2.12)
 	Overlap       int
 }
 
@@ -127,10 +128,16 @@ func effGate(effectiveness float64) float64 {
 }
 
 // recency decays from 1.0 (today) toward 0 with a 30-day scale, using
-// LastInjected (fallback Created). Unknown/zero date → 0 contribution.
-// LastInjected reflects actual use; Created is the novelty fallback (a calibration choice Phase 2b may revisit).
+// LastUseful (fallback Created). Unknown/zero date → 0 contribution.
+//
+// LastUseful is the model's own signal (a useful citation classified at
+// close). LastInjected is deliberately NOT used: injection is the ranker's
+// output, so keying recency on it made every pick refresh itself — a fact
+// injected hundreds of times with near-zero effectiveness never aged
+// (v2.11 live audit: ref 619 / eff 0.04 still in rotation). Created is the
+// novelty fallback so a brand-new fact is injectable from day one.
 func recency(c Candidate, today time.Time) float64 {
-	d := c.LastInjected
+	d := c.LastUseful
 	if d == "" {
 		d = c.Created
 	}

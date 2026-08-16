@@ -45,6 +45,7 @@ func Replay(events []Event, ks []int, seed int64) []Result {
 				RefCount:      g.RefCount,
 				Effectiveness: float64(g.Pos+1) / float64(g.Pos+g.Neg+2),
 				LastInjected:  g.LastInject,
+				LastUseful:    g.LastUseful,
 				Overlap:       0, // historical prompt keywords unavailable
 			})
 		}

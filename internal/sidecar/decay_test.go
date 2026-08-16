@@ -70,6 +70,27 @@ func TestSkillLearningDecayThreshold(t *testing.T) {
 	}
 }
 
+// Claude Code's own memory types (user, reference) get explicit thresholds:
+// a user-identity fact is durable (180d); a reference decays like a note (90d).
+func TestMarkStale_HarnessTypes(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), ".sidecar.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	mustUpsert(t, s, Record{Slug: "who.md", Type: "user", Created: "2026-01-01", Status: "active"})       // 100d old
+	mustUpsert(t, s, Record{Slug: "ref.md", Type: "reference", Created: "2026-01-01", Status: "active"})  // 100d old
+	if _, err := s.MarkStale("2026-04-11"); err != nil {
+		t.Fatalf("MarkStale: %v", err)
+	}
+	if r, _, _ := s.Get("who.md"); r.Status != "active" {
+		t.Errorf("user fact at 100d must stay active (threshold 180), got %q", r.Status)
+	}
+	if r, _, _ := s.Get("ref.md"); r.Status != "stale" {
+		t.Errorf("reference at 100d must go stale (threshold 90), got %q", r.Status)
+	}
+}
+
 // continuity/project facts are "where we left off" markers — they must
 // never rotate out by age (CLAUDE.md lifecycle contract).
 func TestMarkStale_ExemptsContinuityAndProject(t *testing.T) {

@@ -35,8 +35,24 @@ const MaxBodyBytes = maxBodyBytes
 const MaxTotalBytes = maxTotalBytes
 
 // CapBody bounds one record body to maxBytes at a UTF-8 rune boundary with a
-// visible truncation marker. Exported for the recall verb.
-func CapBody(body string, maxBytes int) string { return capBody(body, maxBytes) }
+// visible truncation marker that names the total size and, via hint, where
+// the full text lives (PathHint: "full text: <absolute path>"). Exported for
+// the recall and skill-inject verbs.
+func CapBody(body string, maxBytes int, hint string) string { return capBody(body, maxBytes, hint) }
+
+// pathHint is the truncation hint for a native file: its absolute path (the
+// only pointer that always yields the full text). Empty when the file has no
+// path (synthetic candidates in tests).
+func pathHint(f native.MemFile) string {
+	if f.Path == "" {
+		return ""
+	}
+	return "full text: " + f.Path
+}
+
+// PathHint exports pathHint for the recall and skill-inject verbs, which
+// render outside this package but must pass the same hint render does.
+func PathHint(f native.MemFile) string { return pathHint(f) }
 
 // Candidates assembles ranker-ready candidates for an ad-hoc query against
 // the project+global scope — the same sidecar-backed assembly (self-healing
@@ -231,7 +247,8 @@ func candidates(in Input, files []native.MemFile, terms []string) ([]rank.Candid
 					Domains: splitCSV(r.Domains), RefCount: r.RefCount,
 					Effectiveness: r.Effectiveness, Status: r.Status,
 					Created: r.Created, LastInjected: r.LastInjected,
-					Overlap: overlap[r.Slug],
+					LastUseful: r.LastUseful,
+					Overlap:    overlap[r.Slug],
 				})
 			}
 			return out, held
@@ -320,9 +337,10 @@ func render(ranked []rank.Scored, bySlug map[string]native.MemFile, maxBody, max
 			title = sc.Slug
 		}
 		head := fmt.Sprintf("\n## %s\n", title)
+		hint := pathHint(f)
 		body := ""
 		if f.Body != "" {
-			body = capBody(f.Body, maxBody) + "\n"
+			body = capBody(f.Body, maxBody, hint) + "\n"
 		}
 		if maxTotal > 0 && b.Len()+len(head)+len(body) > maxTotal {
 			if len(injected) > 0 {
@@ -332,7 +350,7 @@ func render(ranked []rank.Scored, bySlug map[string]native.MemFile, maxBody, max
 			if room <= 0 {
 				break
 			}
-			body = capBody(f.Body, room) + "\n"
+			body = capBody(f.Body, room, hint) + "\n"
 			if b.Len()+len(head)+len(body) > maxTotal {
 				break
 			}
@@ -349,14 +367,26 @@ func render(ranked []rank.Scored, bySlug map[string]native.MemFile, maxBody, max
 
 // capBody bounds a single record's body to maxBytes (a byte budget), backing
 // up to a UTF-8 rune boundary so multi-byte text never splits, and appends a
-// visible marker so a truncated hint reads as truncated.
-func capBody(body string, maxBytes int) string {
+// visible marker so a truncated hint reads as truncated. The marker names the
+// body's total size and the hint (how to get the rest) and is counted INSIDE
+// maxBytes so a capped record never exceeds its budget; only a budget too
+// small to hold the marker falls back to the legacy short marker appended
+// after the cut.
+func capBody(body string, maxBytes int, hint string) string {
 	if maxBytes <= 0 || len(body) <= maxBytes {
 		return body
 	}
-	cut := maxBytes
+	marker := fmt.Sprintf("\n\n…(truncated — %d B total)", len(body))
+	if hint != "" {
+		marker = fmt.Sprintf("\n\n…(truncated — %d B total; %s)", len(body), hint)
+	}
+	cut := maxBytes - len(marker)
+	if cut <= 0 {
+		marker = "\n\n…(truncated)"
+		cut = maxBytes
+	}
 	for cut > 0 && !utf8.RuneStart(body[cut]) {
 		cut--
 	}
-	return strings.TrimRight(body[:cut], " \n") + "\n\n…(truncated)"
+	return strings.TrimRight(body[:cut], " \n") + marker
 }

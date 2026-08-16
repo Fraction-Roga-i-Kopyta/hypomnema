@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 )
@@ -142,8 +143,10 @@ func TestRun_FirstEntryLargerThanBudgetIsTruncated(t *testing.T) {
 	if len(res.Injected) != 1 || res.Injected[0] != "big.md" {
 		t.Errorf("the single fact must still inject (truncated), got %v", res.Injected)
 	}
-	if !strings.Contains(res.Markdown, "…(truncated)") {
-		t.Errorf("oversized body must carry the truncation marker:\n%s", res.Markdown)
+	if !strings.Contains(res.Markdown, "…(truncated") ||
+		!strings.Contains(res.Markdown, "full text: ") ||
+		!strings.Contains(res.Markdown, "big.md") {
+		t.Errorf("oversized body must carry the truncation marker with size + path hint:\n%s", res.Markdown)
 	}
 }
 
@@ -361,12 +364,54 @@ func TestRun_DegradedHonoursFrontmatterKeywords(t *testing.T) {
 
 func TestExportedCapBody(t *testing.T) {
 	long := strings.Repeat("я", 3000) // 6000 bytes of UTF-8
-	got := CapBody(long, MaxBodyBytes)
-	if len(got) > MaxBodyBytes+len("\n\n…(truncated)") {
+	got := CapBody(long, MaxBodyBytes, "full text: /p/x.md")
+	if len(got) > MaxBodyBytes {
 		t.Fatalf("cap exceeded: %d bytes", len(got))
 	}
+	if !strings.Contains(got, "…(truncated — 6000 B total; full text: /p/x.md)") {
+		t.Fatalf("missing size+hint marker; got tail %q", got[len(got)-90:])
+	}
+}
+
+func TestCapBody_MarkerInsideBudgetWithHint(t *testing.T) {
+	body := strings.Repeat("x", 5000)
+	got := capBody(body, 500, "full text: /home/u/.claude/memory-global/big-note.md")
+	if len(got) > 500 {
+		t.Fatalf("marker must fit inside the cap: %d bytes", len(got))
+	}
+	if !strings.Contains(got, "…(truncated — 5000 B total; full text: /home/u/.claude/memory-global/big-note.md)") {
+		t.Fatalf("marker must name total size and hint; got tail %q", got[len(got)-90:])
+	}
+}
+
+// Cutting back by the marker length must still land on a rune boundary.
+func TestCapBody_MultiByteAfterMarkerReserve(t *testing.T) {
+	body := strings.Repeat("я", 3000) // 2 bytes each
+	for _, cap := range []int{500, 501, 502, 503} {
+		got := capBody(body, cap, "full text: /p/x.md")
+		if len(got) > cap {
+			t.Fatalf("cap %d: %d bytes", cap, len(got))
+		}
+		if !utf8.ValidString(got) {
+			t.Fatalf("cap %d: split a rune", cap)
+		}
+	}
+}
+
+func TestCapBody_TinyBudgetFallsBackToShortMarker(t *testing.T) {
+	got := capBody(strings.Repeat("x", 100), 20, "full text: /p/n.md")
 	if !strings.HasSuffix(got, "…(truncated)") {
-		t.Fatal("missing truncation marker")
+		t.Fatalf("tiny budget keeps the legacy marker; got %q", got)
+	}
+	if len(got) > 20+len("\n\n…(truncated)") {
+		t.Fatalf("legacy overflow bound exceeded: %d", len(got))
+	}
+}
+
+func TestCapBody_NoHint(t *testing.T) {
+	got := capBody(strings.Repeat("y", 3000), 500, "")
+	if !strings.Contains(got, "…(truncated — 3000 B total)") {
+		t.Fatalf("hintless marker wrong: %q", got[len(got)-60:])
 	}
 }
 
