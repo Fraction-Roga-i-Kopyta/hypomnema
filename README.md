@@ -102,12 +102,14 @@ A single relevance ranker (merged from the two v1 pipelines) scores every candid
 ```
 score = 3.0 × overlap(keywords, file keywords+name+description+body)
       + 1.0 × log10(1 + ref_count) × effGate   # popularity, GATED by proven usefulness
-      + 2.0 × recency                  # 1/(1 + days/30) from last injection (fallback created)
+      + 2.0 × recency                  # 1/(1 + days/30) from last USEFUL citation (trigger-useful; fallback created)
       + 2.0 × effectiveness            # Bayesian (pos+1)/(pos+neg+2) — neutral 0.5 until signal lands
       + 1.0 × project boost            # project-local facts beat global ones on ties
 
 effGate = clamp(2 × effectiveness, 0, 1)       # 1.0 at the prior 0.5; only damps unearned volume
 ```
+
+Recency tracks the model's use, not the ranker's own output: it decays from the latest `trigger-useful` date (sidecar `last_useful`), never from `last_injected`, so a fact can't refresh its own recency merely by being injected.
 
 Since v2.4.0 the `ref_count` reward is gated by `effGate`, so a fact injected
 hundreds of times that rarely proved useful can't coast on volume — the gate is
@@ -243,7 +245,7 @@ The shims activate on next session start.
 
 `memoryctl close` regenerates `self-profile.md` on every close (Stop fires per turn) from WAL events. Five sections: meta-signals (total sessions, outcome-positive/negative counts, trigger-useful vs trigger-silent), intuition signal (silent-applied/trigger-useful ratio), strengths (top strategies by success_count), weaknesses (top mistakes by recurrence), and calibration (domains by error rate). Never edit manually — it's a pure function of WAL.
 
-Run `memoryctl doctor` for a health snapshot: sidecar drift, WAL anomalies, stale facts due for down-rank, global store coverage.
+Run `memoryctl doctor` for a health snapshot: sidecar drift, WAL anomalies, stale facts due for down-rank, global store coverage, **facts larger than the 2.5 KB injection cap** (they inject as a header plus a marker; split or retire them).
 
 ## Pull retrieval
 
@@ -252,6 +254,8 @@ memoryctl recall <query words...> [--k N]
 ```
 
 Pull-side retrieval: rank current project + global memory against an ad-hoc query; print the best fact's body (2.5KB cap) plus an index of runner-ups with file paths (default 6 results total). Writes a `recall` WAL event for the delivered fact and unions it into the session's injected list. Includes stale facts (marked `[stale]`) — recalling one revives it.
+
+A truncated injection ends with `…(truncated — N B total; full text: <path>)` — read that file for the rest; `memoryctl recall` serves a ranked, equally capped excerpt.
 
 ## Lifecycle
 
@@ -276,7 +280,7 @@ it is an explicit decision: `doctor` hints at stale facts worth retiring, and
 
 Native files carry minimal frontmatter (name/description/type) — that's what the harness requires. Hypomnema-specific metadata (ref_count, effectiveness, status, keywords, domains) lives in the SQLite sidecar, keyed by file slug. The sidecar is a derived projection: delete it and `memoryctl` rebuilds from WAL + native frontmatter scan.
 
-Fields you write in the native file:
+Fields you write in the native file: Claude Code's own memory instructions nest `type` (and sometimes `created`/`status`) under a `metadata:` key — hypomnema reads that shape as equivalent to the flat one below.
 
 ```yaml
 ---

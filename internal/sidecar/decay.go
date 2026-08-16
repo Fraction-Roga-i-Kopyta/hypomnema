@@ -11,6 +11,10 @@ var staleDays = map[string]int{
 	"mistake": 60, "strategy": 90, "feedback": 45,
 	"knowledge": 90, "decision": 90, "note": 30,
 	"skill-learning": 120, // durable; decays slower than mistakes
+	// Claude Code's own memory types (its instructions write these under
+	// metadata.type): who-the-user-is is durable; a reference decays like
+	// knowledge/decision.
+	"user": 180, "reference": 90,
 }
 
 // MarkStale flips active rows older than their type's stale threshold to

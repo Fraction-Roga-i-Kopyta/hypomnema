@@ -79,7 +79,11 @@ func runSidecarShow(args []string) {
 		os.Exit(1)
 	}
 	for _, r := range recs {
-		fmt.Printf("%-40s type=%-10s ref=%-3d eff=%.2f status=%s\n",
-			r.Slug, r.Type, r.RefCount, r.Effectiveness, r.Status)
+		useful := r.LastUseful
+		if useful == "" {
+			useful = "-"
+		}
+		fmt.Printf("%-40s type=%-10s ref=%-3d eff=%.2f status=%s useful=%s\n",
+			r.Slug, r.Type, r.RefCount, r.Effectiveness, r.Status, useful)
 	}
 }

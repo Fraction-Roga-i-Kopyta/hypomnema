@@ -57,6 +57,8 @@ directory** and no second archival stage). Native content is never mutated.
 | `knowledge` | 90 |
 | `decision` | 90 |
 | `skill-learning` | 120 |
+| `user` | 180 |
+| `reference` | 90 |
 | any other type | 90 (default) |
 
 Rules:

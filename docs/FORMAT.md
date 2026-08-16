@@ -71,7 +71,7 @@ Every memory file is Markdown opening with a YAML frontmatter block delimited by
 | `type` | yes | enum | `mistake \| strategy \| feedback \| knowledge \| decision \| note \| project \| continuity \| skill-learning`. |
 | `name` | yes | string | Sidecar key; kebab-case slug. |
 | `description` | yes | string | One-line summary; shown in the `MEMORY.md` index and injection headers. |
-| `created` | no | `YYYY-MM-DD` | You set it — recency signal for ranking. Falls back to injection recency when absent. |
+| `created` | no | `YYYY-MM-DD` | You set it — novelty signal: recency uses it only until the fact earns a useful citation (`last_useful` then takes precedence); when absent, the WAL-earliest date is substituted. |
 | `status` | no | enum | `active \| pinned`. `pinned` protects from decay. `stale` is **sidecar-managed** — never hand-set it. |
 | `keywords` | no | list | Primary ranking signal. Inline `[a, b]` or block `- a` form. |
 | `domains` | no | list | Domain filter; kebab-case for multi-word. Same forms as `keywords`. |
@@ -106,6 +106,10 @@ Reflecting the actual parser (`internal/native.go` `splitFrontmatter`):
   (surrounding single/double quotes stripped).
 - **Block-style lists** (`keywords:` on its own line, then `  - a` / `  - b`)
   collapse into the same comma-joined value as inline `[a, b]`.
+- **`metadata:` block** (`metadata:` on its own line, then indented `type:` /
+  `created:` / `status:` / `keywords:` / `domains:` …): direct children are
+  promoted to top-level keys; a column-0 key of the same name wins. This is
+  the shape Claude Code's native memory instructions produce.
 
 ### 3.3 Not supported
 
@@ -116,7 +120,7 @@ Reflecting the actual parser (`internal/native.go` `splitFrontmatter`):
 - **Unclosed frontmatter** (no second `---`). No fields are parsed; the whole
   document is treated as body, so the file carries no ranking metadata.
 - Top-level keys must sit at **column 0**; indented `key: value` lines are read
-  as block-scalar continuation and ignored, not as frontmatter keys.
+  as block-scalar continuation and ignored, not as frontmatter keys. The single exception is the direct children of a top-level `metadata:` key (§3.2).
 
 ---
 

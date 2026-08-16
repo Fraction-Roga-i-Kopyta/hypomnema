@@ -1,5 +1,47 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **Frontmatter nested under `metadata:` is now read.** Claude Code's native
+  memory instructions write `metadata:\n  type: …`; the parser skipped every
+  indented line, so 52% of the live corpus (168/325 sidecar rows) had no
+  type/status/created for hypomnema — candidates projected as active,
+  continuity/project lost their decay exemption, decay used the unknown-type
+  threshold. Direct children of `metadata:` are promoted; a column-0 key wins
+  on collision; block-scalar prose is still ignored. A blank line inside the
+  frontmatter is now a no-op everywhere (it used to terminate a block-style
+  list). `user`/`reference` (harness type names) get stale thresholds
+  180/90 d. Doctor reports `nested_metadata_count` under
+  `corpus_frontmatter_quality`.
+
+- **Stop-hook WAL write-amplification.** `close` fires per turn and re-wrote
+  every fact's `trigger-useful/silent` (and `holdout-hit/miss`) row each time
+  — one live session produced 16 341 `trigger-silent` rows. Rows now carry a
+  per-(event, fact, session) dedup key; a changed verdict still lands. No
+  reader changes: all already collapsed rows per (fact, session).
+
+### Changed
+
+- **Ranking recency now follows the model's use, not the ranker's output.**
+  `recency` decays from the latest `trigger-useful` date (new sidecar
+  column `last_useful`, schema v5→v6, rebuilt from WAL) with `created` as the
+  fallback; `last_injected` no longer feeds the score. Injection had been its
+  own recency signal, so heavily-injected never-useful facts (ref 619 /
+  eff 0.04) refreshed themselves every session. `MarkStale` still measures
+  from last injection. `memoryctl rank` prints `useful=<date>` and its usage
+  line now shows the real `--query` flag. Evidence:
+  `docs/measurements/2026-08-16-v2.12-recency-basis.md`.
+
+### Added
+
+- **`doctor` `oversized_facts`.** Warns when a fact's body exceeds the 2 500 B
+  injection cap (64 of 107 files in one live scope did) and lists the five
+  largest. The truncation marker now reads
+  `…(truncated — N B total; full text: <absolute path>)` and is counted
+  inside the per-record cap.
+
 ## [2.11.0] — 2026-07-23
 
 Harness lifecycle, complete (4 milestones; spec:

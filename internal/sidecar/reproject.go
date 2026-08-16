@@ -16,6 +16,7 @@ type agg struct {
 	neg        int
 	created    string // earliest WAL date for the slug
 	lastInject string // latest inject date
+	lastUseful string // latest trigger-useful date (recall is delivery, not use)
 	// sessions holds one classification per session id: true once the slug
 	// was trigger-useful in that session (useful wins over silent — close
 	// runs every turn, so a fact silent at turn 1 may be cited at turn 5).
@@ -73,6 +74,9 @@ func (a *agg) mergeFrom(src *agg) {
 	a.neg += src.neg
 	if src.lastInject > a.lastInject {
 		a.lastInject = src.lastInject
+	}
+	if src.lastUseful > a.lastUseful {
+		a.lastUseful = src.lastUseful
 	}
 	if a.created == "" || (src.created != "" && src.created < a.created) {
 		a.created = src.created
@@ -212,6 +216,7 @@ func reprojectIn(e dbtx, files []native.MemFile, walPath string, scope []string)
 			Domains:          strings.Join(f.Domains, ","),
 			Created:          created,
 			LastInjected:     a.lastInject,
+			LastUseful:       a.lastUseful,
 			RefCount:         a.injects,
 			Status:           status,
 			Effectiveness:    eff,
@@ -254,7 +259,7 @@ func reprojectIn(e dbtx, files []native.MemFile, walPath string, scope []string)
 			continue // file is back in the live store (hand-restored) — live row wins
 		}
 		if err := upsertIn(e, Record{Slug: slug, Project: project, Status: "retired",
-			Created: a.created, LastInjected: a.lastInject, RefCount: a.injects}); err != nil {
+			Created: a.created, LastInjected: a.lastInject, LastUseful: a.lastUseful, RefCount: a.injects}); err != nil {
 			return fmt.Errorf("sidecar.Reproject: retired row %s: %w", slug, err)
 		}
 	}
@@ -362,6 +367,9 @@ func readWALAgg(walPath string) map[string]*agg {
 		// Deduped per session via classify (close fires on every turn).
 		case "trigger-useful":
 			a.classify(field4, true)
+			if date > a.lastUseful {
+				a.lastUseful = date
+			}
 		case "trigger-silent", "trigger-silent-retro":
 			a.classify(field4, false)
 		case "retire":

@@ -69,6 +69,7 @@ func TestRank_ZeroSafe_NewFactStillRanks(t *testing.T) {
 	zero.Effectiveness = 0
 	zero.Created = ""
 	zero.LastInjected = ""
+	zero.LastUseful = ""
 	got := Rank(q, []Candidate{zero}, 0)
 	if len(got) != 1 {
 		t.Fatalf("zero-signal fact must still be rankable, got %d", len(got))
@@ -159,13 +160,13 @@ func TestRank_RecencyOrdering(t *testing.T) {
 	q := Query{Today: "2026-05-29"}
 	recent := base()
 	recent.Slug = "recent"
-	recent.LastInjected = "2026-05-28"
+	recent.LastUseful = "2026-05-28"
 	old := base()
 	old.Slug = "old"
-	old.LastInjected = "2026-01-01"
+	old.LastUseful = "2026-01-01"
 	got := Rank(q, []Candidate{old, recent}, 0)
 	if got[0].Slug != "recent" {
-		t.Errorf("more recently injected should rank first; got %v", slugs(got))
+		t.Errorf("more recently useful should rank first; got %v", slugs(got))
 	}
 }
 
@@ -277,5 +278,37 @@ func TestRank_CandidateInjectable(t *testing.T) {
 	}, 0)
 	if len(got) != 1 {
 		t.Fatalf("candidate excluded from ranking: %v", got)
+	}
+}
+
+// Recency follows the model's use (LastUseful), not the ranker's own output
+// (LastInjected): a fact injected today but never useful must not outrank an
+// equal fact last useful last week just by having been injected.
+func TestRank_RecencyUsesLastUsefulNotLastInjected(t *testing.T) {
+	q := Query{Today: "2026-08-16"}
+	injectedToday := base()
+	injectedToday.Slug = "injected-today"
+	injectedToday.Created = "2026-01-01"
+	injectedToday.LastInjected = "2026-08-16"
+	injectedToday.LastUseful = ""
+
+	usefulLastWeek := base()
+	usefulLastWeek.Slug = "useful-last-week"
+	usefulLastWeek.Created = "2026-01-01"
+	usefulLastWeek.LastInjected = "2026-01-02"
+	usefulLastWeek.LastUseful = "2026-08-09"
+
+	got := Rank(q, []Candidate{injectedToday, usefulLastWeek}, 0)
+	if got[0].Slug != "useful-last-week" {
+		t.Fatalf("want useful-last-week first, got %v", []string{got[0].Slug, got[1].Slug})
+	}
+	// And the injected-today fact scores exactly like a fact with no dates
+	// but the same Created — LastInjected contributes nothing.
+	same := injectedToday
+	same.Slug = "same-created-no-inject"
+	same.LastInjected = ""
+	r := Rank(q, []Candidate{injectedToday, same}, 0)
+	if r[0].Score != r[1].Score {
+		t.Errorf("LastInjected must not move the score: %v vs %v", r[0].Score, r[1].Score)
 	}
 }
