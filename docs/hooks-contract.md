@@ -226,7 +226,10 @@ Contract (see CLAUDE.md "Lifecycle"):
 - Classifies the session's injected set into `trigger-useful` / `trigger-silent`
   (evidence-phrase or slug/name citation in assistant text) and writes those
   WAL events.
-- Writes one `session-metrics` (v2 shape) and one `session-close` per session.
+- Writes a `session-metrics` (v2 shape) and a `session-close` row per turn
+  (Stop fires once per turn, not once per session). The per-fact
+  classification rows — `trigger-useful`/`trigger-silent`,
+  `holdout-hit`/`holdout-miss` — are written once per (fact, session).
 - Recomputes effectiveness in the sidecar; marks unused facts `stale` past their
   type threshold (age from last injection). No native content is mutated;
   `pinned` / `continuity` / `project` facts never decay.

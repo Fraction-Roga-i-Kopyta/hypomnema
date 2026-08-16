@@ -166,7 +166,7 @@ func TestRank_RecencyOrdering(t *testing.T) {
 	old.LastUseful = "2026-01-01"
 	got := Rank(q, []Candidate{old, recent}, 0)
 	if got[0].Slug != "recent" {
-		t.Errorf("more recently injected should rank first; got %v", slugs(got))
+		t.Errorf("more recently useful should rank first; got %v", slugs(got))
 	}
 }
 
