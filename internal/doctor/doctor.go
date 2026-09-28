@@ -931,7 +931,7 @@ func checkOpenQuanta(walPath string, now time.Time) Check {
 // underscores, spaces or non-ASCII, worktrees, and repo subdirectories.
 func checkStoreResolution(claudeDir string, st native.Store, anchor string) Check {
 	const name = "store_resolution"
-	detail := fmt.Sprintf("%s (project %s, via %s)", st.Dir, st.Project, st.Source)
+	detail := fmt.Sprintf("%s (project %s, via %s; anchor %s)", st.Dir, st.Project, st.Source, anchor)
 	if st.Source != "default" {
 		// An override store has no slug, hence no legacy-slug sibling.
 		return Check{Name: name, Status: OK, Detail: detail}
@@ -960,7 +960,7 @@ func checkStoreResolution(claudeDir string, st native.Store, anchor string) Chec
 	}
 	return Check{Name: name, Status: WARN, Detail: detail +
 		"; legacy store(s) no longer read since v2.13: " + strings.Join(stray, ", ") +
-		" — move their .md files into " + st.Dir + " (see TROUBLESHOOTING)"}
+		" — move their facts (not MEMORY.md) into " + st.Dir + " (see TROUBLESHOOTING)"}
 }
 
 // resolveDoctorNow mirrors the HYPOMNEMA_TODAY / HYPOMNEMA_NOW

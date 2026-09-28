@@ -107,9 +107,18 @@ variables and run:
 ```bash
 LEGACY_STORE="<the .../memory path doctor lists after 'legacy store(s) no longer read', before its '(N facts)'>"
 NEW_STORE="<the .../memory path doctor lists at the start of the store_resolution line, and again after 'move their .md files into'>"
-mv "$LEGACY_STORE"/*.md "$NEW_STORE"/
+for f in "$LEGACY_STORE"/*.md; do
+  [ "$(basename "$f")" = "MEMORY.md" ] && continue
+  mv -n "$f" "$NEW_STORE"/
+done
 memoryctl sidecar rebuild
 ```
+
+`mv -n` never overwrites — a same-named file already present in `$NEW_STORE`
+(or `MEMORY.md`, skipped outright since it is regenerated per store, not
+moved) is left behind in `$LEGACY_STORE`. Check what remains there and merge
+those by hand. Moved facts start a fresh ranking history in the new store —
+their old WAL rows stay attributed to the legacy project tag.
 
 ## Sidecar is stale or missing
 

@@ -676,6 +676,9 @@ func TestCheckStoreResolution(t *testing.T) {
 	if c.Status != OK || !strings.Contains(c.Detail, st.Dir) {
 		t.Errorf("clean install: %+v", c)
 	}
+	if !strings.Contains(c.Detail, "anchor "+anchor) {
+		t.Errorf("detail must name the resolved anchor (ARCHITECTURE/CHANGELOG say \"resolved store and anchor\"): %+v", c)
+	}
 
 	legacy := filepath.Join(claude, "projects", "-tmp-my_proj", "memory")
 	os.MkdirAll(legacy, 0o755)
@@ -683,5 +686,8 @@ func TestCheckStoreResolution(t *testing.T) {
 	c = checkStoreResolution(claude, st, anchor)
 	if c.Status != WARN || !strings.Contains(c.Detail, legacy) || !strings.Contains(c.Detail, "1 facts") {
 		t.Errorf("legacy store with facts must WARN naming it: %+v", c)
+	}
+	if !strings.Contains(c.Detail, "move their facts (not MEMORY.md) into") {
+		t.Errorf("WARN text must match the TROUBLESHOOTING recipe wording: %+v", c)
 	}
 }
