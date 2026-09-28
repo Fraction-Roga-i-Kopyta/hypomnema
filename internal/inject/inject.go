@@ -99,10 +99,11 @@ func (in Input) store() native.Store {
 type Result struct {
 	Markdown string
 	Injected []string
-	// ProjectBySlug maps each injected slug to its owning project (cwd slug or
-	// GlobalProject), so the caller can write project-qualified WAL events
-	// (review E5-deep). Project-local wins over global on a basename tie —
-	// matching scopeRecords' preference. Covers HoldoutSkipped slugs too.
+	// ProjectBySlug maps each injected slug to its owning project (the
+	// resolved store's project tag, or GlobalProject), so the caller can
+	// write project-qualified WAL events. Project-local wins over global on
+	// a basename tie — matching scopeRecords' preference. Covers
+	// HoldoutSkipped slugs too.
 	ProjectBySlug map[string]string
 	// HoldoutSkipped lists held-out facts that ranked inside the top-K and
 	// were withheld (would-have-injected).

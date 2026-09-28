@@ -164,11 +164,11 @@ func TestCanonicalRoot_SymlinkGitStopsWalk(t *testing.T) {
 	}
 }
 
-// TestCanonicalRoot_HostilePointers covers the milestone-1 domain-review
-// finding: mainCheckout used to trust planted .git/commondir content with
-// no proof git itself wrote it, so a bare tarball/zip extraction (no real
-// git involved) could redirect CanonicalRoot onto an unrelated, pre-existing
-// directory — cross-project memory disclosure, or a shared junk slug. Every
+// TestCanonicalRoot_HostilePointers covers the threat mainCheckout's
+// structural checks defend against: without them, a planted .git/commondir
+// pair — no real git required, e.g. from a bare tarball/zip extraction —
+// could redirect CanonicalRoot onto an unrelated, pre-existing directory,
+// causing cross-project memory disclosure or a shared junk slug. Every
 // subtest plants a ".git file → gitdir dir" pair by hand and asserts the
 // result stays the planted root's OWN root.
 func TestCanonicalRoot_HostilePointers(t *testing.T) {

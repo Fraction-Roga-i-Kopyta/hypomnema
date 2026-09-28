@@ -27,10 +27,11 @@ const GlobalProject = "global"
 
 // qkeySep separates the project from the slug in a project-qualified WAL
 // target / sidecar identity. ASCII Unit Separator (0x1f) is impossible inside
-// a filename-derived slug or a cwd-derived project slug, so QKey is
-// collision-proof, and it is neither the WAL column delimiter ('|') nor a
-// carriage return, so a qualified target still passes wal.Validate. Grep still
-// finds a slug: it survives intact after the separator.
+// a filename-derived slug or a store's project tag (SanitizePath's output
+// alphabet is [a-zA-Z0-9-]), so QKey is collision-proof, and it is neither
+// the WAL column delimiter ('|') nor a carriage return, so a qualified
+// target still passes wal.Validate. Grep still finds a slug: it survives
+// intact after the separator.
 const qkeySep = "\x1f"
 
 // QKey builds the project-qualified key for a fact. Global facts use the
