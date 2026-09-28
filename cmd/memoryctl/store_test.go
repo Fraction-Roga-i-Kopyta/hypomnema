@@ -39,6 +39,29 @@ func TestResolveStore_AnchorOrder(t *testing.T) {
 	}
 }
 
+func TestResolveStore_RelativeCLAUDE_PROJECT_CWDMadeAbsolute(t *testing.T) {
+	home := t.TempDir()
+	claude, mem := filepath.Join(home, ".claude"), filepath.Join(home, ".claude", "memory")
+	setStoreEnv(t, claude, mem)
+	t.Setenv("CLAUDE_PROJECT_CWD", ".")
+
+	r := resolveStore("/tmp/cwd")
+	if r.Kind != "CLAUDE_PROJECT_CWD" {
+		t.Fatalf("Kind = %q, want CLAUDE_PROJECT_CWD", r.Kind)
+	}
+	if r.Project == "-" {
+		t.Fatalf("relative \".\" was used verbatim: Project collapsed to %q", r.Project)
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := native.SanitizePath(native.CanonicalRoot(wd))
+	if r.Project != want {
+		t.Errorf("Project = %q, want %q (SanitizePath of the test's cwd canonical root)", r.Project, want)
+	}
+}
+
 func TestConfigDir_SeparateFromClaudeDir(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
