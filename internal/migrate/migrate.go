@@ -284,7 +284,7 @@ type day struct {
 	zero    bool
 }
 
-func parseDay(s string) day    { return parseDayStr(s) }
+func parseDay(s string) day { return parseDayStr(s) }
 func parseDayStr(s string) day {
 	var y, m, d int
 	if _, err := fmt.Sscanf(strings.TrimSpace(s), "%d-%d-%d", &y, &m, &d); err != nil {
