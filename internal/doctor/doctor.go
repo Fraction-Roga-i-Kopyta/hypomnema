@@ -127,8 +127,10 @@ func (r Report) PrintJSON(w io.Writer) {
 // st is the resolved native store: the corpus checks enumerate its
 // per-project directory (plus the global store), via native.Collect. In v2
 // the memory content lives in native files, not under memoryDir — memoryDir
-// is only the metadata root (.wal, .sidecar.db). anchor is unused today
-// (Task 5 consumes it).
+// is only the metadata root (.wal, .sidecar.db). anchor is the project
+// anchor this invocation resolved its store from (CLAUDE_PROJECT_DIR /
+// CLAUDE_PROJECT_CWD / session pin / cwd); checkStoreResolution reports it
+// and uses it to look for legacy-slug store siblings.
 func Run(claudeDir, memoryDir string, st native.Store, anchor string) Report {
 	now := resolveDoctorNow()
 	r := Report{ClaudeDir: claudeDir, MemoryDir: memoryDir, Now: now}
