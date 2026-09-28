@@ -66,7 +66,13 @@ func TestInject_WorktreeReadsMainCheckoutStore(t *testing.T) {
 	f := newStoreFixture(t)
 	base := t.TempDir()
 	mainRoot := filepath.Join(base, "main")
-	wtGit := filepath.Join(mainRoot, ".git", "worktrees", "feat")
+	mainGit := filepath.Join(mainRoot, ".git")
+	// CanonicalRoot now also requires the resolved common dir to look like a
+	// real git common dir (HEAD + objects/), not just sit at the right
+	// position — see internal/native/store.go mainCheckout.
+	os.MkdirAll(filepath.Join(mainGit, "objects"), 0o755)
+	os.WriteFile(filepath.Join(mainGit, "HEAD"), []byte("ref: refs/heads/main\n"), 0o644)
+	wtGit := filepath.Join(mainGit, "worktrees", "feat")
 	os.MkdirAll(wtGit, 0o755)
 	os.WriteFile(filepath.Join(wtGit, "commondir"), []byte("../..\n"), 0o644)
 	wt := filepath.Join(mainRoot, ".worktrees", "feat")

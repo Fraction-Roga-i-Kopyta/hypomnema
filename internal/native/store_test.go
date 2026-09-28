@@ -72,10 +72,20 @@ func mkGitDir(t *testing.T, root string) {
 // mkWorktree lays out what `git worktree add` writes: <wt>/.git is a file
 // "gitdir: <main>/.git/worktrees/<name>", that dir holds commondir "../..",
 // and (the back-link git writes for every linked worktree) a "gitdir" file
-// naming <wt>/.git back.
+// naming <wt>/.git back. It also makes <mainRoot>/.git look like a real git
+// common dir (HEAD + objects/), since CanonicalRoot now requires that too —
+// self-sufficient regardless of whether the caller already created
+// <mainRoot>/.git via mkGitDir.
 func mkWorktree(t *testing.T, mainRoot, wt, name string) {
 	t.Helper()
-	wtGit := filepath.Join(mainRoot, ".git", "worktrees", name)
+	mainGit := filepath.Join(mainRoot, ".git")
+	if err := os.MkdirAll(filepath.Join(mainGit, "objects"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mainGit, "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wtGit := filepath.Join(mainGit, "worktrees", name)
 	if err := os.MkdirAll(wtGit, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -240,6 +250,67 @@ func TestCanonicalRoot_HostilePointers(t *testing.T) {
 		os.MkdirAll(root, 0o755)
 		huge := "gitdir: " + strings.Repeat("a", 5000)
 		os.WriteFile(filepath.Join(root, ".git"), []byte(huge), 0o644)
+		assertOwnRoot(t, root)
+	})
+
+	// The next two prove position (Dir(Dir(p))==common) is not enough on its
+	// own: <p> is itself attacker-chosen, so a shallow enough <p> makes its
+	// grandparent land on some existing directory the attacker never wrote
+	// HEAD/objects into. Both use a genuinely matching back-link and a
+	// genuinely "../.."-consistent commondir, so only the new HEAD+objects
+	// check is what rejects them.
+
+	t.Run("common exists at the right position but isn't a real git dir (archive parent)", func(t *testing.T) {
+		// Analogous to a one-folder archive extracted into ~/Downloads: the
+		// archive's single top-level folder holds root and p as siblings, so
+		// Dir(Dir(p)) lands exactly on the archive's parent (~/Downloads
+		// here) — a pre-existing directory the tarball never wrote HEAD or
+		// objects/ into.
+		downloads := t.TempDir()
+		archive := filepath.Join(downloads, "archive")
+		root := filepath.Join(archive, "hostile-root")
+		p := filepath.Join(archive, "gitdir")
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, ".git"), []byte("gitdir: "+p+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		writeBacklink(t, p, root)
+		if err := os.WriteFile(filepath.Join(p, "commondir"), []byte("../..\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		assertOwnRoot(t, root)
+	})
+
+	t.Run("common resolves a level higher, analogous to /", func(t *testing.T) {
+		// Analogous to a flat archive extracted directly into /tmp (no
+		// intermediate single-folder): root and p sit directly under the
+		// extraction target, one level shallower than the previous subtest,
+		// so Dir(Dir(p)) lands on the extraction target's OWN parent —
+		// standing in for "/" itself, since a test can't write into the
+		// real filesystem root. The parent of this subtest's own
+		// t.TempDir() is exactly such a pre-existing, HEAD/objects-less
+		// ancestor.
+		tmp := t.TempDir()
+		root := filepath.Join(tmp, "hostile-root")
+		p := filepath.Join(tmp, "gitdir")
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, ".git"), []byte("gitdir: "+p+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		writeBacklink(t, p, root)
+		if err := os.WriteFile(filepath.Join(p, "commondir"), []byte("../..\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 		assertOwnRoot(t, root)
 	})
 }
