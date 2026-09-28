@@ -3,8 +3,11 @@ package native
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestSanitizePath_Parity(t *testing.T) {
@@ -35,8 +38,9 @@ func TestSanitizePath_Parity(t *testing.T) {
 }
 
 // Reference values computed with the harness's JS:
-//   function UJ(t){let e=0;for(let n=0;n<t.length;n++)e=(e<<5)-e+t.charCodeAt(n)|0;return e}
-//   Math.abs(UJ(s)).toString(36)
+//
+//	function UJ(t){let e=0;for(let n=0;n<t.length;n++)e=(e<<5)-e+t.charCodeAt(n)|0;return e}
+//	Math.abs(UJ(s)).toString(36)
 func TestJavaHash_KnownValues(t *testing.T) {
 	cases := []struct {
 		in   string
@@ -332,7 +336,7 @@ func fakeEnv(claudeDir, projectDir string, env map[string]string, files map[stri
 func TestResolveStore_Default(t *testing.T) {
 	st := ResolveStore(fakeEnv("/home/u/.claude", "/tmp/proj", nil, nil))
 	want := Store{
-		Dir: filepath.Join("/home/u/.claude", "projects", "-tmp-proj", "memory"),
+		Dir:     filepath.Join("/home/u/.claude", "projects", "-tmp-proj", "memory"),
 		Project: "-tmp-proj", Root: "/tmp/proj", Source: "default",
 	}
 	if st != want {
@@ -400,5 +404,107 @@ func TestResolveStore_Overrides(t *testing.T) {
 				t.Errorf("override project tag = %q, want SanitizePath(dir) %q", st.Project, SanitizePath(tc.wantDir))
 			}
 		})
+	}
+}
+
+// withTimeout runs fn in a goroutine and fails the test if it does not
+// return within d — a planted FIFO must not hang store resolution (os.Open
+// on a FIFO with no writer blocks indefinitely).
+func withTimeout(t *testing.T, d time.Duration, fn func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		fn()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(d):
+		t.Fatalf("did not return within %s — likely blocked on a planted FIFO", d)
+	}
+}
+
+func TestCanonicalRoot_FIFOBacklinkDoesNotHang(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no FIFOs on windows")
+	}
+	base := t.TempDir()
+	mainRoot := filepath.Join(base, "main")
+	mkGitDir(t, mainRoot)
+	wt := filepath.Join(mainRoot, ".worktrees", "feat")
+	mkWorktree(t, mainRoot, wt, "feat")
+
+	// Replace the worktree back-link (<p>/gitdir) with a FIFO. Without
+	// readPointerFile using O_NONBLOCK, os.Open on this blocks until a
+	// writer attaches — up to 78s observed in practice, effectively forever
+	// in a hook's timeout budget.
+	backlink := filepath.Join(mainRoot, ".git", "worktrees", "feat", "gitdir")
+	if err := os.Remove(backlink); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(backlink, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var got string
+	withTimeout(t, 2*time.Second, func() { got = CanonicalRoot(wt) })
+	if got != wt {
+		t.Errorf("CanonicalRoot(FIFO back-link) = %q, want own root %q", got, wt)
+	}
+}
+
+func TestResolveStore_FIFOSettingsFileDoesNotHang(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no FIFOs on windows")
+	}
+	base := t.TempDir()
+	claudeDir := filepath.Join(base, ".claude")
+	projectDir := filepath.Join(base, "proj")
+	if err := os.MkdirAll(filepath.Join(projectDir, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	settingsPath := filepath.Join(projectDir, ".claude", "settings.local.json")
+	if err := syscall.Mkfifo(settingsPath, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var st Store
+	withTimeout(t, 2*time.Second, func() {
+		st = ResolveStore(StoreEnv{
+			ClaudeDir: claudeDir, ProjectDir: projectDir,
+			ManagedSettingsPath: filepath.Join(base, "does-not-exist.json"),
+		})
+	})
+	if st.Source != "default" {
+		t.Errorf("FIFO settings file: got Source=%q, want default (unreadable → fallback)", st.Source)
+	}
+}
+
+func TestResolveStore_OversizedSettingsFileRejected(t *testing.T) {
+	base := t.TempDir()
+	claudeDir := filepath.Join(base, ".claude")
+	projectDir := filepath.Join(base, "proj")
+	if err := os.MkdirAll(filepath.Join(projectDir, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	settingsPath := filepath.Join(projectDir, ".claude", "settings.local.json")
+	f, err := os.Create(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Sparse: does not actually write 1 MiB+1 to disk.
+	if err := f.Truncate(1<<20 + 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	st := ResolveStore(StoreEnv{
+		ClaudeDir: claudeDir, ProjectDir: projectDir,
+		ManagedSettingsPath: filepath.Join(base, "does-not-exist.json"),
+	})
+	if st.Source != "default" {
+		t.Errorf("oversized settings file: got Source=%q, want default (over-cap → fallback)", st.Source)
 	}
 }
