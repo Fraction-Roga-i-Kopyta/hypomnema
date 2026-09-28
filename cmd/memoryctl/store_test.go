@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 )
 
 func setStoreEnv(t *testing.T, claude, mem string) {
@@ -61,8 +63,36 @@ func TestSessionPin_RoundTrip(t *testing.T) {
 	t.Setenv("CLAUDE_PROJECT_DIR", "")
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "s-1")
 	got := resolveStore("")
-	if got.Kind != "session-pin" || got.Dir != r.Dir || got.Project != r.Project || got.Anchor != "/tmp/proj" {
-		t.Errorf("pin lookup: got %+v, want store of %+v", got, r)
+	if got.Kind != "session-pin" || got.Anchor != "/tmp/proj" {
+		t.Errorf("pin lookup: got %+v (want Kind=session-pin, Anchor=/tmp/proj)", got)
+	}
+	// Verify store is re-derived: Dir and Project should match what StoreFor produces from the anchor
+	expected := native.StoreFor(configDir(), "/tmp/proj")
+	if got.Dir != expected.Dir || got.Project != expected.Project {
+		t.Errorf("store not re-derived: got Dir=%q Project=%q, want Dir=%q Project=%q",
+			got.Dir, got.Project, expected.Dir, expected.Project)
+	}
+}
+
+func TestSessionPin_ForgedStoreFieldsIgnored(t *testing.T) {
+	home := t.TempDir()
+	claude, mem := filepath.Join(home, ".claude"), filepath.Join(home, ".claude", "memory")
+	setStoreEnv(t, claude, mem)
+	os.MkdirAll(filepath.Join(mem, ".runtime"), 0o755)
+	// Forge a pin with false dir/project fields; they must be ignored.
+	os.WriteFile(pinPath("s-3"), []byte(`{"anchor":"/tmp/proj","dir":"/tmp/attacker-dir","project":"forged"}`), 0o600)
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "s-3")
+	got := resolveStore("")
+	if got.Kind != "session-pin" || got.Anchor != "/tmp/proj" {
+		t.Errorf("forged pin: got %+v (want Kind=session-pin, Anchor=/tmp/proj)", got)
+	}
+	// Verify the store is re-derived from /tmp/proj, NOT from attacker-dir.
+	expected := native.StoreFor(configDir(), "/tmp/proj")
+	if got.Dir != expected.Dir {
+		t.Errorf("forged pin: Dir=%q (got from attacker-dir?), want %q (from anchor)", got.Dir, expected.Dir)
+	}
+	if got.Dir == "/tmp/attacker-dir" {
+		t.Errorf("SECURITY: forged dir field was trusted! got %q", got.Dir)
 	}
 }
 
@@ -71,9 +101,9 @@ func TestSessionPin_CorruptFallsBack(t *testing.T) {
 	claude, mem := filepath.Join(home, ".claude"), filepath.Join(home, ".claude", "memory")
 	setStoreEnv(t, claude, mem)
 	os.MkdirAll(filepath.Join(mem, ".runtime"), 0o755)
-	os.WriteFile(pinPath("s-2"), []byte(`{"dir":"relative","project":""}`), 0o600)
+	os.WriteFile(pinPath("s-2"), []byte(`{"anchor":"relative"}`), 0o600)
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "s-2")
 	if r := resolveStore("/tmp/cwd"); r.Kind != "cwd" {
-		t.Errorf("corrupt pin must be ignored: %+v", r)
+		t.Errorf("relative anchor: must fallback to cwd, got %+v", r)
 	}
 }

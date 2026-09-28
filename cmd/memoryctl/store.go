@@ -62,30 +62,32 @@ func pinPath(sessionID string) string {
 }
 
 type pinFile struct {
-	Dir     string `json:"dir"`
-	Project string `json:"project"`
-	Root    string `json:"root"`
-	Source  string `json:"source"`
-	Anchor  string `json:"anchor"`
+	Anchor string `json:"anchor"`
 }
 
-// writePin records the session's store so CLI verbs run later in the session
-// resolve the same store without CLAUDE_PROJECT_DIR. Best-effort, atomic.
+// writePin records the session's anchor so CLI verbs run later in the session
+// resolve the same store without CLAUDE_PROJECT_DIR. The anchor alone is
+// stored; the store is re-derived on every read via native.StoreFor. This
+// caps the pin's power at CLAUDE_PROJECT_CWD-level trust: a forged pin file
+// can only redirect to a directory an attacker already controls (the anchor
+// itself), not inject false project metadata. Best-effort, atomic.
 func writePin(sessionID string, r resolved) {
-	if sessionID == "" || r.Dir == "" {
+	if sessionID == "" || r.Anchor == "" || !filepath.IsAbs(r.Anchor) {
 		return
 	}
 	if err := os.MkdirAll(filepath.Join(memoryDir(), ".runtime"), 0o755); err != nil {
 		return
 	}
-	b, err := json.Marshal(pinFile{Dir: r.Dir, Project: r.Project, Root: r.Root, Source: r.Source, Anchor: r.Anchor})
+	b, err := json.Marshal(pinFile{Anchor: r.Anchor})
 	if err != nil {
 		return
 	}
 	_ = pathutil.WriteFileAtomic(pinPath(sessionID), b, 0o600)
 }
 
-// readPin loads a pin; missing, unparsable or implausible pins are ignored.
+// readPin loads a pin and re-derives the store from its anchor. Missing,
+// unparsable or implausible pins are ignored. Any extra JSON fields (from
+// old or forged pins) are silently discarded.
 func readPin(sessionID string) (resolved, bool) {
 	if sessionID == "" {
 		return resolved{}, false
@@ -95,11 +97,11 @@ func readPin(sessionID string) (resolved, bool) {
 		return resolved{}, false
 	}
 	var p pinFile
-	if json.Unmarshal(b, &p) != nil || p.Project == "" || !filepath.IsAbs(p.Dir) {
+	if json.Unmarshal(b, &p) != nil || p.Anchor == "" || !filepath.IsAbs(p.Anchor) {
 		return resolved{}, false
 	}
 	return resolved{
-		Store:  native.Store{Dir: p.Dir, Project: p.Project, Root: p.Root, Source: p.Source},
+		Store:  native.StoreFor(configDir(), p.Anchor),
 		Anchor: p.Anchor, Kind: anchorPin,
 	}, true
 }
