@@ -22,9 +22,11 @@ release.
   the main checkout's), the sanitizer (only `/` was replaced, so dots,
   spaces, or non-ASCII characters in a path produced a slug the harness
   would never compute), `autoMemoryDirectory` (not read at all before), and
-  a `CLAUDE_PROJECT_CWD` pointed at a nonexistent path (used verbatim
-  instead of falling through). See `docs/CONFIGURATION.md` § Store
-  resolution and `docs/ARCHITECTURE.md` § Stores for the resolved contract.
+  a relative `CLAUDE_PROJECT_CWD` (e.g. `.`), which used to sanitize to a
+  single collision-prone slug instead of the intended project — it is now
+  made absolute first; values are otherwise used as given, with no
+  existence check. See `docs/CONFIGURATION.md` § Store resolution and
+  `docs/ARCHITECTURE.md` § Stores for the resolved contract.
 - **Worktree resolution is hardened against planted pointer files.** A
   linked worktree now maps to its main checkout only when git's own
   on-disk structure checks out end to end — the `.git` pointer's gitdir

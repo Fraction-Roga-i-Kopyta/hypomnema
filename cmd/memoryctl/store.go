@@ -38,13 +38,26 @@ func resolveStore(stdinCWD string) resolved {
 		return resolved{Store: native.StoreFor(configDir(), d), Anchor: d, Kind: anchorHarness}
 	}
 	if d := os.Getenv("CLAUDE_PROJECT_CWD"); d != "" {
-		return resolved{Store: native.StoreFor(configDir(), d), Anchor: d, Kind: anchorExplicit}
+		// A relative value (e.g. "." from a shell alias) must be made
+		// absolute before it reaches CanonicalRoot/SanitizePath — a bare
+		// "." sanitizes to "-", colliding every relative-CWD invocation
+		// onto one store. No existence check: a nonexistent absolute path
+		// is still used as given (existing, intentional behaviour).
+		if abs, err := filepath.Abs(d); err == nil {
+			return resolved{Store: native.StoreFor(configDir(), abs), Anchor: abs, Kind: anchorExplicit}
+		}
+		// filepath.Abs fails only if os.Getwd() fails (e.g. the process's
+		// cwd was removed); fall through to the pin/cwd steps below rather
+		// than resolve against a relative path.
 	}
 	if r, ok := readPin(sessionIDFromEnv()); ok {
 		return r
 	}
 	cwd := stdinCWD
 	if cwd == "" {
+		// os.Getwd() failure leaves cwd == "" here; StoreFor(cfg, "") is
+		// already fail-safe (CanonicalRoot("") returns "", producing the
+		// harness's own root-store fallback), so no special-casing needed.
 		cwd, _ = os.Getwd()
 	}
 	return resolved{Store: native.StoreFor(configDir(), cwd), Anchor: cwd, Kind: anchorCWD}
