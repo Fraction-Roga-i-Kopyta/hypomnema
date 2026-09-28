@@ -11,6 +11,25 @@ import (
 	"testing"
 )
 
+// hermeticEnviron is os.Environ() minus the variables a developer's Claude
+// Code session leaks into `go test`; each one changes which store the binary
+// resolves, so tests opt in explicitly through their env map.
+func hermeticEnviron() []string {
+	drop := map[string]bool{
+		"CLAUDE_PROJECT_DIR": true, "CLAUDE_PROJECT_CWD": true,
+		"CLAUDE_CODE_SESSION_ID": true, "HYPOMNEMA_SESSION_ID": true,
+		"CLAUDE_CONFIG_DIR": true, "CLAUDE_COWORK_MEMORY_PATH_OVERRIDE": true,
+	}
+	var out []string
+	for _, kv := range os.Environ() {
+		if k, _, ok := strings.Cut(kv, "="); ok && drop[k] {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
 // binPath holds the path to the built memoryctl binary, set once by
 // TestMain so each test reuses the same executable.
 var binPath string
@@ -78,7 +97,7 @@ func runStdin(t *testing.T, env map[string]string, stdin string, args ...string)
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &errBuf
-	cmd.Env = append(os.Environ(), "GOCOVERDIR="+coverDir)
+	cmd.Env = append(hermeticEnviron(), "GOCOVERDIR="+coverDir)
 	for k, v := range env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
@@ -101,7 +120,7 @@ func run(t *testing.T, env map[string]string, args ...string) (stdout, stderr st
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &errBuf
-	cmd.Env = append(os.Environ(), "GOCOVERDIR="+coverDir)
+	cmd.Env = append(hermeticEnviron(), "GOCOVERDIR="+coverDir)
 	for k, v := range env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
