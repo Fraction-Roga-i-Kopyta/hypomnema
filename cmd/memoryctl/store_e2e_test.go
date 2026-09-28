@@ -66,11 +66,16 @@ func TestInject_WorktreeReadsMainCheckoutStore(t *testing.T) {
 	f := newStoreFixture(t)
 	base := t.TempDir()
 	mainRoot := filepath.Join(base, "main")
-	os.MkdirAll(filepath.Join(mainRoot, ".git", "worktrees", "feat"), 0o755)
-	os.WriteFile(filepath.Join(mainRoot, ".git", "worktrees", "feat", "commondir"), []byte("../..\n"), 0o644)
+	wtGit := filepath.Join(mainRoot, ".git", "worktrees", "feat")
+	os.MkdirAll(wtGit, 0o755)
+	os.WriteFile(filepath.Join(wtGit, "commondir"), []byte("../..\n"), 0o644)
 	wt := filepath.Join(mainRoot, ".worktrees", "feat")
 	os.MkdirAll(wt, 0o755)
-	os.WriteFile(filepath.Join(wt, ".git"), []byte("gitdir: "+filepath.Join(mainRoot, ".git", "worktrees", "feat")+"\n"), 0o644)
+	os.WriteFile(filepath.Join(wt, ".git"), []byte("gitdir: "+wtGit+"\n"), 0o644)
+	// The back-link git writes for every linked worktree; CanonicalRoot now
+	// requires it (see internal/native/store.go mainCheckout) as proof this
+	// gitdir was actually linked to wt by git, not merely planted.
+	os.WriteFile(filepath.Join(wtGit, "gitdir"), []byte(filepath.Join(wt, ".git")+"\n"), 0o644)
 	f.fact(t, mainRoot, "worktreefact", "shared by worktrees")
 	f.env["CLAUDE_PROJECT_DIR"] = wt
 	out, _, _ := runStdin(t, f.env, `{"session_id":"s1","cwd":"`+wt+`","prompt":"worktreefact"}`,

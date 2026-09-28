@@ -70,7 +70,9 @@ func mkGitDir(t *testing.T, root string) {
 }
 
 // mkWorktree lays out what `git worktree add` writes: <wt>/.git is a file
-// "gitdir: <main>/.git/worktrees/<name>", and that dir holds commondir "../..".
+// "gitdir: <main>/.git/worktrees/<name>", that dir holds commondir "../..",
+// and (the back-link git writes for every linked worktree) a "gitdir" file
+// naming <wt>/.git back.
 func mkWorktree(t *testing.T, mainRoot, wt, name string) {
 	t.Helper()
 	wtGit := filepath.Join(mainRoot, ".git", "worktrees", name)
@@ -84,6 +86,9 @@ func mkWorktree(t *testing.T, mainRoot, wt, name string) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(wt, ".git"), []byte("gitdir: "+wtGit+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wtGit, "gitdir"), []byte(filepath.Join(wt, ".git")+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -143,6 +148,100 @@ func TestCanonicalRoot_SymlinkGitStopsWalk(t *testing.T) {
 	if got := CanonicalRoot(inner); got != inner {
 		t.Errorf("CanonicalRoot(symlinked .git) = %q, want %q", got, inner)
 	}
+}
+
+// TestCanonicalRoot_HostilePointers covers the milestone-1 domain-review
+// finding: mainCheckout used to trust planted .git/commondir content with
+// no proof git itself wrote it, so a bare tarball/zip extraction (no real
+// git involved) could redirect CanonicalRoot onto an unrelated, pre-existing
+// directory — cross-project memory disclosure, or a shared junk slug. Every
+// subtest plants a ".git file → gitdir dir" pair by hand and asserts the
+// result stays the planted root's OWN root.
+func TestCanonicalRoot_HostilePointers(t *testing.T) {
+	// plantPointer writes root/.git → "gitdir: <p>" and returns p (a fresh,
+	// empty directory the subtest then populates with commondir / gitdir).
+	plantPointer := func(t *testing.T, base string) (root, p string) {
+		t.Helper()
+		root = filepath.Join(base, "hostile-root")
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		p = filepath.Join(base, "gitdir")
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, ".git"), []byte("gitdir: "+p+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return root, p
+	}
+	writeBacklink := func(t *testing.T, p, root string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(p, "gitdir"), []byte(filepath.Join(root, ".git")+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assertOwnRoot := func(t *testing.T, root string) {
+		t.Helper()
+		if got := CanonicalRoot(root); got != root {
+			t.Errorf("CanonicalRoot(%q) = %q, want own root %q", root, got, root)
+		}
+	}
+
+	t.Run("commondir slash with matching backlink", func(t *testing.T) {
+		// Proves the back-link check alone (root <-> p) is not what saves
+		// this: the back-link genuinely matches, yet a bare existence +
+		// basename check on commondir="/" would still let this through.
+		base := t.TempDir()
+		root, p := plantPointer(t, base)
+		writeBacklink(t, p, root)
+		os.WriteFile(filepath.Join(p, "commondir"), []byte("/\n"), 0o644)
+		assertOwnRoot(t, root)
+	})
+
+	t.Run("commondir slash without backlink", func(t *testing.T) {
+		base := t.TempDir()
+		root, p := plantPointer(t, base)
+		os.WriteFile(filepath.Join(p, "commondir"), []byte("/\n"), 0o644)
+		assertOwnRoot(t, root)
+	})
+
+	t.Run("commondir names another repo, no backlink", func(t *testing.T) {
+		base := t.TempDir()
+		other := filepath.Join(base, "other-real-repo")
+		mkGitDir(t, other)
+		root, p := plantPointer(t, base)
+		os.WriteFile(filepath.Join(p, "commondir"), []byte(filepath.Join(other, ".git")+"\n"), 0o644)
+		assertOwnRoot(t, root)
+	})
+
+	t.Run("backlink names a different worktree path", func(t *testing.T) {
+		base := t.TempDir()
+		root, p := plantPointer(t, base)
+		otherRoot := filepath.Join(base, "some-other-worktree")
+		os.MkdirAll(otherRoot, 0o755)
+		os.WriteFile(filepath.Join(p, "gitdir"), []byte(filepath.Join(otherRoot, ".git")+"\n"), 0o644)
+		os.WriteFile(filepath.Join(p, "commondir"), []byte("../..\n"), 0o644)
+		assertOwnRoot(t, root)
+	})
+
+	t.Run("commondir names a nonexistent repo", func(t *testing.T) {
+		base := t.TempDir()
+		root, p := plantPointer(t, base)
+		writeBacklink(t, p, root)
+		nonexistent := filepath.Join(base, "does-not-exist", ".git")
+		os.WriteFile(filepath.Join(p, "commondir"), []byte(nonexistent+"\n"), 0o644)
+		assertOwnRoot(t, root)
+	})
+
+	t.Run("oversized git file", func(t *testing.T) {
+		base := t.TempDir()
+		root := filepath.Join(base, "hostile-root")
+		os.MkdirAll(root, 0o755)
+		huge := "gitdir: " + strings.Repeat("a", 5000)
+		os.WriteFile(filepath.Join(root, ".git"), []byte(huge), 0o644)
+		assertOwnRoot(t, root)
+	})
 }
 
 func fakeEnv(claudeDir, projectDir string, env map[string]string, files map[string]string) StoreEnv {
