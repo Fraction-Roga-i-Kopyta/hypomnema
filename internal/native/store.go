@@ -2,12 +2,14 @@ package native
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"unicode/utf16"
 )
 
@@ -132,19 +134,52 @@ const maxPointerFileBytes = 4096
 // happen to parse into attacker-chosen content); both cases fall back to
 // "unreadable" exactly like a missing file.
 func readPointerFile(path string) (content string, ok bool) {
-	f, err := os.Open(path)
+	data, err := readRegularFile(path, maxPointerFileBytes)
 	if err != nil {
-		return "", false
-	}
-	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, maxPointerFileBytes+1))
-	if err != nil {
-		return "", false
-	}
-	if len(data) > maxPointerFileBytes {
 		return "", false
 	}
 	return string(data), true
+}
+
+// maxSettingsFileBytes bounds every read of a settings.json scope
+// (managed/local/user) during store resolution. A genuine settings file is
+// a small JSON document; a planted multi-GB or sparse-huge one at one of
+// these well-known paths must not be pulled into memory on every hook
+// invocation just to look for one key.
+const maxSettingsFileBytes = 1 << 20 // 1 MiB
+
+// readRegularFile reads path capped at max bytes, refusing anything that
+// is not a plain regular file. It opens with O_NONBLOCK so a FIFO planted
+// at path cannot hang the caller: a blocking os.Open on a FIFO with no
+// writer attached waits indefinitely (78s+ observed) for one to show up,
+// which would stall a hook past its timeout budget. O_NONBLOCK makes that
+// open return immediately instead (ENXIO for a FIFO with no reader-side
+// writer), and the follow-up Mode().IsRegular() check rejects any other
+// non-regular file (device, socket, …) the open did succeed against.
+// A read of more than max bytes is an error, not a silent truncation — a
+// truncated pointer-file line could still happen to parse into
+// attacker-chosen content.
+func readRegularFile(path string, max int64) ([]byte, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, errors.New(path + ": not a regular file")
+	}
+	data, err := io.ReadAll(io.LimitReader(f, max+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > max {
+		return nil, errors.New(path + ": exceeds byte cap")
+	}
+	return data, nil
 }
 
 // samePath reports whether a and b (both already filepath.Clean-ed by the
@@ -283,8 +318,10 @@ type Store struct {
 func (s Store) Scope() []string { return []string{s.Project, GlobalProject} }
 
 // StoreEnv is everything ResolveStore reads. Zero values fall back to the
-// process: os.Getenv, os.ReadFile, os.UserHomeDir, the platform
-// managed-settings path.
+// process: os.Getenv, a capped regular-file reader (readRegularFile at
+// maxSettingsFileBytes — not os.ReadFile, so a FIFO or an oversized file
+// planted at a settings path can't hang or balloon a hook), os.UserHomeDir,
+// the platform managed-settings path.
 type StoreEnv struct {
 	ClaudeDir           string // Claude Code config dir; projects/ and settings.json live here
 	ProjectDir          string // project anchor (absolute)
@@ -312,7 +349,7 @@ func ResolveStore(e StoreEnv) Store {
 		getenv = os.Getenv
 	}
 	if read == nil {
-		read = os.ReadFile
+		read = func(p string) ([]byte, error) { return readRegularFile(p, maxSettingsFileBytes) }
 	}
 	if home == "" {
 		home, _ = os.UserHomeDir()
@@ -348,7 +385,7 @@ func ResolveStore(e StoreEnv) Store {
 	root := CanonicalRoot(e.ProjectDir)
 	slug := SanitizePath(root)
 	return Store{
-		Dir: filepath.Join(e.ClaudeDir, "projects", slug, "memory"),
+		Dir:     filepath.Join(e.ClaudeDir, "projects", slug, "memory"),
 		Project: slug, Root: root, Source: "default",
 	}
 }
