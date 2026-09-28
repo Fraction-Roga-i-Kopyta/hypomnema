@@ -144,3 +144,91 @@ func TestCanonicalRoot_SymlinkGitStopsWalk(t *testing.T) {
 		t.Errorf("CanonicalRoot(symlinked .git) = %q, want %q", got, inner)
 	}
 }
+
+func fakeEnv(claudeDir, projectDir string, env map[string]string, files map[string]string) StoreEnv {
+	return StoreEnv{
+		ClaudeDir: claudeDir, ProjectDir: projectDir, UserHome: "/home/u",
+		ManagedSettingsPath: "/managed/managed-settings.json",
+		Getenv:              func(k string) string { return env[k] },
+		ReadFile: func(p string) ([]byte, error) {
+			if s, ok := files[p]; ok {
+				return []byte(s), nil
+			}
+			return nil, os.ErrNotExist
+		},
+	}
+}
+
+func TestResolveStore_Default(t *testing.T) {
+	st := ResolveStore(fakeEnv("/home/u/.claude", "/tmp/proj", nil, nil))
+	want := Store{
+		Dir: filepath.Join("/home/u/.claude", "projects", "-tmp-proj", "memory"),
+		Project: "-tmp-proj", Root: "/tmp/proj", Source: "default",
+	}
+	if st != want {
+		t.Errorf("got %+v, want %+v", st, want)
+	}
+	if sc := st.Scope(); len(sc) != 2 || sc[0] != "-tmp-proj" || sc[1] != GlobalProject {
+		t.Errorf("Scope() = %v", sc)
+	}
+}
+
+func TestResolveStore_WorktreeSharesMainStore(t *testing.T) {
+	base := t.TempDir()
+	mainRoot := filepath.Join(base, "main")
+	mkGitDir(t, mainRoot)
+	wt := filepath.Join(mainRoot, ".worktrees", "feat")
+	mkWorktree(t, mainRoot, wt, "feat")
+	a := ResolveStore(fakeEnv("/c", mainRoot, nil, nil))
+	b := ResolveStore(fakeEnv("/c", wt, nil, nil))
+	if a.Dir != b.Dir || a.Project != b.Project {
+		t.Errorf("worktree store %+v != main store %+v", b, a)
+	}
+}
+
+func TestResolveStore_Overrides(t *testing.T) {
+	user := "/home/u/.claude/settings.json"
+	local := "/tmp/proj/.claude/settings.local.json"
+	managed := "/managed/managed-settings.json"
+	cases := []struct {
+		name       string
+		env        map[string]string
+		files      map[string]string
+		wantDir    string
+		wantSource string
+	}{
+		{"env override wins", map[string]string{"CLAUDE_COWORK_MEMORY_PATH_OVERRIDE": "/cowork/mem"},
+			map[string]string{user: `{"autoMemoryDirectory":"/u/mem"}`}, "/cowork/mem", "env-override"},
+		{"policy before local and user", nil, map[string]string{
+			managed: `{"autoMemoryDirectory":"/p/mem"}`, local: `{"autoMemoryDirectory":"/l/mem"}`,
+			user: `{"autoMemoryDirectory":"/u/mem"}`}, "/p/mem", "settings:policy"},
+		{"local before user", nil, map[string]string{
+			local: `{"autoMemoryDirectory":"/l/mem"}`, user: `{"autoMemoryDirectory":"/u/mem"}`},
+			"/l/mem", "settings:local"},
+		{"user", nil, map[string]string{user: `{"autoMemoryDirectory":"~/mem"}`},
+			"/home/u/mem", "settings:user"},
+		// Harness parity: the FIRST scope that sets the key decides; an
+		// invalid value falls back to the default store, not the next scope.
+		{"invalid first key → default", nil, map[string]string{
+			local: `{"autoMemoryDirectory":"relative/dir"}`, user: `{"autoMemoryDirectory":"/u/mem"}`},
+			filepath.Join("/home/u/.claude", "projects", "-tmp-proj", "memory"), "default"},
+		{"filesystem root rejected", nil, map[string]string{user: `{"autoMemoryDirectory":"/"}`},
+			filepath.Join("/home/u/.claude", "projects", "-tmp-proj", "memory"), "default"},
+		{"malformed json skipped", nil, map[string]string{user: `{not json`},
+			filepath.Join("/home/u/.claude", "projects", "-tmp-proj", "memory"), "default"},
+		{"checked-in project settings ignored", nil, map[string]string{
+			"/tmp/proj/.claude/settings.json": `{"autoMemoryDirectory":"/evil"}`},
+			filepath.Join("/home/u/.claude", "projects", "-tmp-proj", "memory"), "default"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			st := ResolveStore(fakeEnv("/home/u/.claude", "/tmp/proj", tc.env, tc.files))
+			if st.Dir != tc.wantDir || st.Source != tc.wantSource {
+				t.Errorf("got Dir=%q Source=%q, want Dir=%q Source=%q", st.Dir, st.Source, tc.wantDir, tc.wantSource)
+			}
+			if tc.wantSource != "default" && st.Project != SanitizePath(tc.wantDir) {
+				t.Errorf("override project tag = %q, want SanitizePath(dir) %q", st.Project, SanitizePath(tc.wantDir))
+			}
+		})
+	}
+}
