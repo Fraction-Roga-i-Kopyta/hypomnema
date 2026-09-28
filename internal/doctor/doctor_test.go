@@ -17,8 +17,10 @@ import (
 )
 
 // fixtureCWD is the working directory every fixture pretends the project
-// lives in. native.Collect encodes it into the per-project slug ("/" → "-"),
-// so the project memory dir is <home>/.claude/projects/-work-proj/memory.
+// lives in. native.StoreFor (via SanitizePath) encodes it into the
+// per-project slug ("/" → "-"), so the project memory dir is
+// <home>/.claude/projects/-work-proj/memory; native.Collect only enumerates
+// whatever store it is handed, it does not derive the slug itself.
 const fixtureCWD = "/work/proj"
 
 // newFixture builds a complete "healthy" v2 native install under tmp.

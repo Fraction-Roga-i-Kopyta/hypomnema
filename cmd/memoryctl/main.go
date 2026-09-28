@@ -258,7 +258,10 @@ func memoryDir() string {
 
 // claudeDir resolves the Claude Code state root. Defaults to ~/.claude
 // but respects $CLAUDE_HOME for parallel installs and test fixtures. Used
-// only by doctor — the hook scripts don't rely on this variable today.
+// throughout memoryctl for everything hypomnema itself owns — hooks, bin,
+// the global store, and native.Collect's WAL/sidecar-derived reads — not
+// only by doctor. Native store resolution instead uses configDir(), which
+// additionally honours CLAUDE_CONFIG_DIR.
 func claudeDir() string {
 	if d := os.Getenv("CLAUDE_HOME"); d != "" {
 		return d
