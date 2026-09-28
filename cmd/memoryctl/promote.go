@@ -20,11 +20,7 @@ func runPromote(args []string) {
 		fmt.Fprintf(os.Stderr, "memoryctl promote: unknown flag %q\n", a)
 		os.Exit(2)
 	}
-	files, err := collectNative()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "memoryctl promote: %v\n", err)
-		os.Exit(1)
-	}
+	files := collectNative(resolveStore("").Store)
 	sugg := promote.Analyze(files, filepath.Join(memoryDir(), ".wal"), promote.Defaults())
 	if len(sugg) == 0 {
 		fmt.Println("no promotion candidates")

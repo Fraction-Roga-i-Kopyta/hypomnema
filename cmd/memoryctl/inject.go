@@ -12,15 +12,31 @@ import (
 	"time"
 
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/inject"
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/jsonl"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/pathutil"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/wal"
 )
 
 type hookStdin struct {
-	SessionID string `json:"session_id"`
-	CWD       string `json:"cwd"`
-	Prompt    string `json:"prompt"`
+	SessionID      string `json:"session_id"`
+	CWD            string `json:"cwd"`
+	Prompt         string `json:"prompt"`
+	Source         string `json:"source"`
+	TranscriptPath string `json:"transcript_path"`
+}
+
+// skipPromptSource reports machine-injected turns (task notifications, peer
+// and agent hand-backs, auto-continuation, poll events). Ranking their text
+// injects noise and spends facts' once-per-session slot. A payload without
+// source (field still rolling out) is treated as a user prompt.
+func skipPromptSource(src string) bool { return src == "system" || src == "poll_event" }
+
+// contextWiped reports a SessionStart after which previously injected facts
+// are no longer in the model's context (compaction summarized them away, or
+// /clear dropped them), so render-dedup must not suppress them.
+func contextWiped(event, src string) bool {
+	return event == "SessionStart" && (src == "compact" || src == "clear")
 }
 
 func runInject(args []string) {
@@ -45,11 +61,28 @@ func runInject(args []string) {
 	if err := json.Unmarshal(raw, &in); err != nil {
 		os.Exit(0) // fail-safe
 	}
+	if event == "UserPromptSubmit" && skipPromptSource(in.Source) {
+		os.Exit(0) // no output, no WAL, session list untouched
+	}
+	r := resolveStore(in.CWD)
+	if event == "SessionStart" && in.SessionID != "" && (r.Kind == anchorHarness || r.Kind == anchorExplicit) {
+		writePin(in.SessionID, r)
+	}
 	already := readInjectedList(in.SessionID)
+	renderDedup, prompt := already, in.Prompt
+	if contextWiped(event, in.Source) {
+		renderDedup = nil
+		if in.Source == "compact" {
+			if s, ok := jsonl.LastCompactSummary(in.TranscriptPath); ok {
+				prompt = inject.CompactQuery(s) // bounded: focus sections, top-40 terms
+			}
+		}
+	}
 	res, err := inject.Run(inject.Input{
-		Event: event, SessionID: in.SessionID, CWD: in.CWD, Prompt: in.Prompt,
+		Event: event, SessionID: in.SessionID, CWD: in.CWD, Prompt: prompt,
 		ClaudeHome: claudeDir(), MemoryDir: memoryDir(), Today: today(), MaxK: 8,
-		AlreadyInjected: already,
+		Store:           r.Store,
+		AlreadyInjected: renderDedup,
 		HoldoutSession:  readListFile(holdoutListPath(in.SessionID)),
 	})
 	if err != nil {
@@ -142,7 +175,16 @@ func persistHoldoutSkips(res inject.Result, sessionID string) {
 func persistInjected(already, slugs []string, projectBySlug map[string]string, sessionID string) {
 	day := today()
 	sid := wal.SanitizeField(sessionID)
+	logged := make(map[string]bool, len(already))
+	for _, s := range already {
+		logged[s] = true
+	}
 	for _, slug := range slugs {
+		// Re-rendered after compaction/clear: already counted for this
+		// session — another row would inflate ref_count (it counts rows).
+		if logged[slug] {
+			continue
+		}
 		// Project-qualify the WAL target so per-project effectiveness doesn't
 		// merge across same-basename facts (review E5-deep). Fall back to the
 		// bare slug if the project is unknown (grandfathered on read).
@@ -195,8 +237,10 @@ func pruneRuntimeLists(dir string) {
 	cutoff := time.Now().Add(-7 * 24 * time.Hour)
 	for _, e := range entries {
 		name := e.Name()
-		if (!strings.HasPrefix(name, "injected-") && !strings.HasPrefix(name, "holdout-")) ||
-			!strings.HasSuffix(name, ".list") {
+		isList := (strings.HasPrefix(name, "injected-") || strings.HasPrefix(name, "holdout-")) &&
+			strings.HasSuffix(name, ".list")
+		isPin := strings.HasPrefix(name, "project-") && strings.HasSuffix(name, ".json")
+		if !isList && !isPin {
 			continue
 		}
 		if info, err := e.Info(); err == nil && info.ModTime().Before(cutoff) {

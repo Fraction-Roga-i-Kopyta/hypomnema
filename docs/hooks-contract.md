@@ -35,9 +35,10 @@ Code envelope (new event types / tool-input fields are tracked separately).
 | `PostToolUse` | `Skill` | `skill-learnings-inject.sh` | `skill-inject` | 10 s | Inject skill-learning facts for the skill |
 | `Stop` | — | `session-stop.sh` | `close` | 10 s | Close the session: classify, decay, rollup |
 
-There is **no** `PreCompact` hook, no fuzzy-dedup `PreToolUse` hook, no
-`PostToolUse` outcome/error-detect hooks. Those v1 mechanics are retired
-(see §7).
+Compaction is handled on `SessionStart` with `source=compact`; **no
+`PreCompact`/`PostCompact` hook is registered**. There is also no
+fuzzy-dedup `PreToolUse` hook and no `PostToolUse` outcome/error-detect
+hooks. Those v1 mechanics are retired (see §9).
 
 ### 1.2 Input
 
@@ -47,10 +48,10 @@ each verb actually reads:
 
 | Verb | Fields read from stdin |
 |---|---|
-| `inject` | `session_id`, `cwd`, `prompt` |
-| `guard` | `tool_input.file_path`, `tool_input.content` (Write), `tool_input.new_string` (Edit), `tool_input.new_source` (NotebookEdit), `tool_input.edits[].new_string` (MultiEdit) |
+| `inject` | `session_id`, `cwd`, `prompt`, `source` (routes SessionStart's compact/clear re-render and UserPromptSubmit's system/poll_event skip), `transcript_path` (SessionStart only, to find the latest compaction summary when `source=compact`) |
+| `guard` | `cwd` (resolves the store this invocation guards), `tool_input.file_path`, `tool_input.content` (Write), `tool_input.new_string` (Edit), `tool_input.new_source` (NotebookEdit), `tool_input.edits[].new_string` (MultiEdit) |
 | `skill-active` | `session_id`, `tool_input.skill` |
-| `skill-inject` | `tool_input.skill` |
+| `skill-inject` | `session_id`, `cwd` (resolves the store the learnings are read from), `tool_input.skill` |
 | `close` | `session_id`, `cwd`, `transcript_path` |
 
 ### 1.3 Output
@@ -99,13 +100,16 @@ Read by `memoryctl` (from its `--help` usage) and by the shims:
 |---|---|---|
 | `HYPOMNEMA_MEMORYCTL` | Path the shim uses to locate the `memoryctl` binary. | `$HOME/.claude/bin/memoryctl` |
 | `CLAUDE_MEMORY_DIR` | Runtime memory root (WAL, sidecar, `.runtime/`, self-profile). | `$HOME/.claude/memory` |
-| `CLAUDE_PROJECT_CWD` | Working dir used to resolve the per-project native store. | current working dir |
+| `CLAUDE_PROJECT_DIR` | Project anchor Claude Code sets on every hook invocation; outranks `CLAUDE_PROJECT_CWD`. | (always set by Claude Code inside a hook) |
+| `CLAUDE_PROJECT_CWD` | hypomnema-only explicit override for CLI use; ignored inside hooks — `CLAUDE_PROJECT_DIR` wins there. | current working dir |
+| `CLAUDE_CONFIG_DIR` | Claude Code config dir used for native store resolution (`projects/`, `settings.json`) only; the global store stays at `~/.claude/memory-global`. | `$HOME/.claude` |
+| `CLAUDE_COWORK_MEMORY_PATH_OVERRIDE` | Highest-precedence store override: an absolute path used verbatim as the resolved memory dir. | unset |
 | `HYPOMNEMA_SESSION_ID` | Session id stamped into WAL entries. | `unknown` |
-| `CLAUDE_CODE_SESSION_ID` | Session id Claude Code exports into Bash; `recall` falls back to it when `HYPOMNEMA_SESSION_ID` is unset. | (inherited) |
+| `CLAUDE_CODE_SESSION_ID` | Session id Claude Code exports into Bash; `recall` falls back to it when `HYPOMNEMA_SESSION_ID` is unset, and it is how a CLI verb looks up the session pin written at `SessionStart`. | (inherited) |
 | `HYPOMNEMA_TODAY` | Freeze "today" (`YYYY-MM-DD`) in date-sensitive logic; used by tests/replay. | `$(date +%Y-%m-%d)` |
 | `HYPOMNEMA_NOW` | Freeze the self-profile `generated:` stamp (`YYYY-MM-DD HH:MM`). | now |
 | `HYPOMNEMA_ALLOW_SECRETS` | Set to `1` to bypass the `guard` secrets gate for a single invocation. | unset |
-| `CLAUDE_HOME` | Claude Code state root (`projects/`, native stores). Used by `doctor`; hooks resolve it from `$HOME`. | `$HOME/.claude` |
+| `CLAUDE_HOME` | Test/parallel-install override for hypomnema's own state root, and — checked before `CLAUDE_CONFIG_DIR` — for native store resolution too. | `$HOME/.claude` |
 
 Implementations MAY add new variables. They MUST NOT re-purpose the ones above.
 
@@ -117,7 +121,11 @@ Verbs may read and write:
   `~/.claude/memory-global/*.md` (global) — per FORMAT.md §3.
 - The runtime tree `~/.claude/memory/`: `.wal` (§5 of FORMAT.md), `.sidecar.db`
   (the single derivative index), `self-profile.md`, and `.runtime/`
-  (session-scoped markers: `injected-<session_id>.list`, `active-skill-<sid>`).
+  (session-scoped markers: `injected-<session_id>.list`, `active-skill-<sid>`,
+  and the store-resolution session pin `project-<session_id>.json`, written
+  by `inject` at `SessionStart` and read back by later CLI verbs in the same
+  session via `CLAUDE_CODE_SESSION_ID`/`HYPOMNEMA_SESSION_ID`). All three
+  families of `.runtime/` file are pruned after 7 days of inactivity.
 
 Verbs MUST NOT modify `~/.claude/settings.json` at runtime, prompt
 interactively (hooks run headless), or block past the configured timeout.
@@ -128,17 +136,33 @@ interactively (hooks run headless), or block past the configured timeout.
 
 **Timeout:** 15 s.
 
-Reads `session_id`, `cwd`, `prompt` (usually empty at session open). Ranks the
-current project + global native memory against `session_keywords` (prompt
-tokens, CWD basename, git branch / changed files / recent commit subjects) and
-emits the top-8 as `hookSpecificOutput.additionalContext` with
-`hookEventName: SessionStart`.
+Reads `session_id`, `cwd`, `prompt` (usually empty at session open), `source`,
+and `transcript_path`. Ranks the current project + global native memory
+against `session_keywords` (prompt tokens, CWD basename, git branch / changed
+files / recent commit subjects) and emits the top-8 as
+`hookSpecificOutput.additionalContext` with `hookEventName: SessionStart`.
+
+`source` distinguishes a fresh session from a re-render after the model's
+context was wiped:
+
+- `source=compact` or `source=clear` — the previously injected set is no
+  longer in the model's context, so this render does **not** dedup against
+  `.runtime/injected-<session_id>.list`: any fact still in the top-8 is
+  re-emitted. On `compact` specifically, ranking uses a bounded query built
+  from the transcript's latest `isCompactSummary` record (focus sections,
+  top-40 terms) instead of the empty prompt, so the re-render tracks what the
+  compaction summary is actually about. A slug already logged as `inject` for
+  this session does **not** get a second WAL row on re-render — `ref_count`
+  is not inflated by compaction.
+- any other value (or absent, for the normal session-open path) — the usual
+  once-per-session dedup applies.
 
 Contract:
 
 - Exit 0 always; empty `additionalContext` when nothing matched.
-- Writes an `inject` WAL event per emitted fact. The sidecar bumps `ref_count`
-  and recency from those events.
+- Writes an `inject` WAL event per **newly-logged** emitted fact (see above —
+  a compact/clear re-render of an already-logged fact writes no second row).
+  The sidecar bumps `ref_count` and recency from those events.
 - Records the injected slugs in `.runtime/injected-<session_id>.list` so
   UserPromptSubmit dedups against them and `close` classifies the whole
   session's set.
@@ -147,11 +171,21 @@ Contract:
 
 **Timeout:** 10 s.
 
-Same verb, `hookEventName: UserPromptSubmit`. Re-ranks against the just-typed
-`prompt` (folded into `session_keywords`) and emits **only** facts that newly
-enter the top-8 — anything already listed in
-`.runtime/injected-<session_id>.list` is not re-emitted (once per session per
-fact). Exit 0 always; `inject` WAL events for the newly injected facts.
+Same verb, `hookEventName: UserPromptSubmit`. Reads `session_id`, `cwd`,
+`prompt`, and `source`.
+
+`source=system` or `source=poll_event` marks a machine-injected turn — a task
+notification, a peer/agent hand-back, an auto-continuation, a poll event —
+not something the user typed. `inject` exits 0 immediately: no ranking, no
+`additionalContext`, no WAL write, the injected-set list untouched. Ranking
+that text would spend a fact's once-per-session slot on noise. A payload
+without `source` (older Claude Code versions) is treated as a real prompt.
+
+Otherwise, re-ranks against the just-typed `prompt` (folded into
+`session_keywords`) and emits **only** facts that newly enter the top-8 —
+anything already listed in `.runtime/injected-<session_id>.list` is not
+re-emitted (once per session per fact). Exit 0 always; `inject` WAL events for
+the newly injected facts.
 
 There is no substring-trigger matching and no negation-token logic; all tokens
 are relevance signal to a single ranker (see CLAUDE.md "How injection ranks
@@ -165,8 +199,12 @@ Reads the mutating tool's payload from stdin and blocks (exit 2) a write into a
 guarded memory store whose content carries a plaintext credential.
 
 Guarded stores (from `guardedRel`): the runtime tree `$CLAUDE_MEMORY_DIR`, the
-global store `~/.claude/memory-global/`, and every native
-`~/.claude/projects/<slug>/memory/` store. A write anywhere else is not policed.
+global store `~/.claude/memory-global/`, this invocation's resolved store
+(including an `autoMemoryDirectory`/env-override store, which lives outside
+`projects/`), and every native `projects/<slug>/memory/` store under both the
+config dir and `~/.claude` (so the check still covers a `CLAUDE_CONFIG_DIR`
+install's own tree even when `guard` itself resolves the other one). A write
+anywhere else is not policed.
 
 Scan input: `content` (Write), `new_string` (Edit), `new_source`
 (NotebookEdit), and each `edits[].new_string` (MultiEdit) are concatenated and

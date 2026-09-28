@@ -29,6 +29,7 @@ func runGuard(args []string) {
 	}
 	raw, _ := io.ReadAll(os.Stdin)
 	var in struct {
+		CWD       string `json:"cwd"`
 		ToolInput struct {
 			FilePath  string     `json:"file_path"`
 			Content   string     `json:"content"`    // Write
@@ -49,7 +50,7 @@ func runGuard(args []string) {
 	if fp == "" {
 		os.Exit(0)
 	}
-	rel, guarded := guardedRel(fp)
+	rel, guarded := guardedRel(fp, resolveStore(in.CWD).Dir)
 	if !guarded {
 		os.Exit(0)
 	}
@@ -91,23 +92,26 @@ func runGuard(args []string) {
 }
 
 // guardedRel maps fp to its path inside whichever memory store owns it: the
-// legacy runtime tree ($CLAUDE_MEMORY_DIR), the global store, or any native
-// per-project store (<claude>/projects/<slug>/memory). ok=false means fp is
-// outside every store — not a write the gate polices.
-func guardedRel(fp string) (rel string, ok bool) {
-	roots := []string{
-		memoryDir(),
-		native.GlobalMemoryDir(filepath.Dir(claudeDir())),
+// legacy runtime tree ($CLAUDE_MEMORY_DIR), the global store, the store this
+// session resolved (an autoMemoryDirectory / env-override store lives outside
+// projects/), or any native per-project store under the config dir or
+// claudeDir. ok=false means fp is outside every store.
+func guardedRel(fp, storeDir string) (rel string, ok bool) {
+	roots := []string{memoryDir(), native.GlobalMemoryDir(filepath.Dir(claudeDir()))}
+	if storeDir != "" {
+		roots = append(roots, storeDir)
 	}
 	for _, root := range roots {
 		if fp == root || strings.HasPrefix(fp, root+"/") {
 			return strings.TrimPrefix(strings.TrimPrefix(fp, root), "/"), true
 		}
 	}
-	projects := filepath.Join(claudeDir(), "projects") + "/"
-	if rest, found := strings.CutPrefix(fp, projects); found {
-		if _, inner, found := strings.Cut(rest, "/memory/"); found {
-			return inner, true
+	for _, base := range []string{configDir(), claudeDir()} {
+		projects := filepath.Join(base, "projects") + "/"
+		if rest, found := strings.CutPrefix(fp, projects); found {
+			if _, inner, found := strings.Cut(rest, "/memory/"); found {
+				return inner, true
+			}
 		}
 	}
 	return "", false

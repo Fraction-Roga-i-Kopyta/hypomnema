@@ -84,6 +84,42 @@ If `memoryctl_available` is WARN ("present but not on $PATH"), add
 
 Re-run `./install.sh`.
 
+## doctor warns `store_resolution: legacy store(s) no longer read`
+
+v2.13 hardened store resolution: the project slug is now derived from the
+sanitized **canonical git root** (with a linked worktree mapped to its main
+checkout), matching exactly how Claude Code itself resolves
+`autoMemoryDirectory`. Before v2.13 the slug came straight from `cwd` with a
+naive `/` → `-` substitution — a path containing dots, underscores, spaces,
+or non-ASCII characters, a linked worktree, or a repo subdirectory produced a
+*different* slug than the harness (and current hypomnema) would compute.
+
+**Cause:** facts were written into that old, differently-keyed store
+directory, and store resolution no longer points there, so they silently
+stop being read.
+
+**Fix:** move the stray `.md` files into the store doctor names as current,
+then rebuild the sidecar. `memoryctl doctor` prints both `…/memory` paths in
+the `store_resolution` line — the resolved (current) store first, then each
+legacy store it found with facts still in it — copy them into these two
+variables and run:
+
+```bash
+LEGACY_STORE="<the .../memory path doctor lists after 'legacy store(s) no longer read', before its '(N facts)'>"
+NEW_STORE="<the .../memory path doctor lists at the start of the store_resolution line, and again after 'move their .md files into'>"
+for f in "$LEGACY_STORE"/*.md; do
+  [ "$(basename "$f")" = "MEMORY.md" ] && continue
+  mv -n "$f" "$NEW_STORE"/
+done
+memoryctl sidecar rebuild
+```
+
+`mv -n` never overwrites — a same-named file already present in `$NEW_STORE`
+(or `MEMORY.md`, skipped outright since it is regenerated per store, not
+moved) is left behind in `$LEGACY_STORE`. Check what remains there and merge
+those by hand. Moved facts start a fresh ranking history in the new store —
+their old WAL rows stay attributed to the legacy project tag.
+
 ## Sidecar is stale or missing
 
 The sidecar (`~/.claude/memory/.sidecar.db`) is a rebuildable projection of

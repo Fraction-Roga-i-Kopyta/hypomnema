@@ -1,5 +1,85 @@
 # Changelog
 
+## [Unreleased]
+
+Store resolution and source-aware injection (hook envelope hardening). A live
+audit found the project slug drifting from Claude Code's own
+`autoMemoryDirectory` resolution — cwd drift after `cd`, linked worktrees,
+non-ASCII paths, and an unread `autoMemoryDirectory` were all keyed
+differently — plus two injection-path bugs: context compaction silently lost
+the memory block, and machine-injected prompts (task notifications, poll
+events) burned real injection slots. Redeploy the binary; the sidecar
+rebuilds itself on the next reproject. No WAL rewrite; no schema bump this
+release.
+
+### Fixed
+
+- **Store resolution now mirrors Claude Code's own `autoMemoryDirectory`
+  rule**, closing several ways a session could silently read/write the
+  wrong store: cwd drift (a CLI verb run after `cd` used to resolve against
+  the shell's current directory instead of the project anchor), linked
+  worktrees (each worktree got its own unrelated store instead of sharing
+  the main checkout's), the sanitizer (only `/` was replaced, so dots,
+  spaces, or non-ASCII characters in a path produced a slug the harness
+  would never compute), `autoMemoryDirectory` (not read at all before), and
+  a relative `CLAUDE_PROJECT_CWD` (e.g. `.`), which used to sanitize to a
+  single collision-prone slug instead of the intended project — it is now
+  made absolute first; values are otherwise used as given, with no
+  existence check. See `docs/CONFIGURATION.md` § Store resolution and
+  `docs/ARCHITECTURE.md` § Stores for the resolved contract. Two deliberate
+  differences from the harness remain: linked-worktree resolution adds the
+  structural verification described below (the harness trusts the pointer
+  files outright), and the final NFC normalization the harness applies to
+  the sanitized path is not replicated (the slug is already pure ASCII by
+  that point, so it never changes the result).
+- **Worktree resolution is hardened against planted pointer files.** A
+  linked worktree now maps to its main checkout only when git's own
+  on-disk structure checks out end to end — the `.git` pointer's gitdir
+  carries a back-link naming the worktree, the resolved common dir sits
+  exactly two levels above it, exists, and contains `HEAD` and `objects/`;
+  every pointer file is read capped at 4 KiB. Anything else keeps the
+  worktree's own store. Without this, a planted `.git`/`commondir` pair —
+  no real git required, e.g. from an extracted archive — could redirect a
+  session's memory reads and writes onto an unrelated, pre-existing
+  directory.
+- **Memory is no longer lost after context compaction or `/clear`.**
+  `SessionStart` previously deduped against the session's already-injected
+  list even when the model's context had just been wiped, so a compacted
+  session saw no `# Memory Context` block at all. `source=compact` /
+  `source=clear` now re-render without that dedup; `compact` ranks against a
+  bounded query built from the transcript's latest compaction summary
+  instead of the empty prompt.
+- **`UserPromptSubmit` no longer ranks machine-injected prompts.**
+  `source=system` / `source=poll_event` turns (task notifications, agent
+  hand-backs, poll events) used to burn a fact's once-per-session injection
+  slot on text the user never wrote; they are now a no-op.
+
+### Added
+
+- **`doctor` `store_resolution` check.** Prints the resolved store, project
+  tag, and anchor source for the current invocation, and warns when a
+  pre-v2.13-keyed store still holds facts hypomnema no longer reads (see
+  TROUBLESHOOTING).
+- **Session pin.** `SessionStart` writes
+  `~/.claude/memory/.runtime/project-<session id>.json`; later CLI verbs run
+  through the Bash tool in the same session (found via
+  `CLAUDE_CODE_SESSION_ID`) resolve the same store without needing
+  `CLAUDE_PROJECT_DIR`. The pin file records only the anchor path — the
+  store is re-derived from it on every read, capping a pin's power at
+  `CLAUDE_PROJECT_CWD`-level trust.
+- **`CLAUDE_CONFIG_DIR` is now honoured for store resolution** (`projects/`,
+  `settings.json`), matching Claude Code's own config-dir override; the
+  global store is unaffected and stays at `~/.claude/memory-global`
+  (`HYPOMNEMA_GLOBAL_DIR` still overrides that independently).
+
+### Changed
+
+- **Project-anchor precedence inside hooks.** `CLAUDE_PROJECT_DIR` (set by
+  Claude Code on every hook invocation) now outranks `CLAUDE_PROJECT_CWD` —
+  a `CLAUDE_PROJECT_CWD` exported globally in a shell profile can no longer
+  collapse every hook-driven session onto one store. `CLAUDE_PROJECT_CWD`
+  remains the right override for manual/CLI use.
+
 ## [2.12.0] — 2026-08-16
 
 Memory signal hygiene (4 milestones; spec:

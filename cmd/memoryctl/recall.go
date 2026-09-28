@@ -54,14 +54,14 @@ func runRecall(args []string) {
 		os.Exit(2)
 	}
 
-	cwd := projectCWD()
-	files := native.Collect(claudeDir(), cwd)
+	r := resolveStore("")
+	files := native.Collect(claudeDir(), r.Store)
 	bySlug := make(map[string]native.MemFile, len(files))
 	for _, f := range files {
 		bySlug[f.Slug] = f
 	}
 	terms := tokenize.Relevance(query)
-	cands := inject.Candidates(memoryDir(), cwd, files, terms)
+	cands := inject.Candidates(memoryDir(), r.Store, files, terms)
 
 	// Pull is an explicit query: a fact that matches zero terms is not an
 	// answer, however fresh or effective — without this filter "no matches"
@@ -74,7 +74,7 @@ func runRecall(args []string) {
 	}
 
 	q := rank.Query{
-		Terms: terms, Project: native.SlugFromCWD(cwd),
+		Terms: terms, Project: r.Project,
 		Today: today(), IncludeStale: true,
 	}
 	// Over-fetch a few: rows whose native file vanished are skipped below.
@@ -93,29 +93,28 @@ func runRecall(args []string) {
 	}
 	if len(kept) == 0 {
 		fmt.Println("no matches")
-		fmt.Print(renderTombstones(terms))
+		fmt.Print(renderTombstones(terms, r.Store))
 		return
 	}
 
 	recordRecall(kept[0].Slug, kept[0].Project)
 	fmt.Print(renderRecall(kept[0], kept[1:], bySlug))
-	fmt.Print(renderTombstones(terms))
+	fmt.Print(renderTombstones(terms, r.Store))
 }
 
 // renderTombstones scans the project + global .archive/ dirs for retired
 // facts matching any query term and renders index-only tombstone lines.
 // Retired facts never re-enter injection; surfacing the tombstone here is
 // what makes retirement a redirect instead of a silent disappearance.
-func renderTombstones(terms []string) string {
+func renderTombstones(terms []string, st native.Store) string {
 	want := map[string]bool{}
 	for _, t := range terms {
 		want[t] = true
 	}
-	home := filepath.Dir(claudeDir())
 	var b strings.Builder
 	for _, store := range []string{
-		native.ProjectMemoryDir(home, projectCWD()),
-		native.GlobalMemoryDir(home),
+		st.Dir,
+		native.GlobalMemoryDir(filepath.Dir(claudeDir())),
 	} {
 		files, err := native.List(filepath.Join(store, ".archive"))
 		if err != nil {

@@ -13,8 +13,8 @@ import (
 // the current project. v2 owns this index; v1 left orphans with ../../../
 // links over the harness's size limit. The Stop hook also regenerates it every
 // session; this verb is the on-demand path (e.g. after a bulk import or to
-// replace a stale v1 orphan immediately). Resolves the project from
-// CLAUDE_PROJECT_CWD, else the process working directory. Best-effort: a
+// replace a stale v1 orphan immediately). Resolves the store like every hook:
+// CLAUDE_PROJECT_DIR → CLAUDE_PROJECT_CWD → session pin → cwd. Best-effort: a
 // missing project memory dir is a no-op, exit 0.
 func runReindex(args []string) {
 	for _, a := range args {
@@ -25,12 +25,7 @@ func runReindex(args []string) {
 		fmt.Fprintf(os.Stderr, "memoryctl reindex: unknown flag %q\n", a)
 		os.Exit(2)
 	}
-	cwd := os.Getenv("CLAUDE_PROJECT_CWD")
-	if cwd == "" {
-		cwd, _ = os.Getwd()
-	}
-	osHome := filepath.Dir(claudeDir())
-	projDir := native.ProjectMemoryDir(osHome, cwd)
+	projDir := resolveStore("").Dir
 	files, err := native.List(projDir)
 	if err != nil || len(files) == 0 {
 		fmt.Fprintf(os.Stderr, "memoryctl reindex: no project memory at %s\n", projDir)

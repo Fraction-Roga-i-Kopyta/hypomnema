@@ -114,8 +114,9 @@ func doRetire(slug, reason, successor string) {
 func doRevive(slug string) {
 	want := strings.TrimSuffix(slug, ".md") + ".md"
 	home := filepath.Dir(claudeDir())
+	r := resolveStore("")
 	stores := []string{
-		native.ProjectMemoryDir(home, projectCWD()),
+		r.Dir,
 		native.GlobalMemoryDir(home),
 	}
 	for _, store := range stores {
@@ -132,7 +133,7 @@ func doRevive(slug string) {
 			fatalf("revive: write %s: %v", dst, err)
 		}
 		_ = os.Remove(src)
-		project := native.SlugFromCWD(projectCWD())
+		project := r.Project
 		if store == native.GlobalMemoryDir(home) {
 			project = native.GlobalProject
 		}
@@ -152,10 +153,7 @@ func doRevive(slug string) {
 // Ambiguity across stores is fatal (the operator must name the copy).
 func resolveFact(slug string) native.MemFile {
 	want := strings.TrimSuffix(slug, ".md") + ".md"
-	files, err := collectNative()
-	if err != nil {
-		fatalf("retire: %v", err)
-	}
+	files := collectNative(resolveStore("").Store)
 	var hits []native.MemFile
 	for _, f := range files {
 		if f.Slug == want {
@@ -256,8 +254,7 @@ func emitLifecycleEvent(event, target string) error {
 // refreshProjectIndex regenerates MEMORY.md when dir is the project store
 // (the global store carries no index — MEMORY.md is project-local).
 func refreshProjectIndex(dir string) {
-	home := filepath.Dir(claudeDir())
-	if dir != native.ProjectMemoryDir(home, projectCWD()) {
+	if dir != resolveStore("").Dir {
 		return
 	}
 	if files, err := native.List(dir); err == nil {
