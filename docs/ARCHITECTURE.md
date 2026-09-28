@@ -33,9 +33,12 @@ and preserving the exit code.
 
 Compaction is handled on `SessionStart` with `source=compact` (and `/clear`
 with `source=clear`), not by a separate hook: **no `PreCompact`/`PostCompact`
-hook is registered** (`PreCompact` was retired with v1; Claude Code has no
-`PostCompact` event to register). The shims carry zero logic; everything
-below happens inside `memoryctl`.
+hook is registered**. `PreCompact` was retired with v1. Claude Code does have
+a `PostCompact` event (fields `trigger`, `compact_summary`; no
+`additionalContext`), but it carries no way to reach the model's context —
+`SessionStart` with `source=compact` is the event whose `additionalContext`
+actually gets seen, so that is where hypomnema re-renders memory instead. The
+shims carry zero logic; everything below happens inside `memoryctl`.
 
 ## End-to-end data flow
 
