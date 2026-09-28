@@ -217,7 +217,7 @@ One package, one responsibility. `memoryctl` (in `cmd/memoryctl/`) wires them.
 
 | Package | Responsibility |
 |---|---|
-| `native` | Native-store adapter — the only code that knows the native format: enumerate/parse files, resolve the project memory dir from cwd. Content is **read-only** |
+| `native` | Native-store adapter — the only code that knows the native format: enumerate/parse files, resolve the project memory dir from the anchor chain (`CLAUDE_PROJECT_DIR` → `CLAUDE_PROJECT_CWD` → session pin → cwd) via the canonical git root and the harness sanitizer — cwd is only the last-resort anchor, not the resolution rule itself (§ Store resolution). Content is **read-only** |
 | `sidecar` | SQLite projection — schema, upserts, reproject, rank queries, `MarkStale`. Only place with SQLite |
 | `wal` | Append-only event log; `Append`/`AppendStrict`, `SanitizeField`, lock acquisition. Four-column invariant enforced |
 | `rank` | The pure relevance ranker (formula above). No I/O, no storage imports → trivially unit-testable and A/B-able |
@@ -283,7 +283,7 @@ A reader coming from v1 docs will look for these — all removed in v2, verify b
 - **Substring triggers + ±40-char negation windows** → tokens are relevance signal.
 - **FTS5 shadow retrieval** (`internal/fts`, `bin/memory-fts-*.sh`, `shadow-miss`) → gone.
 - **TF-IDF body scoring / cold-start gates** → gone (Unicode tokenizer salvaged into `tokenize`).
-- **`.config.sh` safe-parser, `projects.json` longest-prefix detection** → project derived from cwd.
+- **`.config.sh` safe-parser, `projects.json` longest-prefix detection** → project resolved from the anchor chain (§ Store resolution), cwd only as the last resort.
 - **`_agent_context.md`** subagent file → pass facts inline in the subagent prompt.
 - **`PreCompact` nudge hook, per-type quotas (3+3/12/10/8), rotation to `archive/`** → decay is down-rank-in-sidecar; balance emerges from relevance.
 - **`scripts/parity-check.sh` bash↔Go parity contract** → Go is the single implementation.

@@ -99,15 +99,17 @@ directory, and store resolution no longer points there, so they silently
 stop being read.
 
 **Fix:** move the stray `.md` files into the store doctor names as current,
-then rebuild the sidecar:
+then rebuild the sidecar. `memoryctl doctor` prints both `…/memory` paths in
+the `store_resolution` line — the resolved (current) store first, then each
+legacy store it found with facts still in it — copy them into these two
+variables and run:
 
 ```bash
-mv <legacy>/memory/*.md <new>/memory/
+LEGACY_STORE="<the .../memory path doctor lists after 'legacy store(s) no longer read', before its '(N facts)'>"
+NEW_STORE="<the .../memory path doctor lists at the start of the store_resolution line, and again after 'move their .md files into'>"
+mv "$LEGACY_STORE"/*.md "$NEW_STORE"/
 memoryctl sidecar rebuild
 ```
-
-`memoryctl doctor` prints both paths (the resolved store and each legacy
-store it found with facts still in it) in the `store_resolution` line.
 
 ## Sidecar is stale or missing
 

@@ -18,7 +18,7 @@ order:
 managed policy → `<project>/.claude/settings.local.json` → `<config
 dir>/settings.json` that sets the key; a checked-in `.claude/settings.json`
 is never consulted) → `<config dir>/projects/<sanitized canonical
-root>/memory`, where `<config dir>` is `CLAUDE_CONFIG_DIR` (or `CLAUDE_HOME`,
+root>/memory`, where `<config dir>` is `CLAUDE_HOME` (or `CLAUDE_CONFIG_DIR`,
 see §2) or `~/.claude`.
 
 - **Canonical root** is the nearest git root, walking up from the project
@@ -37,7 +37,14 @@ see §2) or `~/.claude`.
   pin (`~/.claude/memory/.runtime/project-<session id>.json`, written at
   `SessionStart` and read by CLI verbs run later in the same session through
   the Bash tool via `CLAUDE_CODE_SESSION_ID`) → the process's working
-  directory.
+  directory. The pin file records **only the anchor path** (`{"anchor":
+  "<abs project dir>"}`) — the store, project tag, and canonical root are
+  re-derived from it on every read, the same as if that anchor had been
+  passed as `CLAUDE_PROJECT_CWD`. This caps a pin's power at
+  `CLAUDE_PROJECT_CWD`-level trust: since the pin is a file any process
+  could in principle write, a forged one can only redirect resolution to a
+  directory the forger already controls, not inject a false project tag or
+  store path directly.
 
 `autoMemoryDirectory` in a project's `.claude/settings.local.json` is honoured
 exactly the way Claude Code honours it: Claude Code's workspace-trust dialog

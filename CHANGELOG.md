@@ -57,7 +57,9 @@ release.
   `~/.claude/memory/.runtime/project-<session id>.json`; later CLI verbs run
   through the Bash tool in the same session (found via
   `CLAUDE_CODE_SESSION_ID`) resolve the same store without needing
-  `CLAUDE_PROJECT_DIR`.
+  `CLAUDE_PROJECT_DIR`. The pin file records only the anchor path — the
+  store is re-derived from it on every read, capping a pin's power at
+  `CLAUDE_PROJECT_CWD`-level trust.
 - **`CLAUDE_CONFIG_DIR` is now honoured for store resolution** (`projects/`,
   `settings.json`), matching Claude Code's own config-dir override; the
   global store is unaffected and stays at `~/.claude/memory-global`

@@ -122,6 +122,9 @@ Environment:
                           invocation; wins over CLAUDE_PROJECT_CWD.
   CLAUDE_PROJECT_CWD      hypomnema-only explicit override for CLI use;
                           ignored inside hooks (CLAUDE_PROJECT_DIR wins).
+  CLAUDE_HOME             hypomnema/test override of the Claude dir (hooks,
+                          bin) that also outranks CLAUDE_CONFIG_DIR for
+                          native store resolution when both are set.
   CLAUDE_CONFIG_DIR       Claude Code config dir for native store resolution
                           (projects/, settings.json only; default ~/.claude).
                           The global store stays at ~/.claude/memory-global.
