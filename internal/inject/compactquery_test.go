@@ -83,6 +83,26 @@ func TestCompactQuery_CapsTermsByFrequency(t *testing.T) {
 	}
 }
 
+func TestCompactQuery_IndentedNumberedSubItemDoesNotEndFocusSection(t *testing.T) {
+	// A numbered sub-item nested under a focus section (e.g. a Pending
+	// Tasks checklist) must not be mistaken for a new top-level header —
+	// real section headers Claude Code emits start at column 0.
+	summary := strings.Join([]string{
+		"7. Pending Tasks:",
+		"   1. Rerun the migration",
+		"   2. Verify postgres advisory lock release",
+		"   3. Update staging config",
+		"8. Current Work:",
+		"   Retrying pgmigration after the postgres lock timeout.",
+	}, "\n")
+	q := " " + CompactQuery(summary) + " "
+	for _, want := range []string{"rerun", "migration", "verify", "advisory", "pgmigration"} {
+		if !strings.Contains(q, " "+want+" ") {
+			t.Errorf("indented sub-item term %q missing from focus query %q", want, q)
+		}
+	}
+}
+
 func TestCompactQuery_Empty(t *testing.T) {
 	if q := CompactQuery(""); q != "" {
 		t.Errorf("empty summary → empty query, got %q", q)
