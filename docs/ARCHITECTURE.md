@@ -24,7 +24,7 @@ and preserving the exit code.
 
 | Event | Matcher | Shim | Verb | Purpose |
 |---|---|---|---|---|
-| `SessionStart` | — | `session-start.sh` | `inject --event=SessionStart` | Rank native facts, inject top-K into `additionalContext`; on `compact`/`clear` re-render the same set without render-dedup |
+| `SessionStart` | — | `session-start.sh` | `inject --event=SessionStart` | Rank native facts, inject top-K into `additionalContext`; on `compact` re-ranks against the compaction summary, on `clear` against the empty prompt — either way without render-dedup |
 | `UserPromptSubmit` | — | `user-prompt-submit.sh` | `inject --event=UserPromptSubmit` | Reactive re-rank with prompt tokens; inject newly-relevant facts |
 | `PreToolUse` | `Write\|Edit` | `pre-tool-write.sh` | `guard` | Secrets gate on memory-path writes (`exit 2` blocks) |
 | `PreToolUse` | `Skill` | `skill-active.sh` | `skill-active` | Record the activated skill for this session |
@@ -75,8 +75,10 @@ UserPromptSubmit ──► inject --event=UserPromptSubmit ───────
    WAL: inject|<slug>|<session>                                 │
                                                                 │
 PreToolUse(Write|Edit) ──► guard ──────────────────────────────┤
-   only on memory paths (legacy ~/.claude/memory, every native  │
-     projects/<slug>/memory/, and memory-global/)               │
+   guarded: legacy ~/.claude/memory, this session's             │
+     resolved store (autoMemoryDirectory/env-override           │
+     included), native projects/<slug>/memory/ under            │
+     both the config dir and ~/.claude, and memory-global/      │
    secrets.Scan(candidate strings): credential outside a fenced │
      code block → exit 2 + stderr (blocks the write)            │
    .secretsignore glob or HYPOMNEMA_ALLOW_SECRETS=1 → exit 0    │
