@@ -1,8 +1,10 @@
 package native
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"unicode/utf16"
@@ -133,4 +135,111 @@ func mainCheckout(root string) string {
 		return common
 	}
 	return filepath.Dir(common)
+}
+
+// Store is the native memory store a session reads and writes.
+type Store struct {
+	Dir     string // absolute memory dir
+	Project string // sidecar/WAL project tag (QKey prefix)
+	Root    string // canonical project root ("" when an override picked Dir)
+	Source  string // default | env-override | settings:policy|local|user
+}
+
+// Scope is the sidecar reconciliation scope: this store's project + global.
+func (s Store) Scope() []string { return []string{s.Project, GlobalProject} }
+
+// StoreEnv is everything ResolveStore reads. Zero values fall back to the
+// process: os.Getenv, os.ReadFile, os.UserHomeDir, the platform
+// managed-settings path.
+type StoreEnv struct {
+	ClaudeDir           string // Claude Code config dir; projects/ and settings.json live here
+	ProjectDir          string // project anchor (absolute)
+	UserHome            string
+	ManagedSettingsPath string
+	Getenv              func(string) string
+	ReadFile            func(string) ([]byte, error)
+}
+
+// StoreFor resolves the store for projectDir with process defaults.
+func StoreFor(claudeDir, projectDir string) Store {
+	return ResolveStore(StoreEnv{ClaudeDir: claudeDir, ProjectDir: projectDir})
+}
+
+// ResolveStore mirrors the harness: CLAUDE_COWORK_MEMORY_PATH_OVERRIDE, then
+// autoMemoryDirectory from the first settings scope that sets it (policy →
+// project-local → user; the checked-in project settings.json is ignored, as
+// the harness documents), then <ClaudeDir>/projects/<SanitizePath(
+// CanonicalRoot(ProjectDir))>/memory. An override's project tag is
+// SanitizePath(dir): identity follows the store, so several projects sharing
+// one override dir are one store.
+func ResolveStore(e StoreEnv) Store {
+	getenv, read, home := e.Getenv, e.ReadFile, e.UserHome
+	if getenv == nil {
+		getenv = os.Getenv
+	}
+	if read == nil {
+		read = os.ReadFile
+	}
+	if home == "" {
+		home, _ = os.UserHomeDir()
+	}
+	if d := validMemoryDir(getenv("CLAUDE_COWORK_MEMORY_PATH_OVERRIDE"), "", false); d != "" {
+		return Store{Dir: d, Project: SanitizePath(d), Source: "env-override"}
+	}
+	managed := e.ManagedSettingsPath
+	if managed == "" {
+		managed = defaultManagedSettingsPath()
+	}
+	scopes := []struct{ name, path string }{
+		{"policy", managed},
+		{"local", filepath.Join(e.ProjectDir, ".claude", "settings.local.json")},
+		{"user", filepath.Join(e.ClaudeDir, "settings.json")},
+	}
+	for _, sc := range scopes {
+		raw, err := read(sc.path)
+		if err != nil {
+			continue
+		}
+		var s struct {
+			AutoMemoryDirectory *string `json:"autoMemoryDirectory"`
+		}
+		if json.Unmarshal(raw, &s) != nil || s.AutoMemoryDirectory == nil {
+			continue
+		}
+		if d := validMemoryDir(*s.AutoMemoryDirectory, home, true); d != "" {
+			return Store{Dir: d, Project: SanitizePath(d), Source: "settings:" + sc.name}
+		}
+		break // first scope that sets the key decides; invalid → default
+	}
+	root := CanonicalRoot(e.ProjectDir)
+	slug := SanitizePath(root)
+	return Store{
+		Dir: filepath.Join(e.ClaudeDir, "projects", slug, "memory"),
+		Project: slug, Root: root, Source: "default",
+	}
+}
+
+// validMemoryDir mirrors the harness's path check: "~/" expands to home when
+// allowed; empty, NUL-bearing, relative, too-short and filesystem-root values
+// are rejected ("").
+func validMemoryDir(p, home string, expandTilde bool) string {
+	p = strings.TrimSpace(p)
+	if expandTilde && home != "" && strings.HasPrefix(p, "~/") {
+		p = filepath.Join(home, p[2:])
+	}
+	if len(p) < 3 || strings.ContainsRune(p, 0) || !filepath.IsAbs(p) {
+		return ""
+	}
+	p = filepath.Clean(p)
+	if filepath.Dir(p) == p {
+		return ""
+	}
+	return p
+}
+
+func defaultManagedSettingsPath() string {
+	if runtime.GOOS == "darwin" {
+		return "/Library/Application Support/ClaudeCode/managed-settings.json"
+	}
+	return "/etc/claude-code/managed-settings.json"
 }
