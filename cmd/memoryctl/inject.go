@@ -46,11 +46,16 @@ func runInject(args []string) {
 		os.Exit(0) // fail-safe
 	}
 	already := readInjectedList(in.SessionID)
+	r := resolveStore(in.CWD)
+	if event == "SessionStart" && in.SessionID != "" && (r.Kind == anchorHarness || r.Kind == anchorExplicit) {
+		writePin(in.SessionID, r)
+	}
 	res, err := inject.Run(inject.Input{
 		Event: event, SessionID: in.SessionID, CWD: in.CWD, Prompt: in.Prompt,
 		ClaudeHome: claudeDir(), MemoryDir: memoryDir(), Today: today(), MaxK: 8,
 		AlreadyInjected: already,
 		HoldoutSession:  readListFile(holdoutListPath(in.SessionID)),
+		Store:           r.Store,
 	})
 	if err != nil {
 		os.Exit(0)

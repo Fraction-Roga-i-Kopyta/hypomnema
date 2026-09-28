@@ -222,8 +222,9 @@ func TestRecallStaleMarkerAndCliFallback(t *testing.T) {
 	}
 	// claudeHome = CLAUDE_HOME = home/.claude; filepath.Dir(memDir) = home/.claude
 	claudeHome := filepath.Dir(memDir)
-	files := native.Collect(claudeHome, "/tmp/proj")
-	if err := sidecar.Reproject(s, files, filepath.Join(memDir, ".wal"), native.Scope("/tmp/proj")); err != nil {
+	st := native.StoreFor(claudeHome, "/tmp/proj")
+	files := native.Collect(claudeHome, st)
+	if err := sidecar.Reproject(s, files, filepath.Join(memDir, ".wal"), st.Scope()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.MarkStale("2026-06-10"); err != nil {

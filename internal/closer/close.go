@@ -23,6 +23,16 @@ type Input struct {
 	ClaudeHome     string
 	MemoryDir      string
 	Today          string
+	// Store is the resolved native store. Zero value → resolved from CWD
+	// (tests and legacy callers); the memoryctl verb always sets it.
+	Store native.Store
+}
+
+func (in Input) store() native.Store {
+	if in.Store.Dir != "" {
+		return in.Store
+	}
+	return native.StoreFor(in.ClaudeHome, in.CWD)
 }
 
 // Result reports what close did (for diagnostics).
@@ -37,8 +47,9 @@ type Result struct {
 // Best-effort throughout — a failure in one step never aborts the others.
 func Run(in Input) (Result, error) {
 	var res Result
+	st := in.store()
 	injected := readInjectedSet(in.MemoryDir, in.SessionID)
-	names, evidence, status := slugMeta(in.ClaudeHome, in.CWD)
+	names, evidence, status := slugMeta(in.ClaudeHome, st)
 
 	sess, sErr := jsonl.ReadSession(in.TranscriptPath)
 
@@ -58,7 +69,7 @@ func Run(in Input) (Result, error) {
 	if sErr == nil {
 		useful, silent := Classify(injected, names, evidence, sess.Text)
 		res.Useful, res.Silent = len(useful), len(silent)
-		projectOf := projectBySlug(in.ClaudeHome, in.CWD)
+		projectOf := projectBySlug(in.ClaudeHome, st)
 		for _, slug := range useful {
 			appendWAL(in.MemoryDir, in.Today, "trigger-useful", qualify(projectOf, slug), sid)
 		}
@@ -109,9 +120,9 @@ func Run(in Input) (Result, error) {
 	wal.Append(in.MemoryDir, metrics, "")
 	wal.Append(in.MemoryDir, fmt.Sprintf("%s|session-close|%s|%s", in.Today, sid, sid), "")
 
-	nativeFiles := collectNative(in.ClaudeHome, in.CWD)
+	nativeFiles := collectNative(in.ClaudeHome, st)
 	if s, err := sidecar.Open(filepath.Join(in.MemoryDir, ".sidecar.db")); err == nil {
-		_ = sidecar.Reproject(s, nativeFiles, filepath.Join(in.MemoryDir, ".wal"), native.Scope(in.CWD))
+		_ = sidecar.Reproject(s, nativeFiles, filepath.Join(in.MemoryDir, ".wal"), st.Scope())
 		if n, derr := s.MarkStale(in.Today); derr == nil {
 			res.Staled = n
 		}
@@ -120,8 +131,7 @@ func Run(in Input) (Result, error) {
 	// Regenerate the native MEMORY.md index for this project (best-effort).
 	// v2 owns this file; v1 left an orphan with ../../../ links. Project scope
 	// only — the global store surfaces via the ranked injection.
-	osHome := filepath.Dir(in.ClaudeHome)
-	projDir := native.ProjectMemoryDir(osHome, in.CWD)
+	projDir := st.Dir
 	if projFiles, lerr := native.List(projDir); lerr == nil && len(projFiles) > 0 {
 		_ = memindex.Write(projDir, memindex.Render(projFiles, memindex.DefaultMaxBytes))
 	}
@@ -155,15 +165,15 @@ func readRuntimeList(path string) []string {
 	return out
 }
 
-func collectNative(claudeHome, cwd string) []native.MemFile {
-	return native.Collect(claudeHome, cwd)
+func collectNative(claudeHome string, st native.Store) []native.MemFile {
+	return native.Collect(claudeHome, st)
 }
 
-func slugMeta(claudeHome, cwd string) (names map[string]string, evidence map[string][]string, status map[string]string) {
+func slugMeta(claudeHome string, st native.Store) (names map[string]string, evidence map[string][]string, status map[string]string) {
 	names = map[string]string{}
 	evidence = map[string][]string{}
 	status = map[string]string{}
-	for _, f := range collectNative(claudeHome, cwd) {
+	for _, f := range collectNative(claudeHome, st) {
 		names[f.Slug] = f.Name
 		status[f.Slug] = f.Status
 		if len(f.Evidence) > 0 {
@@ -187,11 +197,10 @@ func appendWAL(memDir, day, event, slug, sid string) {
 
 // projectBySlug maps each in-scope fact's slug to its owning project, project-
 // local winning over global on a basename tie (matches injection preference).
-func projectBySlug(claudeHome, cwd string) map[string]string {
-	local := native.SlugFromCWD(cwd)
+func projectBySlug(claudeHome string, st native.Store) map[string]string {
 	out := map[string]string{}
-	for _, f := range collectNative(claudeHome, cwd) {
-		if f.Project == local || out[f.Slug] == "" {
+	for _, f := range collectNative(claudeHome, st) {
+		if f.Project == st.Project || out[f.Slug] == "" {
 			out[f.Slug] = f.Project
 		}
 	}

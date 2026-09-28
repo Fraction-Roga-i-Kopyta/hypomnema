@@ -1,7 +1,9 @@
 // Package native is the read-only adapter over Claude Code's native memory
 // store. It is the single place that knows the native on-disk layout and
 // frontmatter format; everything else in v2 depends on this package rather
-// than touching native files directly.
+// than touching native files directly. Project slug/store resolution (the
+// harness-parity sanitizer, canonical git root, and Store type) lives in
+// store.go.
 package native
 
 import (
@@ -9,28 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 )
-
-// SlugFromCWD encodes an absolute working-directory path into the project
-// slug Claude Code uses for its per-project memory dir: every "/" becomes
-// "-". /home/user/Development/hypomnema -> -home-user-Development-hypomnema
-// (encoding verified against a real Claude Code install).
-//
-// We replace the literal "/" rather than os.PathSeparator: the slug encodes
-// Claude Code's logical (POSIX) path, not the host OS separator. If a future
-// Claude Code version encodes other characters (dots, spaces), extend here —
-// this is the single chokepoint.
-func SlugFromCWD(cwd string) string {
-	return strings.ReplaceAll(cwd, "/", "-")
-}
-
-// ProjectMemoryDir returns the native per-project memory directory for cwd:
-// <home>/.claude/projects/<slug>/memory. `home` is the single customization
-// point (callers resolve it, honouring CLAUDE_HOME). The asymmetry with
-// GlobalMemoryDir's HYPOMNEMA_GLOBAL_DIR override is intentional — the global
-// store lives outside the standard projects tree.
-func ProjectMemoryDir(home, cwd string) string {
-	return filepath.Join(home, ".claude", "projects", SlugFromCWD(cwd), "memory")
-}
 
 // GlobalMemoryDir returns the hypomnema-owned global store (native format),
 // which native memory itself lacks (native is per-project only). Honours the
@@ -44,12 +24,6 @@ func GlobalMemoryDir(home string) string {
 
 // GlobalProject is the sidecar project tag for facts in the global store.
 const GlobalProject = "global"
-
-// Scope returns the sidecar reconciliation scope for a session in cwd:
-// the project's own slug plus the global store.
-func Scope(cwd string) []string {
-	return []string{SlugFromCWD(cwd), GlobalProject}
-}
 
 // qkeySep separates the project from the slug in a project-qualified WAL
 // target / sidecar identity. ASCII Unit Separator (0x1f) is impossible inside

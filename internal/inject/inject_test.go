@@ -424,7 +424,7 @@ func TestCandidates_CorruptSidecarSiblingsRemoved(t *testing.T) {
 		}
 	}
 	files := []native.MemFile{{Slug: "a.md", Project: "global", Type: "note", Status: "active"}}
-	Candidates(dir, "/work/proj", files, []string{"a"})
+	Candidates(dir, native.Store{Project: "-work-proj"}, files, []string{"a"})
 	for _, suffix := range []string{"-wal", "-shm"} {
 		if data, err := os.ReadFile(side + suffix); err == nil &&
 			strings.Contains(string(data), "not a database") {

@@ -223,11 +223,7 @@ func runSelfProfile(_ []string) {
 	// v2: content (mistakes/strategies/ambient) comes from native memory, not
 	// memoryDir subdirs. Resolve the merged per-project + global corpus and
 	// pass it to Generate; the WAL + output file still live in memoryDir.
-	files, err := collectNative()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "memoryctl self-profile: %v\n", err)
-		os.Exit(1)
-	}
+	files := collectNative(resolveStore("").Store)
 	if err := profile.Generate(memoryDir(), files); err != nil {
 		// Non-zero exit would get swallowed by session-stop's `2>/dev/null &`
 		// anyway; still, propagate for tests that call the binary directly.
@@ -288,7 +284,8 @@ func runDoctor(args []string) {
 			os.Exit(2)
 		}
 	}
-	report := doctor.Run(claudeDir(), memoryDir(), projectCWD())
+	r := resolveStore("")
+	report := doctor.Run(claudeDir(), memoryDir(), r.Store, r.Anchor)
 	if jsonOut {
 		report.PrintJSON(os.Stdout)
 	} else {
@@ -318,7 +315,7 @@ func runDedupCheck(args []string) {
 	// v2: the dedup comparison corpus is the native mistake store, not a
 	// MemoryDir/mistakes/ subdir. Resolve the merged per-project + global
 	// native corpus; on failure pass nil (dedup degrades to Allow).
-	files, _ := collectNative()
+	files := collectNative(resolveStore("").Store)
 	opts := dedup.Options{
 		MemoryDir: memoryDir(),
 		Files:     files,

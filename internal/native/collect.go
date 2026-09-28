@@ -2,25 +2,18 @@ package native
 
 import "path/filepath"
 
-// Collect returns every native memory file in scope for a project: the
-// per-project store (<home>/.claude/projects/<slug>/memory) plus the global
-// store (<home>/.claude/memory-global). claudeHome is <home>/.claude; cwd is
-// the project working directory. Missing dirs contribute no files, never an
-// error — this is the single read path the v2 consumers (doctor, self-profile,
-// dedup, inject, close) share so none re-derive the on-disk layout.
-//
-// Each file is tagged with its owning project — the cwd slug or
-// GlobalProject. The tag drives sidecar scoping: the sidecar DB is shared
-// across all projects, so a session must only reconcile (and inject) rows
-// inside its own project ∪ global, never another project's.
-func Collect(claudeHome, cwd string) []MemFile {
-	osHome := filepath.Dir(claudeHome)
-	proj, _ := List(ProjectMemoryDir(osHome, cwd))
-	slug := SlugFromCWD(cwd)
+// Collect returns every native memory file in scope for a store: the
+// per-project store (st.Dir, tagged st.Project) plus the global store
+// (<home>/.claude/memory-global, tagged GlobalProject). claudeDir is the
+// Claude Code config dir; the global store stays beside it for backward
+// compatibility (HYPOMNEMA_GLOBAL_DIR overrides). Missing dirs contribute no
+// files, never an error — the single read path every v2 consumer shares.
+func Collect(claudeDir string, st Store) []MemFile {
+	proj, _ := List(st.Dir)
 	for i := range proj {
-		proj[i].Project = slug
+		proj[i].Project = st.Project
 	}
-	glob, _ := List(GlobalMemoryDir(osHome))
+	glob, _ := List(GlobalMemoryDir(filepath.Dir(claudeDir)))
 	for i := range glob {
 		glob[i].Project = GlobalProject
 	}

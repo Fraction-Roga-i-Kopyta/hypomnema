@@ -12,7 +12,7 @@ import (
 func TestCollect_MergesProjectAndGlobal(t *testing.T) {
 	home := t.TempDir()
 	claudeHome := filepath.Join(home, ".claude")
-	projDir := ProjectMemoryDir(home, "/work/proj")
+	projDir := StoreFor(claudeHome, "/work/proj").Dir
 	globDir := GlobalMemoryDir(home)
 	for _, d := range []string{projDir, globDir} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
@@ -28,7 +28,7 @@ func TestCollect_MergesProjectAndGlobal(t *testing.T) {
 	write(projDir, "proj-one", "mistake")
 	write(globDir, "glob-one", "feedback")
 
-	got := Collect(claudeHome, "/work/proj")
+	got := Collect(claudeHome, StoreFor(claudeHome, "/work/proj"))
 
 	if len(got) != 2 {
 		t.Fatalf("want 2 files (1 project + 1 global), got %d: %+v", len(got), got)
@@ -55,7 +55,7 @@ func TestCollect_MissingProjectDirIsSafe(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := Collect(claudeHome, "/never/created")
+	got := Collect(claudeHome, StoreFor(claudeHome, "/never/created"))
 
 	if len(got) != 1 || got[0].Name != "g" {
 		t.Errorf("want only the global file, got %+v", got)
