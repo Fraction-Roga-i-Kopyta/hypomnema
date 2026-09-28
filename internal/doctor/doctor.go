@@ -124,11 +124,12 @@ func (r Report) PrintJSON(w io.Writer) {
 // All checks are defensive: individual read failures are rendered as WARN
 // or FAIL in the relevant check, never panic.
 //
-// cwd is the project working directory: the corpus checks enumerate the
-// per-project native store derived from it (plus the global store), via
-// native.Collect. In v2 the memory content lives in native files, not under
-// memoryDir — memoryDir is only the metadata root (.wal, .sidecar.db).
-func Run(claudeDir, memoryDir, cwd string) Report {
+// st is the resolved native store: the corpus checks enumerate its
+// per-project directory (plus the global store), via native.Collect. In v2
+// the memory content lives in native files, not under memoryDir — memoryDir
+// is only the metadata root (.wal, .sidecar.db). anchor is unused today
+// (Task 5 consumes it).
+func Run(claudeDir, memoryDir string, st native.Store, anchor string) Report {
 	now := resolveDoctorNow()
 	r := Report{ClaudeDir: claudeDir, MemoryDir: memoryDir, Now: now}
 	r.Checks = append(r.Checks,
@@ -139,13 +140,13 @@ func Run(claudeDir, memoryDir, cwd string) Report {
 		checkBrokenSymlinks(filepath.Join(claudeDir, "hooks"), "hooks"),
 		checkBrokenSymlinks(filepath.Join(claudeDir, "bin"), "bin"),
 		checkMemoryctl(claudeDir),
-		checkCorpus(claudeDir, memoryDir, cwd),
+		checkCorpus(claudeDir, memoryDir, st),
 		checkWALErrors(filepath.Join(memoryDir, ".wal"), now),
 		checkOpenQuanta(filepath.Join(memoryDir, ".wal"), now),
 		checkSidecar(memoryDir, now),
-		checkCorpusQuality(claudeDir, cwd),
-		checkOversized(claudeDir, cwd),
-		checkCandidates(memoryDir, claudeDir, cwd),
+		checkCorpusQuality(claudeDir, st),
+		checkOversized(claudeDir, st),
+		checkCandidates(memoryDir, claudeDir, st),
 	)
 	return r
 }
@@ -161,7 +162,7 @@ const candidateSilentMin = 5
 // being applied: ≥candidateSilentMin trigger-silent sessions and no
 // trigger-useful / candidate-confirmed. Suggests retire or a keyword
 // rewrite. WARN-only — corroboration failure is advice, not breakage.
-func checkCandidates(memoryDir, claudeHome, cwd string) Check {
+func checkCandidates(memoryDir, claudeHome string, st native.Store) Check {
 	type tally struct {
 		useful, silent int
 		confirmed      bool
@@ -209,7 +210,7 @@ func checkCandidates(memoryDir, claudeHome, cwd string) Check {
 		}
 	}
 	var flagged []string
-	for _, mf := range native.Collect(claudeHome, cwd) {
+	for _, mf := range native.Collect(claudeHome, st) {
 		if mf.Status != "candidate" {
 			continue
 		}
@@ -478,8 +479,8 @@ func checkMemoryctl(claudeDir string) Check {
 // is fully graceful: a missing or unreadable sidecar yields 0 pinned / 0 stale
 // and never fails the check. Sidecar rows whose status is "deleted" are
 // orphans (no live native file) and contribute nothing to the corpus counts.
-func checkCorpus(claudeDir, memoryDir, cwd string) Check {
-	files := native.Collect(claudeDir, cwd)
+func checkCorpus(claudeDir, memoryDir string, st native.Store) Check {
+	files := native.Collect(claudeDir, st)
 	statusBySlug := sidecarStatusMap(memoryDir)
 	counts := map[string]int{}
 	pinned, stale := 0, 0
@@ -626,11 +627,11 @@ func fmHasNestedMetadata(path string) bool {
 // signal, so there is no reactive-trigger requirement to warn about.)
 //
 // Always WARN-level — a nudge, never a hard failure.
-func checkCorpusQuality(claudeDir, cwd string) Check {
+func checkCorpusQuality(claudeDir string, st native.Store) Check {
 	const name = "corpus_frontmatter_quality"
 	var emptyStatus []string
 	nested := 0
-	for _, f := range native.Collect(claudeDir, cwd) {
+	for _, f := range native.Collect(claudeDir, st) {
 		present, value := fmStatus(f.Path)
 		if present && value == "" {
 			emptyStatus = append(emptyStatus, f.Slug)
@@ -679,14 +680,14 @@ func checkCorpusQuality(claudeDir, cwd string) Check {
 // checkOversized flags facts whose body exceeds the per-record injection cap:
 // the model only ever sees the first inject.MaxBodyBytes of such a fact (a
 // header and a truncation marker), so the fact should be split or retired.
-func checkOversized(claudeDir, cwd string) Check {
+func checkOversized(claudeDir string, st native.Store) Check {
 	const name = "oversized_facts"
 	type item struct {
 		slug string
 		size int
 	}
 	var over []item
-	for _, f := range native.Collect(claudeDir, cwd) {
+	for _, f := range native.Collect(claudeDir, st) {
 		if n := len(f.Body); n > inject.MaxBodyBytes {
 			over = append(over, item{f.Slug, n})
 		}

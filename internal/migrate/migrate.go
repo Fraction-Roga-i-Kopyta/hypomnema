@@ -18,7 +18,7 @@ import (
 type Opts struct {
 	V1Dir     string            // ~/.claude/memory
 	GlobalDir string            // ~/.claude/memory-global
-	OSHome    string            // ~ (for native ProjectMemoryDir)
+	OSHome    string            // ~ (for native store resolution)
 	Projects  map[string]string // abs-cwd → project-name (projects.json)
 	Today     string            // YYYY-MM-DD
 	WALPath   string            // path to .wal (for WAL-aware prune; empty → no WAL check)
@@ -178,7 +178,7 @@ func routeDir(project string, o Opts, nameToCWD map[string]string) string {
 		return o.GlobalDir
 	}
 	if cwd, ok := nameToCWD[project]; ok {
-		return native.ProjectMemoryDir(o.OSHome, cwd)
+		return native.StoreFor(filepath.Join(o.OSHome, ".claude"), cwd).Dir
 	}
 	return o.GlobalDir // unknown project → global (preserve, don't lose)
 }

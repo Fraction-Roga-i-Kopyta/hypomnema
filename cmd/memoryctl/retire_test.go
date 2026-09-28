@@ -19,7 +19,7 @@ func retireFixture(t *testing.T) (env map[string]string, store, memDir, factPath
 	claude := filepath.Join(home, ".claude")
 	cwd := filepath.Join(home, "work", "proj")
 	memDir = filepath.Join(claude, "memory")
-	store = filepath.Join(claude, "projects", native.SlugFromCWD(cwd), "memory")
+	store = native.StoreFor(claude, cwd).Dir
 	globalDir := filepath.Join(home, "memory-global")
 	for _, d := range []string{store, memDir, globalDir, cwd} {
 		if err := os.MkdirAll(d, 0o755); err != nil {

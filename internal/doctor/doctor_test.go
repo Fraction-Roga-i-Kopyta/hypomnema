@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/sidecar"
 )
 
@@ -125,7 +126,7 @@ func seedSidecar(t *testing.T, mem string, statusBySlug map[string]string) {
 
 func TestRun_CleanFixtureNoFails(t *testing.T) {
 	claude, mem, cwd := newFixture(t)
-	r := Run(claude, mem, cwd)
+	r := Run(claude, mem, native.StoreFor(claude, cwd), cwd)
 	_, _, fail := r.Counts()
 	if fail != 0 {
 		var buf bytes.Buffer
@@ -140,7 +141,7 @@ func TestRun_CleanFixtureNoFails(t *testing.T) {
 func TestRun_MissingMemoryDirFails(t *testing.T) {
 	claude := filepath.Join(t.TempDir(), ".claude")
 	// No memory dir created.
-	r := Run(claude, filepath.Join(claude, "memory"), fixtureCWD)
+	r := Run(claude, filepath.Join(claude, "memory"), native.StoreFor(claude, fixtureCWD), fixtureCWD)
 	mustFindCheck(t, r, "memory_dir_exists", FAIL)
 }
 
@@ -152,7 +153,7 @@ func TestRun_SettingsMissingHookCommandFails(t *testing.T) {
 		[]byte(validSettingsJSON(map[string]bool{"session-stop.sh": true})), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	r := Run(claude, mem, cwd)
+	r := Run(claude, mem, native.StoreFor(claude, cwd), cwd)
 	c := mustFindCheck(t, r, "settings_hooks_registered", FAIL)
 	if !strings.Contains(c.Detail, "session-stop.sh") {
 		t.Errorf("expected detail to name the missing hook, got %q", c.Detail)
@@ -166,7 +167,7 @@ func TestRun_BrokenSymlinkFails(t *testing.T) {
 	if err := os.Symlink("/nonexistent/target.sh", filepath.Join(claude, "hooks", "stale-link.sh")); err != nil {
 		t.Fatal(err)
 	}
-	r := Run(claude, mem, cwd)
+	r := Run(claude, mem, native.StoreFor(claude, cwd), cwd)
 	c := mustFindCheck(t, r, "no_broken_symlinks_hooks", FAIL)
 	if !strings.Contains(c.Detail, "stale-link.sh") {
 		t.Errorf("expected detail to name the broken symlink, got %q", c.Detail)
@@ -192,7 +193,7 @@ func TestRun_WALErrorsInLast7Days(t *testing.T) {
 		[]byte(strings.Join(walLines, "\n")+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	r := Run(claude, mem, cwd)
+	r := Run(claude, mem, native.StoreFor(claude, cwd), cwd)
 	c := mustFindCheck(t, r, "wal_errors_last_7d", WARN)
 	// Two events in window (schema-error + format-unsupported), not three.
 	if !strings.Contains(c.Detail, "2 events") {
@@ -206,14 +207,14 @@ func TestRun_WALErrorsInLast7Days(t *testing.T) {
 func TestRun_WALMissingIsOK(t *testing.T) {
 	claude, mem, cwd := newFixture(t)
 	// No .wal file — typical on a fresh install.
-	r := Run(claude, mem, cwd)
+	r := Run(claude, mem, native.StoreFor(claude, cwd), cwd)
 	mustFindCheck(t, r, "wal_errors_last_7d", OK)
 }
 
 func TestRun_CorpusEmptyWarns(t *testing.T) {
 	claude, mem, cwd := newFixture(t)
 	// No native files in project or global dir.
-	r := Run(claude, mem, cwd)
+	r := Run(claude, mem, native.StoreFor(claude, cwd), cwd)
 	mustFindCheck(t, r, "corpus_counts", WARN)
 }
 
@@ -233,7 +234,7 @@ func TestRun_CorpusWithFilesReportsCounts(t *testing.T) {
 		"m-two.md": "pinned",
 		"s-one.md": "stale",
 	})
-	r := Run(claude, mem, cwd)
+	r := Run(claude, mem, native.StoreFor(claude, cwd), cwd)
 	c := mustFindCheck(t, r, "corpus_counts", OK)
 	for _, fragment := range []string{"3 total", "mistake:2", "strategy:1", "1 pinned", "1 stale"} {
 		if !strings.Contains(c.Detail, fragment) {
@@ -252,7 +253,7 @@ func TestRun_CorpusWithoutSidecarReportsZeroStatusCounts(t *testing.T) {
 	writeNative(t, proj, "m-one", "mistake", "active")
 	writeNative(t, proj, "m-two", "mistake", "active")
 	// No .sidecar.db seeded.
-	r := Run(claude, mem, cwd)
+	r := Run(claude, mem, native.StoreFor(claude, cwd), cwd)
 	c := mustFindCheck(t, r, "corpus_counts", OK)
 	for _, fragment := range []string{"2 total", "mistake:2", "0 pinned", "0 stale"} {
 		if !strings.Contains(c.Detail, fragment) {
@@ -275,7 +276,7 @@ func TestRun_CorpusIgnoresDeletedSidecarRows(t *testing.T) {
 		"gone.md":    "deleted", // orphan — no native file; must not be counted
 		"orphan2.md": "stale",   // also no native file; must not be counted
 	})
-	r := Run(claude, mem, cwd)
+	r := Run(claude, mem, native.StoreFor(claude, cwd), cwd)
 	c := mustFindCheck(t, r, "corpus_counts", OK)
 	// 2 native files; m-one pinned (from sidecar), m-two defaults active.
 	// Deleted/orphan sidecar rows contribute nothing to the live counts.
@@ -295,7 +296,7 @@ func TestCorpusQuality_ValidFrontmatterPasses(t *testing.T) {
 	writeNative(t, proj, "fb-plain", "feedback", "active")
 	writeNative(t, proj, "kn-plain", "knowledge", "active")
 	writeNative(t, glob, "mi-pinned", "mistake", "pinned")
-	r := Run(claude, mem, cwd)
+	r := Run(claude, mem, native.StoreFor(claude, cwd), cwd)
 	c := mustFindCheck(t, r, "corpus_frontmatter_quality", OK)
 	if !strings.Contains(c.Detail, "all files have valid frontmatter") {
 		t.Errorf("expected clean detail, got %q", c.Detail)
@@ -310,7 +311,7 @@ func TestCorpusQuality_EmptyStatusWarns(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(proj, "empty-status.md"), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	r := Run(claude, mem, cwd)
+	r := Run(claude, mem, native.StoreFor(claude, cwd), cwd)
 	c := mustFindCheck(t, r, "corpus_frontmatter_quality", WARN)
 	if !strings.Contains(c.Detail, "1 with empty status:") {
 		t.Errorf("expected empty-status warning, got %q", c.Detail)
@@ -320,7 +321,7 @@ func TestCorpusQuality_EmptyStatusWarns(t *testing.T) {
 func TestSidecar_AbsentOnFreshInstallIsOK(t *testing.T) {
 	claude, mem, cwd := newFixture(t)
 	// No .sidecar.db and no .wal — a brand-new install has nothing to rebuild.
-	r := Run(claude, mem, cwd)
+	r := Run(claude, mem, native.StoreFor(claude, cwd), cwd)
 	mustFindCheck(t, r, "sidecar", OK)
 }
 
@@ -330,7 +331,7 @@ func TestSidecar_AbsentWithWALWarns(t *testing.T) {
 	mustWriteWAL(t, mem, []string{
 		time.Now().Format("2006-01-02") + "|inject|slug-a|s1",
 	})
-	r := Run(claude, mem, cwd)
+	r := Run(claude, mem, native.StoreFor(claude, cwd), cwd)
 	c := mustFindCheck(t, r, "sidecar", WARN)
 	if !strings.Contains(c.Detail, "rebuild") {
 		t.Errorf("expected rebuild hint, got %q", c.Detail)
@@ -351,7 +352,7 @@ func TestSidecar_StaleVsWALWarns(t *testing.T) {
 	mustWriteWAL(t, mem, []string{
 		time.Now().Format("2006-01-02") + "|inject|slug-a|s1",
 	})
-	r := Run(claude, mem, cwd)
+	r := Run(claude, mem, native.StoreFor(claude, cwd), cwd)
 	c := mustFindCheck(t, r, "sidecar", WARN)
 	if !strings.Contains(c.Detail, "stale") {
 		t.Errorf("expected stale-vs-WAL warning, got %q", c.Detail)
@@ -372,7 +373,7 @@ func TestSidecar_FreshIsOK(t *testing.T) {
 	if err := os.Chtimes(sidecar, now, now); err != nil {
 		t.Fatal(err)
 	}
-	r := Run(claude, mem, cwd)
+	r := Run(claude, mem, native.StoreFor(claude, cwd), cwd)
 	mustFindCheck(t, r, "sidecar", OK)
 }
 
@@ -389,7 +390,7 @@ func TestOpenQuanta_AllClosedIsOK(t *testing.T) {
 		today + "|clean-session|_global_|s3",
 	}
 	mustWriteWAL(t, mem, lines)
-	r := Run(claude, mem, cwd)
+	r := Run(claude, mem, native.StoreFor(claude, cwd), cwd)
 	c := mustFindCheck(t, r, "open_quanta_last_30d", OK)
 	if !strings.Contains(c.Detail, "0/3") {
 		t.Errorf("expected 0/3 open, got %q", c.Detail)
@@ -409,7 +410,7 @@ func TestOpenQuanta_MajorityOpenWarns(t *testing.T) {
 		today + "|inject|slug-d|s4",
 	}
 	mustWriteWAL(t, mem, lines)
-	r := Run(claude, mem, cwd)
+	r := Run(claude, mem, native.StoreFor(claude, cwd), cwd)
 	c := mustFindCheck(t, r, "open_quanta_last_30d", WARN)
 	if !strings.Contains(c.Detail, "3/4") {
 		t.Errorf("expected 3/4 open, got %q", c.Detail)
@@ -427,7 +428,7 @@ func TestOpenQuanta_ExcludesOldEntriesOutsideWindow(t *testing.T) {
 		old + "|inject|slug-old|s-old",
 	}
 	mustWriteWAL(t, mem, lines)
-	r := Run(claude, mem, cwd)
+	r := Run(claude, mem, native.StoreFor(claude, cwd), cwd)
 	// Empty-window path returns OK with a clear message; no WARN.
 	c := mustFindCheck(t, r, "open_quanta_last_30d", OK)
 	if !strings.Contains(c.Detail, "no inject-carrying sessions") {
@@ -513,7 +514,7 @@ func TestRequiredHookCommands_MatchInstallScript(t *testing.T) {
 
 func TestReport_PrintJSONRoundtrips(t *testing.T) {
 	claude, mem, cwd := newFixture(t)
-	r := Run(claude, mem, cwd)
+	r := Run(claude, mem, native.StoreFor(claude, cwd), cwd)
 	var buf bytes.Buffer
 	r.PrintJSON(&buf)
 	// Decode into a map — we only assert structural shape here, not field
@@ -551,7 +552,7 @@ func TestRun_MissingShimFilesFail(t *testing.T) {
 	}
 	// Regression for the review's headline false-OK: settings.json still
 	// lists every hook, but the shim files themselves are gone.
-	mustFindCheck(t, Run(claude, mem, cwd), "shim_files_present", FAIL)
+	mustFindCheck(t, Run(claude, mem, native.StoreFor(claude, cwd), cwd), "shim_files_present", FAIL)
 }
 
 func TestRun_NonExecutableShimFails(t *testing.T) {
@@ -560,7 +561,7 @@ func TestRun_NonExecutableShimFails(t *testing.T) {
 	if err := os.Chmod(p, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	c := mustFindCheck(t, Run(claude, mem, cwd), "shim_files_present", FAIL)
+	c := mustFindCheck(t, Run(claude, mem, native.StoreFor(claude, cwd), cwd), "shim_files_present", FAIL)
 	if !strings.Contains(c.Detail, "not executable") {
 		t.Errorf("detail should name the non-executable shim, got %q", c.Detail)
 	}
@@ -600,7 +601,7 @@ func TestCheckCandidates(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c := checkCandidates(memDir, claudeHome, cwd)
+	c := checkCandidates(memDir, claudeHome, native.StoreFor(claudeHome, cwd))
 	if c.Status != WARN || !strings.Contains(c.Detail, "dud") {
 		t.Fatalf("got %+v, want WARN naming dud", c)
 	}
@@ -612,7 +613,7 @@ func TestCheckCandidates(t *testing.T) {
 	f, _ := os.OpenFile(filepath.Join(memDir, ".wal"), os.O_APPEND|os.O_WRONLY, 0o644)
 	f.WriteString("2026-07-16|candidate-confirmed|" + q + "|s6\n")
 	f.Close()
-	if c := checkCandidates(memDir, claudeHome, cwd); c.Status != OK {
+	if c := checkCandidates(memDir, claudeHome, native.StoreFor(claudeHome, cwd)); c.Status != OK {
 		t.Fatalf("confirmed candidate must not flag: %+v", c)
 	}
 }
@@ -630,7 +631,7 @@ func TestCheckCorpusQuality_CountsNestedMetadata(t *testing.T) {
 	os.WriteFile(filepath.Join(projDir, "nested.md"),
 		[]byte("---\nname: nested\nmetadata:\n  type: mistake\n  status: active\n---\nx\n"), 0o644)
 
-	c := checkCorpusQuality(claudeHome, cwd)
+	c := checkCorpusQuality(claudeHome, native.StoreFor(claudeHome, cwd))
 	if c.Status != OK {
 		t.Fatalf("nested metadata is tolerated, not a quality issue: %+v", c)
 	}
@@ -649,12 +650,12 @@ func TestCheckOversized(t *testing.T) {
 	}
 	os.WriteFile(filepath.Join(projDir, "small.md"),
 		[]byte("---\nname: small\ntype: note\n---\nshort\n"), 0o644)
-	if c := checkOversized(claudeHome, cwd); c.Status != OK {
+	if c := checkOversized(claudeHome, native.StoreFor(claudeHome, cwd)); c.Status != OK {
 		t.Fatalf("all-small corpus must be OK: %+v", c)
 	}
 	os.WriteFile(filepath.Join(projDir, "huge.md"),
 		[]byte("---\nname: huge\ntype: note\n---\n"+strings.Repeat("z", 3000)+"\n"), 0o644)
-	c := checkOversized(claudeHome, cwd)
+	c := checkOversized(claudeHome, native.StoreFor(claudeHome, cwd))
 	if c.Status != WARN || !strings.Contains(c.Detail, "huge.md (3000 B)") || !strings.Contains(c.Detail, "file path") {
 		t.Fatalf("want WARN naming huge.md with its size: %+v", c)
 	}
