@@ -22,8 +22,13 @@ const compactQueryTerms = 40
 // forms Claude Code actually emits (checked against 25 live summaries, 14 of
 // them markdown-styled): "1. Primary Request and Intent:",
 // "1. **Primary Request and Intent:**", "## 1. Primary Request and Intent",
-// "## Current Work", "7. Pending Tasks (all awaiting review):".
-var sectionHeaderRe = regexp.MustCompile(`^\s*(?:#{1,6}\s+(?:\d+\.\s+)?|\d+\.\s+)\**([A-Za-z][A-Za-z /&'-]{2,58}?)\s*(?:\([^)]*\))?:?\**:?\s*$`)
+// "## Current Work", "7. Pending Tasks (all awaiting review):". Anchored at
+// column 0 (no leading whitespace) — a real header always starts the line;
+// an indented numbered line (e.g. "   1. Rerun the migration", a checklist
+// item nested under "Pending Tasks:") is body text, not a new section, and
+// must not be mistaken for one and prematurely end the focus section it is
+// part of.
+var sectionHeaderRe = regexp.MustCompile(`^(?:#{1,6}\s+(?:\d+\.\s+)?|\d+\.\s+)\**([A-Za-z][A-Za-z /&'-]{2,58}?)\s*(?:\([^)]*\))?:?\**:?\s*$`)
 
 // CompactQuery turns a compaction summary into a bounded ranking query: the
 // text of the focus sections when the summary uses the standard headers
