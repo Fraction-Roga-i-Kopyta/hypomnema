@@ -147,6 +147,7 @@ func Run(claudeDir, memoryDir string, st native.Store, anchor string) Report {
 		checkCorpusQuality(claudeDir, st),
 		checkOversized(claudeDir, st),
 		checkCandidates(memoryDir, claudeDir, st),
+		checkStoreResolution(claudeDir, st, anchor),
 	)
 	return r
 }
@@ -921,6 +922,45 @@ func checkOpenQuanta(walPath string, now time.Time) Check {
 		detail += " — skews Bayesian `eff`; see docs/notes/measurement-bias.md"
 	}
 	return Check{Name: name, Status: status, Detail: detail}
+}
+
+// checkStoreResolution reports the native store this invocation resolved
+// (harness rule: override → canonical git root → sanitized slug) and warns
+// when a store named by the pre-v2.13 formula (only "/" → "-", no canonical
+// root) still holds facts that are no longer read — paths with dots,
+// underscores, spaces or non-ASCII, worktrees, and repo subdirectories.
+func checkStoreResolution(claudeDir string, st native.Store, anchor string) Check {
+	const name = "store_resolution"
+	detail := fmt.Sprintf("%s (project %s, via %s)", st.Dir, st.Project, st.Source)
+	if st.Source != "default" {
+		// An override store has no slug, hence no legacy-slug sibling.
+		return Check{Name: name, Status: OK, Detail: detail}
+	}
+	// <config dir>/projects — taken from the resolved store, not claudeDir,
+	// so CLAUDE_CONFIG_DIR installs are checked in the right tree.
+	projectsRoot := filepath.Dir(filepath.Dir(st.Dir))
+	seen := map[string]bool{st.Project: true}
+	var stray []string
+	for _, p := range []string{anchor, st.Root} {
+		if p == "" {
+			continue
+		}
+		legacy := strings.ReplaceAll(filepath.Clean(p), "/", "-")
+		if seen[legacy] {
+			continue
+		}
+		seen[legacy] = true
+		dir := filepath.Join(projectsRoot, legacy, "memory")
+		if files, err := native.List(dir); err == nil && len(files) > 0 {
+			stray = append(stray, fmt.Sprintf("%s (%d facts)", dir, len(files)))
+		}
+	}
+	if len(stray) == 0 {
+		return Check{Name: name, Status: OK, Detail: detail}
+	}
+	return Check{Name: name, Status: WARN, Detail: detail +
+		"; legacy store(s) no longer read since v2.13: " + strings.Join(stray, ", ") +
+		" — move their .md files into " + st.Dir + " (see TROUBLESHOOTING)"}
 }
 
 // resolveDoctorNow mirrors the HYPOMNEMA_TODAY / HYPOMNEMA_NOW

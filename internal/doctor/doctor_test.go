@@ -666,3 +666,22 @@ func TestCheckOversized(t *testing.T) {
 		t.Errorf("oversized_count = %v, want 1", c.Extra["oversized_count"])
 	}
 }
+
+func TestCheckStoreResolution(t *testing.T) {
+	claude := filepath.Join(t.TempDir(), ".claude")
+	anchor := "/tmp/my_proj" // "_" → new slug "-tmp-my-proj", legacy "-tmp-my_proj"
+	st := native.StoreFor(claude, anchor)
+
+	c := checkStoreResolution(claude, st, anchor)
+	if c.Status != OK || !strings.Contains(c.Detail, st.Dir) {
+		t.Errorf("clean install: %+v", c)
+	}
+
+	legacy := filepath.Join(claude, "projects", "-tmp-my_proj", "memory")
+	os.MkdirAll(legacy, 0o755)
+	os.WriteFile(filepath.Join(legacy, "old.md"), []byte("---\nname: old\ntype: note\n---\nx\n"), 0o644)
+	c = checkStoreResolution(claude, st, anchor)
+	if c.Status != WARN || !strings.Contains(c.Detail, legacy) || !strings.Contains(c.Detail, "1 facts") {
+		t.Errorf("legacy store with facts must WARN naming it: %+v", c)
+	}
+}
