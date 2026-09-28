@@ -14,8 +14,8 @@ release.
 
 ### Fixed
 
-- **Store resolution now matches Claude Code's own `autoMemoryDirectory` rule
-  exactly**, closing several ways a session could silently read/write the
+- **Store resolution now mirrors Claude Code's own `autoMemoryDirectory`
+  rule**, closing several ways a session could silently read/write the
   wrong store: cwd drift (a CLI verb run after `cd` used to resolve against
   the shell's current directory instead of the project anchor), linked
   worktrees (each worktree got its own unrelated store instead of sharing
@@ -26,7 +26,12 @@ release.
   single collision-prone slug instead of the intended project — it is now
   made absolute first; values are otherwise used as given, with no
   existence check. See `docs/CONFIGURATION.md` § Store resolution and
-  `docs/ARCHITECTURE.md` § Stores for the resolved contract.
+  `docs/ARCHITECTURE.md` § Stores for the resolved contract. Two deliberate
+  differences from the harness remain: linked-worktree resolution adds the
+  structural verification described below (the harness trusts the pointer
+  files outright), and the final NFC normalization the harness applies to
+  the sanitized path is not replicated (the slug is already pure ASCII by
+  that point, so it never changes the result).
 - **Worktree resolution is hardened against planted pointer files.** A
   linked worktree now maps to its main checkout only when git's own
   on-disk structure checks out end to end — the `.git` pointer's gitdir

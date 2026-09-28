@@ -49,9 +49,9 @@ each verb actually reads:
 | Verb | Fields read from stdin |
 |---|---|
 | `inject` | `session_id`, `cwd`, `prompt`, `source` (routes SessionStart's compact/clear re-render and UserPromptSubmit's system/poll_event skip), `transcript_path` (SessionStart only, to find the latest compaction summary when `source=compact`) |
-| `guard` | `tool_input.file_path`, `tool_input.content` (Write), `tool_input.new_string` (Edit), `tool_input.new_source` (NotebookEdit), `tool_input.edits[].new_string` (MultiEdit) |
+| `guard` | `cwd` (resolves the store this invocation guards), `tool_input.file_path`, `tool_input.content` (Write), `tool_input.new_string` (Edit), `tool_input.new_source` (NotebookEdit), `tool_input.edits[].new_string` (MultiEdit) |
 | `skill-active` | `session_id`, `tool_input.skill` |
-| `skill-inject` | `tool_input.skill` |
+| `skill-inject` | `session_id`, `cwd` (resolves the store the learnings are read from), `tool_input.skill` |
 | `close` | `session_id`, `cwd`, `transcript_path` |
 
 ### 1.3 Output
@@ -121,7 +121,11 @@ Verbs may read and write:
   `~/.claude/memory-global/*.md` (global) — per FORMAT.md §3.
 - The runtime tree `~/.claude/memory/`: `.wal` (§5 of FORMAT.md), `.sidecar.db`
   (the single derivative index), `self-profile.md`, and `.runtime/`
-  (session-scoped markers: `injected-<session_id>.list`, `active-skill-<sid>`).
+  (session-scoped markers: `injected-<session_id>.list`, `active-skill-<sid>`,
+  and the store-resolution session pin `project-<session_id>.json`, written
+  by `inject` at `SessionStart` and read back by later CLI verbs in the same
+  session via `CLAUDE_CODE_SESSION_ID`/`HYPOMNEMA_SESSION_ID`). All three
+  families of `.runtime/` file are pruned after 7 days of inactivity.
 
 Verbs MUST NOT modify `~/.claude/settings.json` at runtime, prompt
 interactively (hooks run headless), or block past the configured timeout.
@@ -195,8 +199,12 @@ Reads the mutating tool's payload from stdin and blocks (exit 2) a write into a
 guarded memory store whose content carries a plaintext credential.
 
 Guarded stores (from `guardedRel`): the runtime tree `$CLAUDE_MEMORY_DIR`, the
-global store `~/.claude/memory-global/`, and every native
-`~/.claude/projects/<slug>/memory/` store. A write anywhere else is not policed.
+global store `~/.claude/memory-global/`, this invocation's resolved store
+(including an `autoMemoryDirectory`/env-override store, which lives outside
+`projects/`), and every native `projects/<slug>/memory/` store under both the
+config dir and `~/.claude` (so the check still covers a `CLAUDE_CONFIG_DIR`
+install's own tree even when `guard` itself resolves the other one). A write
+anywhere else is not policed.
 
 Scan input: `content` (Write), `new_string` (Edit), `new_source`
 (NotebookEdit), and each `edits[].new_string` (MultiEdit) are concatenated and

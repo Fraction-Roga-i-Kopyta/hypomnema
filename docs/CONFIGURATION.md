@@ -66,7 +66,7 @@ out of the box. Set them only for non-standard installs, tests, or replay.
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | Claude Code's own config-dir override, checked only when `CLAUDE_HOME` is unset. Moves **only** `projects/` and `settings.json` resolution (§1) — the global store stays at `~/.claude/memory-global` (`HYPOMNEMA_GLOBAL_DIR` still overrides that independently). |
 | `CLAUDE_PROJECT_DIR` | (unset) | Project anchor Claude Code sets for every hook invocation; outranks `CLAUDE_PROJECT_CWD` (§1). |
 | `CLAUDE_PROJECT_CWD` | current working dir | hypomnema-only explicit override for CLI use; ignored inside hooks — `CLAUDE_PROJECT_DIR` always wins there. |
-| `CLAUDE_COWORK_MEMORY_PATH_OVERRIDE` | unset | Highest-precedence store override: an absolute (or `~/`-prefixed) path used verbatim as the resolved memory dir. |
+| `CLAUDE_COWORK_MEMORY_PATH_OVERRIDE` | unset | Highest-precedence store override: an absolute path used verbatim as the resolved memory dir (unlike `autoMemoryDirectory`, `~/` is not expanded here). |
 | `HYPOMNEMA_GLOBAL_DIR` | `~/.claude/memory-global` | Location of the global native store (facts that apply across every project). |
 | `HYPOMNEMA_MEMORYCTL` | `~/.claude/bin/memoryctl` | Path to the `memoryctl` binary the shims invoke. |
 | `HYPOMNEMA_SESSION_ID` | (from hook envelope) | Session id stamped into WAL entries. |

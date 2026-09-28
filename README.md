@@ -30,7 +30,7 @@ Parameterized queries only. No hardcoded secrets. No debug logging in committed 
 Don't claim "done" before running a minimum verification set.
 ```
 
-Claude reads it as part of its context — no RAG query, no vector database, just a markdown block prepended by the hook. When Claude hits a new bug worth remembering, it writes a native memory file and the next session injects it automatically. Memory also survives context compaction and `/clear`: hypomnema re-injects the same ranked facts right after, so a compacted session doesn't wake up having forgotten what it already knew.
+Claude reads it as part of its context — no RAG query, no vector database, just a markdown block prepended by the hook. When Claude hits a new bug worth remembering, it writes a native memory file and the next session injects it automatically. Memory also survives context compaction and `/clear`: hypomnema re-ranks — on compaction, against the compaction summary itself — and re-injects whatever lands in the top-8 right after, so a compacted session doesn't wake up having forgotten everything it already knew. A fact that misses that post-compaction top-8 is not re-offered again later in the same session.
 
 ## What hypomnema adds on top of native
 
