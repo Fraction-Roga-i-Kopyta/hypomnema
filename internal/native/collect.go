@@ -4,10 +4,11 @@ import "path/filepath"
 
 // Collect returns every native memory file in scope for a store: the
 // per-project store (st.Dir, tagged st.Project) plus the global store
-// (<home>/.claude/memory-global, tagged GlobalProject). claudeDir is the
-// Claude Code config dir; the global store stays beside it for backward
-// compatibility (HYPOMNEMA_GLOBAL_DIR overrides). Missing dirs contribute no
-// files, never an error — the single read path every v2 consumer shares.
+// (<home>/.claude/memory-global, tagged GlobalProject). claudeDir must be
+// hypomnema's own directory (from claudeDir(), NOT configDir()): the global
+// store lives beside it for backward compatibility (HYPOMNEMA_GLOBAL_DIR
+// overrides). Missing dirs contribute no files, never an error — the single
+// read path every v2 consumer shares.
 func Collect(claudeDir string, st Store) []MemFile {
 	proj, _ := List(st.Dir)
 	for i := range proj {
