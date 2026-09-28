@@ -189,6 +189,17 @@ func samePath(a, b string) bool {
 //     the attacker only controls where <p> itself sits, so pinning common
 //     to <p>'s structural position rules out redirecting to a pre-existing,
 //     unrelated directory (another repo, "/", ...).
+//   - the resolved common dir must also look like a real git common dir:
+//     <common>/HEAD exists as a regular file or symlink, and
+//     <common>/objects exists as a directory. Position alone (the check
+//     above) is not enough, because <p> is itself attacker-chosen: a
+//     shallow-enough <p> makes its two-levels-up ancestor land on some
+//     existing, pre-existing directory the attacker never wrote to at all
+//     (the extraction target's own parent — e.g. ~/Downloads for a
+//     one-folder archive, or "/" for a flat archive extracted straight into
+//     /tmp). HEAD and objects/ are ground truth a plain ancestor directory
+//     never has; requiring both closes that gap regardless of where the
+//     attacker places <p>.
 //
 // Any failure at any step keeps the worktree's own root. The bare-repo
 // branch below (common has no nested .git of its own) and every other
@@ -235,6 +246,17 @@ func mainCheckout(root string) string {
 		return root
 	}
 	if !samePath(common, filepath.Dir(filepath.Dir(gitdir))) {
+		return root
+	}
+	// common's position checks out, but position alone is attacker-chosen
+	// (via <p>'s own location) — require it to actually look like a git
+	// common dir too: HEAD and objects/ are what a plain ancestor directory
+	// (~/Downloads, "/", ...) never has.
+	if fi, err := os.Lstat(filepath.Join(common, "HEAD")); err != nil ||
+		!(fi.Mode().IsRegular() || fi.Mode()&os.ModeSymlink != 0) {
+		return root
+	}
+	if fi, err := os.Stat(filepath.Join(common, "objects")); err != nil || !fi.IsDir() {
 		return root
 	}
 
