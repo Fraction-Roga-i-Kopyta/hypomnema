@@ -6,7 +6,7 @@
 
 **Governance and ranking layer for Claude Code's native file memory — a Go engine (`memoryctl`) + 6 thin shims. No cloud, no embeddings.** Claude Code now ships native file memory; hypomnema adds ranked auto-injection, effectiveness measurement, decay, and a global store that native lacks.
 
-> **Status:** v2.6.0; native-primary. Requires Claude Code ≥ v2.1.59 (native file memory). v1.x stays on its tag for older Claude Code installs — see [MIGRATION.md](docs/MIGRATION.md) for the v1.x → v2.x upgrade path.
+> **Status:** v2.13.0; native-primary. Requires Claude Code ≥ v2.1.59 (native file memory). v1.x stays on its tag for older Claude Code installs — see [MIGRATION.md](docs/MIGRATION.md) for the v1.x → v2.x upgrade path.
 >
 > **Platforms:** macOS (primary, daily-driver) and Linux (`ubuntu-latest`), both covered by CI. The core is the Go binary; the shims are ~5-line `sh` marshallers. Windows: WSL only, native unsupported.
 >
@@ -30,7 +30,7 @@ Parameterized queries only. No hardcoded secrets. No debug logging in committed 
 Don't claim "done" before running a minimum verification set.
 ```
 
-Claude reads it as part of its context — no RAG query, no vector database, just a markdown block prepended by the hook. When Claude hits a new bug worth remembering, it writes a native memory file and the next session injects it automatically.
+Claude reads it as part of its context — no RAG query, no vector database, just a markdown block prepended by the hook. When Claude hits a new bug worth remembering, it writes a native memory file and the next session injects it automatically. Memory also survives context compaction and `/clear`: hypomnema re-injects the same ranked facts right after, so a compacted session doesn't wake up having forgotten what it already knew.
 
 ## What hypomnema adds on top of native
 
@@ -223,8 +223,12 @@ Surgically strips hypomnema entries from `~/.claude/settings.json`. Memory files
 
 Routing is by store location, not by frontmatter: files in
 `~/.claude/projects/<slug>/memory/` inject only in that project; files in
-`~/.claude/memory-global/` inject everywhere. The project slug derives from
-`cwd` at runtime (every `/` becomes `-`) — no mapping file needed.
+`~/.claude/memory-global/` inject everywhere. hypomnema resolves the project
+slug the same way Claude Code resolves `autoMemoryDirectory`: sanitize the
+**canonical git root** (every non-alphanumeric character → `-`), with a
+linked worktree mapping to its main checkout rather than getting its own
+store. See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) § Store resolution
+for the full anchor order and every override.
 (`projects.json` is only consulted by `memoryctl migrate` when converting a
 v1 store.)
 

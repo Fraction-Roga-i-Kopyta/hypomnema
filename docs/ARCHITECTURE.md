@@ -24,15 +24,18 @@ and preserving the exit code.
 
 | Event | Matcher | Shim | Verb | Purpose |
 |---|---|---|---|---|
-| `SessionStart` | — | `session-start.sh` | `inject --event=SessionStart` | Rank native facts, inject top-K into `additionalContext` |
+| `SessionStart` | — | `session-start.sh` | `inject --event=SessionStart` | Rank native facts, inject top-K into `additionalContext`; on `compact`/`clear` re-render the same set without render-dedup |
 | `UserPromptSubmit` | — | `user-prompt-submit.sh` | `inject --event=UserPromptSubmit` | Reactive re-rank with prompt tokens; inject newly-relevant facts |
 | `PreToolUse` | `Write\|Edit` | `pre-tool-write.sh` | `guard` | Secrets gate on memory-path writes (`exit 2` blocks) |
 | `PreToolUse` | `Skill` | `skill-active.sh` | `skill-active` | Record the activated skill for this session |
 | `PostToolUse` | `Skill` | `skill-learnings-inject.sh` | `skill-inject` | Inject accumulated skill-learning facts for that skill |
 | `Stop` | — | `session-stop.sh` | `close` | Attribute outcomes → WAL → effectiveness/decay → self-profile |
 
-There is **no `PreCompact` hook** (retired with v1). The shims carry zero
-logic; everything below happens inside `memoryctl`.
+Compaction is handled on `SessionStart` with `source=compact` (and `/clear`
+with `source=clear`), not by a separate hook: **no `PreCompact`/`PostCompact`
+hook is registered** (`PreCompact` was retired with v1; Claude Code has no
+`PostCompact` event to register). The shims carry zero logic; everything
+below happens inside `memoryctl`.
 
 ## End-to-end data flow
 
@@ -47,11 +50,24 @@ SessionStart ──► memoryctl inject --event=SessionStart ──────�
      filter: status ∈ {active, pinned}; scope ∈ {project,global}│
    emit top-8 (≤2.5KB/body, ≤8KB total) as `# Memory Context`   │
      in additionalContext JSON                                  │
-   WAL: inject|<slug>|<session>  (one line per injected fact)   │
+   WAL: inject|<slug>|<session>  (one line per injected fact,   │
+     skipped for a slug already logged this session — a         │
+     compact/clear re-render never inflates ref_count)           │
    write per-session injected-set (.runtime/injected-<sid>.list)│
+   source=compact: rank against a bounded query built from the  │
+     transcript's latest isCompactSummary record (focus         │
+     sections, top-40 terms), not the empty prompt; source=clear│
+     re-ranks against the empty prompt. Either way the emitted  │
+     set is NOT filtered against what was already injected      │
+     earlier in the session — the model's context was just      │
+     wiped, so re-showing already-seen facts is the point.       │
                                                                 │
 UserPromptSubmit ──► inject --event=UserPromptSubmit ───────────┤
-   same ranker; keywords += prompt tokens (reactive relevance)  │
+   source ∈ {system, poll_event}: exit 0, no output, no WAL,    │
+     session list untouched (machine-injected turn, not a       │
+     user prompt — ranking it would waste a fact's once-per-    │
+     session slot)                                              │
+   else: same ranker; keywords += prompt tokens (reactive)      │
    inject only facts newly entering the top-8 this session      │
    WAL: inject|<slug>|<session>                                 │
                                                                 │
@@ -133,6 +149,42 @@ explicit query, includes `stale` facts (marked `[stale]`, reviving on recall),
 and joins the result into the session's injected-set for `close` to classify.
 
 ## Stores
+
+### Store resolution
+
+`memoryctl` resolves the per-project native store the same way Claude Code
+itself resolves `autoMemoryDirectory`: an explicit override, else
+`<config dir>/projects/<sanitized canonical root>/memory` — see
+`docs/CONFIGURATION.md` § Store resolution for the full precedence
+(`CLAUDE_COWORK_MEMORY_PATH_OVERRIDE` → `autoMemoryDirectory` → the default
+path) and the project-anchor chain (`CLAUDE_PROJECT_DIR` →
+`CLAUDE_PROJECT_CWD` → session pin → cwd) that feeds the canonical root.
+
+**Canonical root and linked worktrees.** The canonical root is the nearest
+git root above the project anchor. When that root is a *linked worktree*
+(`.git` is a file, not a directory), it maps to the main checkout only when
+git's own on-disk structure checks out end to end:
+
+1. `<worktree>/.git` parses as `gitdir: <p>`.
+2. `<p>/gitdir` exists and, resolved, names `<worktree>/.git` — the
+   back-link git itself writes into every linked worktree's
+   `<main>/.git/worktrees/<name>/gitdir`.
+3. `<p>/commondir` resolves to a directory that exists, sits exactly two
+   levels above `<p>` (the `../..` every git-created `commondir` holds for a
+   linked worktree), and contains both `HEAD` and `objects/` — evidence a
+   plain ancestor directory never has.
+4. Every one of those pointer files is read capped at 4 KiB; oversized or
+   unreadable counts as absent.
+
+Any failure at any step keeps the worktree's own store — it never falls back
+to a partially-trusted guess. This exists because a *planted* pointer file
+(no real git required — a tarball/zip extraction can create a `.git` file
+naming `gitdir: /` or an unrelated pre-existing repo) must not redirect a
+session's memory reads/writes onto another project's store. `internal/native`
+(`CanonicalRoot`, `mainCheckout`) is the only code that implements this;
+`internal/doctor`'s `store_resolution` check (`memoryctl doctor`) surfaces
+the resolved store and anchor for a live session so this is verifiable
+without reading Go.
 
 Content lives in **native memory files** — flat markdown with YAML frontmatter,
 one logical `type:` field, no subdirectories:

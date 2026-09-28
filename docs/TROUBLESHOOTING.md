@@ -84,6 +84,31 @@ If `memoryctl_available` is WARN ("present but not on $PATH"), add
 
 Re-run `./install.sh`.
 
+## doctor warns `store_resolution: legacy store(s) no longer read`
+
+v2.13 hardened store resolution: the project slug is now derived from the
+sanitized **canonical git root** (with a linked worktree mapped to its main
+checkout), matching exactly how Claude Code itself resolves
+`autoMemoryDirectory`. Before v2.13 the slug came straight from `cwd` with a
+naive `/` → `-` substitution — a path containing dots, underscores, spaces,
+or non-ASCII characters, a linked worktree, or a repo subdirectory produced a
+*different* slug than the harness (and current hypomnema) would compute.
+
+**Cause:** facts were written into that old, differently-keyed store
+directory, and store resolution no longer points there, so they silently
+stop being read.
+
+**Fix:** move the stray `.md` files into the store doctor names as current,
+then rebuild the sidecar:
+
+```bash
+mv <legacy>/memory/*.md <new>/memory/
+memoryctl sidecar rebuild
+```
+
+`memoryctl doctor` prints both paths (the resolved store and each legacy
+store it found with facts still in it) in the `store_resolution` line.
+
 ## Sidecar is stale or missing
 
 The sidecar (`~/.claude/memory/.sidecar.db`) is a rebuildable projection of
