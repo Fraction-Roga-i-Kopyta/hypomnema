@@ -195,8 +195,10 @@ func pruneRuntimeLists(dir string) {
 	cutoff := time.Now().Add(-7 * 24 * time.Hour)
 	for _, e := range entries {
 		name := e.Name()
-		if (!strings.HasPrefix(name, "injected-") && !strings.HasPrefix(name, "holdout-")) ||
-			!strings.HasSuffix(name, ".list") {
+		isList := (strings.HasPrefix(name, "injected-") || strings.HasPrefix(name, "holdout-")) &&
+			strings.HasSuffix(name, ".list")
+		isPin := strings.HasPrefix(name, "project-") && strings.HasSuffix(name, ".json")
+		if !isList && !isPin {
 			continue
 		}
 		if info, err := e.Info(); err == nil && info.ModTime().Before(cutoff) {

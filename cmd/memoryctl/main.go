@@ -257,6 +257,21 @@ func claudeDir() string {
 	return filepath.Join(home, ".claude")
 }
 
+// configDir is Claude Code's config dir as the harness resolves it for
+// projects/ and settings.json: CLAUDE_HOME (hypomnema/test override) →
+// CLAUDE_CONFIG_DIR → ~/.claude. Used ONLY for native store resolution;
+// everything hypomnema owns (global store, hooks, bin) stays on claudeDir().
+func configDir() string {
+	if d := os.Getenv("CLAUDE_HOME"); d != "" {
+		return d
+	}
+	if d := os.Getenv("CLAUDE_CONFIG_DIR"); d != "" {
+		return d
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".claude")
+}
+
 // runDoctor runs the read-only health check and prints a summary. Exits 1
 // if any check is FAIL so CI / shell scripts can gate on `memoryctl doctor`.
 func runDoctor(args []string) {
