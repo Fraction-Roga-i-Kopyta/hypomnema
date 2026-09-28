@@ -19,6 +19,7 @@ func hermeticEnviron() []string {
 		"CLAUDE_PROJECT_DIR": true, "CLAUDE_PROJECT_CWD": true,
 		"CLAUDE_CODE_SESSION_ID": true, "HYPOMNEMA_SESSION_ID": true,
 		"CLAUDE_CONFIG_DIR": true, "CLAUDE_COWORK_MEMORY_PATH_OVERRIDE": true,
+		"HYPOMNEMA_GLOBAL_DIR": true,
 	}
 	var out []string
 	for _, kv := range os.Environ() {
@@ -28,6 +29,29 @@ func hermeticEnviron() []string {
 		out = append(out, kv)
 	}
 	return out
+}
+
+// TestHermeticEnviron_DropsStoreAffectingVars guards the drop-list itself:
+// a developer's shell exporting one of these must not leak into a
+// subprocess run through run()/runStdin() and silently change which store
+// the binary under test resolves.
+func TestHermeticEnviron_DropsStoreAffectingVars(t *testing.T) {
+	vars := []string{
+		"CLAUDE_PROJECT_DIR", "CLAUDE_PROJECT_CWD", "CLAUDE_CODE_SESSION_ID",
+		"HYPOMNEMA_SESSION_ID", "CLAUDE_CONFIG_DIR", "CLAUDE_COWORK_MEMORY_PATH_OVERRIDE",
+		"HYPOMNEMA_GLOBAL_DIR",
+	}
+	for _, v := range vars {
+		t.Setenv(v, "/should-not-leak")
+	}
+	for _, kv := range hermeticEnviron() {
+		k, _, _ := strings.Cut(kv, "=")
+		for _, v := range vars {
+			if k == v {
+				t.Errorf("hermeticEnviron leaked %s into the subprocess env", v)
+			}
+		}
+	}
 }
 
 // binPath holds the path to the built memoryctl binary, set once by
