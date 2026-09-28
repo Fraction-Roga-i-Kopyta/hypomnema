@@ -24,15 +24,21 @@ and preserving the exit code.
 
 | Event | Matcher | Shim | Verb | Purpose |
 |---|---|---|---|---|
-| `SessionStart` | — | `session-start.sh` | `inject --event=SessionStart` | Rank native facts, inject top-K into `additionalContext` |
+| `SessionStart` | — | `session-start.sh` | `inject --event=SessionStart` | Rank native facts, inject top-K into `additionalContext`; on `compact` re-ranks against the compaction summary, on `clear` against the empty prompt — either way without render-dedup |
 | `UserPromptSubmit` | — | `user-prompt-submit.sh` | `inject --event=UserPromptSubmit` | Reactive re-rank with prompt tokens; inject newly-relevant facts |
 | `PreToolUse` | `Write\|Edit` | `pre-tool-write.sh` | `guard` | Secrets gate on memory-path writes (`exit 2` blocks) |
 | `PreToolUse` | `Skill` | `skill-active.sh` | `skill-active` | Record the activated skill for this session |
 | `PostToolUse` | `Skill` | `skill-learnings-inject.sh` | `skill-inject` | Inject accumulated skill-learning facts for that skill |
 | `Stop` | — | `session-stop.sh` | `close` | Attribute outcomes → WAL → effectiveness/decay → self-profile |
 
-There is **no `PreCompact` hook** (retired with v1). The shims carry zero
-logic; everything below happens inside `memoryctl`.
+Compaction is handled on `SessionStart` with `source=compact` (and `/clear`
+with `source=clear`), not by a separate hook: **no `PreCompact`/`PostCompact`
+hook is registered**. `PreCompact` was retired with v1. Claude Code does have
+a `PostCompact` event (fields `trigger`, `compact_summary`; no
+`additionalContext`), but it carries no way to reach the model's context —
+`SessionStart` with `source=compact` is the event whose `additionalContext`
+actually gets seen, so that is where hypomnema re-renders memory instead. The
+shims carry zero logic; everything below happens inside `memoryctl`.
 
 ## End-to-end data flow
 
@@ -47,17 +53,32 @@ SessionStart ──► memoryctl inject --event=SessionStart ──────�
      filter: status ∈ {active, pinned}; scope ∈ {project,global}│
    emit top-8 (≤2.5KB/body, ≤8KB total) as `# Memory Context`   │
      in additionalContext JSON                                  │
-   WAL: inject|<slug>|<session>  (one line per injected fact)   │
+   WAL: inject|<slug>|<session>  (one line per injected fact,   │
+     skipped for a slug already logged this session — a         │
+     compact/clear re-render never inflates ref_count)           │
    write per-session injected-set (.runtime/injected-<sid>.list)│
+   source=compact: rank against a bounded query built from the  │
+     transcript's latest isCompactSummary record (focus         │
+     sections, top-40 terms), not the empty prompt; source=clear│
+     re-ranks against the empty prompt. Either way the emitted  │
+     set is NOT filtered against what was already injected      │
+     earlier in the session — the model's context was just      │
+     wiped, so re-showing already-seen facts is the point.       │
                                                                 │
 UserPromptSubmit ──► inject --event=UserPromptSubmit ───────────┤
-   same ranker; keywords += prompt tokens (reactive relevance)  │
+   source ∈ {system, poll_event}: exit 0, no output, no WAL,    │
+     session list untouched (machine-injected turn, not a       │
+     user prompt — ranking it would waste a fact's once-per-    │
+     session slot)                                              │
+   else: same ranker; keywords += prompt tokens (reactive)      │
    inject only facts newly entering the top-8 this session      │
    WAL: inject|<slug>|<session>                                 │
                                                                 │
 PreToolUse(Write|Edit) ──► guard ──────────────────────────────┤
-   only on memory paths (legacy ~/.claude/memory, every native  │
-     projects/<slug>/memory/, and memory-global/)               │
+   guarded: legacy ~/.claude/memory, this session's             │
+     resolved store (autoMemoryDirectory/env-override           │
+     included), native projects/<slug>/memory/ under            │
+     both the config dir and ~/.claude, and memory-global/      │
    secrets.Scan(candidate strings): credential outside a fenced │
      code block → exit 2 + stderr (blocks the write)            │
    .secretsignore glob or HYPOMNEMA_ALLOW_SECRETS=1 → exit 0    │
@@ -134,6 +155,42 @@ and joins the result into the session's injected-set for `close` to classify.
 
 ## Stores
 
+### Store resolution
+
+`memoryctl` resolves the per-project native store the same way Claude Code
+itself resolves `autoMemoryDirectory`: an explicit override, else
+`<config dir>/projects/<sanitized canonical root>/memory` — see
+`docs/CONFIGURATION.md` § Store resolution for the full precedence
+(`CLAUDE_COWORK_MEMORY_PATH_OVERRIDE` → `autoMemoryDirectory` → the default
+path) and the project-anchor chain (`CLAUDE_PROJECT_DIR` →
+`CLAUDE_PROJECT_CWD` → session pin → cwd) that feeds the canonical root.
+
+**Canonical root and linked worktrees.** The canonical root is the nearest
+git root above the project anchor. When that root is a *linked worktree*
+(`.git` is a file, not a directory), it maps to the main checkout only when
+git's own on-disk structure checks out end to end:
+
+1. `<worktree>/.git` parses as `gitdir: <p>`.
+2. `<p>/gitdir` exists and, resolved, names `<worktree>/.git` — the
+   back-link git itself writes into every linked worktree's
+   `<main>/.git/worktrees/<name>/gitdir`.
+3. `<p>/commondir` resolves to a directory that exists, sits exactly two
+   levels above `<p>` (the `../..` every git-created `commondir` holds for a
+   linked worktree), and contains both `HEAD` and `objects/` — evidence a
+   plain ancestor directory never has.
+4. Every one of those pointer files is read capped at 4 KiB; oversized or
+   unreadable counts as absent.
+
+Any failure at any step keeps the worktree's own store — it never falls back
+to a partially-trusted guess. This exists because a *planted* pointer file
+(no real git required — a tarball/zip extraction can create a `.git` file
+naming `gitdir: /` or an unrelated pre-existing repo) must not redirect a
+session's memory reads/writes onto another project's store. `internal/native`
+(`CanonicalRoot`, `mainCheckout`) is the only code that implements this;
+`internal/doctor`'s `store_resolution` check (`memoryctl doctor`) surfaces
+the resolved store and anchor for a live session so this is verifiable
+without reading Go.
+
 Content lives in **native memory files** — flat markdown with YAML frontmatter,
 one logical `type:` field, no subdirectories:
 
@@ -165,7 +222,7 @@ One package, one responsibility. `memoryctl` (in `cmd/memoryctl/`) wires them.
 
 | Package | Responsibility |
 |---|---|
-| `native` | Native-store adapter — the only code that knows the native format: enumerate/parse files, resolve the project memory dir from cwd. Content is **read-only** |
+| `native` | Native-store adapter — the only code that knows the native format: enumerate/parse files, resolve the project memory dir from the anchor chain (`CLAUDE_PROJECT_DIR` → `CLAUDE_PROJECT_CWD` → session pin → cwd) via the canonical git root and the harness sanitizer — cwd is only the last-resort anchor, not the resolution rule itself (§ Store resolution). Content is **read-only** |
 | `sidecar` | SQLite projection — schema, upserts, reproject, rank queries, `MarkStale`. Only place with SQLite |
 | `wal` | Append-only event log; `Append`/`AppendStrict`, `SanitizeField`, lock acquisition. Four-column invariant enforced |
 | `rank` | The pure relevance ranker (formula above). No I/O, no storage imports → trivially unit-testable and A/B-able |
@@ -231,7 +288,7 @@ A reader coming from v1 docs will look for these — all removed in v2, verify b
 - **Substring triggers + ±40-char negation windows** → tokens are relevance signal.
 - **FTS5 shadow retrieval** (`internal/fts`, `bin/memory-fts-*.sh`, `shadow-miss`) → gone.
 - **TF-IDF body scoring / cold-start gates** → gone (Unicode tokenizer salvaged into `tokenize`).
-- **`.config.sh` safe-parser, `projects.json` longest-prefix detection** → project derived from cwd.
+- **`.config.sh` safe-parser, `projects.json` longest-prefix detection** → project resolved from the anchor chain (§ Store resolution), cwd only as the last resort.
 - **`_agent_context.md`** subagent file → pass facts inline in the subagent prompt.
 - **`PreCompact` nudge hook, per-type quotas (3+3/12/10/8), rotation to `archive/`** → decay is down-rank-in-sidecar; balance emerges from relevance.
 - **`scripts/parity-check.sh` bash↔Go parity contract** → Go is the single implementation.

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 )
 
 func TestCheckSettings_InvalidJSONFails(t *testing.T) { // review O4
@@ -14,7 +16,7 @@ func TestCheckSettings_InvalidJSONFails(t *testing.T) { // review O4
 		`hooks/v2/session-start.sh hooks/v2/user-prompt-submit.sh hooks/v2/pre-tool-write.sh ` +
 		`hooks/v2/skill-learnings-inject.sh hooks/v2/skill-active.sh hooks/v2/session-stop.sh`
 	os.WriteFile(filepath.Join(claude, "settings.json"), []byte(broken), 0o644)
-	mustFindCheck(t, Run(claude, mem, cwd), "settings_hooks_registered", FAIL)
+	mustFindCheck(t, Run(claude, mem, native.StoreFor(claude, cwd), cwd), "settings_hooks_registered", FAIL)
 }
 
 func TestCheckSettings_WrongEventFails(t *testing.T) { // review O4
@@ -29,7 +31,7 @@ func TestCheckSettings_WrongEventFails(t *testing.T) { // review O4
 		`"PostToolUse":[{"matcher":"Skill","hooks":[{"type":"command","command":"~/.claude/hooks/v2/skill-learnings-inject.sh"}]}],` +
 		`"Stop":[{"hooks":[{"type":"command","command":"~/.claude/hooks/v2/session-start.sh"}]}]}}`
 	os.WriteFile(filepath.Join(claude, "settings.json"), []byte(s), 0o644)
-	mustFindCheck(t, Run(claude, mem, cwd), "settings_hooks_registered", FAIL)
+	mustFindCheck(t, Run(claude, mem, native.StoreFor(claude, cwd), cwd), "settings_hooks_registered", FAIL)
 }
 
 func TestCheckSettings_CorrectWiringOK(t *testing.T) { // review O4 (positive)
@@ -42,7 +44,7 @@ func TestCheckSettings_CorrectWiringOK(t *testing.T) { // review O4 (positive)
 		`"PostToolUse":[{"matcher":"Skill","hooks":[{"type":"command","command":"~/.claude/hooks/v2/skill-learnings-inject.sh"}]}],` +
 		`"Stop":[{"hooks":[{"type":"command","command":"~/.claude/hooks/v2/session-stop.sh"}]}]}}`
 	os.WriteFile(filepath.Join(claude, "settings.json"), []byte(s), 0o644)
-	mustFindCheck(t, Run(claude, mem, cwd), "settings_hooks_registered", OK)
+	mustFindCheck(t, Run(claude, mem, native.StoreFor(claude, cwd), cwd), "settings_hooks_registered", OK)
 }
 
 func TestCheckShimFiles_DirectoryFails(t *testing.T) { // review R3
@@ -50,7 +52,7 @@ func TestCheckShimFiles_DirectoryFails(t *testing.T) { // review R3
 	p := filepath.Join(claude, "hooks", "v2", "session-stop.sh")
 	os.Remove(p)
 	os.Mkdir(p, 0o755) // a directory has exec bits — must not count as a present shim
-	mustFindCheck(t, Run(claude, mem, cwd), "shim_files_present", FAIL)
+	mustFindCheck(t, Run(claude, mem, native.StoreFor(claude, cwd), cwd), "shim_files_present", FAIL)
 }
 
 func TestCheckMemoryctl_NonExecutableFails(t *testing.T) { // review: doctor smoke-test
@@ -60,7 +62,7 @@ func TestCheckMemoryctl_NonExecutableFails(t *testing.T) { // review: doctor smo
 	p := filepath.Join(claude, "bin", "memoryctl")
 	os.Remove(p)
 	os.WriteFile(p, []byte("not a real binary\n"), 0o644)
-	c := mustFindCheck(t, Run(claude, mem, cwd), "memoryctl_available", WARN)
+	c := mustFindCheck(t, Run(claude, mem, native.StoreFor(claude, cwd), cwd), "memoryctl_available", WARN)
 	// A present-but-broken binary must not read as healthy.
 	if !strings.Contains(c.Detail, "not executable") && !strings.Contains(c.Detail, "does not run") {
 		t.Errorf("a non-executable memoryctl should be flagged, got %q", c.Detail)

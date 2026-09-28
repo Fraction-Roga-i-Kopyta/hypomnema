@@ -16,7 +16,7 @@ func TestGuard_BlocksSecret(t *testing.T) {
 	home := t.TempDir()
 	memDir := filepath.Join(home, ".claude", "memory")
 	os.MkdirAll(memDir, 0o755)
-	env := map[string]string{"CLAUDE_MEMORY_DIR": memDir}
+	env := map[string]string{"CLAUDE_HOME": filepath.Join(home, ".claude"), "CLAUDE_MEMORY_DIR": memDir}
 	_, errOut, code := runStdin(t, env, guardStdin(memDir, "mistakes/x.md", "api_key: sk_live_abcd1234efgh"), "guard")
 	if code != 2 {
 		t.Fatalf("secret in memory write must block (exit 2), got %d", code)
@@ -30,7 +30,7 @@ func TestGuard_AllowsClean(t *testing.T) {
 	home := t.TempDir()
 	memDir := filepath.Join(home, ".claude", "memory")
 	os.MkdirAll(memDir, 0o755)
-	env := map[string]string{"CLAUDE_MEMORY_DIR": memDir}
+	env := map[string]string{"CLAUDE_HOME": filepath.Join(home, ".claude"), "CLAUDE_MEMORY_DIR": memDir}
 	_, _, code := runStdin(t, env, guardStdin(memDir, "mistakes/x.md", "a clean note about rate limits"), "guard")
 	if code != 0 {
 		t.Errorf("clean content must allow (exit 0), got %d", code)
@@ -41,7 +41,7 @@ func TestGuard_OutsideMemoryDirAllowed(t *testing.T) {
 	home := t.TempDir()
 	memDir := filepath.Join(home, ".claude", "memory")
 	os.MkdirAll(memDir, 0o755)
-	env := map[string]string{"CLAUDE_MEMORY_DIR": memDir}
+	env := map[string]string{"CLAUDE_HOME": filepath.Join(home, ".claude"), "CLAUDE_MEMORY_DIR": memDir}
 	stdin := `{"tool_name":"Write","tool_input":{"file_path":"/tmp/code.py","content":"api_key: sk_live_abcd1234efgh"}}`
 	_, _, code := runStdin(t, env, stdin, "guard")
 	if code != 0 {
@@ -53,7 +53,7 @@ func TestGuard_AllowEnvBypass(t *testing.T) {
 	home := t.TempDir()
 	memDir := filepath.Join(home, ".claude", "memory")
 	os.MkdirAll(memDir, 0o755)
-	env := map[string]string{"CLAUDE_MEMORY_DIR": memDir, "HYPOMNEMA_ALLOW_SECRETS": "1"}
+	env := map[string]string{"CLAUDE_HOME": filepath.Join(home, ".claude"), "CLAUDE_MEMORY_DIR": memDir, "HYPOMNEMA_ALLOW_SECRETS": "1"}
 	_, _, code := runStdin(t, env, guardStdin(memDir, "seeds/hazard.md", "api_key: sk_live_abcd1234efgh"), "guard")
 	if code != 0 {
 		t.Errorf("HYPOMNEMA_ALLOW_SECRETS=1 must bypass (exit 0), got %d", code)
@@ -65,7 +65,7 @@ func TestGuard_SecretsignoreWhitelist(t *testing.T) {
 	memDir := filepath.Join(home, ".claude", "memory")
 	os.MkdirAll(memDir, 0o755)
 	os.WriteFile(filepath.Join(memDir, ".secretsignore"), []byte("seeds/**\n"), 0o644)
-	env := map[string]string{"CLAUDE_MEMORY_DIR": memDir}
+	env := map[string]string{"CLAUDE_HOME": filepath.Join(home, ".claude"), "CLAUDE_MEMORY_DIR": memDir}
 	_, _, code := runStdin(t, env, guardStdin(memDir, "seeds/hazard.md", "api_key: sk_live_abcd1234efgh"), "guard")
 	if code != 0 {
 		t.Errorf("seeds/** whitelist must allow (exit 0), got %d", code)
@@ -151,7 +151,7 @@ func TestGuard_MultiEditScanned(t *testing.T) { // review S3
 	home := t.TempDir()
 	memDir := filepath.Join(home, ".claude", "memory")
 	os.MkdirAll(filepath.Join(memDir, "mistakes"), 0o755)
-	env := map[string]string{"CLAUDE_MEMORY_DIR": memDir}
+	env := map[string]string{"CLAUDE_HOME": filepath.Join(home, ".claude"), "CLAUDE_MEMORY_DIR": memDir}
 	fp := filepath.Join(memDir, "mistakes", "x.md")
 	stdin := `{"tool_name":"MultiEdit","tool_input":{"file_path":"` + fp +
 		`","edits":[{"old_string":"a","new_string":"harmless"},{"old_string":"b","new_string":"api_key: sk_live_abcd1234efgh"}]}}`
@@ -168,7 +168,7 @@ func TestGuard_NotebookEditScanned(t *testing.T) { // review S3
 	home := t.TempDir()
 	memDir := filepath.Join(home, ".claude", "memory")
 	os.MkdirAll(filepath.Join(memDir, "mistakes"), 0o755)
-	env := map[string]string{"CLAUDE_MEMORY_DIR": memDir}
+	env := map[string]string{"CLAUDE_HOME": filepath.Join(home, ".claude"), "CLAUDE_MEMORY_DIR": memDir}
 	fp := filepath.Join(memDir, "mistakes", "x.md")
 	stdin := `{"tool_name":"NotebookEdit","tool_input":{"file_path":"` + fp +
 		`","new_source":"password: hunter2hunter2"}}`

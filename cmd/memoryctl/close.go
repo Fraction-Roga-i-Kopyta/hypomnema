@@ -37,6 +37,7 @@ func runClose(args []string) {
 	_, _ = closer.Run(closer.Input{
 		SessionID: in.SessionID, CWD: in.CWD, TranscriptPath: in.TranscriptPath,
 		ClaudeHome: claudeDir(), MemoryDir: memoryDir(), Today: today(),
+		Store: resolveStore(in.CWD).Store,
 	})
 
 	// Age out stale active-skill markers (bounded cleanup, best-effort).

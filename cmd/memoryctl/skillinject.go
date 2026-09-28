@@ -16,16 +16,15 @@ import (
 
 // learningsForSkill returns up to k skill-learning facts bound to `skill`,
 // ranked by effectiveness+recency (no query → overlap is 0 for all).
-func learningsForSkill(skill string, k int) ([]rank.Scored, map[string]native.MemFile) {
-	cwd := projectCWD()
-	files := native.Collect(claudeDir(), cwd)
+func learningsForSkill(st native.Store, skill string, k int) ([]rank.Scored, map[string]native.MemFile) {
+	files := native.Collect(claudeDir(), st)
 	bySlug := make(map[string]native.MemFile, len(files))
 	for _, f := range files {
 		bySlug[f.Slug] = f
 	}
 	// Empty terms → Candidates returns every file with Overlap 0 but
 	// effectiveness/refcount populated from the sidecar/WAL.
-	cands := inject.Candidates(memoryDir(), cwd, files, nil)
+	cands := inject.Candidates(memoryDir(), st, files, nil)
 	matched := cands[:0:0]
 	for _, c := range cands {
 		mf, ok := bySlug[c.Slug]
@@ -35,7 +34,7 @@ func learningsForSkill(skill string, k int) ([]rank.Scored, map[string]native.Me
 		matched = append(matched, c)
 	}
 	q := rank.Query{
-		Project:      native.SlugFromCWD(cwd),
+		Project:      st.Project,
 		Today:        today(),
 		IncludeStale: true,
 	}
@@ -46,6 +45,7 @@ const skillInjectK = 5
 
 type skillEnvelope struct {
 	SessionID string `json:"session_id"`
+	CWD       string `json:"cwd"`
 	ToolInput struct {
 		Skill string `json:"skill"`
 	} `json:"tool_input"`
@@ -66,7 +66,7 @@ func runSkillInject(_ []string) {
 		os.Exit(0) // nothing to inject
 	}
 
-	scored, bySlug := learningsForSkill(skill, skillInjectK)
+	scored, bySlug := learningsForSkill(resolveStore(env.CWD).Store, skill, skillInjectK)
 	if len(scored) == 0 {
 		os.Exit(0) // silent: skill has no learnings yet
 	}

@@ -11,6 +11,49 @@ import (
 	"testing"
 )
 
+// hermeticEnviron is os.Environ() minus the variables a developer's Claude
+// Code session leaks into `go test`; each one changes which store the binary
+// resolves, so tests opt in explicitly through their env map.
+func hermeticEnviron() []string {
+	drop := map[string]bool{
+		"CLAUDE_PROJECT_DIR": true, "CLAUDE_PROJECT_CWD": true,
+		"CLAUDE_CODE_SESSION_ID": true, "HYPOMNEMA_SESSION_ID": true,
+		"CLAUDE_CONFIG_DIR": true, "CLAUDE_COWORK_MEMORY_PATH_OVERRIDE": true,
+		"HYPOMNEMA_GLOBAL_DIR": true,
+	}
+	var out []string
+	for _, kv := range os.Environ() {
+		if k, _, ok := strings.Cut(kv, "="); ok && drop[k] {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
+// TestHermeticEnviron_DropsStoreAffectingVars guards the drop-list itself:
+// a developer's shell exporting one of these must not leak into a
+// subprocess run through run()/runStdin() and silently change which store
+// the binary under test resolves.
+func TestHermeticEnviron_DropsStoreAffectingVars(t *testing.T) {
+	vars := []string{
+		"CLAUDE_PROJECT_DIR", "CLAUDE_PROJECT_CWD", "CLAUDE_CODE_SESSION_ID",
+		"HYPOMNEMA_SESSION_ID", "CLAUDE_CONFIG_DIR", "CLAUDE_COWORK_MEMORY_PATH_OVERRIDE",
+		"HYPOMNEMA_GLOBAL_DIR",
+	}
+	for _, v := range vars {
+		t.Setenv(v, "/should-not-leak")
+	}
+	for _, kv := range hermeticEnviron() {
+		k, _, _ := strings.Cut(kv, "=")
+		for _, v := range vars {
+			if k == v {
+				t.Errorf("hermeticEnviron leaked %s into the subprocess env", v)
+			}
+		}
+	}
+}
+
 // binPath holds the path to the built memoryctl binary, set once by
 // TestMain so each test reuses the same executable.
 var binPath string
@@ -78,7 +121,7 @@ func runStdin(t *testing.T, env map[string]string, stdin string, args ...string)
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &errBuf
-	cmd.Env = append(os.Environ(), "GOCOVERDIR="+coverDir)
+	cmd.Env = append(hermeticEnviron(), "GOCOVERDIR="+coverDir)
 	for k, v := range env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
@@ -101,7 +144,7 @@ func run(t *testing.T, env map[string]string, args ...string) (stdout, stderr st
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &errBuf
-	cmd.Env = append(os.Environ(), "GOCOVERDIR="+coverDir)
+	cmd.Env = append(hermeticEnviron(), "GOCOVERDIR="+coverDir)
 	for k, v := range env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}

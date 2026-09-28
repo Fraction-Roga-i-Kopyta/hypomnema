@@ -59,7 +59,8 @@ Usage:
       Regenerate <project>/memory/MEMORY.md from native files with sibling
       links, bounded under the harness size limit. v2 owns this index; the
       Stop hook regenerates it each session, this is the on-demand path.
-      Resolves the project from CLAUDE_PROJECT_CWD, else the working dir.
+      Resolves the project via CLAUDE_PROJECT_DIR -> CLAUDE_PROJECT_CWD ->
+      the session pin -> the working dir (see "Environment" below).
   memoryctl recall <query words...> [--k N]
       Pull-side retrieval: rank current project + global memory against an
       ad-hoc query; print the best fact's body (2.5KB cap) plus an index of
@@ -117,12 +118,25 @@ a secret-bearing write.
 
 Environment:
   CLAUDE_MEMORY_DIR       Memory root (default: ~/.claude/memory).
-  CLAUDE_PROJECT_CWD      Working dir for per-project native memory; defaults to cwd.
+  CLAUDE_PROJECT_DIR      Project anchor Claude Code sets for every hook
+                          invocation; wins over CLAUDE_PROJECT_CWD.
+  CLAUDE_PROJECT_CWD      hypomnema-only explicit override for CLI use;
+                          ignored inside hooks (CLAUDE_PROJECT_DIR wins).
+  CLAUDE_HOME             hypomnema/test override of the Claude dir (hooks,
+                          bin) that also outranks CLAUDE_CONFIG_DIR for
+                          native store resolution when both are set.
+  CLAUDE_CONFIG_DIR       Claude Code config dir for native store resolution
+                          (projects/, settings.json only; default ~/.claude).
+                          The global store stays at ~/.claude/memory-global.
+  CLAUDE_COWORK_MEMORY_PATH_OVERRIDE
+                          Highest-precedence absolute path used verbatim as
+                          the resolved memory dir (see docs/CONFIGURATION.md).
   HYPOMNEMA_TODAY         Freeze "today" in YYYY-MM-DD (for tests/replay).
   HYPOMNEMA_NOW           Freeze self-profile "generated:" stamp (YYYY-MM-DD HH:MM).
   HYPOMNEMA_SESSION_ID    Session id stamped into WAL entries.
   CLAUDE_CODE_SESSION_ID  Session id exported by Claude Code into Bash; recall
-                          falls back to it when HYPOMNEMA_SESSION_ID is unset.
+                          falls back to it when HYPOMNEMA_SESSION_ID is unset,
+                          and resolves the SessionStart-written session pin.
 `
 
 func main() {
@@ -223,11 +237,7 @@ func runSelfProfile(_ []string) {
 	// v2: content (mistakes/strategies/ambient) comes from native memory, not
 	// memoryDir subdirs. Resolve the merged per-project + global corpus and
 	// pass it to Generate; the WAL + output file still live in memoryDir.
-	files, err := collectNative()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "memoryctl self-profile: %v\n", err)
-		os.Exit(1)
-	}
+	files := collectNative(resolveStore("").Store)
 	if err := profile.Generate(memoryDir(), files); err != nil {
 		// Non-zero exit would get swallowed by session-stop's `2>/dev/null &`
 		// anyway; still, propagate for tests that call the binary directly.
@@ -248,9 +258,27 @@ func memoryDir() string {
 
 // claudeDir resolves the Claude Code state root. Defaults to ~/.claude
 // but respects $CLAUDE_HOME for parallel installs and test fixtures. Used
-// only by doctor — the hook scripts don't rely on this variable today.
+// throughout memoryctl for everything hypomnema itself owns — hooks, bin,
+// the global store, and native.Collect's WAL/sidecar-derived reads — not
+// only by doctor. Native store resolution instead uses configDir(), which
+// additionally honours CLAUDE_CONFIG_DIR.
 func claudeDir() string {
 	if d := os.Getenv("CLAUDE_HOME"); d != "" {
+		return d
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".claude")
+}
+
+// configDir is Claude Code's config dir as the harness resolves it for
+// projects/ and settings.json: CLAUDE_HOME (hypomnema/test override) →
+// CLAUDE_CONFIG_DIR → ~/.claude. Used ONLY for native store resolution;
+// everything hypomnema owns (global store, hooks, bin) stays on claudeDir().
+func configDir() string {
+	if d := os.Getenv("CLAUDE_HOME"); d != "" {
+		return d
+	}
+	if d := os.Getenv("CLAUDE_CONFIG_DIR"); d != "" {
 		return d
 	}
 	home, _ := os.UserHomeDir()
@@ -273,7 +301,8 @@ func runDoctor(args []string) {
 			os.Exit(2)
 		}
 	}
-	report := doctor.Run(claudeDir(), memoryDir(), projectCWD())
+	r := resolveStore("")
+	report := doctor.Run(claudeDir(), memoryDir(), r.Store, r.Anchor)
 	if jsonOut {
 		report.PrintJSON(os.Stdout)
 	} else {
@@ -303,7 +332,7 @@ func runDedupCheck(args []string) {
 	// v2: the dedup comparison corpus is the native mistake store, not a
 	// MemoryDir/mistakes/ subdir. Resolve the merged per-project + global
 	// native corpus; on failure pass nil (dedup degrades to Allow).
-	files, _ := collectNative()
+	files := collectNative(resolveStore("").Store)
 	opts := dedup.Options{
 		MemoryDir: memoryDir(),
 		Files:     files,

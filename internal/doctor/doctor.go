@@ -124,11 +124,14 @@ func (r Report) PrintJSON(w io.Writer) {
 // All checks are defensive: individual read failures are rendered as WARN
 // or FAIL in the relevant check, never panic.
 //
-// cwd is the project working directory: the corpus checks enumerate the
-// per-project native store derived from it (plus the global store), via
-// native.Collect. In v2 the memory content lives in native files, not under
-// memoryDir — memoryDir is only the metadata root (.wal, .sidecar.db).
-func Run(claudeDir, memoryDir, cwd string) Report {
+// st is the resolved native store: the corpus checks enumerate its
+// per-project directory (plus the global store), via native.Collect. In v2
+// the memory content lives in native files, not under memoryDir — memoryDir
+// is only the metadata root (.wal, .sidecar.db). anchor is the project
+// anchor this invocation resolved its store from (CLAUDE_PROJECT_DIR /
+// CLAUDE_PROJECT_CWD / session pin / cwd); checkStoreResolution reports it
+// and uses it to look for legacy-slug store siblings.
+func Run(claudeDir, memoryDir string, st native.Store, anchor string) Report {
 	now := resolveDoctorNow()
 	r := Report{ClaudeDir: claudeDir, MemoryDir: memoryDir, Now: now}
 	r.Checks = append(r.Checks,
@@ -139,13 +142,14 @@ func Run(claudeDir, memoryDir, cwd string) Report {
 		checkBrokenSymlinks(filepath.Join(claudeDir, "hooks"), "hooks"),
 		checkBrokenSymlinks(filepath.Join(claudeDir, "bin"), "bin"),
 		checkMemoryctl(claudeDir),
-		checkCorpus(claudeDir, memoryDir, cwd),
+		checkCorpus(claudeDir, memoryDir, st),
 		checkWALErrors(filepath.Join(memoryDir, ".wal"), now),
 		checkOpenQuanta(filepath.Join(memoryDir, ".wal"), now),
 		checkSidecar(memoryDir, now),
-		checkCorpusQuality(claudeDir, cwd),
-		checkOversized(claudeDir, cwd),
-		checkCandidates(memoryDir, claudeDir, cwd),
+		checkCorpusQuality(claudeDir, st),
+		checkOversized(claudeDir, st),
+		checkCandidates(memoryDir, claudeDir, st),
+		checkStoreResolution(claudeDir, st, anchor),
 	)
 	return r
 }
@@ -161,7 +165,7 @@ const candidateSilentMin = 5
 // being applied: ≥candidateSilentMin trigger-silent sessions and no
 // trigger-useful / candidate-confirmed. Suggests retire or a keyword
 // rewrite. WARN-only — corroboration failure is advice, not breakage.
-func checkCandidates(memoryDir, claudeHome, cwd string) Check {
+func checkCandidates(memoryDir, claudeHome string, st native.Store) Check {
 	type tally struct {
 		useful, silent int
 		confirmed      bool
@@ -209,7 +213,7 @@ func checkCandidates(memoryDir, claudeHome, cwd string) Check {
 		}
 	}
 	var flagged []string
-	for _, mf := range native.Collect(claudeHome, cwd) {
+	for _, mf := range native.Collect(claudeHome, st) {
 		if mf.Status != "candidate" {
 			continue
 		}
@@ -478,8 +482,8 @@ func checkMemoryctl(claudeDir string) Check {
 // is fully graceful: a missing or unreadable sidecar yields 0 pinned / 0 stale
 // and never fails the check. Sidecar rows whose status is "deleted" are
 // orphans (no live native file) and contribute nothing to the corpus counts.
-func checkCorpus(claudeDir, memoryDir, cwd string) Check {
-	files := native.Collect(claudeDir, cwd)
+func checkCorpus(claudeDir, memoryDir string, st native.Store) Check {
+	files := native.Collect(claudeDir, st)
 	statusBySlug := sidecarStatusMap(memoryDir)
 	counts := map[string]int{}
 	pinned, stale := 0, 0
@@ -626,11 +630,11 @@ func fmHasNestedMetadata(path string) bool {
 // signal, so there is no reactive-trigger requirement to warn about.)
 //
 // Always WARN-level — a nudge, never a hard failure.
-func checkCorpusQuality(claudeDir, cwd string) Check {
+func checkCorpusQuality(claudeDir string, st native.Store) Check {
 	const name = "corpus_frontmatter_quality"
 	var emptyStatus []string
 	nested := 0
-	for _, f := range native.Collect(claudeDir, cwd) {
+	for _, f := range native.Collect(claudeDir, st) {
 		present, value := fmStatus(f.Path)
 		if present && value == "" {
 			emptyStatus = append(emptyStatus, f.Slug)
@@ -679,14 +683,14 @@ func checkCorpusQuality(claudeDir, cwd string) Check {
 // checkOversized flags facts whose body exceeds the per-record injection cap:
 // the model only ever sees the first inject.MaxBodyBytes of such a fact (a
 // header and a truncation marker), so the fact should be split or retired.
-func checkOversized(claudeDir, cwd string) Check {
+func checkOversized(claudeDir string, st native.Store) Check {
 	const name = "oversized_facts"
 	type item struct {
 		slug string
 		size int
 	}
 	var over []item
-	for _, f := range native.Collect(claudeDir, cwd) {
+	for _, f := range native.Collect(claudeDir, st) {
 		if n := len(f.Body); n > inject.MaxBodyBytes {
 			over = append(over, item{f.Slug, n})
 		}
@@ -920,6 +924,45 @@ func checkOpenQuanta(walPath string, now time.Time) Check {
 		detail += " — skews Bayesian `eff`; see docs/notes/measurement-bias.md"
 	}
 	return Check{Name: name, Status: status, Detail: detail}
+}
+
+// checkStoreResolution reports the native store this invocation resolved
+// (harness rule: override → canonical git root → sanitized slug) and warns
+// when a store named by the pre-v2.13 formula (only "/" → "-", no canonical
+// root) still holds facts that are no longer read — paths with dots,
+// underscores, spaces or non-ASCII, worktrees, and repo subdirectories.
+func checkStoreResolution(claudeDir string, st native.Store, anchor string) Check {
+	const name = "store_resolution"
+	detail := fmt.Sprintf("%s (project %s, via %s; anchor %s)", st.Dir, st.Project, st.Source, anchor)
+	if st.Source != "default" {
+		// An override store has no slug, hence no legacy-slug sibling.
+		return Check{Name: name, Status: OK, Detail: detail}
+	}
+	// <config dir>/projects — taken from the resolved store, not claudeDir,
+	// so CLAUDE_CONFIG_DIR installs are checked in the right tree.
+	projectsRoot := filepath.Dir(filepath.Dir(st.Dir))
+	seen := map[string]bool{st.Project: true}
+	var stray []string
+	for _, p := range []string{anchor, st.Root} {
+		if p == "" {
+			continue
+		}
+		legacy := strings.ReplaceAll(filepath.Clean(p), "/", "-")
+		if seen[legacy] {
+			continue
+		}
+		seen[legacy] = true
+		dir := filepath.Join(projectsRoot, legacy, "memory")
+		if files, err := native.List(dir); err == nil && len(files) > 0 {
+			stray = append(stray, fmt.Sprintf("%s (%d facts)", dir, len(files)))
+		}
+	}
+	if len(stray) == 0 {
+		return Check{Name: name, Status: OK, Detail: detail}
+	}
+	return Check{Name: name, Status: WARN, Detail: detail +
+		"; legacy store(s) no longer read since v2.13: " + strings.Join(stray, ", ") +
+		" — move their facts (not MEMORY.md) into " + st.Dir + " (see TROUBLESHOOTING)"}
 }
 
 // resolveDoctorNow mirrors the HYPOMNEMA_TODAY / HYPOMNEMA_NOW
