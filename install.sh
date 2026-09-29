@@ -131,6 +131,12 @@ echo "  Created: $MEMORY_GLOBAL_DIR"
 # --- [2/4] Install memoryctl binary ---
 echo "[2/4] Installing memoryctl..."
 if [ -x "$SCRIPT_DIR/bin/memoryctl" ]; then
+  # The subagent shims call `close --subagent`; an older binary would exit 2
+  # on every SubagentStop and treat SubagentStart as the parent's
+  # SessionStart. The probe is a no-op for a current binary.
+  if ! printf '{}' | "$SCRIPT_DIR/bin/memoryctl" close --subagent >/dev/null 2>&1; then
+    _die "bin/memoryctl predates subagent support — run 'make build', then re-run install.sh"
+  fi
   if [ "$DRY_RUN" -eq 1 ]; then
     echo "[dry-run] would symlink $SCRIPT_DIR/bin/memoryctl -> $BIN_DIR/memoryctl"
   else
@@ -149,10 +155,10 @@ echo "[3/4] Installing v2 hook shims..."
 V2_HOOKS_DIR="$HOOKS_DIR/v2"
 if [ "$DRY_RUN" -eq 1 ]; then
   echo "[dry-run] would create $V2_HOOKS_DIR"
-  echo "[dry-run] would copy 6 shims from $SCRIPT_DIR/hooks/v2/ to $V2_HOOKS_DIR"
+  echo "[dry-run] would copy 8 shims from $SCRIPT_DIR/hooks/v2/ to $V2_HOOKS_DIR"
 else
   mkdir -p "$V2_HOOKS_DIR"
-  for shim in session-start.sh user-prompt-submit.sh pre-tool-write.sh skill-learnings-inject.sh skill-active.sh session-stop.sh; do
+  for shim in session-start.sh user-prompt-submit.sh pre-tool-write.sh skill-learnings-inject.sh skill-active.sh session-stop.sh subagent-start.sh subagent-stop.sh; do
     src="$SCRIPT_DIR/hooks/v2/$shim"
     if [ -f "$src" ]; then
       # rm -f first: a leftover DANGLING symlink at the dest makes `cp` follow
@@ -166,7 +172,7 @@ else
       echo "WARNING: shim not found: $src" >&2
     fi
   done
-  echo "  Installed 6 shims into $V2_HOOKS_DIR"
+  echo "  Installed 8 shims into $V2_HOOKS_DIR"
 fi
 
 # --- Sweep stale symlinks left by earlier versions ---
@@ -260,6 +266,8 @@ register_hook PreToolUse       "Write|Edit" "$CLAUDE_DIR/hooks/v2/pre-tool-write
 register_hook PostToolUse      "Skill" "$CLAUDE_DIR/hooks/v2/skill-learnings-inject.sh"  10 "PostToolUse(Skill) skill learnings (hypomnema v2)"
 register_hook PreToolUse       "Skill" "$CLAUDE_DIR/hooks/v2/skill-active.sh"             10 "PreToolUse(Skill) active-skill marker (hypomnema v2)"
 register_hook Stop             ""      "$CLAUDE_DIR/hooks/v2/session-stop.sh"            10 "Stop (hypomnema v2)"
+register_hook SubagentStart    ""      "$CLAUDE_DIR/hooks/v2/subagent-start.sh"          15 "SubagentStart (hypomnema v2)"
+register_hook SubagentStop     ""      "$CLAUDE_DIR/hooks/v2/subagent-stop.sh"           10 "SubagentStop (hypomnema v2)"
 
 # Upgrade hint: existing v1 store. Detect by v1 SUBDIRECTORIES — in v2 the
 # $CLAUDE_DIR/memory dir always exists (it holds .wal/.sidecar.db runtime), so
@@ -304,7 +312,7 @@ patch_claude_md() {
 <!-- hypomnema-section -->
 ## Memory (hypomnema)
 - Global store: `~/.claude/memory-global/`; per-project: `~/.claude/projects/<slug>/memory/`. Stores are FLAT — the kind is the `type:` frontmatter field, not a subdirectory.
-- SessionStart + UserPromptSubmit hooks auto-inject the most relevant facts; `memoryctl recall "<query>"` pulls on demand.
+- SessionStart + UserPromptSubmit hooks auto-inject the most relevant facts; `memoryctl recall "<query>"` pulls on demand. Subagents get their own ranked top-5 at SubagentStart.
 - When you learn something durable, write a native memory file with `name:`, `description:`, `type:` (mistake | strategy | feedback | knowledge | decision | note) — see the hypomnema repo `CLAUDE.md` for the schema.
 <!-- /hypomnema-section -->
 BLOCK

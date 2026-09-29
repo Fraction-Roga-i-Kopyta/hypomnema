@@ -242,11 +242,13 @@ func newDoctorFixture(t *testing.T) string {
 	hooks := []string{
 		"session-start.sh", "user-prompt-submit.sh",
 		"pre-tool-write.sh", "skill-learnings-inject.sh", "skill-active.sh", "session-stop.sh",
+		"subagent-start.sh", "subagent-stop.sh",
 	}
 	shimEvent := map[string]string{
 		"session-start.sh": "SessionStart", "user-prompt-submit.sh": "UserPromptSubmit",
 		"pre-tool-write.sh": "PreToolUse", "skill-active.sh": "PreToolUse",
 		"skill-learnings-inject.sh": "PostToolUse", "session-stop.sh": "Stop",
+		"subagent-start.sh": "SubagentStart", "subagent-stop.sh": "SubagentStop",
 	}
 	byEvent := map[string][]string{}
 	for _, h := range hooks {

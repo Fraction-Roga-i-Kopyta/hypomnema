@@ -290,6 +290,8 @@ var requiredHookCommands = []string{
 	"skill-learnings-inject.sh",
 	"skill-active.sh",
 	"session-stop.sh",
+	"subagent-start.sh",
+	"subagent-stop.sh",
 }
 
 // shimEvent maps each required v2 shim to the hook event install.sh registers
@@ -303,6 +305,8 @@ var shimEvent = map[string]string{
 	"skill-active.sh":           "PreToolUse",
 	"skill-learnings-inject.sh": "PostToolUse",
 	"session-stop.sh":           "Stop",
+	"subagent-start.sh":         "SubagentStart",
+	"subagent-stop.sh":          "SubagentStop",
 }
 
 func checkSettings(path string) Check {
