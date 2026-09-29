@@ -301,3 +301,70 @@ func TestRecall_RetiredTombstone(t *testing.T) {
 		t.Fatalf("tombstone must print after no matches:\n%s", out)
 	}
 }
+
+// TestRecall_SeedsRenderedListFromInjectedUnionWhenAbsent: a session that
+// already has an injected union (a.md, b.md from an earlier push render)
+// but no rendered-<sid>.list yet (a session that predates the file) must
+// have recall seed the rendered list from that union before adding the
+// recalled slug — otherwise the next render's dedup only sees the recalled
+// fact and re-offers every earlier-injected fact that still ranks.
+func TestRecall_SeedsRenderedListFromInjectedUnionWhenAbsent(t *testing.T) {
+	home := t.TempDir()
+	memDir := filepath.Join(home, ".claude", "memory")
+	projDir := filepath.Join(home, ".claude", "projects", "-tmp-proj", "memory")
+	os.MkdirAll(projDir, 0o755)
+	os.MkdirAll(filepath.Join(memDir, ".runtime"), 0o755)
+	write := func(name, kw string) {
+		os.WriteFile(filepath.Join(projDir, name),
+			[]byte("---\nname: "+kw+"\ntype: knowledge\ndescription: "+kw+" fact\nkeywords: ["+kw+"]\n---\n"+kw+" body\n"), 0o644)
+	}
+	write("a.md", "alpha")
+	write("b.md", "bravo")
+	write("c.md", "charlie")
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
+	// Union already has a.md + b.md from an earlier push render this
+	// session — but no rendered-s9.list exists yet.
+	os.WriteFile(filepath.Join(memDir, ".runtime", "injected-s9.list"),
+		[]byte("a.md\nb.md\n"), 0o600)
+
+	env := map[string]string{
+		"CLAUDE_HOME":            filepath.Join(home, ".claude"),
+		"CLAUDE_MEMORY_DIR":      memDir,
+		"CLAUDE_PROJECT_CWD":     "/tmp/proj",
+		"HYPOMNEMA_TODAY":        "2026-09-29",
+		"HYPOMNEMA_SESSION_ID":   "s9",
+		"CLAUDE_CODE_SESSION_ID": "",
+	}
+
+	out, errOut, code := run(t, env, "recall", "charlie")
+	if code != 0 {
+		t.Fatalf("recall exit=%d stderr=%s", code, errOut)
+	}
+	if !strings.Contains(out, "c.md") {
+		t.Fatalf("recall should surface c.md: %s", out)
+	}
+
+	rendered, err := os.ReadFile(filepath.Join(memDir, ".runtime", "rendered-s9.list"))
+	if err != nil {
+		t.Fatalf("rendered list not written: %v", err)
+	}
+	for _, want := range []string{"a.md", "b.md", "c.md"} {
+		if !strings.Contains(string(rendered), want) {
+			t.Errorf("rendered-s9.list missing %s (must seed from the injected union): %s", want, rendered)
+		}
+	}
+
+	// The next render must not re-offer a.md or b.md: they were already
+	// union-injected earlier this session, and the seeded rendered list
+	// must make this render's dedup see them too.
+	stdin := `{"session_id":"s9","cwd":"/tmp/proj","prompt":"alpha bravo charlie"}`
+	out2, errOut2, code2 := runStdin(t, env, stdin, "inject", "--event=UserPromptSubmit")
+	if code2 != 0 {
+		t.Fatalf("inject exit=%d stderr=%s", code2, errOut2)
+	}
+	for _, bad := range []string{"a.md", "b.md", "c.md"} {
+		if strings.Contains(out2, bad) {
+			t.Errorf("next prompt re-rendered %s — rendered list was not seeded from the injected union:\n%s", bad, out2)
+		}
+	}
+}
