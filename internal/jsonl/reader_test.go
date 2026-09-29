@@ -254,3 +254,19 @@ func TestDecodeStream_ThinkingCollectedSeparately(t *testing.T) {
 		t.Errorf("Thinking not collected: %q", s.Thinking)
 	}
 }
+
+// A subagent's final report is the input of its SubagentHandback call, not
+// assistant text — its sentences and citations must reach Session.Text.
+func TestDecodeStream_SubagentHandbackMessageIsText(t *testing.T) {
+	src := `{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"h1","name":"SubagentHandback","input":{"message":"Done. <cc-memory filenames=\"a.md\">used it</cc-memory>"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"h2","name":"SubagentHandback","input":"not an object"}]}}
+`
+	s, err := decodeStream(strings.NewReader(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(s.Text, `working`) || !strings.Contains(s.Text, `<cc-memory filenames="a.md">used it</cc-memory>`) {
+		t.Fatalf("handback report missing from Text: %q", s.Text)
+	}
+}
