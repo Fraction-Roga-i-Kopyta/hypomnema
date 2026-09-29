@@ -1,6 +1,7 @@
 package jsonl
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -112,6 +113,50 @@ func TestDecodeStream_OversizeLineDoesNotTruncateRest(t *testing.T) { // review 
 	}
 	if !strings.Contains(s.Text, "before") {
 		t.Errorf("text before the oversized line missing: %q", s.Text)
+	}
+}
+
+func TestDecodeStream_ReadPathsCollected(t *testing.T) {
+	src := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/proj/memory/docker.md"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/proj/memory/docker.md"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"ls"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/proj/memory/sql.md"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":"not-an-object"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":123}}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"still here"}]}}
+`
+	s, err := decodeStream(strings.NewReader(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"/proj/memory/docker.md", "/proj/memory/sql.md"}
+	if len(s.ReadPaths) != len(want) {
+		t.Fatalf("ReadPaths = %v, want %v", s.ReadPaths, want)
+	}
+	for i, w := range want {
+		if s.ReadPaths[i] != w {
+			t.Errorf("ReadPaths[%d] = %q, want %q", i, s.ReadPaths[i], w)
+		}
+	}
+	// A malformed/odd `input` on a Read tool_use must not drop the rest of
+	// the session's content — the plain text line after it still parses.
+	if s.Text != "still here" {
+		t.Errorf("text after odd tool_use input was lost: %q", s.Text)
+	}
+}
+
+func TestDecodeStream_ReadPathsCappedAt1024(t *testing.T) {
+	var b strings.Builder
+	for i := 0; i < 1100; i++ {
+		fmt.Fprintf(&b, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/proj/memory/f%d.md"}}]}}`+"\n", i)
+	}
+	s, err := decodeStream(strings.NewReader(b.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.ReadPaths) != 1024 {
+		t.Errorf("ReadPaths length = %d, want capped at 1024", len(s.ReadPaths))
 	}
 }
 
