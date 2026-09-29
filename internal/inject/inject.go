@@ -115,6 +115,11 @@ type Input struct {
 	// own final observation. These slugs stay withheld regardless of the
 	// sidecar's current budget.
 	HoldoutSession []string
+	// NoGitSignal drops cwd's git context from the query terms — for a
+	// caller whose prompt already names the task (a subagent launched with
+	// its own Agent call), where the parent's branch and working-tree tokens
+	// are unrelated noise.
+	NoGitSignal bool
 }
 
 func (in Input) store() native.Store {
@@ -155,7 +160,7 @@ func Run(in Input) (Result, error) {
 	for _, f := range files {
 		bySlug[f.Slug] = f
 	}
-	terms := Keywords(in.CWD, in.Prompt)
+	terms := keywords(in.CWD, in.Prompt, !in.NoGitSignal)
 	cands, held := candidates(in, st, files, terms)
 	if held == nil {
 		held = map[string]int{} // defense in depth — candidates never returns nil

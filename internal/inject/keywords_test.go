@@ -101,6 +101,30 @@ func TestKeywords_NonGitDirIsSafe(t *testing.T) {
 	}
 }
 
+// A subagent whose query already names its own task should not see the
+// parent's git context — the branch and working-tree tokens are unrelated
+// noise once the query itself carries the task.
+func TestKeywords_WithGitFlagControlsSignal(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	repo := t.TempDir()
+	gitRun(t, repo, "init", "-q")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "-q", "-m", "init")
+	gitRun(t, repo, "checkout", "-q", "-b", "zqbranchtoken")
+
+	if got := keywords(repo, "alpha", false); has(got, "zqbranchtoken") {
+		t.Errorf("withGit=false must not carry the git signal, got %v", got)
+	}
+	if got := keywords(repo, "alpha", true); !has(got, "zqbranchtoken") {
+		t.Errorf("withGit=true must carry the git signal, got %v", got)
+	}
+}
+
 func TestGitSignal_BoundedByTimeout(t *testing.T) {
 	// A hung git (lock contention, network mount) must not stall the
 	// SessionStart hook: gitSignal is best-effort context, not a blocker.
