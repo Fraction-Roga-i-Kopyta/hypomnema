@@ -35,6 +35,22 @@ func AppendStrict(memoryDir, line, dedupKey string) error {
 	return writeLine(memoryDir, line, dedupKey)
 }
 
+// AppendSuffixUnique is Append with an end-anchored dedup: line is skipped
+// when a WAL line in the dedup window ENDS with suffix. A dedup key that ends
+// in the session column must be end-anchored — as a plain substring,
+// "|cite-useful|t|s1" also matches a subagent row "|cite-useful|t|s1:a1" and
+// would drop session s1's own row.
+func AppendSuffixUnique(memoryDir, line, suffix string) {
+	lock, err := Acquire(memoryDir, DefaultLockConfig)
+	if err == nil {
+		defer lock.Release()
+	}
+	if seen, _ := scanTail(filepath.Join(memoryDir, ".wal"), func(l string) bool { return strings.HasSuffix(l, suffix) }); seen {
+		return
+	}
+	_ = writeLine(memoryDir, line, "")
+}
+
 func writeLine(memoryDir, line, dedupKey string) error {
 	walPath := filepath.Join(memoryDir, ".wal")
 
@@ -66,14 +82,19 @@ func writeLine(memoryDir, line, dedupKey string) error {
 const dedupTailBytes int64 = 256 * 1024
 
 // containsLine is the Go equivalent of `grep -qF $dedupKey $(tail -c 256K $wal)`
-// — substring match against the trailing slice of the WAL only. Dedup
-// events arrive in append order, so the last few kilobytes of events
+// — substring match against the trailing slice of the WAL only.
+func containsLine(walPath, key string) (bool, error) {
+	return scanTail(walPath, func(l string) bool { return strings.Contains(l, key) })
+}
+
+// scanTail reports whether any complete line in the WAL's dedup window satisfies match.
+// Dedup events arrive in append order, so the last few kilobytes of events
 // are the only region a fresh duplicate could land in. On a small WAL
 // (< dedupTailBytes) we read the whole file, matching the previous
 // behaviour; on a 50 MB live WAL we read 256 KiB instead of 50 MB,
 // removing the quadratic blow-up the older implementation had when
 // WAL growth outpaced compaction.
-func containsLine(walPath, key string) (bool, error) {
+func scanTail(walPath string, match func(string) bool) (bool, error) {
 	f, err := os.Open(walPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -107,7 +128,7 @@ func containsLine(walPath, key string) (bool, error) {
 		_ = scanner.Text()
 	}
 	for scanner.Scan() {
-		if strings.Contains(scanner.Text(), key) {
+		if match(scanner.Text()) {
 			return true, nil
 		}
 	}

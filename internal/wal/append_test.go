@@ -43,3 +43,16 @@ func TestAppendNoDedupKey(t *testing.T) {
 		t.Errorf("empty dedup key must NOT dedupe; got %d lines:\n%s", strings.Count(string(body), "\n"), body)
 	}
 }
+
+func TestAppendSuffixUnique_EndAnchored(t *testing.T) {
+	dir := t.TempDir()
+	walPath := filepath.Join(dir, ".wal")
+	os.WriteFile(walPath, []byte("2026-09-29|cite-useful|p\x1fdocker.md|s1:a1\n"), 0o644)
+	line, key := "2026-09-29|cite-useful|p\x1fdocker.md|s1", "|cite-useful|p\x1fdocker.md|s1"
+	AppendSuffixUnique(dir, line, key) // not a duplicate: the existing row ends in s1:a1
+	AppendSuffixUnique(dir, line, key) // exact duplicate: skipped
+	b, _ := os.ReadFile(walPath)
+	if n := strings.Count(string(b), "docker.md|s1\n"); n != 1 {
+		t.Fatalf("want exactly one s1 row, got %d:\n%s", n, b)
+	}
+}
