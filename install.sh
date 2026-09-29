@@ -112,6 +112,18 @@ if command -v claude >/dev/null 2>&1; then
 else
   echo "WARNING: could not verify Claude Code version; v2 needs v2.1.59+"
 fi
+
+# The subagent shims call `close --subagent`; an older binary would exit 2
+# on every SubagentStop (blocking the subagent's own stop) and silently
+# treat `inject --event=SubagentStart` as the parent's SessionStart. Probed
+# here, before any file is created — a build not yet under bin/memoryctl is
+# reported separately by [2/4] below, and this probe is a no-op for a
+# current binary. --skip-base skips it: a flagged-actions-only run never
+# touches bin/memoryctl.
+if [ "$SKIP_BASE" -eq 0 ] && [ -x "$SCRIPT_DIR/bin/memoryctl" ] && \
+   ! printf '{}' | "$SCRIPT_DIR/bin/memoryctl" close --subagent >/dev/null 2>&1; then
+  _die "bin/memoryctl predates subagent support — run 'make build', then re-run install.sh"
+fi
 # --- /Pre-flight gates ---
 
 if [ "$SKIP_BASE" -eq 0 ]; then
@@ -131,12 +143,7 @@ echo "  Created: $MEMORY_GLOBAL_DIR"
 # --- [2/4] Install memoryctl binary ---
 echo "[2/4] Installing memoryctl..."
 if [ -x "$SCRIPT_DIR/bin/memoryctl" ]; then
-  # The subagent shims call `close --subagent`; an older binary would exit 2
-  # on every SubagentStop and treat SubagentStart as the parent's
-  # SessionStart. The probe is a no-op for a current binary.
-  if ! printf '{}' | "$SCRIPT_DIR/bin/memoryctl" close --subagent >/dev/null 2>&1; then
-    _die "bin/memoryctl predates subagent support — run 'make build', then re-run install.sh"
-  fi
+  # Subagent-support version guard already ran pre-flight, above.
   if [ "$DRY_RUN" -eq 1 ]; then
     echo "[dry-run] would symlink $SCRIPT_DIR/bin/memoryctl -> $BIN_DIR/memoryctl"
   else

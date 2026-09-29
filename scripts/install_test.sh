@@ -182,6 +182,10 @@ fi
 echo "$out" | grep -q "predates subagent support" || _fail "version guard: missing 'predates subagent support' message"
 n=$(find "$CD/hooks/v2" -name '*.sh' 2>/dev/null | wc -l | tr -d ' ')
 [ "$n" -eq 0 ] || _fail "version guard: $n shim(s) installed before the abort"
+[ -d "$CD/hooks/v2" ] && _fail "version guard: hooks/v2 dir exists before the abort (probe must run pre-flight)"
+[ -L "$CD/bin/memoryctl" ] && _fail "version guard: bin/memoryctl symlink exists before the abort (probe must run pre-flight)"
+[ -e "$CD/bin" ] && _fail "version guard: bin/ dir exists before the abort (probe must run pre-flight)"
+[ -e "$CD/memory-global" ] && _fail "version guard: memory-global/ dir exists before the abort (probe must run pre-flight)"
 
 # --- 13. Stable backup name follows THIS run's pre-change snapshot ---
 CD="$(_sandbox backupstable)"
