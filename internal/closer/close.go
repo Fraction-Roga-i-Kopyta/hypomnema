@@ -67,16 +67,27 @@ func Run(in Input) (Result, error) {
 	// fabricating negative evidence for the whole session (review E4). v1
 	// skipped the evidence pass in this case; v2 must too.
 	if sErr == nil {
-		useful, silent := Classify(injected, names, evidence, sess.Text)
-		res.Useful, res.Silent = len(useful), len(silent)
 		projectOf := projectBySlug(in.ClaudeHome, st)
-		for _, slug := range useful {
-			appendWAL(in.MemoryDir, in.Today, "trigger-useful", qualify(projectOf, slug), sid)
+		cited := resolveCitations(Citations(sess.Text+"\n\n"+sess.Thinking), projectOf)
+		citedSet := make(map[string]bool, len(cited))
+		for _, slug := range cited {
+			citedSet[slug] = true
+			appendWAL(in.MemoryDir, in.Today, "cite-useful", qualify(projectOf, slug), sid)
 		}
-		for _, slug := range silent {
-			appendWAL(in.MemoryDir, in.Today, "trigger-silent", qualify(projectOf, slug), sid)
+		res.Useful = len(cited)
+		// Silence is evidence only where the citation channel demonstrably
+		// worked this session: with no resolvable citation at all, an uncited
+		// fact is more likely a lost or skipped citation than a useless fact.
+		if len(cited) > 0 {
+			for _, slug := range injected {
+				if citedSet[slug] {
+					continue
+				}
+				appendWAL(in.MemoryDir, in.Today, "cite-silent", qualify(projectOf, slug), sid)
+				res.Silent++
+			}
 		}
-		for _, slug := range useful {
+		for _, slug := range cited {
 			if status[slug] != "candidate" {
 				continue
 			}
@@ -86,6 +97,13 @@ func Run(in Input) (Result, error) {
 			target := wal.SanitizeField(qualify(projectOf, slug))
 			line := fmt.Sprintf("%s|candidate-confirmed|%s|%s", in.Today, target, sid)
 			wal.Append(in.MemoryDir, line, "|candidate-confirmed|"+target+"|")
+		}
+		// A readable transcript with injected facts but no resolvable
+		// citation still closed its classification pass — record that
+		// explicitly (session-level, once per session) so doctor's open-quanta
+		// check does not read a citation-less session as a lost one.
+		if len(cited) == 0 && len(injected) > 0 {
+			wal.Append(in.MemoryDir, fmt.Sprintf("%s|cite-none|%s|%s", in.Today, sid, sid), "|cite-none|"+sid+"|"+sid)
 		}
 		// Ablation observation: facts withheld this session get the same
 		// evidence classification, but the verdict flows to holdout-hit/miss
@@ -207,9 +225,21 @@ func projectBySlug(claudeHome string, st native.Store) map[string]string {
 	return out
 }
 
-// qualify project-qualifies a slug for the WAL target so trigger events feed
-// per-project effectiveness (review E5-deep); an unknown project falls back to
-// the bare slug (grandfathered on read).
+// resolveCitations keeps the cited names that are in-scope facts (projectOf
+// already prefers the project copy over the global one on a basename tie).
+func resolveCitations(names []string, projectOf map[string]string) []string {
+	var out []string
+	for _, n := range names {
+		if _, ok := projectOf[n]; ok {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// qualify project-qualifies a slug for the WAL target so classification events
+// feed per-project effectiveness (review E5-deep); an unknown project falls
+// back to the bare slug (grandfathered on read).
 func qualify(projectOf map[string]string, slug string) string {
 	if p := projectOf[slug]; p != "" {
 		return native.QKey(p, slug)
