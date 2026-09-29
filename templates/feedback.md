@@ -16,10 +16,12 @@ evidence:
 Required v2 frontmatter: name, description, type. Do NOT add ref_count,
 triggers, or project — they are sidecar-managed or derived from the store.
 
-evidence: phrases that signal the rule was applied (case-insensitive
-substring), read by the close hook to emit trigger-useful. ≤5 phrases score
-best — long lists rarely match verbatim and get classified silent. Pick
-phrases Claude would actually write when applying the rule.
+Usefulness comes only from an explicit <cc-memory filenames="…"> citation of
+a fact delivered this session — the close hook reads that tag, not this
+frontmatter. evidence: phrases (case-insensitive substring) feed only the
+`ablate` holdout observation for a fact withheld this session. ≤5 phrases
+score best — long lists rarely match verbatim. Pick phrases Claude would
+actually write when applying the rule.
 
 precision_class: ambient marks rules that shape behaviour silently (tone,
 language preference, security baseline). Such files still inject and rank

@@ -153,17 +153,22 @@ files / recent commit subjects) and emits the top-8 as
 `source` distinguishes a fresh session from a re-render after the model's
 context was wiped:
 
-- `source=compact` or `source=clear` — the previously injected set is no
-  longer in the model's context, so this render does **not** dedup against
-  `.runtime/injected-<session_id>.list`: any fact still in the top-8 is
-  re-emitted. On `compact` specifically, ranking uses a bounded query built
-  from the transcript's latest `isCompactSummary` record (focus sections,
-  top-40 terms) instead of the empty prompt, so the re-render tracks what the
-  compaction summary is actually about. A slug already logged as `inject` for
-  this session does **not** get a second WAL row on re-render — `ref_count`
-  is not inflated by compaction.
-- any other value (or absent, for the normal session-open path) — the usual
-  once-per-session dedup applies.
+- `source=compact` or `source=clear` — nothing previously rendered survives
+  in the model's context, so this render's dedup resets to nothing: any
+  fact still in the top-8 is re-emitted regardless of what
+  `.runtime/rendered-<session_id>.list` or the injected union hold. On
+  `compact` specifically, ranking uses a bounded query built from the
+  transcript's latest `isCompactSummary` record (focus sections, top-40
+  terms) instead of the empty prompt, so the re-render tracks what the
+  compaction summary is actually about. A slug already logged as `inject`
+  for this session does **not** get a second WAL row on re-render —
+  `ref_count` is not inflated by compaction.
+- any other value (or absent, for the normal session-open path) — dedup
+  against `.runtime/rendered-<session_id>.list`: the slugs currently in the
+  model's context (this render's normative dedup source). A session whose
+  rendered list does not exist yet — one that predates the file, or has not
+  rendered anything this session — falls back to the injected-session-union
+  `.runtime/injected-<session_id>.list`.
 
 Contract:
 
@@ -171,9 +176,11 @@ Contract:
 - Writes an `inject` WAL event per **newly-logged** emitted fact (see above —
   a compact/clear re-render of an already-logged fact writes no second row).
   The sidecar bumps `ref_count` and recency from those events.
-- Records the injected slugs in `.runtime/injected-<session_id>.list` so
-  UserPromptSubmit dedups against them and `close` classifies the whole
-  session's set.
+- Records the injected slugs in `.runtime/injected-<session_id>.list` — the
+  session union used for WAL `inject`-row dedup and read by `close` to
+  classify the whole session's citations — and unions the newly rendered
+  slugs into `.runtime/rendered-<session_id>.list`, reset to exactly this
+  render's output on compact/clear.
 
 ## 3. UserPromptSubmit — `inject --event=UserPromptSubmit`
 
@@ -191,9 +198,10 @@ without `source` (older Claude Code versions) is treated as a real prompt.
 
 Otherwise, re-ranks against the just-typed `prompt` (folded into
 `session_keywords`) and emits **only** facts that newly enter the top-8 —
-anything already listed in `.runtime/injected-<session_id>.list` is not
-re-emitted (once per session per fact). Exit 0 always; `inject` WAL events for
-the newly injected facts.
+anything already listed in `.runtime/rendered-<session_id>.list` (or, when
+that file does not exist yet, the injected-session-union) is not re-emitted:
+once per context, again after a compaction/clear wipes it. Exit 0 always;
+`inject` WAL events for the newly injected facts.
 
 There is no substring-trigger matching and no negation-token logic; all tokens
 are relevance signal to a single ranker (see CLAUDE.md "How injection ranks
@@ -206,6 +214,11 @@ once per delivery:
 > When a fact below changes what you say or do, wrap that sentence in
 > `<cc-memory filenames="FILE">…</cc-memory>` (the tag is hidden from the
 > user).
+
+"Hidden from the user" holds for the interactive CLI; headless invocation
+(`claude -p`) or raw SDK output may surface the tag literally, since there
+is no interactive renderer to strip it — the instruction line itself stays
+unchanged regardless.
 
 Past that line, each path renders its own header shape — but the file name
 is always present in it, since the file name is the only thing the model can
@@ -298,14 +311,19 @@ it does not print a checkpoint reminder; that v1 behaviour is retired).
 Contract (see CLAUDE.md "Lifecycle"):
 
 - Classifies the session's injected set from explicit `<cc-memory
-  filenames="…">` citations in the assistant transcript: every cited
-  in-scope fact is `cite-useful`; an injected-but-uncited fact is
+  filenames="…">` citations in the assistant transcript: a cited in-scope
+  fact that was actually **delivered** this session (injected, recalled,
+  skill-injected, or read directly with the Read tool) is `cite-useful`; a
+  cited in-scope fact that was never delivered is `cite-undelivered`
+  instead — diagnostic only, not useful, does not arm the guard below and
+  does not confirm a candidate. An injected-but-uncited fact is
   `cite-silent`, but only in a session with at least one resolvable
-  citation — a citation-less session that still had injections writes one
-  session-level `cite-none` instead, so a broken citation channel never
-  fabricates a session of silent facts. Frontmatter `evidence:`/name
-  substring matching no longer produces `cite-*`; it now feeds only the
-  `ablate` holdout observation (`holdout-hit`/`holdout-miss`).
+  **delivered** citation — a session that resolved zero delivered
+  citations (nothing cited, or every citation was `cite-undelivered`)
+  writes one session-level `cite-none` instead, so a broken citation
+  channel never fabricates a session of silent facts. Frontmatter
+  `evidence:`/name substring matching no longer produces `cite-*`; it now
+  feeds only the `ablate` holdout observation (`holdout-hit`/`holdout-miss`).
 - Writes a `session-metrics` (v2 shape) and a `session-close` row per turn
   (Stop fires once per turn, not once per session). The per-fact
   classification rows — `cite-useful`/`cite-silent`,

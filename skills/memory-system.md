@@ -38,10 +38,10 @@ then shows a tombstone redirect instead of silently forgetting.
 Type-specific fields:
 - **mistake** — `severity` (minor|major|critical), `recurrence` (int), `scope` (universal|domain|narrow, informational), `root-cause`, `prevention`
 - **strategy** — `success_count` (int)
-- **feedback** — `evidence:` (≤5 phrases Claude would write when applying the rule; read by the close hook to mark the file useful), optional `precision_class: ambient`
+- **feedback** — `evidence:` (≤5 phrases Claude would write when applying the rule; used only for the `ablate` holdout observation on a fact withheld this session), optional `precision_class: ambient`
 - **knowledge / decision / note** — optional `related: [slug, …]`
 
-`evidence:` is type-agnostic — any injected file can carry it. Keep it short: long lists rarely match verbatim and get classified silent.
+`evidence:` is type-agnostic — any injected file can carry it. Usefulness itself comes only from an explicit `<cc-memory filenames="…">` citation of a fact actually delivered this session (see "Lifecycle" below) — keep `evidence:` short regardless, since long lists rarely match verbatim for the holdout comparison.
 
 ## When to write
 
@@ -62,11 +62,15 @@ Code patterns and conventions (read the code), git history (`git log`/`blame`), 
 
 ## Injection and ranking
 
-`memoryctl inject` (SessionStart + UserPromptSubmit hooks) ranks all `active`/`pinned` files in the current project's store plus the global store, and injects the top-8 (2.5KB per body, 8KB total) once per session. You do not set ranks — write good `keywords` / `domains` / `description` and let the ranker score by overlap + recency + effectiveness. `session_keywords` come from prompt tokens, CWD basename, and git context.
+`memoryctl inject` (SessionStart + UserPromptSubmit hooks) ranks all `active`/`pinned` files in the current project's store plus the global store, and injects the top-8 (2.5KB per body, 8KB total) once per context — again after a compaction/clear wipes the model's context. You do not set ranks — write good `keywords` / `domains` / `description` and let the ranker score by overlap + recency + effectiveness. `session_keywords` come from prompt tokens, CWD basename, and git context.
+
+## Citing memory
+
+Every delivery opens with one instruction line: when a fact changes what you say or do, wrap that sentence in `<cc-memory filenames="FILE">…</cc-memory>` (hidden from the user). This citation — not a keyword or evidence-phrase match — is what `close` reads to credit a fact as useful; cite only the facts that actually changed your answer.
 
 ## Lifecycle
 
-`memoryctl close` runs after each turn (Stop hook): classifies the injected set `trigger-useful` / `trigger-silent` from evidence phrases or slug/name citation, recomputes effectiveness, and marks unused facts `stale` in the sidecar (age counts from last injection). `pinned` files and `continuity`/`project` facts never decay. No native content is ever mutated by hooks.
+`memoryctl close` runs after each turn (Stop hook): classifies the injected set from explicit `<cc-memory filenames="…">` citations of facts actually delivered this session — `cite-useful` for a cited, delivered fact; `cite-silent` for an injected-but-uncited one, but only in a session that had at least one resolvable citation. `evidence:` phrases no longer produce usefulness; they feed only the `ablate` holdout observation. `close` then recomputes effectiveness and marks unused facts `stale` in the sidecar (age counts from last injection). `pinned` files and `continuity`/`project` facts never decay. No native content is ever mutated by hooks.
 
 ## Pull retrieval
 

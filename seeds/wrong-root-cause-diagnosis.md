@@ -60,11 +60,14 @@ real cause harder to spot.
   instead of generating a new one on the fly.
 
 ## How this is measured
-The `evidence:` phrases in this frontmatter are matched against your
-replies at session end (case-insensitive substring). If any phrase
-matched, the session-stop hook emits `trigger-useful`. If none matched,
-`trigger-silent` — which, paired with a recurrence of the same mistake,
-is the observable failure counter for this rule.
+Usefulness comes from an explicit `<cc-memory filenames="…">` citation of
+this fact in a session where it was actually delivered — wrap the sentence
+that used it and the session-stop hook emits `cite-useful`; deliver it and
+stay silent and it emits `cite-silent` instead. The `evidence:` phrases in
+this frontmatter no longer drive that signal; they feed only the `ablate`
+holdout observation for a session where this rule was withheld. A recurring
+`cite-silent` for this rule, paired with a repeat of the same mistake, is
+the observable failure counter.
 
 ## Customising for your language
 The evidence phrases above are English-biased — they match the way a

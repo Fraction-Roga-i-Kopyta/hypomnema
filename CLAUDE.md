@@ -34,9 +34,10 @@ Logical types:
 Injection budget: a single ranked **top-8** across all types, capped at
 **2.5KB per body and 8KB total** (Claude Code diverts oversized hook output
 to a file the model never reads inline, so the budget is what keeps memory
-actually visible). A fact injects **once per session** — later prompts only
-add facts that newly enter the top-8. Per-type quotas are not implemented;
-type balance emerges from relevance.
+actually visible). A fact injects **once per context** — later prompts only
+add facts that newly enter the top-8, and a fact re-enters offerable state
+after a compaction or `/clear` wipes it from the model's context. Per-type
+quotas are not implemented; type balance emerges from relevance.
 
 ## Frontmatter schema
 
@@ -237,13 +238,17 @@ shows `[retired <date> → successor]` instead of silently forgetting.
 
 `memoryctl close` runs after every turn (Claude Code fires Stop per turn):
 - Classifies the session's injected set from explicit `<cc-memory filenames="…">` citations
-  in the assistant transcript (the tag is hidden from the user by Claude Code): every cited
-  in-scope fact is `cite-useful`; an injected-but-uncited fact is `cite-silent` — but only in
-  a session with at least one resolvable citation, so a broken citation channel never
-  fabricates a session of silent facts (a citation-less session that still had injections
-  writes one session-level `cite-none` instead). Frontmatter `evidence:`/name substring
-  matching no longer creates usefulness — it now drives only the `ablate` holdout
-  observation (`holdout-hit`/`holdout-miss`).
+  in the assistant transcript (the tag is hidden from the user by Claude Code): a cited
+  in-scope fact that was actually **delivered** this session (injected, recalled,
+  skill-injected, or read directly with the Read tool) is `cite-useful`; a cited in-scope
+  fact that was never delivered is `cite-undelivered` instead — diagnostic only, not useful,
+  does not arm the silent guard, does not confirm a candidate. An injected-but-uncited fact
+  is `cite-silent` — but only in a session with at least one resolvable **delivered**
+  citation, so a broken citation channel never fabricates a session of silent facts (a
+  session that resolved zero delivered citations — nothing cited, or every citation was
+  `cite-undelivered` — writes one session-level `cite-none` instead). Frontmatter
+  `evidence:`/name substring matching no longer creates usefulness — it now drives only the
+  `ablate` holdout observation (`holdout-hit`/`holdout-miss`).
 - Recomputes effectiveness from the WAL: `(pos+1)/(pos+neg+2)` over one citation observation
   per (slug, session) — `cite-useful` wins over `cite-silent` within a session. Usefulness
   history restarted at v2.14: every fact begins back at the neutral 0.5 prior, and
@@ -286,7 +291,7 @@ an inflated one.
 
 **Zero-safe:** a new fact with `ref_count=0` and no outcomes gets the neutral prior and its frontmatter `created` as recency — it is injectable from day one. The gate cannot hurt it either: an extreme low `effectiveness` *requires* substantial negative evidence (the prior holds new facts near 0.5), so `effGate≈1.0` until a fact has genuinely under-performed.
 
-Status filter: `active` and `pinned` only (sidecar-managed `stale` is excluded). Scope filter: only the current project's facts plus the global store — other projects' rows never inject. Result cap: top-8, 8KB total, once per session per fact.
+Status filter: `active` and `pinned` only (sidecar-managed `stale` is excluded). Scope filter: only the current project's facts plus the global store — other projects' rows never inject. Result cap: top-8, 8KB total, once per context per fact (again after compaction/`/clear`).
 
 `session_keywords` come from prompt tokens, CWD basename, and git context (branch name, changed filenames, recent commit subjects) on both SessionStart and UserPromptSubmit (reactive re-rank).
 
@@ -306,7 +311,7 @@ Do not route around the gate by stripping the value; either whitelist the path o
 
 ## Reading what was injected
 
-Look at the start of your context for a `# Memory Context` block with one `## <name>` section per injected fact (large hook payloads may arrive as a persisted-output file reference — the 8KB budget exists precisely to avoid that).
+Look at the start of your context for a `# Memory Context` block with one `## <name> — <file.md> (<type>, <created>)` section per injected fact — the file name in the header is what you cite (see "Citing memory" below); large hook payloads may arrive as a persisted-output file reference — the 8KB budget exists precisely to avoid that.
 
 ## Citing memory
 
@@ -315,6 +320,8 @@ Every delivery (`inject`, `recall`, `skill-inject`) opens with one instruction l
 > When a fact below changes what you say or do, wrap that sentence in `<cc-memory filenames="FILE">…</cc-memory>` (the tag is hidden from the user).
 
 `FILE` is the fact's file name, shown in its header (`## <name> — <file.md> (<type>, <created>)`). This citation — not a keyword or name match — is the only thing `close` reads to mark a fact `cite-useful`; an injected fact with no citation in a session that had at least one resolvable citation is `cite-silent` instead. Only a fact actually delivered in the session earns credit for a citation — injected/recalled/skill-injected, or read directly with the Read tool from its file — so citing a filename you never saw content from lands as `cite-undelivered`, not `cite-useful`. Cite only the facts that actually changed what you said or did; the tag is hidden from the user, so there is no cost to citing honestly and no benefit to citing everything.
+
+"Hidden from the user" holds for the interactive CLI; headless invocation (`claude -p`) or raw SDK output may surface the tag literally, since there is no interactive renderer to strip it.
 
 ## Pull retrieval
 
