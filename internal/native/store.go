@@ -153,12 +153,14 @@ const maxSettingsFileBytes = 1 << 20 // 1 MiB
 // at path cannot hang the caller: a blocking os.Open on a FIFO with no
 // writer attached waits indefinitely (78s+ observed) for one to show up,
 // which would stall a hook past its timeout budget. O_NONBLOCK makes that
-// open return immediately instead (ENXIO for a FIFO with no reader-side
-// writer), and the follow-up Mode().IsRegular() check rejects any other
-// non-regular file (device, socket, …) the open did succeed against.
-// A read of more than max bytes is an error, not a silent truncation — a
-// truncated pointer-file line could still happen to parse into
-// attacker-chosen content.
+// open return immediately instead — ENXIO when the FIFO has no writer, but
+// when a writer IS already attached the non-blocking open succeeds just
+// like a blocking one would, so O_NONBLOCK alone does not keep a live FIFO
+// out; it is the follow-up Mode().IsRegular() check that rejects it (and
+// any other non-regular file — device, socket, …) the open did succeed
+// against. A read of more than max bytes is an error, not a silent
+// truncation — a truncated pointer-file line could still happen to parse
+// into attacker-chosen content.
 func readRegularFile(path string, max int64) ([]byte, error) {
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
