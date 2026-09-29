@@ -194,23 +194,42 @@ func recordRecallWithSession(slug, project, sid string) {
 	if sid == "" {
 		return // no session — nothing to dedup against, no close to classify
 	}
-	writeSessionList(readInjectedList(sid), []string{slug}, sid)
+	injected := readInjectedList(sid)
+	writeSessionList(injected, []string{slug}, sid)
+	// A pull delivery lands the slug straight in the model's context, same
+	// as a push render — so the rendered list (post-compaction dedup source)
+	// must reflect it too, or a later compact render could offer it again
+	// while it is still on screen from this recall. A session that predates
+	// the rendered list (ok=false) has no per-render history to seed from —
+	// fall back to the injected union so this recall doesn't make every
+	// earlier-injected fact in the session look re-offerable.
+	rendered, ok := readRenderedList(sid)
+	if !ok {
+		rendered = injected
+	}
+	writeRenderedList(rendered, []string{slug}, sid)
 }
 
 // renderRecall renders the hybrid pull output: top-1 full body (same cap as
 // injection) plus an index of runner-ups with paths for follow-up reads.
 func renderRecall(top rank.Scored, rest []rank.Scored, bySlug map[string]native.MemFile) string {
 	var b strings.Builder
-	f := bySlug[top.Slug]
+	b.WriteString(inject.CiteInstruction + "\n\n")
+	f, ok := bySlug[top.Slug]
+	if !ok {
+		// Sidecar row survived, native file vanished — keep the header
+		// citable even when the body render below finds nothing.
+		f.Slug = top.Slug
+	}
 	title := f.Name
 	if title == "" {
-		title = top.Slug
+		title = f.Slug
 	}
 	typ := top.Type
 	if typ == "" {
 		typ = "note"
 	}
-	fmt.Fprintf(&b, "## %s (%s, score %.2f)%s\n", title, typ, top.Score, staleMark(top.Status))
+	fmt.Fprintf(&b, "## %s — %s (%s, score %.2f)%s\n", title, f.Slug, typ, top.Score, staleMark(top.Status))
 	if f.Body != "" {
 		b.WriteString(inject.CapBody(f.Body, inject.MaxBodyBytes, inject.PathHint(f)))
 		b.WriteString("\n")

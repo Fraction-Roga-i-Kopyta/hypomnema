@@ -362,6 +362,73 @@ func TestRun_DegradedHonoursFrontmatterKeywords(t *testing.T) {
 	}
 }
 
+// TestRun_CiteInstructionAndFactHeaders verifies that every rendered fact
+// header carries its citable file name, the citation instruction line
+// appears once right after the heading, and the whole payload (instruction
+// line included) still respects MaxTotalBytes even with 8 fat facts
+// competing for the budget.
+func TestRun_CiteInstructionAndFactHeaders(t *testing.T) {
+	memDir, projDir, home := setup(t)
+	names := []string{"a.md", "b.md", "c.md", "d.md", "e.md", "f.md", "g.md", "h.md"}
+	for _, name := range names {
+		os.WriteFile(filepath.Join(projDir, name),
+			[]byte("---\nname: "+name+"\ntype: knowledge\ncreated: 2026-05-01\n---\n"+mkBody("docker", 900)+"\n"), 0o644)
+	}
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
+
+	res, err := Run(Input{
+		Event: "UserPromptSubmit", SessionID: "s1", CWD: "/tmp/proj", Prompt: "docker",
+		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir,
+		Today: "2026-05-29", MaxK: 8,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	wantPrefix := "# Memory Context\n" + CiteInstruction + "\n"
+	if !strings.HasPrefix(res.Markdown, wantPrefix) {
+		n := len(res.Markdown)
+		if n > 200 {
+			n = 200
+		}
+		t.Errorf("markdown must start with heading + CiteInstruction, got:\n%s", res.Markdown[:n])
+	}
+	if len(res.Markdown) > MaxTotalBytes {
+		t.Errorf("markdown exceeds MaxTotalBytes with 8 fat facts + instruction line: %d bytes", len(res.Markdown))
+	}
+	if len(res.Injected) == 0 {
+		t.Fatalf("expected at least one fact injected")
+	}
+	for _, slug := range res.Injected {
+		if !strings.Contains(res.Markdown, "— "+slug+" (") {
+			t.Errorf("header for %s must carry its citable file name, got:\n%s", slug, res.Markdown)
+		}
+	}
+}
+
+func TestFactHeader(t *testing.T) {
+	cases := []struct {
+		name string
+		f    native.MemFile
+		want string
+	}{
+		{"full", native.MemFile{Name: "Docker cache", Slug: "docker.md", Type: "mistake", Created: "2026-05-01"},
+			"## Docker cache — docker.md (mistake, 2026-05-01)"},
+		{"no created omits date", native.MemFile{Name: "Docker cache", Slug: "docker.md", Type: "mistake"},
+			"## Docker cache — docker.md (mistake)"},
+		{"type falls back to note", native.MemFile{Name: "X", Slug: "x.md"},
+			"## X — x.md (note)"},
+		{"name falls back to slug", native.MemFile{Slug: "x.md", Type: "knowledge"},
+			"## x.md — x.md (knowledge)"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := FactHeader(c.f); got != c.want {
+				t.Errorf("FactHeader(%+v) = %q, want %q", c.f, got, c.want)
+			}
+		})
+	}
+}
+
 func TestExportedCapBody(t *testing.T) {
 	long := strings.Repeat("я", 3000) // 6000 bytes of UTF-8
 	got := CapBody(long, MaxBodyBytes, "full text: /p/x.md")

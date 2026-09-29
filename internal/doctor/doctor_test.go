@@ -422,6 +422,32 @@ func TestOpenQuanta_MajorityOpenWarns(t *testing.T) {
 	}
 }
 
+// TestOpenQuanta_CiteEventsCloseTheSession verifies the v2.14+ closing
+// signals: a session with only inject + cite-useful (or cite-silent) is
+// closed, and — the explicit regression case — a session with only
+// inject + cite-none (the "readable transcript, no resolvable citation"
+// marker) is also closed, not counted as an open quantum.
+func TestOpenQuanta_CiteEventsCloseTheSession(t *testing.T) {
+	claude, mem, cwd := newFixture(t)
+	today := time.Now().Format("2006-01-02")
+	lines := []string{
+		today + "|inject|slug-a|s1",
+		today + "|cite-useful|slug-a|s1",
+		today + "|inject|slug-b|s2",
+		today + "|cite-silent|slug-b|s2",
+		// cite-none: target and session are both the session id (close's
+		// format for a readable, citation-less session).
+		today + "|inject|slug-c|s3",
+		today + "|cite-none|s3|s3",
+	}
+	mustWriteWAL(t, mem, lines)
+	r := Run(claude, mem, native.StoreFor(claude, cwd), cwd)
+	c := mustFindCheck(t, r, "open_quanta_last_30d", OK)
+	if !strings.Contains(c.Detail, "0/3") {
+		t.Errorf("expected 0/3 open (all three sessions closed by cite-* events), got %q", c.Detail)
+	}
+}
+
 func TestOpenQuanta_ExcludesOldEntriesOutsideWindow(t *testing.T) {
 	claude, mem, cwd := newFixture(t)
 	old := time.Now().AddDate(0, 0, -60).Format("2006-01-02")
@@ -571,6 +597,10 @@ func TestRun_NonExecutableShimFails(t *testing.T) {
 
 // TestCheckCandidates: a candidate with ≥5 silent sessions and 0 useful
 // flags WARN naming the slug; a confirmed or fresh candidate does not.
+// Fixtures use cite-useful/cite-silent (the v2.14+ signal) — the legacy
+// trigger-useful/trigger-silent events, still present in old WAL history,
+// must NOT be counted (a candidate with only trigger-silent rows must not
+// flag).
 func TestCheckCandidates(t *testing.T) {
 	home := t.TempDir()
 	claudeHome := filepath.Join(home, ".claude")
@@ -586,18 +616,25 @@ func TestCheckCandidates(t *testing.T) {
 		[]byte("---\nname: dud\ntype: mistake\nstatus: candidate\n---\nx\n"), 0o644)
 	os.WriteFile(filepath.Join(projDir, "fresh.md"),
 		[]byte("---\nname: fresh\ntype: mistake\nstatus: candidate\n---\nx\n"), 0o644)
+	os.WriteFile(filepath.Join(projDir, "legacy-only.md"),
+		[]byte("---\nname: legacy-only\ntype: mistake\nstatus: candidate\n---\nx\n"), 0o644)
 	q := "-tmp-proj\x1fdud.md"
 	var wal strings.Builder
 	for i := 1; i <= 5; i++ {
-		fmt.Fprintf(&wal, "2026-07-1%d|trigger-silent|%s|s%d\n", i, q, i)
+		fmt.Fprintf(&wal, "2026-07-1%d|cite-silent|%s|s%d\n", i, q, i)
 	}
 	// fresh.md: one silent session only — under the threshold.
-	wal.WriteString("2026-07-11|trigger-silent|-tmp-proj\x1ffresh.md|s1\n")
+	wal.WriteString("2026-07-11|cite-silent|-tmp-proj\x1ffresh.md|s1\n")
 	// A same-basename fact in ANOTHER project: its useful citation must not
 	// mask dud's flag, and its silents must not inflate fresh's tally.
-	wal.WriteString("2026-07-11|trigger-useful|-other-proj\x1fdud.md|x1\n")
+	wal.WriteString("2026-07-11|cite-useful|-other-proj\x1fdud.md|x1\n")
 	for i := 1; i <= 5; i++ {
-		fmt.Fprintf(&wal, "2026-07-1%d|trigger-silent|-other-proj\x1ffresh.md|x%d\n", i, i)
+		fmt.Fprintf(&wal, "2026-07-1%d|cite-silent|-other-proj\x1ffresh.md|x%d\n", i, i)
+	}
+	// legacy-only.md: ≥5 pre-v2.14 trigger-silent rows and zero cite-*
+	// rows — must NOT flag; the old signal is ignored entirely now.
+	for i := 1; i <= 5; i++ {
+		fmt.Fprintf(&wal, "2026-07-1%d|trigger-silent|-tmp-proj\x1flegacy-only.md|l%d\n", i, i)
 	}
 	if err := os.WriteFile(filepath.Join(memDir, ".wal"), []byte(wal.String()), 0o644); err != nil {
 		t.Fatal(err)
@@ -610,6 +647,9 @@ func TestCheckCandidates(t *testing.T) {
 	if strings.Contains(c.Detail, "fresh") {
 		t.Fatalf("fresh candidate must not flag: %+v", c)
 	}
+	if strings.Contains(c.Detail, "legacy-only") {
+		t.Fatalf("candidate with only pre-v2.14 trigger-silent rows must not flag: %+v", c)
+	}
 
 	// A confirmation clears the flag.
 	f, _ := os.OpenFile(filepath.Join(memDir, ".wal"), os.O_APPEND|os.O_WRONLY, 0o644)
@@ -617,6 +657,59 @@ func TestCheckCandidates(t *testing.T) {
 	f.Close()
 	if c := checkCandidates(memDir, claudeHome, native.StoreFor(claudeHome, cwd)); c.Status != OK {
 		t.Fatalf("confirmed candidate must not flag: %+v", c)
+	}
+}
+
+// TestCheckCandidates_CiteNoneAndUndeliveredDoNotCount: cite-none's target
+// is a session id, not a fact slug, and cite-undelivered is
+// diagnostic-only — neither may contribute to a candidate's
+// useful/silent tally. A candidate at exactly the WARN threshold from real
+// cite-silent rows must stay flagged with an unchanged count even when the
+// WAL is full of cite-none/cite-undelivered noise, including a pathological
+// case where a cite-none session id collides with the candidate's own bare
+// slug.
+func TestCheckCandidates_CiteNoneAndUndeliveredDoNotCount(t *testing.T) {
+	home := t.TempDir()
+	claudeHome := filepath.Join(home, ".claude")
+	memDir := filepath.Join(claudeHome, "memory")
+	cwd := "/tmp/proj"
+	projDir := filepath.Join(claudeHome, "projects", "-tmp-proj", "memory")
+	for _, d := range []string{memDir, projDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	os.WriteFile(filepath.Join(projDir, "dud.md"),
+		[]byte("---\nname: dud\ntype: mistake\nstatus: candidate\n---\nx\n"), 0o644)
+	q := "-tmp-proj\x1fdud.md"
+	var wal strings.Builder
+	for i := 1; i <= 5; i++ {
+		fmt.Fprintf(&wal, "2026-09-1%d|cite-silent|%s|s%d\n", i, q, i)
+	}
+	// Noise: cite-none rows whose session id happens to equal the
+	// candidate's own bare slug ("dud") — the pathological collision case
+	// for the legacy bare-slug fallback lookup.
+	for i := 1; i <= 20; i++ {
+		fmt.Fprintf(&wal, "2026-09-1%d|cite-none|dud|dud\n", i)
+	}
+	// Noise: cite-undelivered rows for the SAME fact — must not add to
+	// useful or silent, and must not confirm it.
+	for i := 1; i <= 20; i++ {
+		fmt.Fprintf(&wal, "2026-09-1%d|cite-undelivered|%s|x%d\n", i, q, i)
+	}
+	if err := os.WriteFile(filepath.Join(memDir, ".wal"), []byte(wal.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	c := checkCandidates(memDir, claudeHome, native.StoreFor(claudeHome, cwd))
+	if c.Status != WARN || !strings.Contains(c.Detail, "dud") {
+		t.Fatalf("got %+v, want WARN naming dud (cite-none/cite-undelivered noise must not mask a real flag)", c)
+	}
+	slugs, _ := c.Extra["slugs"].([]string)
+	if len(slugs) != 1 || slugs[0] != "dud" {
+		// Exactly the real candidate should be flagged — the noise must not
+		// spawn a second phantom-keyed flag alongside it.
+		t.Fatalf("want exactly [dud] flagged, got %+v (full check: %+v)", slugs, c)
 	}
 }
 
@@ -691,5 +784,158 @@ func TestCheckStoreResolution(t *testing.T) {
 	}
 	if !strings.Contains(c.Detail, "move their facts (not MEMORY.md) into") {
 		t.Errorf("WARN text must match the TROUBLESHOOTING recipe wording: %+v", c)
+	}
+}
+
+// TestCheckCitationSignal_NoCiteDataIsOK: a WAL with zero cite-useful/
+// cite-silent rows anywhere (pre-v2.14 history, or a fresh install) reports
+// OK naming the pre-v2.14 cutover — never a WARN, since there is nothing yet
+// to judge the citation channel by.
+func TestCheckCitationSignal_NoCiteDataIsOK(t *testing.T) {
+	_, mem, _ := newFixture(t)
+	now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	lines := []string{
+		now.Format("2006-01-02") + "|inject|slug-a|s1",
+		now.Format("2006-01-02") + "|trigger-useful|slug-a|s1", // legacy signal — irrelevant here
+	}
+	mustWriteWAL(t, mem, lines)
+	c := checkCitationSignal(filepath.Join(mem, ".wal"), now)
+	if c.Status != OK || !strings.Contains(c.Detail, "no citation data yet") {
+		t.Fatalf("got %+v, want OK naming 'no citation data yet'", c)
+	}
+}
+
+// TestCheckCitationSignal_NeverCitedWarns: citation data exists somewhere in
+// history (so the channel has fired before), but the last 7 days show ≥3
+// distinct inject-carrying sessions and zero cite-useful sessions — the
+// channel looks like it just went dark.
+func TestCheckCitationSignal_NeverCitedWarns(t *testing.T) {
+	_, mem, _ := newFixture(t)
+	now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	old := now.AddDate(0, 0, -20).Format("2006-01-02")
+	today := now.Format("2006-01-02")
+	lines := []string{
+		old + "|cite-useful|slug-old|s-old", // proves citation data exists at all
+		today + "|inject|slug-a|s1",
+		today + "|cite-none|s1|s1",
+		today + "|inject|slug-b|s2",
+		today + "|cite-none|s2|s2",
+		today + "|inject|slug-c|s3",
+		today + "|cite-none|s3|s3",
+		// no cite-useful in the 7d window
+	}
+	mustWriteWAL(t, mem, lines)
+	c := checkCitationSignal(filepath.Join(mem, ".wal"), now)
+	if c.Status != WARN || !strings.Contains(c.Detail, "never cited") {
+		t.Fatalf("got %+v, want WARN containing 'never cited'", c)
+	}
+}
+
+// TestCheckCitationSignal_SomeCitedIsOK: 3 sessions injected within the
+// window, one of them also carries a cite-useful — reports OK with the M/N
+// ratio.
+func TestCheckCitationSignal_SomeCitedIsOK(t *testing.T) {
+	_, mem, _ := newFixture(t)
+	now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	today := now.Format("2006-01-02")
+	lines := []string{
+		today + "|inject|slug-a|s1",
+		today + "|cite-useful|slug-a|s1",
+		today + "|inject|slug-b|s2",
+		today + "|cite-none|s2|s2",
+		today + "|inject|slug-c|s3",
+		today + "|cite-none|s3|s3",
+	}
+	mustWriteWAL(t, mem, lines)
+	c := checkCitationSignal(filepath.Join(mem, ".wal"), now)
+	if c.Status != OK || !strings.Contains(c.Detail, "1/3") {
+		t.Fatalf("got %+v, want OK containing '1/3'", c)
+	}
+}
+
+// TestCheckCitationSignal_MissingWALIsOK mirrors the fresh-install path the
+// other WAL-reading checks use: no .wal file at all is OK, not a WARN.
+func TestCheckCitationSignal_MissingWALIsOK(t *testing.T) {
+	_, mem, _ := newFixture(t)
+	c := checkCitationSignal(filepath.Join(mem, ".wal"), time.Now())
+	if c.Status != OK || !strings.Contains(c.Detail, "no citation data yet") {
+		t.Fatalf("got %+v, want OK naming 'no citation data yet'", c)
+	}
+}
+
+// TestCheckCitationSignal_CiteNoneOnlyHistoryWarns: a WAL whose only cite-*
+// rows are cite-none (close ran and reached a classification pass, but no
+// citation ever resolved as delivered) must NOT read as "no citation data
+// yet" — that reading previously let 3 inject+cite-none sessions in the
+// window report OK, hiding the exact channel-went-dark case this check
+// exists to catch.
+func TestCheckCitationSignal_CiteNoneOnlyHistoryWarns(t *testing.T) {
+	_, mem, _ := newFixture(t)
+	now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	today := now.Format("2006-01-02")
+	lines := []string{
+		today + "|inject|slug-a|s1",
+		today + "|cite-none|s1|s1",
+		today + "|inject|slug-b|s2",
+		today + "|cite-none|s2|s2",
+		today + "|inject|slug-c|s3",
+		today + "|cite-none|s3|s3",
+	}
+	mustWriteWAL(t, mem, lines)
+	c := checkCitationSignal(filepath.Join(mem, ".wal"), now)
+	if c.Status != WARN || !strings.Contains(c.Detail, "never cited") {
+		t.Fatalf("got %+v, want WARN containing 'never cited' (cite-none-only history must still count as history)", c)
+	}
+}
+
+// TestCheckCitationSignal_RecallOnlyCiteUsefulDoesNotInflateM: a session
+// that never injects anything but still resolves a delivered citation (e.g.
+// pull-only via recall) must not count toward M — M is the intersection of
+// inject-carrying sessions and cite-useful sessions, not a raw cite-useful
+// tally, or a healthy-looking M/N ratio could mask an inject path whose
+// citations never land.
+func TestCheckCitationSignal_RecallOnlyCiteUsefulDoesNotInflateM(t *testing.T) {
+	_, mem, _ := newFixture(t)
+	now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	today := now.Format("2006-01-02")
+	lines := []string{
+		today + "|inject|slug-a|s1",
+		today + "|cite-none|s1|s1",
+		today + "|inject|slug-b|s2",
+		today + "|cite-none|s2|s2",
+		today + "|inject|slug-c|s3",
+		today + "|cite-none|s3|s3",
+		today + "|cite-useful|slug-d|s4", // recall-only session — no inject row for s4
+	}
+	mustWriteWAL(t, mem, lines)
+	c := checkCitationSignal(filepath.Join(mem, ".wal"), now)
+	if c.Status != WARN || !strings.Contains(c.Detail, "never cited") {
+		t.Fatalf("got %+v, want WARN — s4's cite-useful must not count toward M (no inject in s4 this window)", c)
+	}
+}
+
+// TestCheckCitationSignal_PreCutoverSessionsNotCounted: right after an
+// upgrade the window still holds sessions closed by a pre-citation close —
+// they injected facts but carry no cite-* row, because the model was never
+// told to cite. Only sessions a citation-aware close classified count
+// toward N, so one uncited post-upgrade session must not raise a WARN on
+// the strength of the pre-upgrade ones.
+func TestCheckCitationSignal_PreCutoverSessionsNotCounted(t *testing.T) {
+	_, mem, _ := newFixture(t)
+	now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	yesterday := now.AddDate(0, 0, -1).Format("2006-01-02")
+	today := now.Format("2006-01-02")
+	lines := []string{
+		yesterday + "|inject|slug-a|old1",
+		yesterday + "|trigger-silent|slug-a|old1",
+		yesterday + "|inject|slug-b|old2",
+		yesterday + "|inject|slug-c|old3",
+		today + "|inject|slug-a|new1",
+		today + "|cite-none|new1|new1",
+	}
+	mustWriteWAL(t, mem, lines)
+	c := checkCitationSignal(filepath.Join(mem, ".wal"), now)
+	if c.Status != OK || !strings.Contains(c.Detail, "0/1") {
+		t.Fatalf("got %+v, want OK containing '0/1' (pre-cutover sessions excluded from N)", c)
 	}
 }

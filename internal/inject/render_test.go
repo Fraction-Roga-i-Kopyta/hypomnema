@@ -28,6 +28,23 @@ func TestRender_CapsLongBodies(t *testing.T) {
 	}
 }
 
+// A sidecar row whose native file vanished before reconciliation must still
+// render a header carrying the citable file name — render backfills
+// f.Slug from the ranked candidate when bySlug misses.
+func TestRender_MissingBySlugStillCarriesFileName(t *testing.T) {
+	ranked := []rank.Scored{{Candidate: rank.Candidate{Slug: "ghost.md"}}}
+	bySlug := map[string]native.MemFile{} // native file gone; sidecar row remains
+
+	out, injected := render(ranked, bySlug, 500, 0)
+
+	if len(injected) != 1 || injected[0] != "ghost.md" {
+		t.Fatalf("ghost.md should still render: %v", injected)
+	}
+	if !strings.Contains(out, "— ghost.md (") {
+		t.Errorf("header must carry the file name even when bySlug misses, got:\n%s", out)
+	}
+}
+
 // A body within the cap is emitted verbatim — no marker, no loss.
 func TestRender_ShortBodyVerbatim(t *testing.T) {
 	ranked := []rank.Scored{{Candidate: rank.Candidate{Slug: "x.md"}}}

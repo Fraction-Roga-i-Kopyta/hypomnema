@@ -18,19 +18,20 @@ When you open a new Claude Code session in a project, hypomnema injects a `# Mem
 
 ```markdown
 # Memory Context
+When a fact below changes what you say or do, wrap that sentence in <cc-memory filenames="FILE">…</cc-memory> (the tag is hidden from the user).
 
-## sqlalchemy-metadata-reserved-name
+## sqlalchemy-metadata-reserved-name — sqlalchemy-metadata-reserved-name.md (mistake, 2026-03-02)
 Root cause: `metadata_` mapped to column "metadata" collides with `Base.metadata`
 Prevention: Check SQLAlchemy reserved attribute names before mapping
 
-## code-approach
+## code-approach — code-approach.md (feedback, 2026-02-14)
 Parameterized queries only. No hardcoded secrets. No debug logging in committed code.
 
-## verification-before-done
+## verification-before-done — verification-before-done.md (strategy, 2026-01-20)
 Don't claim "done" before running a minimum verification set.
 ```
 
-Claude reads it as part of its context — no RAG query, no vector database, just a markdown block prepended by the hook. When Claude hits a new bug worth remembering, it writes a native memory file and the next session injects it automatically. Memory also survives context compaction and `/clear`: hypomnema re-ranks — on compaction, against the compaction summary itself — and re-injects whatever lands in the top-8 right after, so a compacted session doesn't wake up having forgotten everything it already knew. A fact that misses that post-compaction top-8 is not re-offered again later in the same session.
+Claude reads it as part of its context — no RAG query, no vector database, just a markdown block prepended by the hook. The file name in each header is what a citation names: when a fact actually changes what Claude says or does, it wraps that sentence in `<cc-memory filenames="sqlalchemy-metadata-reserved-name.md">…</cc-memory>` — hidden from the user, read by `close` as the honest usefulness signal. When Claude hits a new bug worth remembering, it writes a native memory file and the next session injects it automatically. Memory also survives context compaction and `/clear`: hypomnema re-ranks — on compaction, against the compaction summary itself — and re-injects whatever lands in the top-8 right after, so a compacted session doesn't wake up having forgotten everything it already knew. A fact that misses that post-compaction top-8 is dropped from the model's *current* context, so a later prompt in the same session can offer it again — dedup now tracks what's actually still visible, not just what was ever shown.
 
 ## What hypomnema adds on top of native
 
@@ -41,7 +42,7 @@ Hypomnema adds:
 | Gap in native | What hypomnema provides |
 |---|---|
 | Native injects only an index, not ranked content | `memoryctl inject` ranks native facts by relevance (keyword overlap + ref_count + recency + effectiveness) and injects the top-K via `additionalContext` — not just a table of contents |
-| No per-session effectiveness signal | WAL captures `trigger-useful`/`trigger-silent` per session; effectiveness feeds back into ranking |
+| No per-session effectiveness signal | WAL captures `<cc-memory>` citations (`cite-useful`/`cite-silent`) per session; effectiveness feeds back into ranking |
 | No decay / lifecycle | `memoryctl close` down-ranks stale facts in the sidecar; nothing is deleted from disk |
 | No secrets gate | `memoryctl guard` (PreToolUse:Write\|Edit) blocks credential patterns before they land in a memory file |
 | No global store | Native memory is per-project only; hypomnema owns `~/.claude/memory-global/` for facts that travel across every project (language rules, universal debugging patterns) |
@@ -50,7 +51,7 @@ Hypomnema adds:
 An A/B replay on the maintainer's corpus suggested ranked injection recovers
 several times more useful memories per budget slot than a random baseline.
 Treat that number as indicative, not proven: the ground-truth labels
-(`trigger-useful`) can only exist for facts the ranker itself injected, so the
+(`cite-useful`) can only exist for facts the ranker itself injected, so the
 comparison measures agreement with past injection policy more than retrieval
 quality against an unbiased oracle, and the lift scales with the candidate-pool
 size. See [`docs/measurements/2026-05-29-v2-ranker-ab.md`](docs/measurements/2026-05-29-v2-ranker-ab.md) for the method and caveats.
@@ -102,19 +103,19 @@ A single relevance ranker (merged from the two v1 pipelines) scores every candid
 ```
 score = 3.0 × overlap(keywords, file keywords+name+description+body)
       + 1.0 × log10(1 + ref_count) × effGate   # popularity, GATED by proven usefulness
-      + 2.0 × recency                  # 1/(1 + days/30) from last USEFUL citation (trigger-useful; fallback created)
+      + 2.0 × recency                  # 1/(1 + days/30) from last USEFUL citation (cite-useful; fallback created)
       + 2.0 × effectiveness            # Bayesian (pos+1)/(pos+neg+2) — neutral 0.5 until signal lands
       + 1.0 × project boost            # project-local facts beat global ones on ties
 
 effGate = clamp(2 × effectiveness, 0, 1)       # 1.0 at the prior 0.5; only damps unearned volume
 ```
 
-Recency tracks the model's use, not the ranker's own output: it decays from the latest `trigger-useful` date (sidecar `last_useful`), never from `last_injected`, so a fact can't refresh its own recency merely by being injected.
+Recency tracks the model's use, not the ranker's own output: it decays from the latest `cite-useful` date (sidecar `last_useful`), never from `last_injected`, so a fact can't refresh its own recency merely by being injected.
 
 Since v2.4.0 the `ref_count` reward is gated by `effGate`, so a fact injected
 hundreds of times that rarely proved useful can't coast on volume — the gate is
 neutral at the Bayesian prior and only *damps* unearned popularity, never
-amplifies. The blend is additive and zero-safe: a brand-new fact with `ref_count=0` and no outcome history is still injectable — it scores on overlap, its frontmatter `created` recency and the neutral prior, not zero. Status filter: `active` and `pinned` only; `stale` is skipped (down-ranked in sidecar, still on disk). Scope filter: only the current project's facts plus the global store inject — other projects' rows never leak in. The result is a flat top-8, capped at 2.5KB per body and 8KB total (Claude Code diverts larger hook payloads to a file the model never sees inline), and each fact injects at most once per session.
+amplifies. The blend is additive and zero-safe: a brand-new fact with `ref_count=0` and no outcome history is still injectable — it scores on overlap, its frontmatter `created` recency and the neutral prior, not zero. Status filter: `active` and `pinned` only; `stale` is skipped (down-ranked in sidecar, still on disk). Scope filter: only the current project's facts plus the global store inject — other projects' rows never leak in. The result is a flat top-8, capped at 2.5KB per body and 8KB total (Claude Code diverts larger hook payloads to a file the model never sees inline), and each fact injects at most once per context (again after a compaction/`/clear` wipes it).
 
 Keyword overlap is the primary signal. Keywords come from git context (branch name, changed filenames, recent commit messages, CWD basename) plus prompt tokens, on both events. The old substring-trigger mechanism is gone; the ranker treats all tokens as relevance signal, not imperative triggers.
 
@@ -247,7 +248,7 @@ The shims activate on next session start.
 
 ## Self-profile
 
-`memoryctl close` regenerates `self-profile.md` on every close (Stop fires per turn) from WAL events. Five sections: meta-signals (total sessions, outcome-positive/negative counts, trigger-useful vs trigger-silent), intuition signal (silent-applied/trigger-useful ratio), strengths (top strategies by success_count), weaknesses (top mistakes by recurrence), and calibration (domains by error rate). Never edit manually — it's a pure function of WAL.
+`memoryctl close` regenerates `self-profile.md` on every close (Stop fires per turn) from WAL events. Five sections: meta-signals (total sessions, legacy outcome-positive/negative counts, cite-useful vs cite-silent), intuition signal (silent-applied/cite-useful ratio), strengths (top strategies by success_count), weaknesses (top mistakes by recurrence), and calibration (domains by error rate). Never edit manually — it's a pure function of WAL.
 
 Run `memoryctl doctor` for a health snapshot: sidecar drift, WAL anomalies, stale facts due for down-rank, global store coverage, **facts larger than the 2.5 KB injection cap** (they inject as a header plus a marker; split or retire them).
 

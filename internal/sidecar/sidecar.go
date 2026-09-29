@@ -39,7 +39,7 @@ type Record struct {
 	Domains       string
 	Created       string
 	LastInjected  string
-	LastUseful    string // latest trigger-useful date — the model's use signal (v6); "" until first useful citation
+	LastUseful    string // latest cite-useful date — the model's use signal (v6); "" until first useful citation
 	RefCount      int
 	Status        string
 	Effectiveness float64
@@ -55,10 +55,10 @@ type Record struct {
 // per-project Reproject clears only its own rows for a same-basename slug.
 // v4 (v2.10.0) made the memory PK composite (slug, project). v5 added
 // `holdout_remaining` for per-fact ablation. v6 (v2.12.0) added last_useful
-// (latest trigger-useful date) so recency can follow the model's use rather
-// than the ranker's own injections. Open wipes a sidecar written by
-// a different generation — the sidecar is a derived projection, so the wipe
-// only costs the next Reproject.
+// (latest cite-useful date, v2.14+; formerly trigger-useful) so recency can
+// follow the model's use rather than the ranker's own injections. Open wipes
+// a sidecar written by a different generation — the sidecar is a derived
+// projection, so the wipe only costs the next Reproject.
 const schemaVersion = "6"
 
 // Open opens (creating if needed) the sidecar DB at dbPath and applies the

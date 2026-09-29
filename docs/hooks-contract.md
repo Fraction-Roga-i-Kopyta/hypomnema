@@ -121,11 +121,20 @@ Verbs may read and write:
   `~/.claude/memory-global/*.md` (global) — per FORMAT.md §3.
 - The runtime tree `~/.claude/memory/`: `.wal` (§5 of FORMAT.md), `.sidecar.db`
   (the single derivative index), `self-profile.md`, and `.runtime/`
-  (session-scoped markers: `injected-<session_id>.list`, `active-skill-<sid>`,
-  and the store-resolution session pin `project-<session_id>.json`, written
-  by `inject` at `SessionStart` and read back by later CLI verbs in the same
-  session via `CLAUDE_CODE_SESSION_ID`/`HYPOMNEMA_SESSION_ID`). All three
-  families of `.runtime/` file are pruned after 7 days of inactivity.
+  (session-scoped markers: `injected-<session_id>.list` — the session's
+  injected union, for `close` classification, WAL `inject`-row dedup, and
+  as the render-dedup fallback when no rendered list exists yet;
+  `rendered-<session_id>.list` — what is in the model's *current* context,
+  the normative dedup source for the next render, reset on `compact`/`clear`;
+  `holdout-<session_id>.list` — facts withheld for `ablate`; `active-skill-<sid>`
+  — the marker `skill-active` writes; and the store-resolution session pin
+  `project-<session_id>.json`, written by `inject` at `SessionStart` and read
+  back by later CLI verbs in the same session via
+  `CLAUDE_CODE_SESSION_ID`/`HYPOMNEMA_SESSION_ID`). The three `*.list` families
+  plus the session pin are pruned after 7 days of inactivity (`inject`'s
+  `pruneRuntimeLists`); `active-skill-<sid>` ages out separately and sooner —
+  `close` removes it after 24 h (§5) — since a stale skill marker would
+  mis-tag `skill-learning` captures long before a week is up.
 
 Verbs MUST NOT modify `~/.claude/settings.json` at runtime, prompt
 interactively (hooks run headless), or block past the configured timeout.
@@ -145,17 +154,22 @@ files / recent commit subjects) and emits the top-8 as
 `source` distinguishes a fresh session from a re-render after the model's
 context was wiped:
 
-- `source=compact` or `source=clear` — the previously injected set is no
-  longer in the model's context, so this render does **not** dedup against
-  `.runtime/injected-<session_id>.list`: any fact still in the top-8 is
-  re-emitted. On `compact` specifically, ranking uses a bounded query built
-  from the transcript's latest `isCompactSummary` record (focus sections,
-  top-40 terms) instead of the empty prompt, so the re-render tracks what the
-  compaction summary is actually about. A slug already logged as `inject` for
-  this session does **not** get a second WAL row on re-render — `ref_count`
-  is not inflated by compaction.
-- any other value (or absent, for the normal session-open path) — the usual
-  once-per-session dedup applies.
+- `source=compact` or `source=clear` — nothing previously rendered survives
+  in the model's context, so this render's dedup resets to nothing: any
+  fact still in the top-8 is re-emitted regardless of what
+  `.runtime/rendered-<session_id>.list` or the injected union hold. On
+  `compact` specifically, ranking uses a bounded query built from the
+  transcript's latest `isCompactSummary` record (focus sections, top-40
+  terms) instead of the empty prompt, so the re-render tracks what the
+  compaction summary is actually about. A slug already logged as `inject`
+  for this session does **not** get a second WAL row on re-render —
+  `ref_count` is not inflated by compaction.
+- any other value (or absent, for the normal session-open path) — dedup
+  against `.runtime/rendered-<session_id>.list`: the slugs currently in the
+  model's context (this render's normative dedup source). A session whose
+  rendered list does not exist yet — one that predates the file, or has not
+  rendered anything this session — falls back to the injected-session-union
+  `.runtime/injected-<session_id>.list`.
 
 Contract:
 
@@ -163,9 +177,11 @@ Contract:
 - Writes an `inject` WAL event per **newly-logged** emitted fact (see above —
   a compact/clear re-render of an already-logged fact writes no second row).
   The sidecar bumps `ref_count` and recency from those events.
-- Records the injected slugs in `.runtime/injected-<session_id>.list` so
-  UserPromptSubmit dedups against them and `close` classifies the whole
-  session's set.
+- Records the injected slugs in `.runtime/injected-<session_id>.list` — the
+  session union used for WAL `inject`-row dedup and read by `close` to
+  classify the whole session's citations — and unions the newly rendered
+  slugs into `.runtime/rendered-<session_id>.list`, reset to exactly this
+  render's output on compact/clear.
 
 ## 3. UserPromptSubmit — `inject --event=UserPromptSubmit`
 
@@ -178,18 +194,52 @@ Same verb, `hookEventName: UserPromptSubmit`. Reads `session_id`, `cwd`,
 notification, a peer/agent hand-back, an auto-continuation, a poll event —
 not something the user typed. `inject` exits 0 immediately: no ranking, no
 `additionalContext`, no WAL write, the injected-set list untouched. Ranking
-that text would spend a fact's once-per-session slot on noise. A payload
+that text would spend a fact's once-per-context slot on noise. A payload
 without `source` (older Claude Code versions) is treated as a real prompt.
 
 Otherwise, re-ranks against the just-typed `prompt` (folded into
 `session_keywords`) and emits **only** facts that newly enter the top-8 —
-anything already listed in `.runtime/injected-<session_id>.list` is not
-re-emitted (once per session per fact). Exit 0 always; `inject` WAL events for
-the newly injected facts.
+anything already listed in `.runtime/rendered-<session_id>.list` (or, when
+that file does not exist yet, the injected-session-union) is not re-emitted:
+once per context, again after a compaction/clear wipes it. Exit 0 always;
+`inject` WAL events for the newly injected facts.
 
 There is no substring-trigger matching and no negation-token logic; all tokens
 are relevance signal to a single ranker (see CLAUDE.md "How injection ranks
 files"). Both are retired v1 mechanics.
+
+`inject`, `recall`, and `skill-inject` each open their rendered
+`additionalContext` with the citation instruction line, verbatim, exactly
+once per delivery:
+
+> When a fact below changes what you say or do, wrap that sentence in
+> `<cc-memory filenames="FILE">…</cc-memory>` (the tag is hidden from the
+> user).
+
+"Hidden from the user" holds for the interactive CLI; headless invocation
+(`claude -p`) or raw SDK output may surface the tag literally, since there
+is no interactive renderer to strip it — the instruction line itself stays
+unchanged regardless.
+
+Past that line, each path renders its own header shape — but the file name
+is always present in it, since the file name is the only thing the model can
+put inside `filenames="…"` to cite that fact:
+
+- **`inject`** (`internal/inject`, `FactHeader`) — one
+  `## <name> — <file.md> (<type>, <created>)` header per injected fact, in
+  ranked order, each followed by its body.
+- **`recall`** (`cmd/memoryctl/recall.go`, `renderRecall`) — a hybrid
+  render: the top match gets a full header, `## <name> — <file.md> (<type>,
+  score N)` (plus a trailing `[stale]` mark when applicable), followed by
+  its body; runner-ups are index-only numbered lines with no `##` header —
+  `N. <file.md> (score)[stale][ — description]` followed by the file's
+  absolute path on the next line.
+- **`skill-inject`** (`cmd/memoryctl/skillinject.go`, `runSkillInject`) — a
+  flat list, no `##` header at all: one `- (<file.md>) <body>` entry per
+  delivered learning.
+
+All three count inside the render budget (§1.3) like any other emitted
+text.
 
 ## 4. PreToolUse `Write|Edit` — `guard` (secrets gate)
 
@@ -261,12 +311,23 @@ it does not print a checkpoint reminder; that v1 behaviour is retired).
 
 Contract (see CLAUDE.md "Lifecycle"):
 
-- Classifies the session's injected set into `trigger-useful` / `trigger-silent`
-  (evidence-phrase or slug/name citation in assistant text) and writes those
-  WAL events.
+- Classifies the session's injected set from explicit `<cc-memory
+  filenames="…">` citations in the assistant transcript: a cited in-scope
+  fact that was actually **delivered** this session (injected, recalled,
+  skill-injected, or read directly with the Read tool) is `cite-useful`; a
+  cited in-scope fact that was never delivered is `cite-undelivered`
+  instead — diagnostic only, not useful, does not arm the guard below and
+  does not confirm a candidate. An injected-but-uncited fact is
+  `cite-silent`, but only in a session with at least one resolvable
+  **delivered** citation — a session that resolved zero delivered
+  citations (nothing cited, or every citation was `cite-undelivered`)
+  writes one session-level `cite-none` instead, so a broken citation
+  channel never fabricates a session of silent facts. Frontmatter
+  `evidence:`/name substring matching no longer produces `cite-*`; it now
+  feeds only the `ablate` holdout observation (`holdout-hit`/`holdout-miss`).
 - Writes a `session-metrics` (v2 shape) and a `session-close` row per turn
   (Stop fires once per turn, not once per session). The per-fact
-  classification rows — `trigger-useful`/`trigger-silent`,
+  classification rows — `cite-useful`/`cite-silent`,
   `holdout-hit`/`holdout-miss` — are written once per (fact, session).
 - Recomputes effectiveness in the sidecar; marks unused facts `stale` past their
   type threshold (age from last injection). No native content is mutated;

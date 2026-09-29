@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/inject"
 )
 
 func skillFixture(t *testing.T) map[string]string {
@@ -56,6 +58,33 @@ func TestSkillInjectReturnsOnlyMatchingSkill(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "hookSpecificOutput") {
 		t.Fatalf("want hookSpecificOutput envelope, got: %s", stdout)
+	}
+}
+
+// TestSkillInjectCiteInstructionAndFileNamePrefix verifies that
+// skill-inject shows the citation instruction once and prefixes every
+// learning entry with its citable file name.
+func TestSkillInjectCiteInstructionAndFileNamePrefix(t *testing.T) {
+	env := skillFixture(t)
+	stdin := `{"session_id":"s9","tool_input":{"skill":"commit"}}`
+	stdout, _, exit := runStdin(t, env, stdin, "skill-inject")
+	if exit != 0 {
+		t.Fatalf("exit=%d, want 0", exit)
+	}
+	var out struct {
+		HookSpecificOutput struct {
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &out); err != nil {
+		t.Fatalf("bad envelope: %v\n%s", err, stdout)
+	}
+	ctx := out.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(ctx, inject.CiteInstruction) {
+		t.Errorf("skill-inject output must carry the citation instruction, got:\n%s", ctx)
+	}
+	if !strings.Contains(ctx, "(commit-learning.md)") {
+		t.Errorf("each learning entry must be prefixed with its citable file name, got:\n%s", ctx)
 	}
 }
 
