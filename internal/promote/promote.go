@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/wal"
 )
 
 // Suggestion is one promotion candidate, ordered mechanical > claudemd >
@@ -211,9 +212,9 @@ func readHistory(walPath string) map[string]*history {
 		h := get(key)
 		switch event {
 		case "cite-useful":
-			h.add(sess, true)
+			h.add(wal.ParentSession(sess), true)
 		case "cite-silent":
-			h.add(sess, false)
+			h.add(wal.ParentSession(sess), false)
 		case "trigger-useful", "trigger-silent", "trigger-silent-retro", "outcome-positive", "outcome-negative":
 			// Usefulness history restarted in v2.14 — only cite-* (explicit
 			// <cc-memory> citations) feed the useful-streak and never-

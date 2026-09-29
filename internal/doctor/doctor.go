@@ -25,6 +25,7 @@ import (
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/inject"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/sidecar"
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/wal"
 )
 
 // Status is the three-level health grade for each check.
@@ -207,12 +208,12 @@ func checkCandidates(memoryDir, claudeHome string, st native.Store) Check {
 			}
 			switch event {
 			case "cite-useful":
-				if k := key + "\x00" + parts[3] + "\x00u"; !seen[k] {
+				if k := key + "\x00" + wal.ParentSession(parts[3]) + "\x00u"; !seen[k] {
 					seen[k] = true
 					t.useful++
 				}
 			case "cite-silent":
-				if k := key + "\x00" + parts[3] + "\x00s"; !seen[k] {
+				if k := key + "\x00" + wal.ParentSession(parts[3]) + "\x00s"; !seen[k] {
 					seen[k] = true
 					t.silent++
 				}
