@@ -122,9 +122,10 @@ Verbs may read and write:
 - The runtime tree `~/.claude/memory/`: `.wal` (§5 of FORMAT.md), `.sidecar.db`
   (the single derivative index), `self-profile.md`, and `.runtime/`
   (session-scoped markers: `injected-<session_id>.list` — the session's
-  injected union, for `close` classification and once-per-session dedup;
+  injected union, for `close` classification, WAL `inject`-row dedup, and
+  as the render-dedup fallback when no rendered list exists yet;
   `rendered-<session_id>.list` — what is in the model's *current* context,
-  the dedup source for the next render, reset on `compact`/`clear`;
+  the normative dedup source for the next render, reset on `compact`/`clear`;
   `holdout-<session_id>.list` — facts withheld for `ablate`; `active-skill-<sid>`
   — the marker `skill-active` writes; and the store-resolution session pin
   `project-<session_id>.json`, written by `inject` at `SessionStart` and read
@@ -193,7 +194,7 @@ Same verb, `hookEventName: UserPromptSubmit`. Reads `session_id`, `cwd`,
 notification, a peer/agent hand-back, an auto-continuation, a poll event —
 not something the user typed. `inject` exits 0 immediately: no ranking, no
 `additionalContext`, no WAL write, the injected-set list untouched. Ranking
-that text would spend a fact's once-per-session slot on noise. A payload
+that text would spend a fact's once-per-context slot on noise. A payload
 without `source` (older Claude Code versions) is treated as a real prompt.
 
 Otherwise, re-ranks against the just-typed `prompt` (folded into
