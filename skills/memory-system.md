@@ -70,7 +70,7 @@ Every delivery opens with one instruction line: when a fact changes what you say
 
 ## Lifecycle
 
-`memoryctl close` runs after each turn (Stop hook): classifies the injected set from explicit `<cc-memory filenames="…">` citations of facts actually delivered this session — `cite-useful` for a cited, delivered fact; `cite-silent` for an injected-but-uncited one, but only in a session that had at least one resolvable citation. `evidence:` phrases no longer produce usefulness; they feed only the `ablate` holdout observation. `close` then recomputes effectiveness and marks unused facts `stale` in the sidecar (age counts from last injection). `pinned` files and `continuity`/`project` facts never decay. No native content is ever mutated by hooks.
+`memoryctl close` runs after each turn (Stop hook): classifies the injected set from explicit `<cc-memory filenames="…">` citations of facts actually delivered this session — `cite-useful` for a cited, delivered fact; `cite-silent` for an injected-but-uncited one, but only in a session that had at least one delivered citation. `evidence:` phrases no longer produce usefulness; they feed only the `ablate` holdout observation. `close` then recomputes effectiveness and marks unused facts `stale` in the sidecar (age counts from last injection). `pinned` files and `continuity`/`project` facts never decay. No native content is ever mutated by hooks.
 
 ## Pull retrieval
 
