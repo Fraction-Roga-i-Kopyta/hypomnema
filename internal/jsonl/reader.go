@@ -1,23 +1,23 @@
 // Package jsonl streams Claude Code session-transcript JSONL files
-// and extracts the assistant-authored text that evidence-learn mines.
+// and extracts the assistant-authored text and thinking for citation parsing.
 //
 // Claude Code writes one JSON object per line to
 // ~/.claude/projects/<slug>/<session-uuid>.jsonl. The object type
 // we care about is:
 //
-//	{"type":"assistant","message":{"content":[{"type":"text","text":"…"}]}}
+//	{"type":"assistant","message":{"content":[{"type":"text","text":"…"},{"type":"thinking","thinking":"…"}]}}
 //
 // Any other type (user, attachment, hook_additional_context,
 // permission-mode, deferred_tools_delta, …) is ignored. Inside the
-// assistant `content` array, only items with `type == "text"` are
-// extracted — `thinking` entries carry the model's hidden reasoning
-// trace, which is never shown to the user and would skew evidence
-// mining toward internal-only phrases.
+// assistant `content` array, Session.Text collects only `type == "text"` items
+// (for evidence mining and other evidence-learn use cases), while Session.Thinking
+// collects `type == "thinking"` items separately (memory citations via
+// <cc-memory filenames="…"> can appear in thinking blocks). These two streams
+// never mix: Text is text-only, Thinking is thinking-only.
 //
 // Some sessions exceed 1MB. We stream — never load the whole file
-// into memory — and expose an iterator that returns one text chunk
-// at a time plus the session_id attached to the first line that
-// carries it.
+// into memory — and expose an iterator that returns one Session
+// at a time with the session_id and both text and thinking content.
 package jsonl
 
 import (
