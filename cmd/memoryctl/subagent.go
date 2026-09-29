@@ -75,16 +75,19 @@ func agentTypeTerms(agentType string) string {
 
 // subagentQuery builds the ranking query: the task this agent was launched
 // with (its Agent call in the parent transcript), else the parent's recent
-// prompts, always with the agent type's words.
-func subagentQuery(parentTranscript, agentType, agentID string) string {
+// prompts, always with the agent type's words. fromTask is true only on the
+// Agent-call branch — the caller uses it to skip the git signal, since a
+// query that already names the task doesn't need the PARENT's branch and
+// working-tree tokens on top.
+func subagentQuery(parentTranscript, agentType, agentID string) (query string, fromTask bool) {
 	typ := agentTypeTerms(agentType)
 	if desc, prompt, ok := jsonl.PendingAgentCall(parentTranscript, agentType, agentID); ok {
-		return strings.TrimSpace(desc + " " + typ + " " + inject.TopTerms(prompt, subagentPromptTerms))
+		return strings.TrimSpace(desc + " " + typ + " " + inject.TopTerms(prompt, subagentPromptTerms)), true
 	}
 	if p, ok := jsonl.RecentUserPrompts(parentTranscript, subagentRecentPrompt); ok {
-		return strings.TrimSpace(typ + " " + inject.TopTerms(p, subagentPromptTerms))
+		return strings.TrimSpace(typ + " " + inject.TopTerms(p, subagentPromptTerms)), false
 	}
-	return typ
+	return typ, false
 }
 
 // runSubagentStart is `inject --event=SubagentStart`: rank the store for
@@ -104,9 +107,10 @@ func runSubagentStart(raw []byte) {
 		// now would claim a delivery that never happens.
 		return
 	}
+	query, fromTask := subagentQuery(in.TranscriptPath, in.AgentType, in.AgentID)
 	res, err := inject.Run(inject.Input{
 		Event: "SubagentStart", SessionID: key, CWD: in.CWD,
-		Prompt:     subagentQuery(in.TranscriptPath, in.AgentType, in.AgentID),
+		Prompt: query, NoGitSignal: fromTask,
 		ClaudeHome: claudeDir(), MemoryDir: memoryDir(), Today: today(),
 		MaxK: subagentMaxK, MaxBytes: subagentMaxBytes,
 		Store: resolveStore(in.CWD).Store,

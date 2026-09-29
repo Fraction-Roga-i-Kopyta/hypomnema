@@ -222,6 +222,27 @@ func TestSubagentStart_ResumeIsNoop(t *testing.T) {
 	}
 }
 
+func TestSubagentQuery_FromTaskFlag(t *testing.T) {
+	own := writeTranscript(t, agentCallLine("t1", "general-purpose", "Fix migration", "Investigate the pgmigration lock"))
+	query, fromTask := subagentQuery(own, "general-purpose", "a1")
+	if !fromTask {
+		t.Errorf("want fromTask=true for this agent's own pending call; query=%q", query)
+	}
+	if !strings.Contains(query, "Fix migration") {
+		t.Errorf("query must contain the call's description; got %q", query)
+	}
+
+	fallback := writeTranscript(t,
+		agentCallLine("t1", "general-purpose", "Fix docker", "dockercache layer"),
+		toolResultLine("t1"),
+		userPromptLine("now look at the pgmigration lock"),
+	)
+	_, fromTask2 := subagentQuery(fallback, "general-purpose", "a2")
+	if fromTask2 {
+		t.Errorf("want fromTask=false when falling back to the parent's recent prompts")
+	}
+}
+
 func TestSubagentStart_ParentHoldoutStaysWithheld(t *testing.T) {
 	f := newStoreFixture(t)
 	f.fact(t, "/tmp/proj", "dockercache", "docker layer cache")
