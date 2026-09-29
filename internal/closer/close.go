@@ -134,7 +134,7 @@ func Run(in Input) (Result, error) {
 		// one. A session with only undelivered citations still writes this
 		// (undelivered never arms the guard above).
 		if len(delivered) == 0 && len(injected) > 0 {
-			wal.Append(in.MemoryDir, fmt.Sprintf("%s|cite-none|%s|%s", in.Today, sid, sid), "|cite-none|"+sid+"|"+sid)
+			wal.AppendSuffixUnique(in.MemoryDir, fmt.Sprintf("%s|cite-none|%s|%s", in.Today, sid, sid), "|cite-none|"+sid+"|"+sid)
 		}
 		// Ablation observation: facts withheld this session get the same
 		// evidence classification, but the verdict flows to holdout-hit/miss
@@ -241,7 +241,7 @@ func slugMeta(claudeHome string, st native.Store) (names map[string]string, evid
 func appendWAL(memDir, day, event, slug, sid string) {
 	target := wal.SanitizeField(slug)
 	line := fmt.Sprintf("%s|%s|%s|%s", day, event, target, sid)
-	wal.Append(memDir, line, "|"+event+"|"+target+"|"+sid)
+	wal.AppendSuffixUnique(memDir, line, "|"+event+"|"+target+"|"+sid)
 }
 
 // projectBySlug maps each in-scope fact's slug to its owning project, project-
