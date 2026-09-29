@@ -311,7 +311,9 @@ func writeSessionList(already, slugs []string, sessionID string) {
 
 // pruneRuntimeLists drops session lists untouched for 7 days: a session that
 // old will never see another inject or close, so its list is dead weight
-// (the live install had accumulated 170+ of them).
+// (the live install had accumulated 170+ of them). agentcall-*.claim marks
+// (pickAgentCall) age out on the same cutoff — a launching call that old has
+// long since been superseded by a fresh transcript tail.
 func pruneRuntimeLists(dir string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -324,7 +326,8 @@ func pruneRuntimeLists(dir string) {
 			strings.HasPrefix(name, "rendered-")) &&
 			strings.HasSuffix(name, ".list")
 		isPin := strings.HasPrefix(name, "project-") && strings.HasSuffix(name, ".json")
-		if !isList && !isPin {
+		isClaim := strings.HasPrefix(name, "agentcall-") && strings.HasSuffix(name, ".claim")
+		if !isList && !isPin && !isClaim {
 			continue
 		}
 		if info, err := e.Info(); err == nil && info.ModTime().Before(cutoff) {

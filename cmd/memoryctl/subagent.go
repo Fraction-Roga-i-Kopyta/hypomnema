@@ -9,6 +9,7 @@ import (
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/closer"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/inject"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/jsonl"
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/pathutil"
 )
 
 // subagentStdin is the SubagentStart / SubagentStop envelope subset
@@ -75,21 +76,59 @@ func agentTypeTerms(agentType string) string {
 	}), " ")
 }
 
-// subagentQuery builds the ranking query: the task this agent was launched
-// with (its Agent call in the parent transcript), else the parent's recent
-// prompts, always with the agent type's words. fromTask is true only on the
-// Agent-call branch — the caller uses it to skip the git signal, since a
-// query that already names the task doesn't need the PARENT's branch and
-// working-tree tokens on top.
+// subagentQuery builds the ranking query: the task this agent was assigned
+// (see pickAgentCall), else the parent's recent prompts, always with the
+// agent type's words. fromTask is true only on the assigned-call branch —
+// the caller uses it to skip the git signal, since a query that already
+// names the task doesn't need the PARENT's branch and working-tree tokens
+// on top.
 func subagentQuery(parentTranscript, agentType, agentID string) (query string, fromTask bool) {
 	typ := agentTypeTerms(agentType)
-	if desc, prompt, ok := jsonl.PendingAgentCall(parentTranscript, agentType, agentID); ok {
-		return strings.TrimSpace(desc + " " + typ + " " + inject.TopTerms(prompt, subagentPromptTerms)), true
+	if c, ok := pickAgentCall(parentTranscript, agentType, agentID); ok {
+		return strings.TrimSpace(c.Description + " " + typ + " " + inject.TopTerms(c.Prompt, subagentPromptTerms)), true
 	}
 	if p, ok := jsonl.RecentUserPrompts(parentTranscript, subagentRecentPrompt); ok {
 		return strings.TrimSpace(typ + " " + inject.TopTerms(p, subagentPromptTerms)), false
 	}
 	return typ, false
+}
+
+// pickAgentCall assigns this subagent the call that launched it. Its own
+// acknowledged call wins. Otherwise the oldest still-unanswered call of its
+// type that no sibling has claimed is claimed atomically and taken, so
+// parallel launches of one type — synchronous ones are never acknowledged —
+// each get a distinct call, in the order their hooks fire.
+func pickAgentCall(parentTranscript, agentType, agentID string) (jsonl.AgentCall, bool) {
+	pending, own, ok := jsonl.AgentCalls(parentTranscript, agentType, agentID)
+	if !ok {
+		return jsonl.AgentCall{}, false
+	}
+	if own != nil {
+		claimAgentCall(own.ID) // siblings without an acknowledgement skip it
+		return *own, true
+	}
+	for _, c := range pending {
+		if claimAgentCall(c.ID) {
+			return c, true
+		}
+	}
+	return jsonl.AgentCall{}, false
+}
+
+// claimAgentCall atomically marks a launching call as taken; false when a
+// sibling already holds it or the runtime dir is unusable.
+func claimAgentCall(id string) bool {
+	dir := filepath.Join(memoryDir(), ".runtime")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return false
+	}
+	f, err := os.OpenFile(filepath.Join(dir, "agentcall-"+pathutil.SafeFileName(id)+".claim"),
+		os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return false
+	}
+	_ = f.Close()
+	return true
 }
 
 // claimSubagentStart atomically creates the key's rendered list as the

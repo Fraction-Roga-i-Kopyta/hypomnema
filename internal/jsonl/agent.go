@@ -40,24 +40,28 @@ type agentCallInput struct {
 	SubagentType string `json:"subagent_type"`
 }
 
-// PendingAgentCall finds the Agent (or legacy Task) call that launched this
-// subagent in the parent transcript. Calls are filtered by subagent_type
-// (absent/empty counts as "general-purpose"). A background launch is
-// acknowledged at once by a tool_result naming the new agent
-// ("agentId: <id>") — often before this hook reads the tail — and that
-// identifies the call exactly, even among parallel launches of one type.
-// Without an acknowledgement (a synchronous launch) the newest call of the
-// type with no tool_result yet is taken. ok is false when the file is
-// unreadable or neither rule finds a call in the tail window.
-func PendingAgentCall(path, agentType, agentID string) (description, prompt string, ok bool) {
+// AgentCall is one Agent (or legacy Task) tool_use in a transcript.
+type AgentCall struct {
+	ID          string
+	Description string
+	Prompt      string
+}
+
+// AgentCalls scans the tail of a parent transcript for launches of
+// agentType (absent/empty subagent_type counts as "general-purpose").
+// pending lists the calls with no tool_result yet, oldest first. own is the
+// call whose tool_result acknowledges agentID ("agentId: <id>", first match
+// wins) — a background launch is acknowledged at once, often before this
+// hook reads the tail; nil when no acknowledgement has landed (always for a
+// synchronous launch). readable is false for an unreadable/non-regular file.
+func AgentCalls(path, agentType, agentID string) (pending []AgentCall, own *AgentCall, readable bool) {
 	lines, readable := readTailLines(path, agentTailBytes)
 	if !readable {
-		return "", "", false
+		return nil, nil, false
 	}
-	type call struct{ id, desc, prompt string }
-	var calls []call
+	var calls []AgentCall
 	answered := map[string]bool{}
-	own := ""
+	ownID := ""
 	for _, line := range lines {
 		var rec agentRecord
 		if json.Unmarshal(line, &rec) != nil || rec.Message == nil {
@@ -75,27 +79,29 @@ func PendingAgentCall(path, agentType, agentID string) (description, prompt stri
 					typ = "general-purpose"
 				}
 				if typ == agentType {
-					calls = append(calls, call{p.ID, in.Description, in.Prompt})
+					calls = append(calls, AgentCall{ID: p.ID, Description: in.Description, Prompt: in.Prompt})
 				}
 			case p.Type == "tool_result" && p.ToolUseID != "":
 				answered[p.ToolUseID] = true
-				if own == "" && agentID != "" && bytes.Contains(p.Content, []byte("agentId: "+agentID)) {
-					own = p.ToolUseID
+				if ownID == "" && agentID != "" && bytes.Contains(p.Content, []byte("agentId: "+agentID)) {
+					ownID = p.ToolUseID
 				}
 			}
 		}
 	}
+	for i := range calls {
+		if ownID != "" && calls[i].ID == ownID {
+			c := calls[i]
+			own = &c
+			break
+		}
+	}
 	for _, c := range calls {
-		if own != "" && c.id == own {
-			return c.desc, c.prompt, true
+		if !answered[c.ID] {
+			pending = append(pending, c)
 		}
 	}
-	for i := len(calls) - 1; i >= 0; i-- {
-		if !answered[calls[i].id] {
-			return calls[i].desc, calls[i].prompt, true
-		}
-	}
-	return "", "", false
+	return pending, own, true
 }
 
 // RecentUserPrompts returns up to n of the newest human-typed prompts in the
