@@ -93,3 +93,17 @@ func TestRun_SubagentSkipsHoldout(t *testing.T) {
 		t.Errorf("subagent close must not classify holdout observations:\n%s", w)
 	}
 }
+
+func TestRun_SubagentRepeatStopWritesOneSessionClose(t *testing.T) {
+	memDir, _, run := subagentFixture(t, subagentFiles, []string{"docker.md"}, nil,
+		assistantText(`<cc-memory filenames="docker.md">fixed the cache</cc-memory>`))
+	run()
+	run()
+	w, _ := os.ReadFile(filepath.Join(memDir, ".wal"))
+	if n := strings.Count(string(w), "|session-close|s1:a1|s1:a1"); n != 1 {
+		t.Fatalf("want exactly one session-close for the subagent key, got %d:\n%s", n, w)
+	}
+	if n := strings.Count(string(w), "|cite-useful|"); n != 1 {
+		t.Fatalf("want exactly one cite-useful row, got %d:\n%s", n, w)
+	}
+}
