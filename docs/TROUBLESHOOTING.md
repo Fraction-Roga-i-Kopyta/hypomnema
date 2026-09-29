@@ -171,9 +171,13 @@ status: active
 
 ## doctor warns `citation_signal: facts were injected … but never cited`
 
-Facts got injected (`# Memory Context` fired) but no `close` ever wrote a
-`cite-useful` row in the last 7 days — WARN only fires once at least 3
-distinct sessions injected something and every one of them cited zero facts.
+Facts got injected (`# Memory Context` fired) but none of the sessions
+`close` classified in the last 7 days carried a `cite-useful` row — WARN
+only fires once at least 3 distinct classified sessions injected something
+and every one of them cited zero delivered facts. A session counts only if
+it carries a `cite-*` row, so sessions closed before the v2.14 upgrade (the
+model was never told to cite) and sessions whose transcript `close` could
+not read are left out.
 This means the honest-usefulness signal itself is off: `cite-useful` /
 `cite-silent` come solely from an explicit `<cc-memory filenames="…">`
 citation in the assistant's own transcript text (CLAUDE.md "Citing memory"),
@@ -188,13 +192,13 @@ few different reasons. Check, in order:
    actually show it, check whether `additionalContext` is being diverted to
    a file by an oversized payload — see the 8 KB budget in "Memory layout"
    (`CLAUDE.md`).
-2. **Is the transcript readable by `close`?** `close` skips classification
-   entirely — writing neither `cite-useful` nor `cite-silent` — when
-   `transcript_path` is missing or the JSONL can't be read; a citation-less
-   *readable* session instead gets a `cite-none` row (see `docs/EVENTS.md`).
-   Grep the WAL for `|cite-none|` in the same window: present means the
-   transcript read fine and the model simply isn't citing; absent alongside
-   zero `cite-*` means the transcript read is failing.
+2. **Are citations landing but not counting?** Every session this check
+   counts had its transcript read (each carries a `cite-none` row). Grep the
+   WAL for `|cite-undelivered|` in the same window: present means the model
+   does cite, but names facts that were not delivered in that session — for
+   example a store reached through a symlinked path (see `docs/EVENTS.md`).
+   An unreadable transcript is a different failure: `close` writes no
+   `cite-*` row at all for it, so it never shows up here.
 3. **Is the model citing at all?** If the instruction line is present and
    transcripts are readable, the model isn't wrapping used facts in the tag.
    This is a prompting/model-behaviour question, not a hypomnema bug — the

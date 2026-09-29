@@ -968,11 +968,16 @@ const citationSignalMinSessions = 3
 // hasn't seen a Stop hook since the cutover reports OK rather than a false
 // WARN.
 //
-// The window stats stay narrower: N is sessions that injected something in
-// the window, M is the subset of those that ALSO carry a cite-useful in the
-// window — the intersection, not a raw cite-useful session count. A session
-// with a citation but no inject this window (e.g. recall-only) must not
-// inflate M; it never showed the channel doing its job on an injected fact.
+// The window stats stay narrower: N is sessions in the window that injected
+// something AND carry a cite-* row — i.e. sessions a citation-aware close
+// actually classified. Every such close that saw injections writes one of
+// cite-useful/cite-silent/cite-none, so this excludes exactly the sessions
+// closed before the cutover, whose model was never told to cite; counting
+// them would raise a false WARN for the first week after an upgrade. M is
+// the subset of N that ALSO carries a cite-useful — the intersection, not a
+// raw cite-useful session count. A session with a citation but no inject
+// this window (e.g. recall-only) must not inflate M; it never showed the
+// channel doing its job on an injected fact.
 func checkCitationSignal(walPath string, now time.Time) Check {
 	const name = "citation_signal"
 	f, err := os.Open(walPath)
@@ -987,6 +992,7 @@ func checkCitationSignal(walPath string, now time.Time) Check {
 	cutoff := now.AddDate(0, 0, -citationSignalWindowDays).Format("2006-01-02")
 	hasCiteHistory := false
 	injSess := map[string]bool{}
+	classifiedSess := map[string]bool{}
 	usefulSess := map[string]bool{}
 
 	sc := bufio.NewScanner(f)
@@ -1003,6 +1009,9 @@ func checkCitationSignal(walPath string, now time.Time) Check {
 		if parts[0] < cutoff {
 			continue
 		}
+		if strings.HasPrefix(event, "cite-") {
+			classifiedSess[sess] = true
+		}
 		switch event {
 		case "inject":
 			injSess[sess] = true
@@ -1017,20 +1026,24 @@ func checkCitationSignal(walPath string, now time.Time) Check {
 	if !hasCiteHistory {
 		return Check{Name: name, Status: OK, Detail: "no citation data yet (pre-v2.14 history)"}
 	}
-	m := 0
+	n, m := 0, 0
 	for sess := range injSess {
+		if !classifiedSess[sess] {
+			continue
+		}
+		n++
 		if usefulSess[sess] {
 			m++
 		}
 	}
-	if len(injSess) >= citationSignalMinSessions && m == 0 {
+	if n >= citationSignalMinSessions && m == 0 {
 		return Check{Name: name, Status: WARN,
 			Detail: fmt.Sprintf("facts were injected in %d session(s) over %d days but never cited — the usefulness signal is off (the model is not citing, or citations are not reaching the transcript); see TROUBLESHOOTING",
-				len(injSess), citationSignalWindowDays)}
+				n, citationSignalWindowDays)}
 	}
 	return Check{Name: name, Status: OK,
 		Detail: fmt.Sprintf("%d/%d injected sessions carried a citation (%dd)",
-			m, len(injSess), citationSignalWindowDays)}
+			m, n, citationSignalWindowDays)}
 }
 
 // checkStoreResolution reports the native store this invocation resolved

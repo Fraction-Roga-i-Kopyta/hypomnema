@@ -817,8 +817,11 @@ func TestCheckCitationSignal_NeverCitedWarns(t *testing.T) {
 	lines := []string{
 		old + "|cite-useful|slug-old|s-old", // proves citation data exists at all
 		today + "|inject|slug-a|s1",
+		today + "|cite-none|s1|s1",
 		today + "|inject|slug-b|s2",
+		today + "|cite-none|s2|s2",
 		today + "|inject|slug-c|s3",
+		today + "|cite-none|s3|s3",
 		// no cite-useful in the 7d window
 	}
 	mustWriteWAL(t, mem, lines)
@@ -839,7 +842,9 @@ func TestCheckCitationSignal_SomeCitedIsOK(t *testing.T) {
 		today + "|inject|slug-a|s1",
 		today + "|cite-useful|slug-a|s1",
 		today + "|inject|slug-b|s2",
+		today + "|cite-none|s2|s2",
 		today + "|inject|slug-c|s3",
+		today + "|cite-none|s3|s3",
 	}
 	mustWriteWAL(t, mem, lines)
 	c := checkCitationSignal(filepath.Join(mem, ".wal"), now)
@@ -895,13 +900,42 @@ func TestCheckCitationSignal_RecallOnlyCiteUsefulDoesNotInflateM(t *testing.T) {
 	today := now.Format("2006-01-02")
 	lines := []string{
 		today + "|inject|slug-a|s1",
+		today + "|cite-none|s1|s1",
 		today + "|inject|slug-b|s2",
+		today + "|cite-none|s2|s2",
 		today + "|inject|slug-c|s3",
+		today + "|cite-none|s3|s3",
 		today + "|cite-useful|slug-d|s4", // recall-only session — no inject row for s4
 	}
 	mustWriteWAL(t, mem, lines)
 	c := checkCitationSignal(filepath.Join(mem, ".wal"), now)
 	if c.Status != WARN || !strings.Contains(c.Detail, "never cited") {
 		t.Fatalf("got %+v, want WARN — s4's cite-useful must not count toward M (no inject in s4 this window)", c)
+	}
+}
+
+// TestCheckCitationSignal_PreCutoverSessionsNotCounted: right after an
+// upgrade the window still holds sessions closed by a pre-citation close —
+// they injected facts but carry no cite-* row, because the model was never
+// told to cite. Only sessions a citation-aware close classified count
+// toward N, so one uncited post-upgrade session must not raise a WARN on
+// the strength of the pre-upgrade ones.
+func TestCheckCitationSignal_PreCutoverSessionsNotCounted(t *testing.T) {
+	_, mem, _ := newFixture(t)
+	now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	yesterday := now.AddDate(0, 0, -1).Format("2006-01-02")
+	today := now.Format("2006-01-02")
+	lines := []string{
+		yesterday + "|inject|slug-a|old1",
+		yesterday + "|trigger-silent|slug-a|old1",
+		yesterday + "|inject|slug-b|old2",
+		yesterday + "|inject|slug-c|old3",
+		today + "|inject|slug-a|new1",
+		today + "|cite-none|new1|new1",
+	}
+	mustWriteWAL(t, mem, lines)
+	c := checkCitationSignal(filepath.Join(mem, ".wal"), now)
+	if c.Status != OK || !strings.Contains(c.Detail, "0/1") {
+		t.Fatalf("got %+v, want OK containing '0/1' (pre-cutover sessions excluded from N)", c)
 	}
 }
