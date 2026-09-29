@@ -106,7 +106,7 @@ variables and run:
 
 ```bash
 LEGACY_STORE="<the .../memory path doctor lists after 'legacy store(s) no longer read', before its '(N facts)'>"
-NEW_STORE="<the .../memory path doctor lists at the start of the store_resolution line, and again after 'move their .md files into'>"
+NEW_STORE="<the .../memory path doctor lists at the start of the store_resolution line, and again after 'move their facts (not MEMORY.md) into'>"
 for f in "$LEGACY_STORE"/*.md; do
   [ "$(basename "$f")" = "MEMORY.md" ] && continue
   mv -n "$f" "$NEW_STORE"/
@@ -169,13 +169,50 @@ line drops the file from injection. Set it to `active` (or delete the line):
 status: active
 ```
 
-## My rule shows under "ambient" in `self-profile.md`, never as trigger-useful/silent
+## doctor warns `citation_signal: facts were injected … but never cited`
+
+Facts got injected (`# Memory Context` fired) but no `close` ever wrote a
+`cite-useful` row in the last 7 days — WARN only fires once at least 3
+distinct sessions injected something and every one of them cited zero facts.
+This means the honest-usefulness signal itself is off: `cite-useful` /
+`cite-silent` come solely from an explicit `<cc-memory filenames="…">`
+citation in the assistant's own transcript text (CLAUDE.md "Citing memory"),
+never from an evidence-phrase or name match, so a session can go quiet for a
+few different reasons. Check, in order:
+
+1. **Is the instruction line actually reaching the model?** The injected
+   `# Memory Context` block should start with "When a fact below changes
+   what you say or do, wrap that sentence in `<cc-memory filenames="FILE">…
+   </cc-memory>`" (see § SessionStart injects nothing above if the block is
+   missing entirely, or `additionalContext` is being diverted to a file by an
+   oversized payload — check the 8 KB budget).
+2. **Is the transcript readable by `close`?** `close` skips classification
+   entirely — writing neither `cite-useful` nor `cite-silent` — when
+   `transcript_path` is missing or the JSONL can't be read; a citation-less
+   *readable* session instead gets a `cite-none` row (see `docs/EVENTS.md`).
+   Grep the WAL for `|cite-none|` in the same window: present means the
+   transcript read fine and the model simply isn't citing; absent alongside
+   zero `cite-*` means the transcript read is failing.
+3. **Is the model citing at all?** If the instruction line is present and
+   transcripts are readable, the model isn't wrapping used facts in the tag.
+   This is a prompting/model-behaviour question, not a hypomnema bug — the
+   tag is deliberately hidden from the user, so there's nothing to visually
+   confirm in the transcript besides grepping raw JSONL for `<cc-memory`.
+
+`citation_signal` reports OK with "no citation data yet" before any `cite-*`
+row has ever been written (a fresh install, or one that hasn't seen a Stop
+hook since the v2.14 cutover) — that is expected, not a problem.
+
+## My rule shows under "ambient" in `self-profile.md`, never as cite-useful/silent
 
 By design when the file has `precision_class: ambient`. Ambient rules shape
 behaviour continuously (tone, language preference, security baseline) without
 producing citation events, so they are excluded from the precision denominator
 on purpose. If the rule *should* produce visible citations, remove
-`precision_class: ambient` and add `evidence:` phrases.
+`precision_class: ambient` — citing still requires the model to actually wrap
+the sentence in `<cc-memory filenames="…">`; `evidence:` phrases no longer
+produce `cite-useful`/`cite-silent` (they only drive the `ablate` holdout
+comparison).
 
 ### An injected fact ends with `…(truncated — N B total; full text: <path>)`
 

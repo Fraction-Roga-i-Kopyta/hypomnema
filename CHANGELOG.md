@@ -1,5 +1,70 @@
 # Changelog
 
+## [Unreleased]
+
+Usefulness now comes from an explicit citation, not a keyword guess. Every
+injected/recalled fact is delivered with an instruction line telling the
+model to wrap the sentence it actually used in `<cc-memory
+filenames="FILE">…</cc-memory>` (the tag is hidden from the user); `close`
+reads that tag — not a substring match against `evidence:` phrases or the
+fact's own name — to decide `cite-useful` vs `cite-silent`. Sidecar schema
+is unchanged (v6); effectiveness recomputes from the WAL on the next
+`close`/reproject, no migration needed. Usefulness history restarted at this
+cutover: every fact begins back at the neutral 0.5 prior, and pre-cutover
+`trigger-*`/`outcome-*` WAL rows stay on disk but are no longer read by any
+usefulness reader.
+
+### Changed
+
+- **Usefulness signal is now citation-based, not evidence/name substring
+  matching.** `close` classifies the session's injected set from explicit
+  `<cc-memory filenames="…">` citations in the assistant transcript: every
+  cited in-scope fact is `cite-useful`; an injected-but-uncited fact is
+  `cite-silent`, but only in a session with at least one resolvable
+  citation (a citation-less-but-readable session instead writes one
+  session-level `cite-none`, so a broken citation channel never fabricates a
+  session of silent facts). Frontmatter `evidence:`/name substring matching
+  no longer produces `cite-*` — it now drives only the `ablate` holdout
+  observation (`holdout-hit`/`holdout-miss`). Every usefulness reader —
+  sidecar effectiveness and `last_useful`, `promote`, self-profile's
+  measurable counters, the `ab` replay harness, and `doctor`'s candidate
+  check — now reads only `cite-*`; `trigger-*`/`outcome-*` rows stay in the
+  WAL as history but are ignored.
+
+### Added
+
+- **`doctor` `citation_signal` check.** Watches for the citation channel
+  going dark — facts get injected but no `cite-useful`/`cite-silent` ever
+  lands — distinct from `open_quanta_last_30d` (which only asks whether a
+  closing event fired at all). OK "no citation data yet" before any
+  `cite-*` history exists; WARN "never cited" once at least 3 sessions
+  injected something in the last 7 days and all of them cited zero facts;
+  OK "M/N injected sessions carried a citation" otherwise. See
+  TROUBLESHOOTING.
+- **Citation instruction line and file names in headers.** `inject`,
+  `recall`, and `skill-inject` now open every delivery with one verbatim
+  instruction line telling the model how to cite a fact it used, and render
+  each fact's header with its file name — `## <name> — <file.md> (<type>,
+  <created>)` — since the file name is the only thing the model can put
+  inside `filenames="…"`. Both count inside the existing render budget.
+- **`Session.Thinking`** (`internal/jsonl`). Assistant `content[].thinking`
+  text is now collected separately from `Session.Text`, so a citation
+  emitted inside a thinking block is still found — `close` scans `Text +
+  "\n\n" + Thinking` for `<cc-memory>` tags.
+
+### Fixed
+
+- **A fact dropped by a post-compaction re-render is injectable again.**
+  `SessionStart`/`UserPromptSubmit` used to dedup against the session's
+  whole injected history (`injected-<sid>.list`), so a fact that fell out
+  of the model's context on a `compact`/`clear` re-render — because it no
+  longer ranked in the new top-8 — could never be re-offered for the rest
+  of the session even though the model could no longer see it. Dedup now
+  tracks `.runtime/rendered-<sid>.list`, the slugs actually in the model's
+  *current* context, reset on every `compact`/`clear` re-render; the
+  session-wide union (`injected-<sid>.list`) still drives `close`
+  classification and `ref_count`, unaffected.
+
 ## [2.13.0] — 2026-09-29
 
 Store resolution and source-aware injection (hook envelope hardening). A live
