@@ -54,8 +54,8 @@ type Session struct {
 	DurationSec int      // last timestamp − first timestamp, in seconds
 }
 
-// maxReadPaths bounds how many distinct Read tool_use calls a session
-// tracks (and, in turn, how many resolved paths ReadPaths can hold) — a
+// maxReadPaths bounds how many distinct Read paths (and unanswered Read
+// calls) a session tracks, and so how many paths ReadPaths can hold — a
 // runaway or adversarial transcript must not balloon memory;
 // citation-delivery matching only ever needs to check a handful of facts
 // against this list.
@@ -106,22 +106,26 @@ func readFilePath(raw json.RawMessage) string {
 	return in.FilePath
 }
 
-// readState tracks every Read tool_use seen (by id → file_path, in
-// first-seen order) and, separately, whether each id's tool_result came
-// back successfully. delivered() resolves the two into the final ReadPaths:
-// an id with no recorded outcome (ok's zero value, false) — because its
-// tool_result was an error, or never appeared at all — is excluded, not
-// merely unconfirmed. This is what makes "the result never arrived" and
-// "the result said is_error: true" collapse to the same NOT-delivered
-// outcome.
+// readState tracks Read tool_use calls by path. A path is delivered once
+// ANY Read of it came back with a successful tool_result; a call whose
+// result was an error, or never appeared at all, leaves its path
+// undelivered — not merely unconfirmed. This is what makes "the result
+// never arrived" and "the result said is_error: true" collapse to the same
+// NOT-delivered outcome.
+//
+// The cap counts distinct paths, not calls: re-reading the same file does
+// not use up room for new ones. Calls still waiting for their result are
+// held in pending and dropped as soon as the result lands, so pending only
+// grows with unanswered calls, bounded by the same cap.
 type readState struct {
-	ids   []string          // tool_use ids, first-seen order, capped at maxReadPaths
-	paths map[string]string // id -> file_path
-	ok    map[string]bool   // id -> tool_result succeeded; absent id reads as false (undelivered)
+	order   []string          // distinct paths, first-seen order, capped at maxReadPaths
+	known   map[string]bool   // path is in order
+	pending map[string]string // tool_use id -> path, awaiting its tool_result
+	ok      map[string]bool   // path -> at least one successful Read
 }
 
 func newReadState() *readState {
-	return &readState{paths: map[string]string{}, ok: map[string]bool{}}
+	return &readState{known: map[string]bool{}, pending: map[string]string{}, ok: map[string]bool{}}
 }
 
 // recordCall registers a Read tool_use's id/path. A blank id or path (an
@@ -131,46 +135,43 @@ func (rs *readState) recordCall(id, path string) {
 	if id == "" || path == "" {
 		return
 	}
-	if _, exists := rs.paths[id]; exists {
+	if !rs.known[path] {
+		if len(rs.order) >= maxReadPaths {
+			return
+		}
+		rs.known[path] = true
+		rs.order = append(rs.order, path)
+	}
+	if _, exists := rs.pending[id]; exists {
 		return // duplicate tool_use id — keep the first
 	}
-	if len(rs.ids) >= maxReadPaths {
+	if len(rs.pending) >= maxReadPaths {
 		return
 	}
-	rs.ids = append(rs.ids, id)
-	rs.paths[id] = path
+	rs.pending[id] = path
 }
 
 // recordResult applies a tool_result's outcome to the Read call it answers,
 // if any — a tool_result for a tool we never tracked (not a Read, or a Read
 // whose input didn't parse) is simply ignored.
 func (rs *readState) recordResult(toolUseID string, isError bool) {
-	if toolUseID == "" {
+	path, tracked := rs.pending[toolUseID]
+	if !tracked {
 		return
 	}
-	if _, tracked := rs.paths[toolUseID]; !tracked {
-		return
+	delete(rs.pending, toolUseID)
+	if !isError {
+		rs.ok[path] = true
 	}
-	rs.ok[toolUseID] = !isError
 }
 
 // delivered returns the successfully-read paths in first-seen order,
 // deduped, capped at maxReadPaths.
 func (rs *readState) delivered() []string {
-	seen := make(map[string]bool, len(rs.ids))
-	out := make([]string, 0, len(rs.ids))
-	for _, id := range rs.ids {
-		if !rs.ok[id] { // false or absent — both mean not delivered
-			continue
-		}
-		p := rs.paths[id]
-		if seen[p] {
-			continue
-		}
-		seen[p] = true
-		out = append(out, p)
-		if len(out) >= maxReadPaths {
-			break
+	out := make([]string, 0, len(rs.order))
+	for _, p := range rs.order {
+		if rs.ok[p] {
+			out = append(out, p)
 		}
 	}
 	return out
