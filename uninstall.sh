@@ -35,7 +35,7 @@ Options:
   --yes, -y       Skip confirmation prompts.
   --help          Show this message.
 
-Always removes the six v2 shims, the memoryctl symlink, hypomnema's
+Always removes the eight v2 shims, the memoryctl symlink, hypomnema's
 settings.json hook entries, and the CLAUDE.md section (if --patch-claude-md
 added one).
 
@@ -81,7 +81,8 @@ removed_shims=0
 # Keep in lockstep with install.sh's shim list and doctor's
 # requiredHookCommands (internal/doctor/doctor.go).
 for shim in session-start.sh user-prompt-submit.sh pre-tool-write.sh \
-            skill-learnings-inject.sh skill-active.sh session-stop.sh; do
+            skill-learnings-inject.sh skill-active.sh session-stop.sh \
+            subagent-start.sh subagent-stop.sh; do
   target="$V2_HOOKS_DIR/$shim"
   if [ -f "$target" ] || [ -L "$target" ]; then
     _run rm "$target"
@@ -121,13 +122,13 @@ removed_bin=$(_remove_our_symlinks "$BIN_DIR")
 echo "  Removed $removed_bin symlink(s) from $BIN_DIR."
 
 # --- [3/3] Strip v2 hypomnema hook entries from settings.json ---
-# Matches only the 6 known v2 shim names install.sh registers (not arbitrary
+# Matches only the 8 known v2 shim names install.sh registers (not arbitrary
 # hooks/v2/*.sh, which could be a user's own hook — review O5).
 echo "[3/3] Stripping hypomnema v2 entries from $SETTINGS..."
 if [ -f "$SETTINGS" ]; then
   if [ "$DRY_RUN" -eq 1 ]; then
     affected=$(jq '[.hooks // {} | to_entries[] | .value[]?.hooks[]?
-                    | select((.command // "") | test("hooks/v2/(session-start|user-prompt-submit|pre-tool-write|skill-learnings-inject|skill-active|session-stop)\\.sh"))] | length' \
+                    | select((.command // "") | test("hooks/v2/(session-start|user-prompt-submit|pre-tool-write|skill-learnings-inject|skill-active|session-stop|subagent-start|subagent-stop)\\.sh"))] | length' \
                   "$SETTINGS" 2>/dev/null || echo 0)
     echo "[dry-run] would strip $affected hypomnema v2 entry(ies) across all hook events"
   else
@@ -140,7 +141,7 @@ if [ -f "$SETTINGS" ]; then
             .value |= (
               map(
                 .hooks = ((.hooks // []) | map(select(
-                  (.command // "") | test("hooks/v2/(session-start|user-prompt-submit|pre-tool-write|skill-learnings-inject|skill-active|session-stop)\\.sh") | not
+                  (.command // "") | test("hooks/v2/(session-start|user-prompt-submit|pre-tool-write|skill-learnings-inject|skill-active|session-stop|subagent-start|subagent-stop)\\.sh") | not
                 )))
               )
               | map(select(((.hooks // []) | length) > 0))
