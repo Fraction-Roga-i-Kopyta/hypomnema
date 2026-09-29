@@ -151,3 +151,62 @@ func TestInject_ResumeKeepsDedup(t *testing.T) {
 		t.Errorf("resume restores the conversation; dedup must still apply: %q", out)
 	}
 }
+
+func TestInject_RenderDedupUsesCurrentContextNotSessionUnion(t *testing.T) {
+	f := newStoreFixture(t)
+	f.fact(t, "/tmp/proj", "prealpha", "pre alpha fact")
+	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
+	rt := filepath.Join(f.mem, ".runtime")
+	os.MkdirAll(rt, 0o755)
+	// prealpha was delivered earlier in the session (union) …
+	os.WriteFile(filepath.Join(rt, "injected-s1.list"), []byte("prealpha.md\n"), 0o600)
+	// … but the post-compaction render did not include it.
+	os.WriteFile(filepath.Join(rt, "rendered-s1.list"), []byte(""), 0o600)
+	out, _, _ := runStdin(t, f.env, `{"session_id":"s1","cwd":"/tmp/proj","prompt":"prealpha"}`, "inject", "--event=UserPromptSubmit")
+	if !strings.Contains(additionalContext(t, out), "pre alpha fact") {
+		t.Errorf("a fact outside the current context must be injectable again: %q", out)
+	}
+	wal, _ := os.ReadFile(filepath.Join(f.mem, ".wal"))
+	if strings.Contains(string(wal), "\x1fprealpha.md|s1") {
+		t.Errorf("re-offering an already-counted fact must not add an inject row:\n%s", wal)
+	}
+	rendered, _ := os.ReadFile(filepath.Join(rt, "rendered-s1.list"))
+	if !strings.Contains(string(rendered), "prealpha.md") {
+		t.Errorf("rendered list must now include prealpha: %q", rendered)
+	}
+}
+
+func TestInject_CompactResetsRenderedList(t *testing.T) {
+	f := newStoreFixture(t)
+	f.fact(t, "/tmp/proj", "prealpha", "pre alpha fact")
+	f.fact(t, "/tmp/proj", "postbeta", "post beta fact")
+	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
+	runStdin(t, f.env, `{"session_id":"s1","cwd":"/tmp/proj","prompt":"prealpha postbeta"}`, "inject", "--event=UserPromptSubmit")
+	transcript := writeSummaryTranscript(t, "8. Current Work:\n   postbeta")
+	out, _, _ := runStdin(t, f.env, `{"session_id":"s1","cwd":"/tmp/proj","source":"compact","transcript_path":"`+transcript+`"}`, "inject", "--event=SessionStart")
+	ctx := additionalContext(t, out)
+	rendered, _ := os.ReadFile(filepath.Join(f.mem, ".runtime", "rendered-s1.list"))
+	got := strings.Fields(string(rendered))
+	// The rendered list is exactly what the compact render showed.
+	for _, s := range got {
+		if !strings.Contains(ctx, strings.TrimSuffix(s, ".md")) {
+			t.Errorf("rendered list names %s which the compact render did not show; ctx=%q", s, ctx)
+		}
+	}
+	if len(got) == 0 {
+		t.Errorf("compact render must record what it showed")
+	}
+}
+
+func TestInject_MissingRenderedListFallsBackToUnion(t *testing.T) {
+	f := newStoreFixture(t)
+	f.fact(t, "/tmp/proj", "prealpha", "pre alpha fact")
+	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
+	rt := filepath.Join(f.mem, ".runtime")
+	os.MkdirAll(rt, 0o755)
+	os.WriteFile(filepath.Join(rt, "injected-s1.list"), []byte("prealpha.md\n"), 0o600)
+	out, _, _ := runStdin(t, f.env, `{"session_id":"s1","cwd":"/tmp/proj","prompt":"prealpha"}`, "inject", "--event=UserPromptSubmit")
+	if strings.Contains(additionalContext(t, out), "pre alpha fact") {
+		t.Errorf("a session that predates the rendered list must keep union dedup: %q", out)
+	}
+}

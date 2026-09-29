@@ -147,8 +147,10 @@ func TestRecallSessionIDTraversal(t *testing.T) {
 		t.Error("sanitised session list missing from .runtime")
 	}
 	for _, e := range entries {
-		if !strings.HasPrefix(e.Name(), "injected-") || !strings.HasSuffix(e.Name(), ".list") {
-			t.Errorf("unexpected file in .runtime: %s", e.Name())
+		name := e.Name()
+		okPrefix := strings.HasPrefix(name, "injected-") || strings.HasPrefix(name, "rendered-")
+		if !okPrefix || !strings.HasSuffix(name, ".list") {
+			t.Errorf("unexpected file in .runtime: %s", name)
 		}
 	}
 }
