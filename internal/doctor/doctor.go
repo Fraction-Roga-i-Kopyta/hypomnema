@@ -25,6 +25,7 @@ import (
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/inject"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/sidecar"
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/wal"
 )
 
 // Status is the three-level health grade for each check.
@@ -207,12 +208,12 @@ func checkCandidates(memoryDir, claudeHome string, st native.Store) Check {
 			}
 			switch event {
 			case "cite-useful":
-				if k := key + "\x00" + parts[3] + "\x00u"; !seen[k] {
+				if k := key + "\x00" + wal.ParentSession(parts[3]) + "\x00u"; !seen[k] {
 					seen[k] = true
 					t.useful++
 				}
 			case "cite-silent":
-				if k := key + "\x00" + parts[3] + "\x00s"; !seen[k] {
+				if k := key + "\x00" + wal.ParentSession(parts[3]) + "\x00s"; !seen[k] {
 					seen[k] = true
 					t.silent++
 				}
@@ -289,6 +290,8 @@ var requiredHookCommands = []string{
 	"skill-learnings-inject.sh",
 	"skill-active.sh",
 	"session-stop.sh",
+	"subagent-start.sh",
+	"subagent-stop.sh",
 }
 
 // shimEvent maps each required v2 shim to the hook event install.sh registers
@@ -302,6 +305,8 @@ var shimEvent = map[string]string{
 	"skill-active.sh":           "PreToolUse",
 	"skill-learnings-inject.sh": "PostToolUse",
 	"session-stop.sh":           "Stop",
+	"subagent-start.sh":         "SubagentStart",
+	"subagent-stop.sh":          "SubagentStop",
 }
 
 func checkSettings(path string) Check {
@@ -469,6 +474,21 @@ func checkMemoryctl(claudeDir string) Check {
 			Name:   "memoryctl_available",
 			Status: WARN,
 			Detail: local + " present but does not run (`--help` failed) — rebuild it: " + rerr.Error(),
+		}
+	}
+	// The subagent shims call `inject --subagent` and `close --subagent`; a
+	// binary rebuilt from an older ref (make build writes the symlink target
+	// in place) refuses them, and the shims swallow that — subagent memory
+	// silently stops. With `{}` on stdin a current binary is a no-op for both.
+	for _, verb := range []string{"close", "inject"} {
+		probe := exec.CommandContext(ctx, local, verb, "--subagent")
+		probe.Stdin = strings.NewReader("{}")
+		if perr := probe.Run(); perr != nil {
+			return Check{
+				Name:   "memoryctl_available",
+				Status: WARN,
+				Detail: local + " predates subagent support (`" + verb + " --subagent` failed) — run `make build && ./install.sh`",
+			}
 		}
 	}
 	if _, err := exec.LookPath("memoryctl"); err != nil {

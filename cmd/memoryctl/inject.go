@@ -41,10 +41,19 @@ func contextWiped(event, src string) bool {
 
 func runInject(args []string) {
 	event := "SessionStart"
+	subagent := false
 	for _, a := range args {
 		switch {
 		case strings.HasPrefix(a, "--event="):
 			event = strings.TrimPrefix(a, "--event=")
+		case a == "--subagent":
+			// Forces the SubagentStart path regardless of --event=. A
+			// memoryctl built before subagent support does not recognize
+			// this flag and exits 2 (unknown flag, below) before reading
+			// stdin — that refusal is what lets a pre-subagent shim detect
+			// and swallow an incompatible binary instead of silently
+			// treating the subagent's envelope as the parent's SessionStart.
+			subagent = true
 		case a == "-h" || a == "--help":
 			fmt.Print(usage)
 			return
@@ -53,10 +62,17 @@ func runInject(args []string) {
 			os.Exit(2)
 		}
 	}
-	if event != "SessionStart" && event != "UserPromptSubmit" {
+	if subagent {
+		event = "SubagentStart"
+	}
+	if event != "SessionStart" && event != "UserPromptSubmit" && event != "SubagentStart" {
 		event = "SessionStart"
 	}
 	raw, _ := io.ReadAll(os.Stdin)
+	if event == "SubagentStart" {
+		runSubagentStart(raw)
+		os.Exit(0)
+	}
 	var in hookStdin
 	if err := json.Unmarshal(raw, &in); err != nil {
 		os.Exit(0) // fail-safe
@@ -295,7 +311,9 @@ func writeSessionList(already, slugs []string, sessionID string) {
 
 // pruneRuntimeLists drops session lists untouched for 7 days: a session that
 // old will never see another inject or close, so its list is dead weight
-// (the live install had accumulated 170+ of them).
+// (the live install had accumulated 170+ of them). agentcall-*.claim marks
+// (pickAgentCall) age out on the same cutoff — a launching call that old has
+// long since been superseded by a fresh transcript tail.
 func pruneRuntimeLists(dir string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -308,7 +326,8 @@ func pruneRuntimeLists(dir string) {
 			strings.HasPrefix(name, "rendered-")) &&
 			strings.HasSuffix(name, ".list")
 		isPin := strings.HasPrefix(name, "project-") && strings.HasSuffix(name, ".json")
-		if !isList && !isPin {
+		isClaim := strings.HasPrefix(name, "agentcall-") && strings.HasSuffix(name, ".claim")
+		if !isList && !isPin && !isClaim {
 			continue
 		}
 		if info, err := e.Info(); err == nil && info.ModTime().Before(cutoff) {

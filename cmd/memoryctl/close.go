@@ -18,18 +18,28 @@ type stopStdin struct {
 	TranscriptPath string `json:"transcript_path"`
 }
 
-// runClose: memoryctl close — the Stop hook. Reads the Stop envelope from
-// stdin, runs the close path, exits 0 always (fail-safe).
+// runClose: memoryctl close — the Stop hook (and, with --subagent, the
+// SubagentStop hook). Reads the envelope from stdin, exits 0 always
+// (fail-safe).
 func runClose(args []string) {
+	subagent := false
 	for _, a := range args {
-		if a == "-h" || a == "--help" {
+		switch a {
+		case "-h", "--help":
 			fmt.Print(usage)
 			return
+		case "--subagent":
+			subagent = true
+		default:
+			fmt.Fprintf(os.Stderr, "memoryctl close: unknown flag %q\n", a)
+			os.Exit(2)
 		}
-		fmt.Fprintf(os.Stderr, "memoryctl close: unknown flag %q\n", a)
-		os.Exit(2)
 	}
 	raw, _ := io.ReadAll(os.Stdin)
+	if subagent {
+		runSubagentStop(raw)
+		os.Exit(0)
+	}
 	var in stopStdin
 	if err := json.Unmarshal(raw, &in); err != nil {
 		os.Exit(0)

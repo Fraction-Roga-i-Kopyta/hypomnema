@@ -1,5 +1,76 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **Ranked memory for subagents.** `SubagentStart` builds a query from the
+  subagent's own launch task — its `Agent`/`Task` call's description and
+  prompt, read back out of the parent transcript, else the parent's 3 most
+  recent prompts — and injects a ranked top-5 (5 KB total) before the
+  subagent's first turn, under its own observation key
+  (`<session_id>:<agent_id>`). A short default skip list (`fork`, `Explore`,
+  `claude-code-guide`, `statusline-setup`) gets no memory; override with
+  `HYPOMNEMA_SUBAGENT_SKIP`, or set it to `*` to opt every subagent out.
+  A fact the parent session is withholding under an ablation stays withheld
+  from its subagents. `close --subagent` (`SubagentStop`) classifies the
+  subagent's own citations — including its `SubagentHandback` report —
+  under that same key, independent of the parent session's classification.
+- **`doctor`'s `memoryctl_available` check warns when the resolved binary
+  predates subagent support** — it probes `close --subagent` directly, so a
+  `make build` from an older ref that still passes `--help` is caught before
+  it ever reaches the subagent shims, which swallow that same refusal at
+  runtime (see Fixed below) rather than corrupt the parent session.
+
+### Fixed
+
+- **The `SubagentStart`/`SubagentStop` shims never surface a pre-subagent
+  `memoryctl` to the harness.** Both now pass `--subagent`, a flag a binary
+  older than subagent support does not recognise — it refuses (exit 2)
+  before reading stdin, instead of silently treating the subagent's
+  envelope as the parent's `SessionStart`, or, on `SubagentStop`, blocking
+  the subagent's own stop and looping it on stderr. The shim swallows that
+  refusal and always exits 0.
+- **Parallel launches of one agent type get distinct calls.** `SubagentStart`
+  used to fall back to the newest unanswered call of the agent's type, so N
+  synchronous launches of one type all matched the same (newest) sibling's
+  task. Each subagent's own acknowledged launch now wins when it has one;
+  otherwise the oldest still-unclaimed call of its type is claimed
+  atomically (`.runtime/agentcall-<id>.claim`) and taken, so parallel
+  launches — synchronous ones are never acknowledged — get distinct calls in
+  the order their hooks fire.
+- **`close`'s per-session WAL dedup is end-anchored, not substring**, across
+  every per-session close row: `cite-useful`, `cite-silent`,
+  `cite-undelivered`, `cite-none`, `holdout-hit`/`holdout-miss`, and a
+  subagent's `session-close` all now dedup with `wal.AppendSuffixUnique`
+  (matching on `strings.HasSuffix`), so a subagent key like `s1:a1` can no
+  longer suppress — or be suppressed by — the parent's own row ending in
+  plain `s1` (see `docs/EVENTS.md`).
+
+### Changed
+
+- **The installer registers 8 hooks** (`SubagentStart`, `SubagentStop`
+  added) and refuses to proceed against a `bin/memoryctl` that predates
+  subagent support — that probe now runs pre-flight, before any file is
+  created.
+- **The installer's stable backup name (`settings.json.backup-hypomnema`)
+  now always points at THIS run's pre-change snapshot**, not the very first
+  one ever taken — every earlier snapshot stays available under its own
+  timestamped name.
+- **`promote` and `doctor`'s candidate check count a session and its
+  subagents as one observation** (`wal.ParentSession`), while sidecar
+  effectiveness, `ab`, self-profile, and doctor's `citation_signal` /
+  `open_quanta_last_30d` continue to treat each subagent key as its own
+  session.
+
+### Upgrade / rollback
+
+- Rolling back below v2.15 leaves the `SubagentStart`/`SubagentStop`
+  registrations in `settings.json`; against an older `memoryctl` those hooks
+  simply do nothing (see Fixed above — no corrupted parent session, no
+  looping subagent). Remove the two entries with this version's
+  `uninstall.sh`, or delete them by hand, for a clean rollback.
+
 ## [2.14.0] — 2026-09-29
 
 Usefulness now comes from an explicit citation, not a keyword guess. Every

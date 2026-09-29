@@ -3,7 +3,7 @@
 **Status:** STABLE. Companion to `docs/FORMAT.md`.
 
 This document describes the wire shape between Claude Code and the hypomnema
-hooks. It covers the six hooks the installer wires, the stdin/stdout JSON
+hooks. It covers the eight hooks the installer wires, the stdin/stdout JSON
 shapes, exit codes, environment variables, and the fail-safe rules.
 
 In v2 every hook is a **thin shim** (`hooks/v2/*.sh`, a few lines of `sh`) that
@@ -14,6 +14,15 @@ is not an optional dependency. The shim's only defensive behaviour is that if
 the binary is missing from its resolved path it exits 0 (so a broken install
 never breaks a session); it does not degrade to a bash fallback.
 
+The two subagent shims (`subagent-start.sh`, `subagent-stop.sh`) do not
+`exec` — they run `memoryctl` and then unconditionally `exit 0`, stderr
+redirected to `/dev/null`, regardless of what `memoryctl` itself returned.
+`subagent-start.sh` also always passes `--subagent` alongside
+`--event=SubagentStart` (§1.2). Both exist to swallow the exit-2 refusal a
+memoryctl older than subagent support gives on `--subagent` (§8, §9) — a
+hook for a feature the resolved binary lacks must be a no-op to the harness,
+never a loud or silently-corrupting error.
+
 The invariants here are what `install.sh` wires into `~/.claude/settings.json`.
 This document describes **hypomnema's own commitments**, not the upstream Claude
 Code envelope (new event types / tool-input fields are tracked separately).
@@ -22,7 +31,7 @@ Code envelope (new event types / tool-input fields are tracked separately).
 
 ## 1. Shared contract
 
-### 1.1 The six hooks
+### 1.1 The eight hooks
 
 `install.sh` (`register_hook` calls) wires exactly these, and nothing else:
 
@@ -34,11 +43,13 @@ Code envelope (new event types / tool-input fields are tracked separately).
 | `PreToolUse` | `Skill` | `skill-active.sh` | `skill-active` | 10 s | Record the activated skill for this session |
 | `PostToolUse` | `Skill` | `skill-learnings-inject.sh` | `skill-inject` | 10 s | Inject skill-learning facts for the skill |
 | `Stop` | — | `session-stop.sh` | `close` | 10 s | Close the session: classify, decay, rollup |
+| `SubagentStart` | — | `subagent-start.sh` | `inject --event=SubagentStart --subagent` | 15 s | Rank + inject memory for a subagent's own task |
+| `SubagentStop` | — | `subagent-stop.sh` | `close --subagent` | 10 s | Classify the subagent's own citations under its key |
 
 Compaction is handled on `SessionStart` with `source=compact`; **no
 `PreCompact`/`PostCompact` hook is registered**. There is also no
 fuzzy-dedup `PreToolUse` hook and no `PostToolUse` outcome/error-detect
-hooks. Those v1 mechanics are retired (see §9).
+hooks. Those v1 mechanics are retired (see §11).
 
 ### 1.2 Input
 
@@ -53,6 +64,8 @@ each verb actually reads:
 | `skill-active` | `session_id`, `tool_input.skill` |
 | `skill-inject` | `session_id`, `cwd` (resolves the store the learnings are read from), `tool_input.skill` |
 | `close` | `session_id`, `cwd`, `transcript_path` |
+| `inject --event=SubagentStart --subagent` | `session_id`, `cwd`, `transcript_path`, `agent_id`, `agent_type` — `session_id` and `transcript_path` are the **parent's**, not the subagent's. `--subagent` forces the `SubagentStart` path regardless of `--event=`; it exists so a memoryctl older than subagent support refuses the unrecognised flag (exit 2, before stdin is even read) rather than defaulting `--event=SubagentStart` to `SessionStart` and silently misreading the subagent's envelope as the parent's (§8, §9) |
+| `close --subagent` | `session_id`, `cwd`, `agent_id`, `agent_type`, `agent_transcript_path` — again `session_id` is the parent's; `agent_transcript_path` is the subagent's own transcript |
 
 ### 1.3 Output
 
@@ -68,10 +81,12 @@ that Claude Code prepends to the model's context:
 }
 ```
 
-`hookEventName` is `SessionStart` or `UserPromptSubmit` for `inject`
-(mirroring the `--event` flag). `additionalContext` is the ranked `# Memory
-Context` block (top-8 facts, ≤2.5 KB per body, ≤8 KB total). Empty context is
-valid and means nothing matched.
+`hookEventName` is `SessionStart`, `UserPromptSubmit`, or `SubagentStart` for
+`inject` (mirroring the `--event` flag). `additionalContext` is the ranked
+`# Memory Context` block (top-8 facts, ≤2.5 KB per body, ≤8 KB total for
+`SessionStart`/`UserPromptSubmit`; top-5, ≤5 KB total for `SubagentStart` —
+same ≤2.5 KB per-fact body cap, just a smaller total and a smaller K — see
+§8 below). Empty context is valid and means nothing matched.
 
 `guard`, `skill-active`, and `close` produce **no** stdout envelope. `guard`
 communicates via exit code + stderr; `skill-active` and `close` are
@@ -110,6 +125,7 @@ Read by `memoryctl` (from its `--help` usage) and by the shims:
 | `HYPOMNEMA_NOW` | Freeze the self-profile `generated:` stamp (`YYYY-MM-DD HH:MM`). | now |
 | `HYPOMNEMA_ALLOW_SECRETS` | Set to `1` to bypass the `guard` secrets gate for a single invocation. | unset |
 | `CLAUDE_HOME` | Test/parallel-install override for hypomnema's own state root, and — checked before `CLAUDE_CONFIG_DIR` — for native store resolution too. | `$HOME/.claude` |
+| `HYPOMNEMA_SUBAGENT_SKIP` | Comma-separated `agent_type` list that gets no memory at `SubagentStart`/`SubagentStop`. Checked with `os.LookupEnv`: when SET it fully replaces the default list (trimmed, empty items dropped); set-but-empty means skip nothing; a single `*` entry means skip every agent type — the full opt-out. Set it in `settings.json`'s top-level `env` block so both hooks inherit it. | `fork,Explore,claude-code-guide,statusline-setup` |
 
 Implementations MAY add new variables. They MUST NOT re-purpose the ones above.
 
@@ -130,9 +146,11 @@ Verbs may read and write:
   — the marker `skill-active` writes; and the store-resolution session pin
   `project-<session_id>.json`, written by `inject` at `SessionStart` and read
   back by later CLI verbs in the same session via
-  `CLAUDE_CODE_SESSION_ID`/`HYPOMNEMA_SESSION_ID`). The three `*.list` families
-  plus the session pin are pruned after 7 days of inactivity (`inject`'s
-  `pruneRuntimeLists`); `active-skill-<sid>` ages out separately and sooner —
+  `CLAUDE_CODE_SESSION_ID`/`HYPOMNEMA_SESSION_ID`; and `agentcall-<tool_use_id>.claim`
+  — the empty marker a SubagentStart writes when it takes a launching Agent
+  call, so parallel launches of one type get distinct calls, §8). The three
+  `*.list` families, the session pin and the `agentcall-*.claim` markers are
+  pruned after 7 days of inactivity (`inject`'s `pruneRuntimeLists`); `active-skill-<sid>` ages out separately and sooner —
   `close` removes it after 24 h (§5) — since a stale skill marker would
   mis-tag `skill-learning` captures long before a week is up.
 
@@ -339,9 +357,131 @@ mid-task you write a `type: continuity` file into the project's native store
 yourself (CLAUDE.md "When to write `continuity`"). The Stop hook does not touch
 them.
 
+## 8. SubagentStart — `inject --event=SubagentStart`
+
+**Timeout:** 15 s.
+
+Reads `session_id`, `cwd`, `transcript_path`, `agent_id`, `agent_type`.
+`session_id` and `transcript_path` on this event are the **parent's** — the
+subagent's own transcript does not exist yet at start; it only appears (as
+`agent_transcript_path`) on SubagentStop.
+
+No-op — exit 0, no stdout, no WAL row, no runtime file — when: `session_id`
+or `agent_id` is empty; `agent_type` is in the skip list (default `fork`,
+`Explore`, `claude-code-guide`, `statusline-setup`; a SET
+`HYPOMNEMA_SUBAGENT_SKIP` replaces the list wholesale, §1.5); or the key
+already has a `rendered-<key>.list` — a resumed agent (the harness does not
+add a second SubagentStart context to a transcript that already carries one)
+or a concurrent duplicate start. That file is created (`O_CREATE|O_EXCL`)
+before ranking begins and stands as the claim on the key, so a start whose
+ranking fails after the claim is written also stays a no-op on retry — the
+key was already claimed, nothing more gets written for it.
+
+Key: `key = session_id + ":" + agent_id` — written verbatim in WAL rows and
+fact headers; sanitized (`pathutil.SafeFileName`, `:` → `_`) in runtime file
+names (`rendered-<key>.list`, `injected-<key>.list`).
+
+Query — built from the **parent's** transcript, tail-bounded to the last
+2 MiB (a line straddling the window boundary is dropped; one landing exactly
+on it is kept):
+
+1. `jsonl.AgentCalls` scans that tail for assistant `Agent`/`Task` tool_use
+   calls of this agent's type, split into `pending` (no `tool_result` yet,
+   oldest first) and `own` (the call whose `tool_result` names
+   `agentId: <agent_id>` — the background-launch acknowledgement). `pickAgentCall`
+   assigns this subagent a call: `own`, if this launch has already been
+   acknowledged, wins outright — exact even among parallel calls of the same
+   type. Otherwise it walks `pending` oldest-first and atomically claims the
+   first call no sibling has taken yet (`O_CREATE|O_EXCL` on
+   `.runtime/agentcall-<id>.claim`, pruned after 7 days alongside the other
+   runtime lists) and uses that one. A synchronous launch is never
+   acknowledged, so parallel synchronous launches of one type are
+   distinguished entirely by claim order — each hook that reaches the claim
+   first keeps its call, so two launches racing for the same call get
+   different ones, in the order their hooks actually fire.
+2. Found: query = the call's `description` + agent-type words + the top-40
+   terms (`inject.TopTerms`) of its `prompt`. The git-context signal (branch,
+   changed files, recent commit subjects) is **not** added — the task
+   description already names the work (`inject.Input.NoGitSignal`).
+3. Not found: query = agent-type words + top-40 terms of the parent's 3 most
+   recent user prompts (`jsonl.RecentUserPrompts`). The git-context signal
+   **is** kept here, since this fallback carries no task text of its own.
+4. Agent-type words are omitted for `general-purpose` (~92% of launches) —
+   they carry no ranking signal there.
+
+Budget: `MaxK = 5`, `MaxBytes = 5000` total — smaller than the session budget
+(§1.3), since a subagent's context window is scarcer, but the same ≤2.5 KB
+per-fact body cap still applies within that smaller total. The citation
+instruction line and per-fact headers are the same ones `inject.Run` always
+produces.
+
+The parent's holdout list (`holdout-<session_id>.list`) is read-only input
+here: a fact the parent session is withholding for an ablation observation
+must not reach its subagent and contaminate that observation. The subagent
+path never writes a holdout list or a store-resolution session pin of its
+own.
+
+Output: same envelope shape as §2/§3 with `hookEventName: "SubagentStart"`;
+when nothing renders there is no stdout at all — not even an empty envelope.
+
+Contract:
+
+- Exit 0 always.
+- A successful (non-skipped, non-duplicate) start writes `injected-<key>.list`
+  when at least one fact was injected, and always writes `rendered-<key>.list`
+  — even empty — as the marker that this key's first start has already run.
+- Writes an `inject` WAL row, keyed to `key`, per newly-injected fact.
+
+## 9. SubagentStop — `close --subagent`
+
+**Timeout:** 10 s.
+
+Reads `session_id`, `cwd`, `agent_id`, `agent_type` (same fields as
+SubagentStart — `session_id` is still the parent's), plus
+`agent_transcript_path`: the subagent's own transcript, where its citations
+and its `SubagentHandback` report live.
+
+No-op when `session_id`, `agent_id`, or `agent_transcript_path` is empty, or
+`agent_type` is in the skip list — same list as SubagentStart (§1.5).
+
+Otherwise runs the same citation classification as `close` (CLAUDE.md
+"Lifecycle") against the subagent's own transcript, under
+`key = session_id + ":" + agent_id`: `cite-useful` / `cite-undelivered` /
+`cite-silent` / `cite-none` rows, exactly as for a normal session.
+`jsonl.ReadSession` folds the text of any `SubagentHandback` tool_use
+(`input.message`) into the transcript's text before classification, so a
+citation the agent makes only in its final hand-back report still counts. A
+subagent whose transcript could not be read (missing/unreadable
+`agent_transcript_path`) still gets its `session-close` row below, but no
+`cite-*` row.
+
+What it leaves to the parent's own next `Stop`: no `session-metrics` row, no
+holdout classification, no sidecar reprojection (`Reproject`/`MarkStale`), no
+`MEMORY.md` regeneration, no self-profile regeneration. Session-level work
+stays with the parent.
+
+It writes one `session-close|<key>|<key>` row, and — unlike the parent's own
+`session-close|<sid>|<sid>` row from §7 (a plain, undeduped `wal.Append`, one
+per turn since Stop fires every turn) — this one IS deduped, with
+`wal.AppendSuffixUnique`: `SubagentStop` can fire more than once for the same
+key (a repeated stop, a retried hook), and a repeat must add nothing. The same
+dedup guards the `cite-none` row above.
+
+End-anchoring is what makes that dedup safe to share with the parent's own
+rows in the first place. Every per-session close row keys off `|event|target|sid`,
+and the parent's plain session id can be a literal prefix of a subagent's
+compound one — `s1` vs. `s1:a1`. A plain-substring dedup check would let the
+shorter parent key match INSIDE an already-written longer subagent row:
+`|cite-useful|t|s1` is a substring of `|cite-useful|t|s1:a1`, since the
+latter starts with exactly those characters — and would silently drop the
+parent's own legitimate row. `wal.AppendSuffixUnique` checks
+`strings.HasSuffix` instead — end-anchored, so `s1` (a substring but never a
+suffix of `s1:a1`) cannot collide with it either way. `candidate-confirmed`
+keeps the old substring dedup; it is intentionally session-free.
+
 ---
 
-## 8. Running hooks manually
+## 10. Running hooks manually
 
 Each verb reads its JSON envelope on stdin; this is how tests and debugging
 exercise them:
@@ -369,7 +509,7 @@ Validate the WAL grammar (FORMAT.md §5) with `memoryctl wal validate`
 
 ---
 
-## 9. Retired in v2
+## 11. Retired in v2
 
 These v1 hooks and behaviours are **gone** — do not implement or rely on them:
 
@@ -384,7 +524,7 @@ These v1 hooks and behaviours are **gone** — do not implement or rely on them:
 - The bash `~/.claude/hooks/memory-*.sh` scripts (replaced by `hooks/v2/*.sh`
   thin shims).
 
-## 10. Versioning
+## 12. Versioning
 
 This document versions together with `FORMAT.md`. Any change to a wire shape,
 exit-code semantics, or the fail-safe rule of an existing hook is a breaking

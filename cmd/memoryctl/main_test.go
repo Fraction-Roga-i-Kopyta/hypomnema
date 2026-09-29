@@ -19,7 +19,7 @@ func hermeticEnviron() []string {
 		"CLAUDE_PROJECT_DIR": true, "CLAUDE_PROJECT_CWD": true,
 		"CLAUDE_CODE_SESSION_ID": true, "HYPOMNEMA_SESSION_ID": true,
 		"CLAUDE_CONFIG_DIR": true, "CLAUDE_COWORK_MEMORY_PATH_OVERRIDE": true,
-		"HYPOMNEMA_GLOBAL_DIR": true,
+		"HYPOMNEMA_GLOBAL_DIR": true, "HYPOMNEMA_SUBAGENT_SKIP": true,
 	}
 	var out []string
 	for _, kv := range os.Environ() {
@@ -39,7 +39,7 @@ func TestHermeticEnviron_DropsStoreAffectingVars(t *testing.T) {
 	vars := []string{
 		"CLAUDE_PROJECT_DIR", "CLAUDE_PROJECT_CWD", "CLAUDE_CODE_SESSION_ID",
 		"HYPOMNEMA_SESSION_ID", "CLAUDE_CONFIG_DIR", "CLAUDE_COWORK_MEMORY_PATH_OVERRIDE",
-		"HYPOMNEMA_GLOBAL_DIR",
+		"HYPOMNEMA_GLOBAL_DIR", "HYPOMNEMA_SUBAGENT_SKIP",
 	}
 	for _, v := range vars {
 		t.Setenv(v, "/should-not-leak")
@@ -97,6 +97,14 @@ func TestMain(m *testing.M) {
 	if err := os.MkdirAll(coverDir, 0o755); err != nil {
 		panic(err)
 	}
+
+	// Some tests call package functions in-process. Point the default state
+	// roots at a throwaway dir so one that forgets its own override can never
+	// write the real ~/.claude. Subprocess tests pass their own values after
+	// these in cmd.Env, and the last duplicate key wins.
+	sandbox := filepath.Join(dir, "sandbox-home", ".claude")
+	os.Setenv("CLAUDE_HOME", sandbox)
+	os.Setenv("CLAUDE_MEMORY_DIR", filepath.Join(sandbox, "memory"))
 
 	code := m.Run()
 
@@ -242,11 +250,13 @@ func newDoctorFixture(t *testing.T) string {
 	hooks := []string{
 		"session-start.sh", "user-prompt-submit.sh",
 		"pre-tool-write.sh", "skill-learnings-inject.sh", "skill-active.sh", "session-stop.sh",
+		"subagent-start.sh", "subagent-stop.sh",
 	}
 	shimEvent := map[string]string{
 		"session-start.sh": "SessionStart", "user-prompt-submit.sh": "UserPromptSubmit",
 		"pre-tool-write.sh": "PreToolUse", "skill-active.sh": "PreToolUse",
 		"skill-learnings-inject.sh": "PostToolUse", "session-stop.sh": "Stop",
+		"subagent-start.sh": "SubagentStart", "subagent-stop.sh": "SubagentStop",
 	}
 	byEvent := map[string][]string{}
 	for _, h := range hooks {

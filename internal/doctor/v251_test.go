@@ -11,7 +11,7 @@ import (
 
 func TestCheckSettings_InvalidJSONFails(t *testing.T) { // review O4
 	claude, mem, cwd := newFixture(t)
-	// Corrupt JSON that nonetheless contains all six shim substrings.
+	// Corrupt JSON that nonetheless contains the six original shim substrings.
 	broken := "{ BROKEN " +
 		`hooks/v2/session-start.sh hooks/v2/user-prompt-submit.sh hooks/v2/pre-tool-write.sh ` +
 		`hooks/v2/skill-learnings-inject.sh hooks/v2/skill-active.sh hooks/v2/session-stop.sh`
@@ -42,6 +42,8 @@ func TestCheckSettings_CorrectWiringOK(t *testing.T) { // review O4 (positive)
 		`"PreToolUse":[{"matcher":"Write|Edit","hooks":[{"type":"command","command":"~/.claude/hooks/v2/pre-tool-write.sh"}]},` +
 		`{"matcher":"Skill","hooks":[{"type":"command","command":"~/.claude/hooks/v2/skill-active.sh"}]}],` +
 		`"PostToolUse":[{"matcher":"Skill","hooks":[{"type":"command","command":"~/.claude/hooks/v2/skill-learnings-inject.sh"}]}],` +
+		`"SubagentStart":[{"hooks":[{"type":"command","command":"~/.claude/hooks/v2/subagent-start.sh"}]}],` +
+		`"SubagentStop":[{"hooks":[{"type":"command","command":"~/.claude/hooks/v2/subagent-stop.sh"}]}],` +
 		`"Stop":[{"hooks":[{"type":"command","command":"~/.claude/hooks/v2/session-stop.sh"}]}]}}`
 	os.WriteFile(filepath.Join(claude, "settings.json"), []byte(s), 0o644)
 	mustFindCheck(t, Run(claude, mem, native.StoreFor(claude, cwd), cwd), "settings_hooks_registered", OK)

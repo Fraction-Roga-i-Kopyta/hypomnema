@@ -22,6 +22,14 @@ const gitSignalTimeout = 500 * time.Millisecond
 // the prompt is empty — the git context of cwd (branch, changed files, recent
 // commit subjects). Deduped, lowercased, Unicode-tokenized.
 func Keywords(cwd, prompt string) []string {
+	return keywords(cwd, prompt, true)
+}
+
+// keywords is Keywords with the git signal made optional: a caller whose
+// prompt already names the task (a subagent launched with its own Agent
+// call) passes withGit=false so the cwd's branch and working-tree tokens —
+// unrelated to that task — don't skew ranking.
+func keywords(cwd, prompt string, withGit bool) []string {
 	seen := map[string]bool{}
 	var out []string
 	add := func(toks []string) {
@@ -34,7 +42,9 @@ func Keywords(cwd, prompt string) []string {
 	}
 	add(tokenize.Relevance(prompt))
 	add(tokenize.Relevance(filepath.Base(cwd)))
-	add(gitSignal(cwd))
+	if withGit {
+		add(gitSignal(cwd))
+	}
 	return out
 }
 

@@ -114,7 +114,8 @@ Usage:
 Hook verbs (invoked by the v2 shims, not run by hand): inject, close, guard,
 skill-inject, skill-active. Each reads a hook envelope on stdin and is
 fail-safe (exit 0 on bad input); guard is the exception — it exits 2 to block
-a secret-bearing write.
+a secret-bearing write. The subagent hooks call inject --subagent
+(SubagentStart) and close --subagent (SubagentStop).
 
 Environment:
   CLAUDE_MEMORY_DIR       Memory root (default: ~/.claude/memory).

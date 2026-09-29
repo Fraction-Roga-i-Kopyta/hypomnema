@@ -173,6 +173,25 @@ func TestInjectVerb_PrunesOldRuntimeLists(t *testing.T) {
 	}
 }
 
+func TestPruneRuntimeLists_PrunesOldAgentCallClaims(t *testing.T) {
+	dir := t.TempDir()
+	stale := filepath.Join(dir, "agentcall-t1.claim")
+	fresh := filepath.Join(dir, "agentcall-t2.claim")
+	os.WriteFile(stale, nil, 0o600)
+	os.WriteFile(fresh, nil, 0o600)
+	old := time.Now().Add(-8 * 24 * time.Hour)
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatal(err)
+	}
+	pruneRuntimeLists(dir)
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Errorf("stale agentcall claim should be pruned, stat err=%v", err)
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Errorf("fresh agentcall claim must survive prune: %v", err)
+	}
+}
+
 func TestInjectVerb_FailSafeOnBadStdin(t *testing.T) {
 	home := t.TempDir()
 	memDir := filepath.Join(home, ".claude", "memory")

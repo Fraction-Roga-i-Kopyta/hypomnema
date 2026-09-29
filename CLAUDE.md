@@ -6,7 +6,7 @@ You are working inside the hypomnema project: a governance + ranking layer for C
 
 Claude Code v2.1.59+ ships native file memory: the harness stores markdown files in `~/.claude/projects/<slug>/memory/` and injects only a `MEMORY.md` index. Hypomnema adds what native lacks:
 
-- **Ranked auto-injection** — `memoryctl inject` (SessionStart + UserPromptSubmit shims) ranks native facts by relevance and injects the top-K via `additionalContext`, not just a table of contents.
+- **Ranked auto-injection** — `memoryctl inject` (SessionStart + UserPromptSubmit shims) ranks native facts by relevance and injects the top-K via `additionalContext`, not just a table of contents, and `SubagentStart` (each eligible subagent gets its own ranked top-5 for the task it was launched with).
 - **Effectiveness measurement** — WAL tracks `<cc-memory>` citations (`cite-useful`/`cite-silent`) per session; Bayesian effectiveness feeds back into ranking.
 - **Decay + lifecycle** — `memoryctl close` (Stop shim) down-ranks stale facts in the sidecar; content is never mutated by hooks.
 - **Secrets gate** — `memoryctl guard` (PreToolUse:Write shim) blocks credential patterns before they land in a memory file.
@@ -37,7 +37,8 @@ to a file the model never reads inline, so the budget is what keeps memory
 actually visible). A fact injects **once per context** — later prompts only
 add facts that newly enter the top-8, and a fact re-enters offerable state
 after a compaction or `/clear` wipes it from the model's context. Per-type
-quotas are not implemented; type balance emerges from relevance.
+quotas are not implemented; type balance emerges from relevance. Subagents
+get a smaller budget — top-5, 5 KB total — ranked against their own task.
 
 ## Frontmatter schema
 
@@ -258,6 +259,7 @@ shows `[retired <date> → successor]` instead of silently forgetting.
 - Marks facts `stale` in the sidecar when unused past their type threshold — age counts from **last injection** (fallback `created`), so facts in rotation stay alive. No native content mutation.
 - Archiving ships as `memoryctl retire` (see the lifecycle loop above): the file moves to the store's `.archive/`, the sidecar row becomes `retired`, and recall shows a tombstone redirect. Stale facts that were never retired simply stop injecting.
 - `status: pinned` files and `continuity`/`project` facts never decay.
+- `memoryctl close --subagent` (SubagentStop) runs the same citation classification on the subagent's own transcript (including its SubagentHandback report) under the key `<session_id>:<agent_id>`; session-level work stays with the parent's Stop. Counters of "how many sessions" (promote, doctor candidates) count a session and its subagents once.
 
 ## How injection ranks files
 
@@ -315,7 +317,7 @@ Look at the start of your context for a `# Memory Context` block with one `## <n
 
 ## Citing memory
 
-Every delivery (`inject`, `recall`, `skill-inject`) opens with one instruction line, verbatim:
+Every delivery (`inject` — SessionStart, UserPromptSubmit, SubagentStart — `recall`, `skill-inject`) opens with one instruction line, verbatim:
 
 > When a fact below changes what you say or do, wrap that sentence in `<cc-memory filenames="FILE">…</cc-memory>` (the tag is hidden from the user).
 
@@ -341,7 +343,7 @@ any injected memory.
 
 ## Subagent context
 
-There is no auto-generated subagent context file (`_agent_context.md` was retired with v1). When you spawn a subagent, pass the relevant facts inline in its prompt.
+Subagents receive ranked memory automatically at `SubagentStart` — query = this agent's Agent-call description + prompt, else the parent's recent prompts — except `fork`, `Explore`, `claude-code-guide`, `statusline-setup` (override with `HYPOMNEMA_SUBAGENT_SKIP`, a comma list; set-but-empty means none skipped, and a `*` entry means skip every agent type — set it in `settings.json`'s `env` block to opt every subagent out). A fact the parent session is withholding under an ablation stays withheld from its subagents. The subagent's citations are measured under its own key, separately from the parent's. Pass inline only what is specific to the task at hand — the ranker already covers general recall. `memoryctl recall` run inside a subagent records against the parent session (there is no agent id in the subagent's Bash environment); `skill-inject` run inside a subagent does the same, for the same reason.
 
 ## Source of truth
 
