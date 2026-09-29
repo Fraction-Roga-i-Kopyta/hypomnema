@@ -52,7 +52,7 @@ type history struct {
 	confirmed  bool
 }
 
-// add records one trigger classification, dedup per session, useful wins —
+// add records one citation classification, dedup per session, useful wins —
 // mirrors the sidecar agg's classify() semantics so promote and ranking
 // read the same session verdicts.
 func (h *history) add(sess string, useful bool) {
@@ -210,10 +210,15 @@ func readHistory(walPath string) map[string]*history {
 		}
 		h := get(key)
 		switch event {
-		case "trigger-useful":
+		case "cite-useful":
 			h.add(sess, true)
-		case "trigger-silent":
+		case "cite-silent":
 			h.add(sess, false)
+		case "trigger-useful", "trigger-silent", "trigger-silent-retro", "outcome-positive", "outcome-negative":
+			// Usefulness history restarted in v2.14 — only cite-* (explicit
+			// <cc-memory> citations) feed the useful-streak and never-
+			// corroborated promotion signals. These legacy events stay in
+			// the WAL as history but no longer count toward either.
 		case "candidate-confirmed":
 			h.confirmed = true
 		case "ablate-start":

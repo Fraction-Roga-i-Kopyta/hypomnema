@@ -5,10 +5,10 @@ import "testing"
 func TestSignalsBefore_LastUseful(t *testing.T) {
 	events := []Event{
 		{Date: "2026-04-01", Kind: "inject", Slug: "a.md", Field: "s1"},
-		{Date: "2026-04-01", Kind: "trigger-useful", Slug: "a.md", Field: "s1"},
-		{Date: "2026-04-03", Kind: "recall", Slug: "a.md", Field: "s2"},         // delivery, not use
-		{Date: "2026-04-05", Kind: "trigger-useful", Slug: "a.md", Field: "s3"}, // on/after cutoff: excluded
-		{Date: "2026-04-02", Kind: "trigger-silent", Slug: "b.md", Field: "s1"},
+		{Date: "2026-04-01", Kind: "cite-useful", Slug: "a.md", Field: "s1"},
+		{Date: "2026-04-03", Kind: "recall", Slug: "a.md", Field: "s2"},      // delivery, not use
+		{Date: "2026-04-05", Kind: "cite-useful", Slug: "a.md", Field: "s3"}, // on/after cutoff: excluded
+		{Date: "2026-04-02", Kind: "cite-silent", Slug: "b.md", Field: "s1"},
 	}
 	sig := SignalsBefore(events, "2026-04-05")
 	if sig["a.md"].LastUseful != "2026-04-01" {
