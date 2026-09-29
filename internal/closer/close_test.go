@@ -302,6 +302,19 @@ func assistantParts(parts ...map[string]any) string {
 	return string(b)
 }
 
+// toolResultLine builds a user-type transcript line carrying the tool_result
+// for a Read tool_use — the jsonl delivery gate only counts a Read as
+// delivered when this line names it (by tool_use_id) and is_error is false.
+func toolResultLine(toolUseID string, isError bool) string {
+	part := map[string]any{"type": "tool_result", "tool_use_id": toolUseID}
+	if isError {
+		part["is_error"] = true
+	}
+	b, _ := json.Marshal(map[string]any{"type": "user", "sessionId": "s1",
+		"message": map[string]any{"content": []map[string]any{part}}})
+	return string(b)
+}
+
 func TestRun_CitationSignal(t *testing.T) {
 	files := map[string]string{
 		"docker.md": "---\nname: Docker cache\ntype: mistake\n---\ndocker cache\n",
@@ -320,7 +333,7 @@ func TestRun_CitationSignal(t *testing.T) {
 			wantUseful: []string{"docker.md"}, wantSilent: []string{"sql.md"}},
 		{name: "no citation at all → no silent (guard off)",
 			text: `used docker.md and SQL index to fix it`},
-		// Delivery gate (ruling W4): citing alone is no longer enough — a
+		// Delivery gate: citing alone is no longer enough — a
 		// resolved citation for a fact that was neither injected nor read
 		// this session earns cite-undelivered, not cite-useful, and does not
 		// arm the cite-silent guard for the injected facts either.
@@ -367,7 +380,7 @@ func TestRun_CitationSignal(t *testing.T) {
 // with the Read tool from the exact project-store or global-store path. A
 // citation that resolves but was never delivered earns cite-undelivered
 // instead, which counts for nothing else and does not arm the cite-silent
-// guard (ruling W4).
+// guard.
 func TestRun_CitationDeliveryGate(t *testing.T) {
 	files := map[string]string{
 		"docker.md": "---\nname: Docker cache\ntype: mistake\n---\ndocker cache\n",
@@ -387,9 +400,9 @@ func TestRun_CitationDeliveryGate(t *testing.T) {
 		os.WriteFile(filepath.Join(memDir, ".wal"), nil, 0o644)
 		os.WriteFile(filepath.Join(memDir, ".runtime", "injected-s1.list"), []byte("docker.md\n"), 0o600)
 		tx := filepath.Join(home, "t.jsonl")
-		readPart := map[string]any{"type": "tool_use", "name": "Read",
+		readPart := map[string]any{"type": "tool_use", "id": "read-extra", "name": "Read",
 			"input": map[string]any{"file_path": filepath.Join(projDir, "extra.md")}}
-		os.WriteFile(tx, []byte(assistantParts(readPart, cite)+"\n"), 0o644)
+		os.WriteFile(tx, []byte(assistantParts(readPart, cite)+"\n"+toolResultLine("read-extra", false)+"\n"), 0o644)
 
 		if _, err := Run(Input{SessionID: "s1", CWD: "/tmp/proj", TranscriptPath: tx,
 			ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir, Today: "2026-09-30"}); err != nil {
@@ -452,9 +465,9 @@ func TestRun_CitationDeliveryGate(t *testing.T) {
 		os.WriteFile(filepath.Join(memDir, ".wal"), nil, 0o644)
 		os.WriteFile(filepath.Join(memDir, ".runtime", "injected-s1.list"), []byte("docker.md\n"), 0o600)
 		tx := filepath.Join(home, "t.jsonl")
-		readPart := map[string]any{"type": "tool_use", "name": "Read",
+		readPart := map[string]any{"type": "tool_use", "id": "read-elsewhere", "name": "Read",
 			"input": map[string]any{"file_path": filepath.Join(elsewhere, "extra.md")}}
-		os.WriteFile(tx, []byte(assistantParts(readPart, cite)+"\n"), 0o644)
+		os.WriteFile(tx, []byte(assistantParts(readPart, cite)+"\n"+toolResultLine("read-elsewhere", false)+"\n"), 0o644)
 
 		if _, err := Run(Input{SessionID: "s1", CWD: "/tmp/proj", TranscriptPath: tx,
 			ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir, Today: "2026-09-30"}); err != nil {
@@ -466,6 +479,40 @@ func TestRun_CitationDeliveryGate(t *testing.T) {
 		}
 		if !strings.Contains(w, "|cite-undelivered|-tmp-proj\x1fextra.md|s1") {
 			t.Errorf("must still classify as undelivered:\n%s", w)
+		}
+	})
+
+	t.Run("Read of the exact store path, is_error:true → cite-undelivered, no cite-useful, no candidate-confirmed", func(t *testing.T) {
+		home := t.TempDir()
+		memDir := filepath.Join(home, ".claude", "memory")
+		projDir := filepath.Join(home, ".claude", "projects", "-tmp-proj", "memory")
+		os.MkdirAll(filepath.Join(memDir, ".runtime"), 0o755)
+		os.MkdirAll(projDir, 0o755)
+		for name, body := range files {
+			os.WriteFile(filepath.Join(projDir, name), []byte(body), 0o644)
+		}
+		os.WriteFile(filepath.Join(projDir, "extra.md"),
+			[]byte("---\nname: Extra\ntype: note\nstatus: candidate\n---\nextra\n"), 0o644)
+		os.WriteFile(filepath.Join(memDir, ".wal"), nil, 0o644)
+		os.WriteFile(filepath.Join(memDir, ".runtime", "injected-s1.list"), []byte("docker.md\n"), 0o600)
+		tx := filepath.Join(home, "t.jsonl")
+		readPart := map[string]any{"type": "tool_use", "id": "read-failed", "name": "Read",
+			"input": map[string]any{"file_path": filepath.Join(projDir, "extra.md")}}
+		os.WriteFile(tx, []byte(assistantParts(readPart, cite)+"\n"+toolResultLine("read-failed", true)+"\n"), 0o644)
+
+		if _, err := Run(Input{SessionID: "s1", CWD: "/tmp/proj", TranscriptPath: tx,
+			ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir, Today: "2026-09-30"}); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		w := string(mustRead(t, filepath.Join(memDir, ".wal")))
+		if !strings.Contains(w, "|cite-undelivered|-tmp-proj\x1fextra.md|s1") {
+			t.Errorf("a failed Read must not count as delivery — citation must be cite-undelivered:\n%s", w)
+		}
+		if strings.Contains(w, "|cite-useful|-tmp-proj\x1fextra.md|s1") {
+			t.Errorf("a failed Read must not earn cite-useful:\n%s", w)
+		}
+		if strings.Contains(w, "|candidate-confirmed|") && strings.Contains(w, "extra.md") {
+			t.Errorf("a failed Read must not graduate the candidate:\n%s", w)
 		}
 	})
 }

@@ -74,7 +74,7 @@ func Run(in Input) (Result, error) {
 			injectedSet[slug] = true
 		}
 		globalDir := native.GlobalMemoryDir(filepath.Dir(in.ClaudeHome))
-		// Delivery gate (ruling W4): a resolved citation only earns
+		// Delivery gate: a resolved citation only earns
 		// cite-useful if the fact actually reached the model this session —
 		// injected (inject + recall + skill-inject, already folded into
 		// injected-<sid>.list) or read directly with the Read tool. Without
