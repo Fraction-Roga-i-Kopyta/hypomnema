@@ -1,6 +1,7 @@
 package promote
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -126,5 +127,29 @@ func TestAnalyze_LegacyTriggerEventsHaveNoEffect(t *testing.T) {
 		if want[s.Slug] != s.Kind {
 			t.Fatalf("%s: kind %q, want %q", s.Slug, s.Kind, want[s.Slug])
 		}
+	}
+}
+
+// Five subagents of one orchestrating session are one observation: they
+// must not by themselves reach the useful-streak or never-corroborated
+// thresholds.
+func TestAnalyze_SubagentKeysCountAsOneSession(t *testing.T) {
+	q := func(slug string) string { return native.QKey("p", slug) }
+	var lines []string
+	for i := 1; i <= 5; i++ {
+		lines = append(lines,
+			fmt.Sprintf("2026-07-01|cite-useful|%s|s1:a%d", q("always"), i),
+			fmt.Sprintf("2026-07-01|cite-silent|%s|s1:a%d", q("dud"), i))
+	}
+	walPath := filepath.Join(t.TempDir(), ".wal")
+	if err := os.WriteFile(walPath, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	files := []native.MemFile{
+		{Slug: "always.md", Project: "p", Type: "feedback", Status: "active"},
+		{Slug: "dud.md", Project: "p", Type: "mistake", Status: "candidate"},
+	}
+	if got := Analyze(files, walPath, Defaults()); len(got) != 0 {
+		t.Fatalf("five subagents of one session must count once; got %+v", got)
 	}
 }

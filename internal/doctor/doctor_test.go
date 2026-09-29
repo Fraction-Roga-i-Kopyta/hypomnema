@@ -939,3 +939,25 @@ func TestCheckCitationSignal_PreCutoverSessionsNotCounted(t *testing.T) {
 		t.Fatalf("got %+v, want OK containing '0/1' (pre-cutover sessions excluded from N)", c)
 	}
 }
+
+func TestCheckCandidates_SubagentKeysCountAsOneSession(t *testing.T) {
+	home := t.TempDir()
+	claudeHome := filepath.Join(home, ".claude")
+	memDir := filepath.Join(claudeHome, "memory")
+	projDir := filepath.Join(claudeHome, "projects", "-tmp-proj", "memory")
+	for _, d := range []string{memDir, projDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	os.WriteFile(filepath.Join(projDir, "dud.md"),
+		[]byte("---\nname: dud\ntype: mistake\nstatus: candidate\n---\nx\n"), 0o644)
+	var wal strings.Builder
+	for i := 1; i <= 5; i++ {
+		fmt.Fprintf(&wal, "2026-07-11|cite-silent|-tmp-proj\x1fdud.md|s1:a%d\n", i)
+	}
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(wal.String()), 0o644)
+	if c := checkCandidates(memDir, claudeHome, native.StoreFor(claudeHome, "/tmp/proj")); c.Status != OK {
+		t.Fatalf("five silent subagents of one session are one silent session: %+v", c)
+	}
+}
