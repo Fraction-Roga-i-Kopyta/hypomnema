@@ -19,7 +19,7 @@ func hermeticEnviron() []string {
 		"CLAUDE_PROJECT_DIR": true, "CLAUDE_PROJECT_CWD": true,
 		"CLAUDE_CODE_SESSION_ID": true, "HYPOMNEMA_SESSION_ID": true,
 		"CLAUDE_CONFIG_DIR": true, "CLAUDE_COWORK_MEMORY_PATH_OVERRIDE": true,
-		"HYPOMNEMA_GLOBAL_DIR": true,
+		"HYPOMNEMA_GLOBAL_DIR": true, "HYPOMNEMA_SUBAGENT_SKIP": true,
 	}
 	var out []string
 	for _, kv := range os.Environ() {
@@ -39,7 +39,7 @@ func TestHermeticEnviron_DropsStoreAffectingVars(t *testing.T) {
 	vars := []string{
 		"CLAUDE_PROJECT_DIR", "CLAUDE_PROJECT_CWD", "CLAUDE_CODE_SESSION_ID",
 		"HYPOMNEMA_SESSION_ID", "CLAUDE_CONFIG_DIR", "CLAUDE_COWORK_MEMORY_PATH_OVERRIDE",
-		"HYPOMNEMA_GLOBAL_DIR",
+		"HYPOMNEMA_GLOBAL_DIR", "HYPOMNEMA_SUBAGENT_SKIP",
 	}
 	for _, v := range vars {
 		t.Setenv(v, "/should-not-leak")
