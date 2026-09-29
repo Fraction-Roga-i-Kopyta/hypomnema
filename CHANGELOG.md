@@ -1,5 +1,41 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **Ranked memory for subagents.** `SubagentStart` builds a query from the
+  subagent's own launch task — its `Agent`/`Task` call's description and
+  prompt, read back out of the parent transcript, else the parent's 3 most
+  recent prompts — and injects a ranked top-5 (5 KB total) before the
+  subagent's first turn, under its own observation key
+  (`<session_id>:<agent_id>`). A short default skip list (`fork`, `Explore`,
+  `claude-code-guide`, `statusline-setup`) gets no memory; override with
+  `HYPOMNEMA_SUBAGENT_SKIP`. A fact the parent session is withholding under
+  an ablation stays withheld from its subagents. `close --subagent`
+  (`SubagentStop`) classifies the subagent's own citations — including its
+  `SubagentHandback` report — under that same key, independent of the
+  parent session's classification.
+
+### Fixed
+
+- **`close`'s per-session WAL dedup is end-anchored, not substring.**
+  `session-close` and `cite-none` now dedup with `wal.AppendSuffixUnique`
+  (matching on `strings.HasSuffix`), so a subagent key like `s1:a1` can no
+  longer suppress — or be suppressed by — the parent's own row ending in
+  plain `s1`.
+
+### Changed
+
+- **The installer registers 8 hooks** (`SubagentStart`, `SubagentStop`
+  added) and refuses to proceed against a `bin/memoryctl` that predates
+  subagent support.
+- **`promote` and `doctor`'s candidate check count a session and its
+  subagents as one observation** (`wal.ParentSession`), while sidecar
+  effectiveness, `ab`, self-profile, and doctor's `citation_signal` /
+  `open_quanta_last_30d` continue to treat each subagent key as its own
+  session.
+
 ## [2.14.0] — 2026-09-29
 
 Usefulness now comes from an explicit citation, not a keyword guess. Every
