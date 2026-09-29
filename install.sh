@@ -220,10 +220,13 @@ fi
 if [ -f "$SETTINGS" ]; then
   BACKUP_TS=$(date +%Y%m%d-%H%M%S)
   _run cp "$SETTINGS" "${SETTINGS}.backup-hypomnema-${BACKUP_TS}"
-  if [ ! -e "${SETTINGS}.backup-hypomnema" ] && [ "$DRY_RUN" -eq 0 ]; then
+  if [ "$DRY_RUN" -eq 0 ]; then
+    # Keep the stable name pointing at THIS run's pre-change snapshot; every
+    # earlier snapshot stays available under its timestamped name.
+    rm -f "${SETTINGS}.backup-hypomnema"
     ln -s "$(basename "${SETTINGS}.backup-hypomnema-${BACKUP_TS}")" \
           "${SETTINGS}.backup-hypomnema" 2>/dev/null || \
-          cp "${SETTINGS}" "${SETTINGS}.backup-hypomnema"
+          cp "${SETTINGS}.backup-hypomnema-${BACKUP_TS}" "${SETTINGS}.backup-hypomnema"
   fi
 fi
 

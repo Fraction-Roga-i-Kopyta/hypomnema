@@ -183,6 +183,23 @@ echo "$out" | grep -q "predates subagent support" || _fail "version guard: missi
 n=$(find "$CD/hooks/v2" -name '*.sh' 2>/dev/null | wc -l | tr -d ' ')
 [ "$n" -eq 0 ] || _fail "version guard: $n shim(s) installed before the abort"
 
+# --- 13. Stable backup name follows THIS run's pre-change snapshot ---
+CD="$(_sandbox backupstable)"
+echo '{}' > "$CD/settings.json"
+CLAUDE_DIR="$CD" "$REPO/install.sh" >/dev/null 2>&1 || _fail "backup-stable: first install failed"
+echo '{"marker":1}' > "$CD/settings.json"
+sleep 1 # BACKUP_TS is second-resolution; force the two runs into different seconds
+CLAUDE_DIR="$CD" "$REPO/install.sh" >/dev/null 2>&1 || _fail "backup-stable: second install failed"
+if [ -e "$CD/settings.json.backup-hypomnema" ]; then
+  if grep -q '"marker"' "$CD/settings.json.backup-hypomnema"; then
+    _ok "stable backup name points at the pre-second-run snapshot"
+  else
+    _fail "stable backup name does not contain the pre-second-run marker"
+  fi
+else
+  _fail "settings.json.backup-hypomnema missing after second install"
+fi
+
 echo ""
 if [ "$FAILS" -gt 0 ]; then
   echo "install_test: $FAILS failure(s)"
