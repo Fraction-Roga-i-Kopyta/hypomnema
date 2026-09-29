@@ -180,6 +180,11 @@ var bayesianCorpusTypes = map[string]bool{
 // sig.outcomesPerSlug. The fraction is what the cold-start-scoring ADR's
 // review-trigger watches for the corpus-level "Bayesian gate is dormant for
 // too many slugs" signal.
+//
+// Scope note: sig.outcomesPerSlug is fed exclusively by outcome-positive/
+// outcome-negative (see collectWALSignals) — a different, hook-fed signal
+// than the cite-useful/cite-silent citation signal the rest of this package
+// moved to. This gate is intentionally untouched by the v2.14 fresh start.
 func computeCorpusBayesianFraction(files []native.MemFile, sig *walSignals, minSamples int) {
 	var total, active int
 	for _, f := range files {
@@ -210,7 +215,7 @@ func now() string {
 }
 
 // walSignals holds every counter derived from the WAL, computed in a
-// single pass. Ambient-aware buckets (trigger-useful measurable etc.)
+// single pass. Ambient-aware buckets (cite-useful measurable etc.)
 // require the ambient slug set ahead of time, so the WAL pass is not
 // fully standalone — but all other counters are.
 type walSignals struct {
@@ -265,8 +270,8 @@ type walSignals struct {
 //   - outcomeCutoff is the YYYY-MM-DD date below which outcome events do
 //     not count toward per-slug Bayesian-gate sampling (empty string
 //     disables the filter).
-//   - intuitionCutoff is the YYYY-MM-DD date below which trigger-useful
-//     and trigger-silent events do not count toward the intuition-
+//   - intuitionCutoff is the YYYY-MM-DD date below which cite-useful
+//     and cite-silent events do not count toward the intuition-
 //     milestone ratio. Same empty-string-disables semantics.
 func collectWALSignals(walPath string, ambient map[string]bool, outcomeCutoff, intuitionCutoff string) (*walSignals, error) {
 	f, err := os.Open(walPath)
@@ -296,8 +301,8 @@ func collectWALSignals(walPath string, ambient map[string]bool, outcomeCutoff, i
 
 	// v2.6.0 (review E1+E2): count SESSIONS, not turns, and classify each
 	// (slug, session) once (useful wins over silent). close writes a
-	// session-metrics + trigger rows on every turn, so per-event counters
-	// inflated totals ~20x; and trigger slugs carry a `.md` suffix while
+	// session-metrics + cite rows on every turn, so per-event counters
+	// inflated totals ~20x; and cite slugs carry a `.md` suffix while
 	// ambient slugs are bare, so the ambient lookup must normalize.
 	sessSet := map[string]bool{} // unique session ids → total sessions
 	type trigAgg struct{ useful, ambient, usefulRecent, silentRecentSeen bool }
@@ -343,10 +348,16 @@ func collectWALSignals(walPath string, ambient map[string]bool, outcomeCutoff, i
 			}
 		case "clean-session":
 			sig.cleanSessions++
+		// outcome-positive/outcome-negative track a different, hook-fed
+		// signal (mistake-not-repeated bookkeeping) than the citation-based
+		// usefulness signal below — intentionally untouched by the v2.14
+		// fresh start. This raw Meta-signals row and the per-slug window
+		// feeding corpus_fraction_with_active_bayesian (computeCorpusBayesianFraction /
+		// sig.outcomesPerSlug) still read outcome-* verbatim.
 		case "outcome-positive":
 			sig.outcomePositive++
 			if len(fields) >= 4 {
-				// Normalize the slug so v2 trigger keys (bareSlug|session) can
+				// Normalize the slug so v2 cite keys (bareSlug|session) can
 				// correlate with legacy outcome keys (review E1).
 				positive[strings.TrimSuffix(fields[2], ".md")+"|"+fields[3]] = true
 			}
@@ -362,7 +373,7 @@ func collectWALSignals(walPath string, ambient map[string]bool, outcomeCutoff, i
 			sig.strategyUsed++
 		case "strategy-gap":
 			sig.strategyGap++
-		case "trigger-useful":
+		case "cite-useful":
 			if len(fields) >= 4 {
 				bare := strings.TrimSuffix(fields[2], ".md")
 				a := getTrig(bare, fields[3])
@@ -372,7 +383,7 @@ func collectWALSignals(walPath string, ambient map[string]bool, outcomeCutoff, i
 					a.usefulRecent = true
 				}
 			}
-		case "trigger-silent":
+		case "cite-silent":
 			if len(fields) >= 4 {
 				bare := strings.TrimSuffix(fields[2], ".md")
 				a := getTrig(bare, fields[3])
@@ -381,6 +392,11 @@ func collectWALSignals(walPath string, ambient map[string]bool, outcomeCutoff, i
 					a.silentRecentSeen = true
 				}
 			}
+		case "trigger-useful", "trigger-silent", "trigger-silent-retro":
+			// Usefulness history restarted in v2.14 — only cite-* (explicit
+			// model citations) feed the "measurable" useful/silent counters
+			// and the intuition-ratio window. These legacy rows stay in the
+			// WAL as history but no longer classify a session.
 		case "evidence-empty":
 			if len(fields) >= 3 {
 				evidenceEmpty[fields[2]] = true
@@ -741,7 +757,7 @@ func renderProfile(ts string, sig *walSignals, weak []weakness, strong []strengt
 	fmt.Fprintf(&b, "| strategy-used (clean session + strategy injected) | %d |\n", sig.strategyUsed)
 	fmt.Fprintf(&b, "| strategy-gap (clean session, no strategy) | %d |\n", sig.strategyGap)
 	fmt.Fprintf(&b, "| ambient activations (rules excluded from precision by design) | %d |\n", sig.ambientActivations)
-	fmt.Fprintf(&b, "| trigger-useful measurable (referenced explicitly) | %d |\n", sig.triggerUsefulMeas)
+	fmt.Fprintf(&b, "| cite-useful measurable (referenced explicitly) | %d |\n", sig.triggerUsefulMeas)
 	fmt.Fprintf(&b, "| silent-applied measurable (silent + outcome-positive) | %d |\n", sig.silentApplied)
 	fmt.Fprintf(&b, "| silent-noise (silent, no application signal — **tuning targets**) | %d |\n", sig.silentNoise)
 	fmt.Fprintf(&b, "| **measurable precision** (useful + applied) / (useful + silent) | **%s%%** |\n", sig.precisionPct)
@@ -759,7 +775,7 @@ func renderProfile(ts string, sig *walSignals, weak []weakness, strong []strengt
 	fmt.Fprintf(&b, "| signal | value |\n")
 	fmt.Fprintf(&b, "|---|---|\n")
 	fmt.Fprintf(&b, "| silent-applied (last 30d) | %d |\n", sig.silentAppliedRecent)
-	fmt.Fprintf(&b, "| trigger-useful measurable (last 30d) | %d |\n", sig.triggerUsefulMeasRecent)
+	fmt.Fprintf(&b, "| cite-useful measurable (last 30d) | %d |\n", sig.triggerUsefulMeasRecent)
 	fmt.Fprintf(&b, "| **silent_applied_to_useful_ratio_30d** | **%s** |\n", formatRatio(sig.intuitionRatioDefined, sig.intuitionRatio))
 	fmt.Fprintf(&b, "| interpretation | %s |\n", interpretIntuitionRatio(sig.intuitionRatioDefined, sig.intuitionRatio))
 

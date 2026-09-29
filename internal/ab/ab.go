@@ -1,6 +1,6 @@
 // Package ab is the A/B null-hypothesis harness: it replays the historical
 // WAL and measures whether the ranker concentrates each session's
-// trigger-useful slugs into a small budget better than random selection.
+// cite-useful slugs into a small budget better than random selection.
 // Signals are aggregated under a strict temporal holdout (events before the
 // session's date only) so the replay is leakage-free.
 package ab
@@ -65,9 +65,11 @@ func ParseWAL(path string) ([]Event, error) {
 	return out, sc.Err()
 }
 
-// EvalSessions groups trigger-useful events by session id (Field), attaching
-// each session's earliest trigger-useful date. Returned sorted by date then
-// useful-set size for determinism.
+// EvalSessions groups cite-useful events by session id (Field), attaching
+// each session's earliest cite-useful date. Returned sorted by date then
+// useful-set size for determinism. Legacy trigger-useful/trigger-silent-
+// retro/outcome-positive rows are not ground truth (v2.14 fresh start) — a
+// WAL carrying only those yields zero eval sessions.
 func EvalSessions(events []Event) []EvalSession {
 	type acc struct {
 		date   string
@@ -75,7 +77,7 @@ func EvalSessions(events []Event) []EvalSession {
 	}
 	bySession := map[string]*acc{}
 	for _, e := range events {
-		if e.Kind != "trigger-useful" {
+		if e.Kind != "cite-useful" {
 			continue
 		}
 		a := bySession[e.Field]
@@ -103,8 +105,19 @@ func EvalSessions(events []Event) []EvalSession {
 
 // SignalsBefore aggregates per-slug signals from events with Date strictly
 // before `date`. inject-agg's Field is its aggregated count (wal-compact.sh).
+//
+// Pos/Neg are derived from cite-useful/cite-silent, one verdict per (slug,
+// session) with useful winning over silent within a session — mirroring the
+// sidecar's agg.classify/outcomes (internal/sidecar/reproject.go) so
+// replayed effectiveness matches the live ranker. Legacy outcome-positive/
+// outcome-negative and trigger-useful/trigger-silent/trigger-silent-retro
+// events are ignored (v2.14 fresh start).
 func SignalsBefore(events []Event, date string) map[string]Signal {
 	out := map[string]Signal{}
+	type sessKey struct{ slug, session string }
+	// verdict holds one classification per (slug, session); cite-useful
+	// always wins, regardless of arrival order relative to cite-silent.
+	verdict := map[sessKey]bool{}
 	for _, e := range events {
 		if e.Date >= date {
 			continue
@@ -125,17 +138,32 @@ func SignalsBefore(events []Event, date string) map[string]Signal {
 			if e.Date > s.LastInject {
 				s.LastInject = e.Date
 			}
-		case "outcome-positive":
-			s.Pos++
-		case "outcome-negative":
-			s.Neg++
-		case "trigger-useful":
+		case "cite-useful":
 			if e.Date > s.LastUseful {
 				s.LastUseful = e.Date
+			}
+			verdict[sessKey{e.Slug, e.Field}] = true // unconditional: useful wins
+		case "cite-silent":
+			k := sessKey{e.Slug, e.Field}
+			if _, seen := verdict[k]; !seen {
+				verdict[k] = false
 			}
 		}
 		out[e.Slug] = s
 	}
+
+	// Fold the per-session verdicts into Pos/Neg after the scan — one
+	// observation per session.
+	for k, useful := range verdict {
+		s := out[k.slug]
+		if useful {
+			s.Pos++
+		} else {
+			s.Neg++
+		}
+		out[k.slug] = s
+	}
+
 	return out
 }
 

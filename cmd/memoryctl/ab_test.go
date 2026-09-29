@@ -17,7 +17,7 @@ func TestABVerb(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		wal += "2026-04-01|inject|cold" + string(rune('0'+i)) + ".md|s0\n"
 	}
-	wal += "2026-04-10|trigger-useful|hot.md|s1\n"
+	wal += "2026-04-10|cite-useful|hot.md|s1\n"
 	if err := os.WriteFile(filepath.Join(memDir, ".wal"), []byte(wal), 0o644); err != nil {
 		t.Fatal(err)
 	}
