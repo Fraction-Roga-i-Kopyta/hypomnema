@@ -37,12 +37,12 @@ func TestReproject_AmbientNotPenalizedBySilence(t *testing.T) { // P3a ambient-e
 	dir := t.TempDir()
 	s, _ := Open(filepath.Join(dir, ".sidecar.db"))
 	defer s.Close()
-	// Five sessions, each marks BOTH facts trigger-silent (injected, not cited).
+	// Five sessions, each marks BOTH facts cite-silent (injected, not cited).
 	var wal string
 	for i := 0; i < 5; i++ {
 		sid := "s" + string(rune('0'+i))
-		wal += "2026-07-01|trigger-silent|amb.md|" + sid + "\n"
-		wal += "2026-07-01|trigger-silent|reg.md|" + sid + "\n"
+		wal += "2026-07-01|cite-silent|amb.md|" + sid + "\n"
+		wal += "2026-07-01|cite-silent|reg.md|" + sid + "\n"
 	}
 	walPath := filepath.Join(dir, ".wal")
 	if err := os.WriteFile(walPath, []byte(wal), 0o644); err != nil {
@@ -73,8 +73,8 @@ func TestReproject_PerProjectEffectivenessNoMerge(t *testing.T) { // E5-deep
 	var wal string
 	for i := 0; i < 3; i++ {
 		sid := "s" + string(rune('0'+i))
-		wal += "2026-07-01|trigger-useful|" + q("projA", "notes.md") + "|" + sid + "\n"
-		wal += "2026-07-01|trigger-silent|" + q("projB", "notes.md") + "|" + sid + "\n"
+		wal += "2026-07-01|cite-useful|" + q("projA", "notes.md") + "|" + sid + "\n"
+		wal += "2026-07-01|cite-silent|" + q("projB", "notes.md") + "|" + sid + "\n"
 	}
 	walPath := filepath.Join(dir, ".wal")
 	if err := os.WriteFile(walPath, []byte(wal), 0o644); err != nil {
@@ -112,7 +112,7 @@ func TestReproject_LegacyBareSlugGrandfathered(t *testing.T) { // E5-deep M2
 	s, _ := Open(filepath.Join(dir, ".sidecar.db"))
 	defer s.Close()
 	// A legacy (pre-v2.10) bare-slug useful event, no project attribution.
-	wal := "2026-06-01|trigger-useful|solo.md|sX\n"
+	wal := "2026-06-01|cite-useful|solo.md|sX\n"
 	walPath := filepath.Join(dir, ".wal")
 	os.WriteFile(walPath, []byte(wal), 0o644)
 	Reproject(s, []native.MemFile{{Slug: "solo.md", Project: "projA", Type: "note", Name: "solo"}}, walPath, []string{"projA"})

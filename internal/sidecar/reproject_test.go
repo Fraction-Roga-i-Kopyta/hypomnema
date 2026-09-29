@@ -290,19 +290,60 @@ func TestPopulateKeywords_PreservesOtherSlugs(t *testing.T) {
 	}
 }
 
-// Effectiveness must learn from the trigger events close already writes:
-// one observation per (slug, session), useful wins over silent within a
-// session, retro-silents count, and legacy outcome-* events still add in.
-func TestReproject_EffectivenessFromTriggerEvents(t *testing.T) {
+// Effectiveness must learn from the cite events close writes: one
+// observation per (slug, session), useful wins over silent within a session.
+func TestReproject_EffectivenessFromCiteEvents(t *testing.T) {
 	dir := t.TempDir()
 	walPath := filepath.Join(dir, ".wal")
 	wal := "" +
 		"2026-04-01|inject|m.md|s1\n" +
-		"2026-04-01|trigger-silent|m.md|s1\n" + // flips to useful below
+		"2026-04-01|cite-silent|m.md|s1\n" + // flips to useful below
+		"2026-04-01|cite-useful|m.md|s1\n" +
+		"2026-04-02|inject|m.md|s2\n" +
+		"2026-04-02|cite-silent|m.md|s2\n" +
+		"2026-04-03|inject|n.md|s1\n" +
+		"2026-04-03|cite-silent|n.md|s1\n" +
+		"2026-04-04|cite-silent|n.md|s2\n" +
+		"2026-04-05|cite-silent|n.md|s3\n"
+	if err := os.WriteFile(walPath, []byte(wal), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(filepath.Join(dir, ".sidecar.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	files := []native.MemFile{
+		{Slug: "m.md", ContentSHA: "m"},
+		{Slug: "n.md", ContentSHA: "n"},
+	}
+	if err := Reproject(s, files, walPath, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// m: useful s1 + silent s2 → (1+1)/(1+1+2) = 0.5
+	if r, _, _ := s.Get("m.md"); r.Effectiveness != 0.5 {
+		t.Errorf("m.md effectiveness = %v, want 0.5 (1 useful session vs 1 silent session)", r.Effectiveness)
+	}
+	// n: three silent sessions, never useful → (0+1)/(0+3+2) = 0.2
+	if r, _, _ := s.Get("n.md"); r.Effectiveness != 0.2 {
+		t.Errorf("n.md effectiveness = %v, want 0.2 (3 silent sessions)", r.Effectiveness)
+	}
+}
+
+// Fresh start (v2.14): the legacy trigger-*/outcome-* lines that used to
+// drive TestReproject_EffectivenessFromTriggerEvents no longer have any
+// effect — with none of them counting, both facts sit at the neutral prior.
+func TestReproject_LegacySignalIgnored(t *testing.T) {
+	dir := t.TempDir()
+	walPath := filepath.Join(dir, ".wal")
+	wal := "" +
+		"2026-04-01|inject|m.md|s1\n" +
+		"2026-04-01|trigger-silent|m.md|s1\n" +
 		"2026-04-01|trigger-useful|m.md|s1\n" +
 		"2026-04-02|inject|m.md|s2\n" +
 		"2026-04-02|trigger-silent|m.md|s2\n" +
-		"2026-04-02|outcome-positive|m.md|s2\n" + // legacy signal still counts
+		"2026-04-02|outcome-positive|m.md|s2\n" +
 		"2026-04-03|inject|n.md|s1\n" +
 		"2026-04-03|trigger-silent|n.md|s1\n" +
 		"2026-04-04|trigger-silent|n.md|s2\n" +
@@ -323,13 +364,68 @@ func TestReproject_EffectivenessFromTriggerEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// m: useful s1 + silent s2 + legacy positive → (2+1)/(2+1+2) = 0.6
-	if r, _, _ := s.Get("m.md"); r.Effectiveness != 0.6 {
-		t.Errorf("m.md effectiveness = %v, want 0.6 (1 useful session + 1 legacy positive vs 1 silent session)", r.Effectiveness)
+	if r, _, _ := s.Get("m.md"); r.Effectiveness != 0.5 {
+		t.Errorf("m.md effectiveness = %v, want 0.5 (legacy trigger-*/outcome-* must not count)", r.Effectiveness)
 	}
-	// n: three silent sessions, never useful → (0+1)/(0+3+2) = 0.2
-	if r, _, _ := s.Get("n.md"); r.Effectiveness != 0.2 {
-		t.Errorf("n.md effectiveness = %v, want 0.2 (3 silent sessions)", r.Effectiveness)
+	if r, _, _ := s.Get("n.md"); r.Effectiveness != 0.5 {
+		t.Errorf("n.md effectiveness = %v, want 0.5 (legacy trigger-*/outcome-* must not count)", r.Effectiveness)
+	}
+}
+
+// Fresh start (v2.14): legacy trigger-*/outcome-* events must have NO effect
+// on effectiveness or last_useful — only explicit cite-* citations do.
+func TestReproject_FreshStartIgnoresLegacySignal(t *testing.T) {
+	dir := t.TempDir()
+	walPath := filepath.Join(dir, ".wal")
+	wal := "" +
+		// Fact A: legacy signal only (trigger-useful x3, outcome-positive x2,
+		// one trigger-silent-retro) — none of it should count.
+		"2026-04-01|inject|a.md|s1\n" +
+		"2026-04-01|trigger-useful|a.md|s1\n" +
+		"2026-04-02|inject|a.md|s2\n" +
+		"2026-04-02|trigger-useful|a.md|s2\n" +
+		"2026-04-03|inject|a.md|s3\n" +
+		"2026-04-03|trigger-useful|a.md|s3\n" +
+		"2026-04-03|outcome-positive|a.md|s3\n" +
+		"2026-04-04|outcome-positive|a.md|s4\n" +
+		"2026-04-05|trigger-silent-retro|a.md|s4\n" +
+		// Fact B: live cite-* signal — two useful sessions, one silent.
+		"2026-09-01|inject|b.md|s5\n" +
+		"2026-09-20|cite-useful|b.md|s5\n" +
+		"2026-09-02|inject|b.md|s6\n" +
+		"2026-09-25|cite-useful|b.md|s6\n" +
+		"2026-09-03|inject|b.md|s7\n" +
+		"2026-09-26|cite-silent|b.md|s7\n"
+	if err := os.WriteFile(walPath, []byte(wal), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(filepath.Join(dir, ".sidecar.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	files := []native.MemFile{
+		{Slug: "a.md", ContentSHA: "a"},
+		{Slug: "b.md", ContentSHA: "b"},
+	}
+	if err := Reproject(s, files, walPath, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	a, _, _ := s.Get("a.md")
+	if a.Effectiveness != 0.5 {
+		t.Errorf("a.md effectiveness = %v, want 0.5 (legacy trigger-*/outcome-* must not count)", a.Effectiveness)
+	}
+	if a.LastUseful != "" {
+		t.Errorf("a.md last_useful = %q, want empty (trigger-useful must not set it)", a.LastUseful)
+	}
+
+	b, _, _ := s.Get("b.md")
+	if b.Effectiveness != 0.6 {
+		t.Errorf("b.md effectiveness = %v, want 0.6 (2 cite-useful sessions + 1 cite-silent session)", b.Effectiveness)
+	}
+	if b.LastUseful != "2026-09-25" {
+		t.Errorf("b.md last_useful = %q, want 2026-09-25 (latest cite-useful date)", b.LastUseful)
 	}
 }
 
@@ -563,7 +659,7 @@ func TestReproject_CandidateGraduation(t *testing.T) {
 	}
 
 	// Graduation also follows plain usefulness (belt and braces for a lost
-	// confirmation event): fresh store, trigger-useful only.
+	// confirmation event): fresh store, cite-useful only.
 	s2, err := Open(filepath.Join(dir, ".sidecar2.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -571,7 +667,7 @@ func TestReproject_CandidateGraduation(t *testing.T) {
 	defer s2.Close()
 	wal2 := filepath.Join(dir, ".wal2")
 	if err := os.WriteFile(wal2,
-		[]byte("2026-07-20|inject|"+q+"|s1\n2026-07-20|trigger-useful|"+q+"|s1\n"), 0o644); err != nil {
+		[]byte("2026-07-20|inject|"+q+"|s1\n2026-07-20|cite-useful|"+q+"|s1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := Reproject(s2, files, wal2, []string{"projA"}); err != nil {

@@ -28,11 +28,11 @@ func TestRun_OrdersByLastUseful(t *testing.T) {
 	// useful in March, b yesterday. Unwired → identical scores → slug order
 	// (a first); wired → b first.
 	wal := "2026-03-01|inject|-tmp-proj\x1fa-fact.md|s0\n" +
-		"2026-03-01|trigger-useful|-tmp-proj\x1fa-fact.md|s0\n" +
+		"2026-03-01|cite-useful|-tmp-proj\x1fa-fact.md|s0\n" +
 		"2026-08-15|inject|-tmp-proj\x1fa-fact.md|s1\n" +
 		"2026-03-01|inject|-tmp-proj\x1fb-fact.md|s0\n" +
 		"2026-08-15|inject|-tmp-proj\x1fb-fact.md|s1\n" +
-		"2026-08-15|trigger-useful|-tmp-proj\x1fb-fact.md|s1\n"
+		"2026-08-15|cite-useful|-tmp-proj\x1fb-fact.md|s1\n"
 	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(wal), 0o644)
 
 	res, err := Run(Input{SessionID: "s2", CWD: "/tmp/proj", Prompt: "alpha",

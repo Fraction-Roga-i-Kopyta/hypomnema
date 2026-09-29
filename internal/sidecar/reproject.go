@@ -16,9 +16,9 @@ type agg struct {
 	neg        int
 	created    string // earliest WAL date for the slug
 	lastInject string // latest inject date
-	lastUseful string // latest trigger-useful date (recall is delivery, not use)
+	lastUseful string // latest cite-useful date (recall is delivery, not use)
 	// sessions holds one classification per session id: true once the slug
-	// was trigger-useful in that session (useful wins over silent — close
+	// was cite-useful in that session (useful wins over silent — close
 	// runs every turn, so a fact silent at turn 1 may be cited at turn 5).
 	sessions map[string]bool
 	// retired is true when the WAL carries a retire event for the slug with
@@ -48,8 +48,10 @@ func (a *agg) holdoutRemaining() int {
 }
 
 // graduated reports whether a candidate fact has earned active status: an
-// explicit confirmation event, or any useful evidence (belt and braces —
-// the event is the primary signal, usefulness covers a lost event).
+// explicit confirmation event, or any cite-useful session (belt and braces —
+// the event is the primary signal, usefulness covers a lost event). There is
+// no outcome path any more: a.pos is never incremented (legacy outcome-
+// positive is ignored since v2.14), so it always reads as 0 here.
 func (a *agg) graduated() bool {
 	if a.confirmed || a.pos > 0 {
 		return true
@@ -109,8 +111,10 @@ func (a *agg) classify(session string, useful bool) {
 	}
 }
 
-// outcomes folds the per-session trigger classifications into the legacy
-// outcome-positive/negative counters: pos+neg for the Bayesian effectiveness.
+// outcomes folds the per-session cite classifications into pos/neg for the
+// Bayesian effectiveness formula. a.pos/a.neg (the legacy outcome-positive/
+// negative counters) are always 0 since v2.14 — kept as fields so a rebuilt
+// sidecar's shape does not change, but nothing increments them any more.
 func (a *agg) outcomes() (pos, neg int) {
 	pos, neg = a.pos, a.neg
 	for _, useful := range a.sessions {
@@ -358,20 +362,23 @@ func readWALAgg(walPath string) map[string]*agg {
 			if date > a.lastInject {
 				a.lastInject = date
 			}
-		case "outcome-positive":
-			a.pos++
-		case "outcome-negative":
-			a.neg++
-		// The trigger events close writes are the live usefulness signal:
-		// cited-in-session → positive, injected-but-silent → negative.
-		// Deduped per session via classify (close fires on every turn).
-		case "trigger-useful":
+		// cite-useful/cite-silent are the live usefulness signal (v2.14):
+		// close now writes these only for an explicit <cc-memory> citation
+		// in the model's own text. Deduped per session via classify (close
+		// fires on every turn, so a fact silent at turn 1 may be cited at
+		// turn 5).
+		case "cite-useful":
 			a.classify(field4, true)
 			if date > a.lastUseful {
 				a.lastUseful = date
 			}
-		case "trigger-silent", "trigger-silent-retro":
+		case "cite-silent":
 			a.classify(field4, false)
+		case "trigger-useful", "trigger-silent", "trigger-silent-retro", "outcome-positive", "outcome-negative":
+			// Usefulness history restarted in v2.14 — only cite-* (explicit
+			// model citations) feed effectiveness and recency. These legacy
+			// events stay in the WAL as history but no longer classify
+			// sessions, move last_useful, or bump pos/neg.
 		case "retire":
 			a.retired = true
 		case "revive":
