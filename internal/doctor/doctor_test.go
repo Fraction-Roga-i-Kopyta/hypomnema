@@ -424,7 +424,7 @@ func TestOpenQuanta_MajorityOpenWarns(t *testing.T) {
 
 // TestOpenQuanta_CiteEventsCloseTheSession verifies the v2.14+ closing
 // signals: a session with only inject + cite-useful (or cite-silent) is
-// closed, and — the brief's explicit regression case — a session with only
+// closed, and — the explicit regression case — a session with only
 // inject + cite-none (the "readable transcript, no resolvable citation"
 // marker) is also closed, not counted as an open quantum.
 func TestOpenQuanta_CiteEventsCloseTheSession(t *testing.T) {
@@ -661,8 +661,8 @@ func TestCheckCandidates(t *testing.T) {
 }
 
 // TestCheckCandidates_CiteNoneAndUndeliveredDoNotCount: cite-none's target
-// is a session id, not a fact slug (ruling W6), and cite-undelivered is
-// diagnostic-only (ruling W4) — neither may contribute to a candidate's
+// is a session id, not a fact slug, and cite-undelivered is
+// diagnostic-only — neither may contribute to a candidate's
 // useful/silent tally. A candidate at exactly the WARN threshold from real
 // cite-silent rows must stay flagged with an unchanged count even when the
 // WAL is full of cite-none/cite-undelivered noise, including a pathological
@@ -855,5 +855,53 @@ func TestCheckCitationSignal_MissingWALIsOK(t *testing.T) {
 	c := checkCitationSignal(filepath.Join(mem, ".wal"), time.Now())
 	if c.Status != OK || !strings.Contains(c.Detail, "no citation data yet") {
 		t.Fatalf("got %+v, want OK naming 'no citation data yet'", c)
+	}
+}
+
+// TestCheckCitationSignal_CiteNoneOnlyHistoryWarns: a WAL whose only cite-*
+// rows are cite-none (close ran and reached a classification pass, but no
+// citation ever resolved as delivered) must NOT read as "no citation data
+// yet" — that reading previously let 3 inject+cite-none sessions in the
+// window report OK, hiding the exact channel-went-dark case this check
+// exists to catch.
+func TestCheckCitationSignal_CiteNoneOnlyHistoryWarns(t *testing.T) {
+	_, mem, _ := newFixture(t)
+	now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	today := now.Format("2006-01-02")
+	lines := []string{
+		today + "|inject|slug-a|s1",
+		today + "|cite-none|s1|s1",
+		today + "|inject|slug-b|s2",
+		today + "|cite-none|s2|s2",
+		today + "|inject|slug-c|s3",
+		today + "|cite-none|s3|s3",
+	}
+	mustWriteWAL(t, mem, lines)
+	c := checkCitationSignal(filepath.Join(mem, ".wal"), now)
+	if c.Status != WARN || !strings.Contains(c.Detail, "never cited") {
+		t.Fatalf("got %+v, want WARN containing 'never cited' (cite-none-only history must still count as history)", c)
+	}
+}
+
+// TestCheckCitationSignal_RecallOnlyCiteUsefulDoesNotInflateM: a session
+// that never injects anything but still resolves a delivered citation (e.g.
+// pull-only via recall) must not count toward M — M is the intersection of
+// inject-carrying sessions and cite-useful sessions, not a raw cite-useful
+// tally, or a healthy-looking M/N ratio could mask an inject path whose
+// citations never land.
+func TestCheckCitationSignal_RecallOnlyCiteUsefulDoesNotInflateM(t *testing.T) {
+	_, mem, _ := newFixture(t)
+	now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	today := now.Format("2006-01-02")
+	lines := []string{
+		today + "|inject|slug-a|s1",
+		today + "|inject|slug-b|s2",
+		today + "|inject|slug-c|s3",
+		today + "|cite-useful|slug-d|s4", // recall-only session — no inject row for s4
+	}
+	mustWriteWAL(t, mem, lines)
+	c := checkCitationSignal(filepath.Join(mem, ".wal"), now)
+	if c.Status != WARN || !strings.Contains(c.Detail, "never cited") {
+		t.Fatalf("got %+v, want WARN — s4's cite-useful must not count toward M (no inject in s4 this window)", c)
 	}
 }
