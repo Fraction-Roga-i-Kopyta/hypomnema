@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [2.14.0] — 2026-09-29
 
 Usefulness now comes from an explicit citation, not a keyword guess. Every
 injected/recalled fact is delivered with an instruction line telling the
