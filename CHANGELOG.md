@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [2.13.0] — 2026-09-29
 
 Store resolution and source-aware injection (hook envelope hardening). A live
 audit found the project slug drifting from Claude Code's own
