@@ -34,6 +34,35 @@ const MaxBodyBytes = maxBodyBytes
 // (skill-inject) enforce the same budget the injection render path does.
 const MaxTotalBytes = maxTotalBytes
 
+// CiteInstruction is the verbatim line every delivery path (inject render,
+// recall, skill-inject) shows exactly once: it tells the model how to mark a
+// fact as actually used, by wrapping the sentence it changed in a
+// <cc-memory filenames="FILE">…</cc-memory> tag. Claude Code hides the tag
+// from the user; the close hook parses it as the honest usefulness signal
+// (internal/closer/cite.go) in place of substring matching. It counts inside
+// the render budget like any other rendered text.
+const CiteInstruction = `When a fact below changes what you say or do, wrap that sentence in <cc-memory filenames="FILE">…</cc-memory> (the tag is hidden from the user).`
+
+// FactHeader renders one fact's citation-ready header line. The file name
+// (Slug) is always present — it is the only thing the model can put inside
+// filenames="…" to cite this exact fact. Type falls back to "note" and name
+// falls back to the slug when frontmatter omits them; the created date is
+// appended only when known.
+func FactHeader(f native.MemFile) string {
+	name := f.Name
+	if name == "" {
+		name = f.Slug
+	}
+	typ := f.Type
+	if typ == "" {
+		typ = "note"
+	}
+	if f.Created == "" {
+		return fmt.Sprintf("## %s — %s (%s)", name, f.Slug, typ)
+	}
+	return fmt.Sprintf("## %s — %s (%s, %s)", name, f.Slug, typ, f.Created)
+}
+
 // CapBody bounds one record body to maxBytes at a UTF-8 rune boundary with a
 // visible truncation marker that names the total size and, via hint, where
 // the full text lives (PathHint: "full text: <absolute path>"). Exported for
@@ -341,14 +370,18 @@ func render(ranked []rank.Scored, bySlug map[string]native.MemFile, maxBody, max
 	}
 	var b strings.Builder
 	b.WriteString("# Memory Context\n")
+	b.WriteString(CiteInstruction + "\n")
 	var injected []string
 	for _, sc := range ranked {
-		f := bySlug[sc.Slug]
-		title := f.Name
-		if title == "" {
-			title = sc.Slug
+		f, ok := bySlug[sc.Slug]
+		if !ok {
+			// A sidecar row whose native file vanished before reconciliation
+			// (e.g. the file was deleted between rank and render) — the row
+			// still deserves a header, and the header still needs the file
+			// name to be citable.
+			f.Slug = sc.Slug
 		}
-		head := fmt.Sprintf("\n## %s\n", title)
+		head := "\n" + FactHeader(f) + "\n"
 		hint := pathHint(f)
 		body := ""
 		if f.Body != "" {
