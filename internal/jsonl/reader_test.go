@@ -2,6 +2,7 @@ package jsonl
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -164,6 +165,27 @@ func TestDecodeStream_ReadPathsCappedAt1024(t *testing.T) {
 	}
 	if len(s.ReadPaths) != 1024 {
 		t.Errorf("ReadPaths length = %d, want capped at 1024", len(s.ReadPaths))
+	}
+}
+
+// TestDecodeStream_RepeatedReadsDoNotExhaustCap: the cap counts distinct
+// paths, so re-reading one file more than maxReadPaths times still leaves
+// room for a later, different path.
+func TestDecodeStream_RepeatedReadsDoNotExhaustCap(t *testing.T) {
+	var b strings.Builder
+	for i := 0; i < 1100; i++ {
+		fmt.Fprintf(&b, `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"r%d","name":"Read","input":{"file_path":"/proj/memory/same.md"}}]}}`+"\n", i)
+		fmt.Fprintf(&b, `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"r%d"}]}}`+"\n", i)
+	}
+	b.WriteString(`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"late","name":"Read","input":{"file_path":"/proj/memory/late.md"}}]}}` + "\n")
+	b.WriteString(`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"late"}]}}` + "\n")
+	s, err := decodeStream(strings.NewReader(b.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"/proj/memory/same.md", "/proj/memory/late.md"}
+	if !reflect.DeepEqual(s.ReadPaths, want) {
+		t.Errorf("ReadPaths = %v, want %v", s.ReadPaths, want)
 	}
 }
 
