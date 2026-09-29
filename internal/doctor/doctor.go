@@ -187,10 +187,10 @@ func checkCandidates(memoryDir, claudeHome string, st native.Store) Check {
 			}
 			event := parts[1]
 			// cite-none's target is the session id, not a fact slug — keying
-			// it would create a phantom per-key tally under that session id
-			// (ruling W6), and cite-undelivered (a real qualified slug, but
-			// diagnostic-only per ruling W4) must not create or contribute
-			// to a tally either. Skip both before any key is computed.
+			// it would create a phantom per-key tally under that session id,
+			// and cite-undelivered (a real qualified slug, but diagnostic
+			// only) must not create or contribute to a tally either. Skip
+			// both before any key is computed.
 			if event == "cite-none" || event == "cite-undelivered" {
 				continue
 			}
@@ -957,13 +957,22 @@ const citationSignalMinSessions = 3
 // injected but the model's <cc-memory> citations never reach the transcript
 // (or are never written), so close has nothing to classify as useful. Distinct
 // from open_quanta_last_30d, which asks "did a closing event fire at all" —
-// this asks "when it fired, did any citation land." It never reads cite-none;
-// that event only marks a session's classification pass as closed, not
-// whether the signal itself is healthy.
+// this asks "when it fired, did any citation land."
 //
-// Pre-v2.14 WAL history carries no cite-useful/cite-silent rows at all, so an
-// install that hasn't seen a Stop hook since the cutover reports OK rather
-// than a false WARN.
+// A row with ANY cite- prefix (cite-useful, cite-silent, cite-none,
+// cite-undelivered) proves the v2.14+ citation channel has run at least
+// once — cite-none alone (close reached a classification pass but resolved
+// no delivered citation) is exactly the "channel went dark" case this check
+// exists to catch, so it must count as history the same as the others.
+// Pre-v2.14 WAL history carries no cite-* rows at all, so an install that
+// hasn't seen a Stop hook since the cutover reports OK rather than a false
+// WARN.
+//
+// The window stats stay narrower: N is sessions that injected something in
+// the window, M is the subset of those that ALSO carry a cite-useful in the
+// window — the intersection, not a raw cite-useful session count. A session
+// with a citation but no inject this window (e.g. recall-only) must not
+// inflate M; it never showed the channel doing its job on an injected fact.
 func checkCitationSignal(walPath string, now time.Time) Check {
 	const name = "citation_signal"
 	f, err := os.Open(walPath)
@@ -978,7 +987,7 @@ func checkCitationSignal(walPath string, now time.Time) Check {
 	cutoff := now.AddDate(0, 0, -citationSignalWindowDays).Format("2006-01-02")
 	hasCiteHistory := false
 	injSess := map[string]bool{}
-	citeSess := map[string]bool{}
+	usefulSess := map[string]bool{}
 
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -988,7 +997,7 @@ func checkCitationSignal(walPath string, now time.Time) Check {
 			continue
 		}
 		event, sess := parts[1], parts[3]
-		if event == "cite-useful" || event == "cite-silent" {
+		if strings.HasPrefix(event, "cite-") {
 			hasCiteHistory = true
 		}
 		if parts[0] < cutoff {
@@ -998,7 +1007,7 @@ func checkCitationSignal(walPath string, now time.Time) Check {
 		case "inject":
 			injSess[sess] = true
 		case "cite-useful":
-			citeSess[sess] = true
+			usefulSess[sess] = true
 		}
 	}
 	if err := sc.Err(); err != nil {
@@ -1008,14 +1017,20 @@ func checkCitationSignal(walPath string, now time.Time) Check {
 	if !hasCiteHistory {
 		return Check{Name: name, Status: OK, Detail: "no citation data yet (pre-v2.14 history)"}
 	}
-	if len(injSess) >= citationSignalMinSessions && len(citeSess) == 0 {
+	m := 0
+	for sess := range injSess {
+		if usefulSess[sess] {
+			m++
+		}
+	}
+	if len(injSess) >= citationSignalMinSessions && m == 0 {
 		return Check{Name: name, Status: WARN,
 			Detail: fmt.Sprintf("facts were injected in %d session(s) over %d days but never cited — the usefulness signal is off (the model is not citing, or citations are not reaching the transcript); see TROUBLESHOOTING",
 				len(injSess), citationSignalWindowDays)}
 	}
 	return Check{Name: name, Status: OK,
 		Detail: fmt.Sprintf("%d/%d injected sessions carried a citation (%dd)",
-			len(citeSess), len(injSess), citationSignalWindowDays)}
+			m, len(injSess), citationSignalWindowDays)}
 }
 
 // checkStoreResolution reports the native store this invocation resolved
