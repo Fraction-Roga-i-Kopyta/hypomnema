@@ -183,9 +183,11 @@ few different reasons. Check, in order:
 1. **Is the instruction line actually reaching the model?** The injected
    `# Memory Context` block should start with "When a fact below changes
    what you say or do, wrap that sentence in `<cc-memory filenames="FILE">…
-   </cc-memory>`" (see § SessionStart injects nothing above if the block is
-   missing entirely, or `additionalContext` is being diverted to a file by an
-   oversized payload — check the 8 KB budget).
+   </cc-memory>`". If the block is missing entirely, see "SessionStart
+   injects nothing" above. If it's present but the model's context doesn't
+   actually show it, check whether `additionalContext` is being diverted to
+   a file by an oversized payload — see the 8 KB budget in "Memory layout"
+   (`CLAUDE.md`).
 2. **Is the transcript readable by `close`?** `close` skips classification
    entirely — writing neither `cite-useful` nor `cite-silent` — when
    `transcript_path` is missing or the JSONL can't be read; a citation-less

@@ -51,12 +51,16 @@ usefulness reader.
   injected something in the last 7 days and all of them cited zero facts;
   OK "M/N injected sessions carried a citation" otherwise. See
   TROUBLESHOOTING.
-- **Citation instruction line and file names in headers.** `inject`,
+- **Citation instruction line and per-path header shapes.** `inject`,
   `recall`, and `skill-inject` now open every delivery with one verbatim
-  instruction line telling the model how to cite a fact it used, and render
-  each fact's header with its file name — `## <name> — <file.md> (<type>,
-  <created>)` — since the file name is the only thing the model can put
-  inside `filenames="…"`. Both count inside the existing render budget.
+  instruction line telling the model how to cite a fact it used. Each path
+  keeps its own header shape, but the file name is always present — it's
+  the only thing the model can put inside `filenames="…"`: `inject` prints
+  one `## <name> — <file.md> (<type>, <created>)` header per fact; `recall`
+  gives its top match `## <name> — <file.md> (<type>, score N)` and
+  index-only runner-up lines (`N. <file.md> (score) — description` + path);
+  `skill-inject` renders a flat `- (<file.md>) <body>` list, no `##` header.
+  All three count inside the existing render budget.
 - **`Session.Thinking`** (`internal/jsonl`). Assistant `content[].thinking`
   text is now collected separately from `Session.Text`, so a citation
   emitted inside a thinking block is still found — `close` scans `Text +
