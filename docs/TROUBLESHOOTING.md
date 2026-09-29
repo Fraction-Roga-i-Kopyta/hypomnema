@@ -83,34 +83,51 @@ doctor points at a specific check."
    ```
 
    A `memoryctl_available` line whose detail contains `predates subagent
-   support` means the resolved binary itself is too old — `make build` then
-   re-run `./install.sh` (it refuses to proceed against a `bin/memoryctl`
-   that doesn't understand `close --subagent`).
+   support` means the resolved binary itself is too old. With the current
+   shims that is a no-op, not a harness-visible error — `subagent-start.sh`
+   / `subagent-stop.sh` swallow the binary's exit-2 refusal on `--subagent`
+   and exit 0 either way, so a subagent just runs without memory instead of
+   looping or corrupting the parent session (§1, §8, §9 of
+   hooks-contract.md). `doctor` still warns because the subagent gets no
+   memory either way: `make build` then re-run `./install.sh` (it refuses to
+   proceed against a `bin/memoryctl` that doesn't understand `close
+   --subagent`).
 4. **Claude Code older than the verified version (2.1.284) may not deliver
    `additionalContext` on `SubagentStart`**, even though the hook fires and
    `memoryctl` still writes its `inject` WAL row — the subagent's context
    never actually receives the text, but `ref_count` keeps climbing as if it
-   had. Update Claude Code, or, until that's an option, remove the
-   `SubagentStart` registration from `settings.json`.
-5. **Nested agents (a subagent launching its own subagent) and a write race
-   between the launch acknowledgement and the hook firing** both fall back
-   to ranking against the parent's 3 most recent prompts instead of the
-   launching `Agent`/`Task` call — expected, not a bug; the subagent still
-   gets memory, just against a less specific query.
+   had. Update Claude Code, or, until that's an option, set
+   `HYPOMNEMA_SUBAGENT_SKIP=*` in `settings.json`'s top-level `env` block
+   (item 1 above) rather than deleting the `SubagentStart` registration —
+   deleting it is undone by the next `./install.sh`.
+5. **Nested agents (a subagent launching its own subagent) and a launching
+   call this hook cannot find at all** both fall back to ranking against the
+   parent's 3 most recent prompts instead of a specific task — expected, not
+   a bug; the subagent still gets memory, just against a less specific
+   query. This fallback fires only when no call of the agent's type is found
+   in the transcript at all (a nested agent's launching call lives in its
+   *parent subagent's* transcript, not the top-level one this hook reads) —
+   not merely because the acknowledgement hasn't landed yet; see the next
+   section for that case.
 
 ## A subagent got memory for a sibling's task
 
-Parallel launches of the **same** agent type that start before their launch
-acknowledgement is written back into the parent transcript can be matched to
-a concurrently-launched sibling's `Agent`/`Task` call instead of their own —
-`SubagentStart` has nothing yet to tell the two apart. Measured on a live
-session: 40/46 exact matches before the acknowledgement lands, 46/46 once it
-has (the acknowledgement is usually visible within about 100ms of the
-subagent's first transcript record). The effect is a less relevant fact set
-for that one subagent's launch, not data corruption or a wrong classification
-later — `SubagentStop` still classifies citations under the correct agent's
-own key regardless of what `SubagentStart` ranked against. Nothing to fix;
-expected under enough launch concurrency.
+Only an **acknowledged** launch is matched exactly: the `tool_result` naming
+`agentId: <id>` identifies that agent's own call even among several parallel
+calls of the same type. A synchronous launch is never acknowledged, and a
+background launch's acknowledgement can still be unwritten when
+`SubagentStart` fires. Either way, the subagent instead claims the **oldest
+still-unclaimed** call of its type (`.runtime/agentcall-<id>.claim`, an
+atomic create) — so N parallel launches of one type, none yet acknowledged,
+get N *distinct* calls, assigned in the order their `SubagentStart` hooks
+actually fire, not in launch order. A mismatch (a subagent ranked against a
+sibling's task) now needs the hooks themselves to fire out of launch order —
+still possible under enough concurrency, but no longer the default outcome
+of parallel launches the way "newest pending call wins" was. The effect,
+when it does happen, is a less relevant fact set for that one subagent's
+launch, not data corruption or a wrong classification later — `SubagentStop`
+still classifies citations under the correct agent's own key regardless of
+what `SubagentStart` ranked against.
 
 ## Hooks not firing after install
 

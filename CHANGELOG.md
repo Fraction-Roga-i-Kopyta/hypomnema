@@ -19,10 +19,26 @@
 - **`doctor`'s `memoryctl_available` check warns when the resolved binary
   predates subagent support** — it probes `close --subagent` directly, so a
   `make build` from an older ref that still passes `--help` is caught before
-  the subagent shims start silently no-oping.
+  it ever reaches the subagent shims, which swallow that same refusal at
+  runtime (see Fixed below) rather than corrupt the parent session.
 
 ### Fixed
 
+- **The `SubagentStart`/`SubagentStop` shims never surface a pre-subagent
+  `memoryctl` to the harness.** Both now pass `--subagent`, a flag a binary
+  older than subagent support does not recognise — it refuses (exit 2)
+  before reading stdin, instead of silently treating the subagent's
+  envelope as the parent's `SessionStart`, or, on `SubagentStop`, blocking
+  the subagent's own stop and looping it on stderr. The shim swallows that
+  refusal and always exits 0.
+- **Parallel launches of one agent type get distinct calls.** `SubagentStart`
+  used to fall back to the newest unanswered call of the agent's type, so N
+  synchronous launches of one type all matched the same (newest) sibling's
+  task. Each subagent's own acknowledged launch now wins when it has one;
+  otherwise the oldest still-unclaimed call of its type is claimed
+  atomically (`.runtime/agentcall-<id>.claim`) and taken, so parallel
+  launches — synchronous ones are never acknowledged — get distinct calls in
+  the order their hooks fire.
 - **`close`'s per-session WAL dedup is end-anchored, not substring**, across
   every per-session close row: `cite-useful`, `cite-silent`,
   `cite-undelivered`, `cite-none`, `holdout-hit`/`holdout-miss`, and a
@@ -35,7 +51,8 @@
 
 - **The installer registers 8 hooks** (`SubagentStart`, `SubagentStop`
   added) and refuses to proceed against a `bin/memoryctl` that predates
-  subagent support.
+  subagent support — that probe now runs pre-flight, before any file is
+  created.
 - **The installer's stable backup name (`settings.json.backup-hypomnema`)
   now always points at THIS run's pre-change snapshot**, not the very first
   one ever taken — every earlier snapshot stays available under its own
@@ -45,6 +62,14 @@
   effectiveness, `ab`, self-profile, and doctor's `citation_signal` /
   `open_quanta_last_30d` continue to treat each subagent key as its own
   session.
+
+### Upgrade / rollback
+
+- Rolling back below v2.15 leaves the `SubagentStart`/`SubagentStop`
+  registrations in `settings.json`; against an older `memoryctl` those hooks
+  simply do nothing (see Fixed above — no corrupted parent session, no
+  looping subagent). Remove the two entries with this version's
+  `uninstall.sh`, or delete them by hand, for a clean rollback.
 
 ## [2.14.0] — 2026-09-29
 

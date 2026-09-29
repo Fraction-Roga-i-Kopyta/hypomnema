@@ -192,7 +192,7 @@ date|event|target|session
 | `date` | `^\d{4}-\d{2}-\d{2}$` (`YYYY-MM-DD`), local timezone of the writer. |
 | `event` | `^[a-z][a-z0-9-]*$` — lowercase kebab-case. |
 | `target` | Slug or identifier. `\|`, newlines, and `\r` MUST be sanitised to `_` (else the row splits or fails validation). |
-| `session` | Non-empty session id (sanitised to `_`); writers use `unknown` / `cli` rather than an empty column. |
+| `session` | Non-empty session id (sanitised to `_`); writers use `unknown` / `cli` rather than an empty column. May be a subagent's compound observation key, `<session_id>:<agent_id>`, verbatim (not sanitised further) — `SubagentStart`/`SubagentStop` write it as-is; only runtime file NAMES map `:` to `_` (`pathutil.SafeFileName`). |
 
 The **four-column invariant is immutable**. Richer data is encoded inside
 `target` with a sub-delimiter (`,` or `>`), never a fifth column. Empty rows are
@@ -209,14 +209,14 @@ Written by the v2 hooks / verbs:
 
 | Event | Writer | `target` |
 |---|---|---|
-| `inject` | `inject` (SessionStart / UserPromptSubmit) | slug |
+| `inject` | `inject` (SessionStart / UserPromptSubmit / SubagentStart) | slug |
 | `recall` | `recall`, `skill-inject` | slug |
 | `cite-useful` | `close` | slug (citation resolved AND delivered this session — injected/recalled/skill-injected, or read directly with the Read tool) |
 | `cite-silent` | `close` | slug (injected fact went uncited; written only in a session with ≥1 delivered citation) |
 | `cite-undelivered` | `close` | slug (citation resolved to an in-scope fact but never delivered this session; diagnostic only — feeds no reader) |
 | `cite-none` | `close` | session id (both `$3` and `$4`); one per session with injected facts and zero delivered citations |
 | `session-metrics` | `close` | `$3 = domains:<csv>,error_count:N,tool_calls:M,duration:Ss`; `$4 = session id` |
-| `session-close` | `close` | session id (canonical `$4`) |
+| `session-close` | `close` (also `close --subagent`) | session id (canonical `$4`) — a subagent's row uses its compound key and is deduped (`wal.AppendSuffixUnique`); the parent's own per-turn row is not |
 | `dedup-blocked` / `dedup-candidate` / `dedup-merged` | `dedup check` (manual CLI, not hook-wired) | `new>existing` / `new~existing` |
 
 `trigger-useful` / `trigger-silent` are **legacy since v2.14** (superseded by
