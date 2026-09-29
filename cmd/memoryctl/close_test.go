@@ -18,7 +18,7 @@ func TestCloseVerb(t *testing.T) {
 	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
 	os.WriteFile(filepath.Join(memDir, ".runtime", "injected-s1.list"), []byte("docker.md\n"), 0o600)
 	tx := filepath.Join(home, "t.jsonl")
-	os.WriteFile(tx, []byte(`{"type":"assistant","sessionId":"s1","message":{"content":[{"type":"text","text":"docker.md helped"}]}}`+"\n"), 0o644)
+	os.WriteFile(tx, []byte(`{"type":"assistant","sessionId":"s1","message":{"content":[{"type":"text","text":"<cc-memory filenames=\"docker.md\">helped</cc-memory>"}]}}`+"\n"), 0o644)
 
 	env := map[string]string{
 		"CLAUDE_HOME": filepath.Join(home, ".claude"), "CLAUDE_MEMORY_DIR": memDir,
@@ -30,8 +30,8 @@ func TestCloseVerb(t *testing.T) {
 		t.Fatalf("close exit=%d stderr=%s", code, errOut)
 	}
 	wal, _ := os.ReadFile(filepath.Join(memDir, ".wal"))
-	if !strings.Contains(string(wal), "\x1fdocker.md|s1") {
-		t.Errorf("expected trigger-useful for cited docker.md:\n%s", wal)
+	if !strings.Contains(string(wal), "|cite-useful|-tmp-proj\x1fdocker.md|s1") {
+		t.Errorf("expected cite-useful for cited docker.md:\n%s", wal)
 	}
 	if !strings.Contains(string(wal), "|session-close|s1|s1") {
 		t.Errorf("expected session-close:\n%s", wal)
