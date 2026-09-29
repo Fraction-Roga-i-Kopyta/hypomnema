@@ -35,7 +35,8 @@ const (
 var defaultSubagentSkip = []string{"fork", "Explore", "claude-code-guide", "statusline-setup"}
 
 // subagentSkipped reports whether agentType gets no memory. A SET
-// HYPOMNEMA_SUBAGENT_SKIP (even empty) replaces the default list.
+// HYPOMNEMA_SUBAGENT_SKIP (even empty) replaces the default list. An entry
+// of exactly "*" matches every agent type — the full opt-out.
 func subagentSkipped(agentType string) bool {
 	list := defaultSubagentSkip
 	if v, ok := os.LookupEnv("HYPOMNEMA_SUBAGENT_SKIP"); ok {
@@ -47,7 +48,7 @@ func subagentSkipped(agentType string) bool {
 		}
 	}
 	for _, s := range list {
-		if s == agentType {
+		if s == "*" || s == agentType {
 			return true
 		}
 	}

@@ -201,6 +201,27 @@ func TestSubagentStart_SkipList(t *testing.T) {
 	}
 }
 
+func TestSubagentStart_WildcardSkipsEveryType(t *testing.T) {
+	f := newStoreFixture(t)
+	f.fact(t, "/tmp/proj", "dockercache", "docker layer cache")
+	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
+	f.env["HYPOMNEMA_SUBAGENT_SKIP"] = "*"
+	parent := writeTranscript(t, userPromptLine("dockercache"))
+	rt := filepath.Join(f.mem, ".runtime")
+	out, _, code := runStdin(t, f.env, subagentEnv("s1", "a1", "general-purpose", "/tmp/proj", parent, ""),
+		"inject", "--event=SubagentStart")
+	if code != 0 || strings.TrimSpace(out) != "" {
+		t.Errorf("wildcard skip: want silent exit 0; code=%d out=%q", code, out)
+	}
+	if exists(filepath.Join(rt, "injected-s1_a1.list")) || exists(filepath.Join(rt, "rendered-s1_a1.list")) {
+		t.Errorf("wildcard skip: must leave no key files")
+	}
+	wal, _ := os.ReadFile(filepath.Join(f.mem, ".wal"))
+	if strings.Contains(string(wal), "|inject|") {
+		t.Errorf("wildcard skip: must not write inject rows:\n%s", wal)
+	}
+}
+
 func TestSubagentStart_ResumeIsNoop(t *testing.T) {
 	f := newStoreFixture(t)
 	f.fact(t, "/tmp/proj", "dockercache", "docker layer cache")
@@ -388,6 +409,23 @@ func TestSubagentStop_CitationInHandbackReport(t *testing.T) {
 	w, _ := os.ReadFile(filepath.Join(f.mem, ".wal"))
 	if !hasRow(string(w), "cite-useful", "pgmigration.md", "s1:a1") {
 		t.Errorf("a citation in the SubagentHandback report must count:\n%s", w)
+	}
+}
+
+func TestSubagentStop_WildcardSkipIsNoop(t *testing.T) {
+	f := newStoreFixture(t)
+	f.fact(t, "/tmp/proj", "dockercache", "docker layer cache")
+	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
+	f.env["HYPOMNEMA_SUBAGENT_SKIP"] = "*"
+	agent := writeTranscript(t, assistantCiteLine(`<cc-memory filenames="dockercache.md">x</cc-memory>`))
+	out, stderr, code := runStdin(t, f.env, subagentEnv("s1", "a1", "general-purpose", "/tmp/proj", "", agent),
+		"close", "--subagent")
+	if code != 0 || strings.TrimSpace(out) != "" || stderr != "" {
+		t.Errorf("wildcard skip: want silent exit 0; code=%d out=%q stderr=%q", code, out, stderr)
+	}
+	w, _ := os.ReadFile(filepath.Join(f.mem, ".wal"))
+	if strings.TrimSpace(string(w)) != "" {
+		t.Errorf("wildcard skip: close --subagent must not write the WAL:\n%s", w)
 	}
 }
 
