@@ -53,10 +53,14 @@ func runInject(args []string) {
 			os.Exit(2)
 		}
 	}
-	if event != "SessionStart" && event != "UserPromptSubmit" {
+	if event != "SessionStart" && event != "UserPromptSubmit" && event != "SubagentStart" {
 		event = "SessionStart"
 	}
 	raw, _ := io.ReadAll(os.Stdin)
+	if event == "SubagentStart" {
+		runSubagentStart(raw)
+		os.Exit(0)
+	}
 	var in hookStdin
 	if err := json.Unmarshal(raw, &in); err != nil {
 		os.Exit(0) // fail-safe
