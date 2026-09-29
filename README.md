@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/Fraction-Roga-i-Kopyta/hypomnema?include_prereleases&sort=semver)](https://github.com/Fraction-Roga-i-Kopyta/hypomnema/releases)
 
-**Governance and ranking layer for Claude Code's native file memory — a Go engine (`memoryctl`) + 6 thin shims. No cloud, no embeddings.** Claude Code now ships native file memory; hypomnema adds ranked auto-injection, effectiveness measurement, decay, and a global store that native lacks.
+**Governance and ranking layer for Claude Code's native file memory — a Go engine (`memoryctl`) + 8 thin shims. No cloud, no embeddings.** Claude Code now ships native file memory; hypomnema adds ranked auto-injection (session AND subagents), effectiveness measurement, decay, and a global store that native lacks.
 
 > **Status:** v2.14.0; native-primary. Requires Claude Code ≥ v2.1.59 (native file memory). v1.x stays on its tag for older Claude Code installs — see [MIGRATION.md](docs/MIGRATION.md) for the v1.x → v2.x upgrade path.
 >
@@ -42,6 +42,7 @@ Hypomnema adds:
 | Gap in native | What hypomnema provides |
 |---|---|
 | Native injects only an index, not ranked content | `memoryctl inject` ranks native facts by relevance (keyword overlap + ref_count + recency + effectiveness) and injects the top-K via `additionalContext` — not just a table of contents |
+| Subagents start with a blank context | `SubagentStart` ranks the store against the subagent's own launch task (or a fallback query) and injects its own top-5, under a key that keeps its citations separate from the parent session |
 | No per-session effectiveness signal | WAL captures `<cc-memory>` citations (`cite-useful`/`cite-silent`) per session; effectiveness feeds back into ranking |
 | No decay / lifecycle | `memoryctl close` down-ranks stale facts in the sidecar; nothing is deleted from disk |
 | No secrets gate | `memoryctl guard` (PreToolUse:Write\|Edit) blocks credential patterns before they land in a memory file |
@@ -66,10 +67,12 @@ size. See [`docs/measurements/2026-05-29-v2-ranker-ab.md`](docs/measurements/202
 └───────────────▲───────────────────────────▲─────────────────┘
        read-only │ (content)       write-intercept │ (guard)
 ┌────────────────┴───────────────────────────┴────────────────┐
-│  hypomnema v2 — memoryctl (Go) + 6 thin sh shims            │
+│  hypomnema v2 — memoryctl (Go) + 8 thin sh shims            │
 │                                                             │
 │  inject ──► additionalContext (ranked top-K)                │
+│  inject (SubagentStart) ──► own top-5 for its task          │
 │  close  ──► classify → WAL → effectiveness/decay → profile  │
+│  close --subagent ──► classify under its own key            │
 │  guard  ──► secrets gate (PreToolUse:Write|Edit)            │
 │  skill-inject/skill-active ──► per-skill learnings          │
 │  migrate──► one-shot v1 conversion + pruning                │
@@ -80,7 +83,7 @@ size. See [`docs/measurements/2026-05-29-v2-ranker-ab.md`](docs/measurements/202
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**Six hook events, six shims** — each ~5 lines, zero logic, pure marshalling:
+**Eight hook events, eight shims** — each ~5 lines, zero logic, pure marshalling:
 
 | Event (matcher) | Shim | What memoryctl does |
 |---|---|---|
@@ -90,6 +93,8 @@ size. See [`docs/measurements/2026-05-29-v2-ranker-ab.md`](docs/measurements/202
 | `PreToolUse:Skill` | `skill-active.sh` | Record which skill just activated (marker for the capture path) |
 | `PostToolUse:Skill` | `skill-learnings-inject.sh` | `skill-inject`: surface accumulated learnings for the activated skill |
 | `Stop` | `session-stop.sh` | `close`: classify the injected set (evidence/citation) → WAL → recompute effectiveness/decay → regenerate `MEMORY.md` + self-profile |
+| `SubagentStart` | `subagent-start.sh` | Rank against the subagent's own launch task (fallback: the parent's recent prompts) → inject its own top-5 |
+| `SubagentStop` | `subagent-stop.sh` | `close --subagent`: classify the subagent's own citations (including its hand-back report) under its own key |
 
 Fuzzy dedup for near-duplicate mistakes is available as the `memoryctl dedup`
 verb but is not wired as a hook in v2. The project's native `MEMORY.md` index is
@@ -196,7 +201,7 @@ memoryctl doctor # verify: all checks OK
 `./install.sh`:
 - Verifies Claude Code ≥ v2.1.59 and that `settings.json` is valid JSON — before touching anything.
 - Symlinks the pre-built `memoryctl` into `~/.claude/bin/`.
-- Copies the 6 hook shims into `~/.claude/hooks/v2/` and registers them in `~/.claude/settings.json` (timestamped backup first).
+- Copies the 8 hook shims into `~/.claude/hooks/v2/` and registers them in `~/.claude/settings.json` (timestamped backup first).
 - Creates `~/.claude/memory-global/` for global facts.
 
 **Upgrading from v1.x:** run `memoryctl migrate --dry-run` first — it shows what will be kept, pruned, and routed to global vs. project store. Then `memoryctl migrate --execute` (backs up the old store, does NOT delete it). See [docs/MIGRATION.md](docs/MIGRATION.md).
@@ -318,13 +323,13 @@ precision_class: ambient  # excludes from precision denominator (use for languag
 
 ## Subagents
 
-Claude Code subagents don't receive SessionStart injection, and there is no auto-generated context file (`_agent_context.md` was a v1 artefact). Pass the facts a subagent needs inline in its prompt — the orchestrating session has them from its own `# Memory Context` block.
+Subagents get their own ranked memory at `SubagentStart`: `memoryctl` builds a query from the agent's own launch task (its `Agent`/`Task` call — description + prompt — read back out of the parent transcript) or, failing that, the parent's recent prompts, and injects its own top-5 (5 KB cap) before the subagent's first turn. Lookup-only agents (`fork`, `Explore`, `claude-code-guide`, `statusline-setup` by default; override with `HYPOMNEMA_SUBAGENT_SKIP`) are skipped — memory would be noise there. A subagent's citations are classified at `SubagentStop` under its own key (`<session_id>:<agent_id>`), separate from the parent session, so its usefulness signal never mixes with the parent's. There is still no auto-generated context file (`_agent_context.md` was a v1 artefact) — pass inline only what is specific to the task beyond what the ranker already covers.
 
 ## Design decisions
 
 **Why native files as the store, not a custom directory?** Claude Code's harness already injects `MEMORY.md` for the model — the file format is stable, the harness reads it for free. Owning a separate store meant a schema fork and two systems of record. Native is the substrate; sidecar is the metadata layer.
 
-**Why a Go binary, not bash?** The hot path (inject) needs to parse hundreds of files, run ranking, and return before the hook timeout. Go eliminates the bash 3.2/awk/sed portability tax, is testable with table-driven unit tests, and is benchmarkable. The six shims that remain in bash are ~5 lines each — marshalling only.
+**Why a Go binary, not bash?** The hot path (inject) needs to parse hundreds of files, run ranking, and return before the hook timeout. Go eliminates the bash 3.2/awk/sed portability tax, is testable with table-driven unit tests, and is benchmarkable. The eight shims that remain in bash are ~5 lines each — marshalling only.
 
 **Why a sidecar, not frontmatter?** Native frontmatter is the content contract (harness reads it). Embedding hypomnema metadata there would pollute the harness format and require careful merge logic on every `git pull`. SQLite sidecar is a derivative — the WAL is the truth, the sidecar is a fast query projection that can be rebuilt anytime.
 

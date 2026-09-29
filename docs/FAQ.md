@@ -114,7 +114,7 @@ every `active`/`pinned` fact in scope is a ranking candidate regardless of its
 
 It is Go-primary by design. The `memoryctl` binary is the mandatory engine —
 it does all the real work: ranking and injection, WAL accounting, Bayesian
-effectiveness, decay, the secrets gate, dedup, self-profile, `doctor`. The six
+effectiveness, decay, the secrets gate, dedup, self-profile, `doctor`. The eight
 files in `~/.claude/hooks/v2/` are ~5-line bash shims that read the hook
 envelope on stdin and pipe it to `memoryctl`; they contain no logic. This is
 the reverse of v1, where bash carried the hot paths and Go was an optional

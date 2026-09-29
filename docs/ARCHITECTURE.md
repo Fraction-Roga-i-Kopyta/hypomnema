@@ -17,7 +17,7 @@ or the per-release CHANGELOG.
 
 ## The hooks
 
-`install.sh` copies six shims into `~/.claude/hooks/v2/` and registers them in
+`install.sh` copies eight shims into `~/.claude/hooks/v2/` and registers them in
 `settings.json`. Each shim resolves `memoryctl` (fail-open: `exit 0` if the
 binary is absent) and `exec`s one verb, forwarding stdin (the hook envelope)
 and preserving the exit code.
@@ -30,6 +30,8 @@ and preserving the exit code.
 | `PreToolUse` | `Skill` | `skill-active.sh` | `skill-active` | Record the activated skill for this session |
 | `PostToolUse` | `Skill` | `skill-learnings-inject.sh` | `skill-inject` | Inject accumulated skill-learning facts for that skill |
 | `Stop` | — | `session-stop.sh` | `close` | Attribute outcomes → WAL → effectiveness/decay → self-profile |
+| `SubagentStart` | — | `subagent-start.sh` | `inject --event=SubagentStart` | Rank against the subagent's own task, inject its own top-5 under its own key |
+| `SubagentStop` | — | `subagent-stop.sh` | `close --subagent` | Classify the subagent's own citations (incl. its hand-back report) under its own key |
 
 Compaction is handled on `SessionStart` with `source=compact` (and `/clear`
 with `source=clear`), not by a separate hook: **no `PreCompact`/`PostCompact`
@@ -110,7 +112,48 @@ Stop ──► close ───────────────────�
    sidecar.MarkStale: decay by age from last-injection          │
    memindex.Write: regenerate this project's native MEMORY.md   │
    profile.Generate: self-profile.md                            │
-   ── no native content is ever mutated by a hook ──────────────┘
+   ── no native content is ever mutated by a hook ──────────────┤
+                                                                │
+SubagentStart ──► inject --event=SubagentStart ─────────────────┤
+   session_id/transcript_path are the PARENT's; agent_id/type   │
+     name the subagent                                          │
+   agent_type in skip list (default fork/Explore/claude-code-   │
+     guide/statusline-setup, override HYPOMNEMA_SUBAGENT_SKIP)  │
+     → exit 0, nothing written                                  │
+   key = session_id + ":" + agent_id                            │
+   claim rendered-<key>.list (O_CREATE|O_EXCL) before ranking:  │
+     already claimed (resumed agent / concurrent duplicate)     │
+     → exit 0, nothing written                                  │
+   query: jsonl.PendingAgentCall(parent transcript tail ≤2MiB,  │
+     agent_type, agent_id) → own Agent/Task call's description  │
+     + prompt (top-40 terms) + type words, NoGitSignal=true;    │
+     else jsonl.RecentUserPrompts(parent, 3) + type words,      │
+     git signal kept                                            │
+   HoldoutSession = parent's holdout list, READ-ONLY (never     │
+     persisted for the subagent)                                │
+   rank.TopK, MaxK=5, MaxBytes=5000 → emit under key            │
+   WAL: inject|<slug>|<key>                                     │
+   write injected-<key>.list (if non-empty), rendered-<key>.list│
+     (always — marks the claim as fulfilled)                    │
+                                                                │
+SubagentStop ──► close --subagent ───────────────────────────────┤
+   agent_transcript_path = the SUBAGENT's own transcript        │
+   agent_type in skip list, or any of session_id/agent_id/      │
+     agent_transcript_path empty → exit 0, nothing written      │
+   closer.Run(SessionID=key, TranscriptPath=agent_transcript_   │
+     path, Subagent=true): same citation classification as      │
+     close, jsonl folds SubagentHandback.input.message into the │
+     transcript text first                                      │
+   WAL: cite-useful|<slug>|<key>, cite-silent, cite-undelivered, │
+     cite-none|<key>|<key> as usual — no session-metrics, no     │
+     holdout classification, no sidecar reproject/MarkStale, no │
+     MEMORY.md/self-profile regen (left to the parent's Stop)   │
+   WAL: session-close|<key>|<key>, deduped END-ANCHORED          │
+     (wal.AppendSuffixUnique) so it never suppresses — or is     │
+     suppressed by — the parent's own session-close|<sid>|<sid> │
+   unreadable subagent transcript: session-close only, no        │
+     cite-* row for this key                                     │
+   ── session-level work stays with the parent's next Stop ─────┘
 ```
 
 ### Dedup (CLI verb, not a default hook)
@@ -121,7 +164,7 @@ a pure-Go rapidfuzz token-set port). At/above the merge threshold it blocks
 (pre-tool) or merges into the existing file's `recurrence` and deletes the new
 one (post-tool); a lower candidate threshold emits an advisory note. It emits
 `dedup-blocked` / `dedup-merged` / `dedup-candidate`. It is a real verb but is
-**not** wired into the six installed hooks — invoke it explicitly.
+**not** wired into the eight installed hooks — invoke it explicitly.
 
 ## The relevance ranker (one pipeline)
 
@@ -231,7 +274,7 @@ One package, one responsibility. `memoryctl` (in `cmd/memoryctl/`) wires them.
 | `wal` | Append-only event log; `Append`/`AppendStrict`, `SanitizeField`, lock acquisition. Four-column invariant enforced |
 | `rank` | The pure relevance ranker (formula above). No I/O, no storage imports → trivially unit-testable and A/B-able |
 | `inject` | Orchestrator: keywords → `native.List` → `sidecar` → `rank.TopK` → JSON |
-| `closer` | Stop path: transcript classify → WAL → reproject/decay → profile |
+| `closer` | Stop path: transcript classify → WAL → reproject/decay → profile; `Subagent: true` runs the same classification under a subagent's own key and skips the session-level steps |
 | `dedup` + `fuzzy` | Fuzzy dedup on write (token-set ratio) |
 | `secrets` | Secrets gate (credential patterns, `.secretsignore`) |
 | `tokenize` | Unicode-aware tokenizer (salvaged from v1's TF-IDF; Cyrillic/CJK/Greek participate, not just Latin) |
@@ -242,7 +285,7 @@ One package, one responsibility. `memoryctl` (in `cmd/memoryctl/`) wires them.
 | `pathutil` | Shared slug/filename sanitisers |
 | `ab` | Offline A/B harness: replay historical WAL, ranked-top-K vs dump-all on `cite-useful` proxy |
 | `invariants` | Automated checks for the mechanically-checkable rules in `docs/INVARIANTS.md` |
-| `jsonl` | Streams the session-transcript JSONL, extracting assistant-authored text and Read-tool paths for citation classification |
+| `jsonl` | Streams the session-transcript JSONL, extracting assistant-authored text and Read-tool paths for citation classification (folding in `SubagentHandback` text); `PendingAgentCall`/`RecentUserPrompts` read a parent transcript's tail to build a subagent's ranking query |
 
 ### `memoryctl` command surface
 
@@ -287,13 +330,13 @@ single invocation.
 A reader coming from v1 docs will look for these — all removed in v2, verify by
 `ls`/grep rather than assuming they exist:
 
-- **Five 700-line bash hooks + `hooks/lib/` libraries** → six ~5-line shims + Go.
+- **Five 700-line bash hooks + `hooks/lib/` libraries** → eight ~5-line shims + Go.
 - **Two scoring pipelines** (composite-score + priority-key) → one `rank`.
 - **Substring triggers + ±40-char negation windows** → tokens are relevance signal.
 - **FTS5 shadow retrieval** (`internal/fts`, `bin/memory-fts-*.sh`, `shadow-miss`) → gone.
 - **TF-IDF body scoring / cold-start gates** → gone (Unicode tokenizer salvaged into `tokenize`).
 - **`.config.sh` safe-parser, `projects.json` longest-prefix detection** → project resolved from the anchor chain (§ Store resolution), cwd only as the last resort.
-- **`_agent_context.md`** subagent file → pass facts inline in the subagent prompt.
+- **`_agent_context.md`** subagent file → `SubagentStart` ranks and injects the subagent's own top-5 automatically; pass inline only what is specific to the task beyond that.
 - **`PreCompact` nudge hook, per-type quotas (3+3/12/10/8), rotation to `archive/`** → decay is down-rank-in-sidecar; balance emerges from relevance.
 - **`scripts/parity-check.sh` bash↔Go parity contract** → Go is the single implementation.
 
