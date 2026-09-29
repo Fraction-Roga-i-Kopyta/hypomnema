@@ -741,3 +741,33 @@ func TestReproject_HoldoutEventsDontTouchEffectiveness(t *testing.T) {
 		t.Fatalf("effectiveness = %v, want the untouched 0.5 prior", r.Effectiveness)
 	}
 }
+
+// TestReadWALAgg_CiteNoneAndUndeliveredNoPhantomEntries: cite-none's target
+// is the session id, not a fact slug — indexing it would create a phantom
+// per-key aggregate keyed by a session id (ruling W6). cite-undelivered
+// carries a real qualified slug but is diagnostic-only per ruling W4 and
+// must not create or contribute to a per-fact aggregate either. Neither
+// event should leave a trace in readWALAgg's map, and a real inject event
+// for an unrelated fact must still aggregate normally alongside them.
+func TestReadWALAgg_CiteNoneAndUndeliveredNoPhantomEntries(t *testing.T) {
+	dir := t.TempDir()
+	walPath := filepath.Join(dir, ".wal")
+	wal := "" +
+		"2026-09-30|inject|proj\x1ffact.md|s1\n" +
+		"2026-09-30|cite-none|s1|s1\n" +
+		"2026-09-30|cite-undelivered|proj\x1fextra.md|s1\n"
+	if err := os.WriteFile(walPath, []byte(wal), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	aggs := readWALAgg(walPath)
+	if _, ok := aggs["s1"]; ok {
+		t.Errorf("cite-none must not create a phantom aggregate keyed by the session id, got %+v", aggs["s1"])
+	}
+	if _, ok := aggs[native.QKey("proj", "extra")]; ok {
+		t.Errorf("cite-undelivered must not create/contribute to a per-fact aggregate, got %+v", aggs)
+	}
+	a, ok := aggs[native.QKey("proj", "fact")]
+	if !ok || a.injects != 1 {
+		t.Errorf("normal inject aggregation broken alongside the noise events: %+v ok=%v", a, ok)
+	}
+}

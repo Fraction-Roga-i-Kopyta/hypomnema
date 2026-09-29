@@ -69,25 +69,54 @@ func Run(in Input) (Result, error) {
 	if sErr == nil {
 		projectOf := projectBySlug(in.ClaudeHome, st)
 		cited := resolveCitations(Citations(sess.Text+"\n\n"+sess.Thinking), projectOf)
-		citedSet := make(map[string]bool, len(cited))
+		injectedSet := make(map[string]bool, len(injected))
+		for _, slug := range injected {
+			injectedSet[slug] = true
+		}
+		globalDir := native.GlobalMemoryDir(filepath.Dir(in.ClaudeHome))
+		// Delivery gate (ruling W4): a resolved citation only earns
+		// cite-useful if the fact actually reached the model this session —
+		// injected (inject + recall + skill-inject, already folded into
+		// injected-<sid>.list) or read directly with the Read tool. Without
+		// this gate close would credit ANY in-scope filename the model
+		// happened to type in a <cc-memory> tag, fabricated, echoed, or
+		// name-only, with durable usefulness (effectiveness, candidate
+		// graduation) even though the fact was never shown to it.
+		var delivered, undelivered []string
+		deliveredSet := make(map[string]bool, len(cited))
 		for _, slug := range cited {
-			citedSet[slug] = true
+			if injectedSet[slug] || readDelivered(sess.ReadPaths, slug, st.Dir, globalDir) {
+				deliveredSet[slug] = true
+				delivered = append(delivered, slug)
+			} else {
+				undelivered = append(undelivered, slug)
+			}
+		}
+		for _, slug := range delivered {
 			appendWAL(in.MemoryDir, in.Today, "cite-useful", qualify(projectOf, slug), sid)
 		}
-		res.Useful = len(cited)
+		res.Useful = len(delivered)
+		for _, slug := range undelivered {
+			// Resolved but undelivered: counts for nothing else — not
+			// useful, not candidate-confirmed, and does not arm the
+			// cite-silent guard below. Diagnostic only (see docs/EVENTS.md).
+			appendWAL(in.MemoryDir, in.Today, "cite-undelivered", qualify(projectOf, slug), sid)
+		}
 		// Silence is evidence only where the citation channel demonstrably
-		// worked this session: with no resolvable citation at all, an uncited
-		// fact is more likely a lost or skipped citation than a useless fact.
-		if len(cited) > 0 {
+		// worked this session: with no DELIVERED citation at all, an uncited
+		// fact is more likely a lost or skipped citation than a useless
+		// fact — and an undelivered citation alone (fabricated/echoed/
+		// name-only) must not arm this guard either.
+		if len(delivered) > 0 {
 			for _, slug := range injected {
-				if citedSet[slug] {
+				if deliveredSet[slug] {
 					continue
 				}
 				appendWAL(in.MemoryDir, in.Today, "cite-silent", qualify(projectOf, slug), sid)
 				res.Silent++
 			}
 		}
-		for _, slug := range cited {
+		for _, slug := range delivered {
 			if status[slug] != "candidate" {
 				continue
 			}
@@ -98,11 +127,13 @@ func Run(in Input) (Result, error) {
 			line := fmt.Sprintf("%s|candidate-confirmed|%s|%s", in.Today, target, sid)
 			wal.Append(in.MemoryDir, line, "|candidate-confirmed|"+target+"|")
 		}
-		// A readable transcript with injected facts but no resolvable
-		// citation still closed its classification pass — record that
-		// explicitly (session-level, once per session) so doctor's open-quanta
-		// check does not read a citation-less session as a lost one.
-		if len(cited) == 0 && len(injected) > 0 {
+		// A readable transcript with injected facts but no resolvable,
+		// DELIVERED citation still closed its classification pass — record
+		// that explicitly (session-level, once per session) so doctor's
+		// open-quanta check does not read a citation-less session as a lost
+		// one. A session with only undelivered citations still writes this
+		// (undelivered never arms the guard above).
+		if len(delivered) == 0 && len(injected) > 0 {
 			wal.Append(in.MemoryDir, fmt.Sprintf("%s|cite-none|%s|%s", in.Today, sid, sid), "|cite-none|"+sid+"|"+sid)
 		}
 		// Ablation observation: facts withheld this session get the same
@@ -235,6 +266,29 @@ func resolveCitations(names []string, projectOf map[string]string) []string {
 		}
 	}
 	return out
+}
+
+// readDelivered reports whether slug (an in-scope fact's basename, e.g.
+// "docker.md") was delivered by a direct file read this session: one of
+// paths (Session.ReadPaths — every Read tool_use's input.file_path), once
+// filepath.Clean'd, has that basename AND sits directly in the resolved
+// project store dir or the global store dir. A same-named file read from
+// anywhere else does not count — the directory check is what makes this "a
+// direct read of THIS fact", not just a file that happens to share a name.
+func readDelivered(paths []string, slug, storeDir, globalDir string) bool {
+	storeDir = filepath.Clean(storeDir)
+	globalDir = filepath.Clean(globalDir)
+	for _, p := range paths {
+		clean := filepath.Clean(p)
+		if filepath.Base(clean) != slug {
+			continue
+		}
+		dir := filepath.Dir(clean)
+		if dir == storeDir || dir == globalDir {
+			return true
+		}
+	}
+	return false
 }
 
 // qualify project-qualifies a slug for the WAL target so classification events

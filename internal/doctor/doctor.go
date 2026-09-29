@@ -186,6 +186,14 @@ func checkCandidates(memoryDir, claudeHome string, st native.Store) Check {
 				continue
 			}
 			event := parts[1]
+			// cite-none's target is the session id, not a fact slug — keying
+			// it would create a phantom per-key tally under that session id
+			// (ruling W6), and cite-undelivered (a real qualified slug, but
+			// diagnostic-only per ruling W4) must not create or contribute
+			// to a tally either. Skip both before any key is computed.
+			if event == "cite-none" || event == "cite-undelivered" {
+				continue
+			}
 			project, slug, qualified := native.ParseQKey(parts[2])
 			slug = strings.TrimSuffix(slug, ".md")
 			key := slug

@@ -660,6 +660,59 @@ func TestCheckCandidates(t *testing.T) {
 	}
 }
 
+// TestCheckCandidates_CiteNoneAndUndeliveredDoNotCount: cite-none's target
+// is a session id, not a fact slug (ruling W6), and cite-undelivered is
+// diagnostic-only (ruling W4) — neither may contribute to a candidate's
+// useful/silent tally. A candidate at exactly the WARN threshold from real
+// cite-silent rows must stay flagged with an unchanged count even when the
+// WAL is full of cite-none/cite-undelivered noise, including a pathological
+// case where a cite-none session id collides with the candidate's own bare
+// slug.
+func TestCheckCandidates_CiteNoneAndUndeliveredDoNotCount(t *testing.T) {
+	home := t.TempDir()
+	claudeHome := filepath.Join(home, ".claude")
+	memDir := filepath.Join(claudeHome, "memory")
+	cwd := "/tmp/proj"
+	projDir := filepath.Join(claudeHome, "projects", "-tmp-proj", "memory")
+	for _, d := range []string{memDir, projDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	os.WriteFile(filepath.Join(projDir, "dud.md"),
+		[]byte("---\nname: dud\ntype: mistake\nstatus: candidate\n---\nx\n"), 0o644)
+	q := "-tmp-proj\x1fdud.md"
+	var wal strings.Builder
+	for i := 1; i <= 5; i++ {
+		fmt.Fprintf(&wal, "2026-09-1%d|cite-silent|%s|s%d\n", i, q, i)
+	}
+	// Noise: cite-none rows whose session id happens to equal the
+	// candidate's own bare slug ("dud") — the pathological collision case
+	// for the legacy bare-slug fallback lookup.
+	for i := 1; i <= 20; i++ {
+		fmt.Fprintf(&wal, "2026-09-1%d|cite-none|dud|dud\n", i)
+	}
+	// Noise: cite-undelivered rows for the SAME fact — must not add to
+	// useful or silent, and must not confirm it.
+	for i := 1; i <= 20; i++ {
+		fmt.Fprintf(&wal, "2026-09-1%d|cite-undelivered|%s|x%d\n", i, q, i)
+	}
+	if err := os.WriteFile(filepath.Join(memDir, ".wal"), []byte(wal.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	c := checkCandidates(memDir, claudeHome, native.StoreFor(claudeHome, cwd))
+	if c.Status != WARN || !strings.Contains(c.Detail, "dud") {
+		t.Fatalf("got %+v, want WARN naming dud (cite-none/cite-undelivered noise must not mask a real flag)", c)
+	}
+	slugs, _ := c.Extra["slugs"].([]string)
+	if len(slugs) != 1 || slugs[0] != "dud" {
+		// Exactly the real candidate should be flagged — the noise must not
+		// spawn a second phantom-keyed flag alongside it.
+		t.Fatalf("want exactly [dud] flagged, got %+v (full check: %+v)", slugs, c)
+	}
+}
+
 func TestCheckCorpusQuality_CountsNestedMetadata(t *testing.T) {
 	home := t.TempDir()
 	claudeHome := filepath.Join(home, ".claude")
