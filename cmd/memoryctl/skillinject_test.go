@@ -61,8 +61,8 @@ func TestSkillInjectReturnsOnlyMatchingSkill(t *testing.T) {
 	}
 }
 
-// TestSkillInjectCiteInstructionAndFileNamePrefix is the RED test for task 7:
-// skill-inject must show the citation instruction once and prefix every
+// TestSkillInjectCiteInstructionAndFileNamePrefix verifies that
+// skill-inject shows the citation instruction once and prefixes every
 // learning entry with its citable file name.
 func TestSkillInjectCiteInstructionAndFileNamePrefix(t *testing.T) {
 	env := skillFixture(t)

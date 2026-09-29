@@ -362,11 +362,11 @@ func TestRun_DegradedHonoursFrontmatterKeywords(t *testing.T) {
 	}
 }
 
-// TestRun_CiteInstructionAndFactHeaders is the RED test for task 7: every
-// rendered fact header must carry its citable file name, the citation
-// instruction line must appear once right after the heading, and the whole
-// payload (instruction line included) must still respect MaxTotalBytes even
-// with 8 fat facts competing for the budget.
+// TestRun_CiteInstructionAndFactHeaders verifies that every rendered fact
+// header carries its citable file name, the citation instruction line
+// appears once right after the heading, and the whole payload (instruction
+// line included) still respects MaxTotalBytes even with 8 fat facts
+// competing for the budget.
 func TestRun_CiteInstructionAndFactHeaders(t *testing.T) {
 	memDir, projDir, home := setup(t)
 	names := []string{"a.md", "b.md", "c.md", "d.md", "e.md", "f.md", "g.md", "h.md"}

@@ -316,12 +316,11 @@ func readWALAgg(walPath string) map[string]*agg {
 			continue
 		}
 		// cite-none's target is the session id, not a fact slug — keying it
-		// would create a phantom per-key aggregate under that session id
-		// (ruling W6). cite-undelivered carries a real qualified slug but is
-		// diagnostic-only (ruling W4: a resolved-but-undelivered citation
-		// must not feed effectiveness, recency, or anything else a per-fact
-		// aggregate drives) — skip entry creation for both before any key is
-		// computed.
+		// would create a phantom per-key aggregate under that session id.
+		// cite-undelivered carries a real qualified slug but is
+		// diagnostic-only: a resolved-but-undelivered citation must not feed
+		// effectiveness, recency, or anything else a per-fact aggregate
+		// drives — skip entry creation for both before any key is computed.
 		if event == "cite-none" || event == "cite-undelivered" {
 			continue
 		}

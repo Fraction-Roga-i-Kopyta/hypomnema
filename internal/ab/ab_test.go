@@ -76,8 +76,8 @@ func TestSignalsBefore_TemporalHoldout(t *testing.T) {
 	}
 }
 
-// TestSignalsBefore_UsefulWinsPerSession is the exact fixture from the
-// design brief: one verdict per (slug, session), useful wins over silent
+// TestSignalsBefore_UsefulWinsPerSession verifies the per-session verdict
+// rule: one verdict per (slug, session), useful wins over silent
 // even when silent arrives first within the same session.
 func TestSignalsBefore_UsefulWinsPerSession(t *testing.T) {
 	events, _ := ParseWAL(writeWAL(t, ""+
