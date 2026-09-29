@@ -94,16 +94,19 @@ func TestCloseVerb_UnreadableTranscriptSkipsClassification(t *testing.T) { // re
 		"HYPOMNEMA_TODAY": "2026-05-29",
 	}
 	// transcript_path points at a file that does not exist — usefulness is
-	// unobservable, so close must NOT fabricate trigger-silent for the injected
-	// facts (review E4). session-metrics/close still get written.
+	// unobservable, so close must NOT fabricate cite-silent (or any cite-*)
+	// for the injected facts (review E4). session-metrics/close still get
+	// written. docker.md is both in the project store and injected-s1.list,
+	// so this proves the guard, not just the absence of the (now-retired)
+	// trigger-* event names.
 	stdin := `{"session_id":"s1","cwd":"/tmp/proj","transcript_path":"` + filepath.Join(home, "nope.jsonl") + `"}`
 	_, errOut, code := runStdin(t, env, stdin, "close")
 	if code != 0 {
 		t.Fatalf("close exit=%d stderr=%s", code, errOut)
 	}
 	wal := mustReadStr(t, filepath.Join(memDir, ".wal"))
-	if strings.Contains(wal, "trigger-silent") || strings.Contains(wal, "trigger-useful") {
-		t.Errorf("unreadable transcript must skip trigger classification, got:\n%s", wal)
+	if strings.Contains(wal, "|cite-useful|") || strings.Contains(wal, "|cite-silent|") || strings.Contains(wal, "|cite-none|") {
+		t.Errorf("unreadable transcript must skip citation classification, got:\n%s", wal)
 	}
 	if !strings.Contains(wal, "|session-close|") {
 		t.Errorf("session-close should still be written:\n%s", wal)

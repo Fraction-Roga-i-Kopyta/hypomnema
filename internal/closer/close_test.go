@@ -46,11 +46,21 @@ func TestRun_EmitsClosingEvents(t *testing.T) {
 	}
 }
 
+// TestRun_MissingTranscriptIsNotFatal also proves the "unreadable transcript
+// → no classification rows" invariant: an injected, citable fact is present
+// in the project store and in injected-s1.list, so if the sErr==nil guard
+// ever regressed, this would start emitting cite-useful/cite-silent/cite-none
+// rows for it.
 func TestRun_MissingTranscriptIsNotFatal(t *testing.T) {
 	home := t.TempDir()
 	memDir := filepath.Join(home, ".claude", "memory")
+	projDir := filepath.Join(home, ".claude", "projects", "-tmp-proj", "memory")
 	os.MkdirAll(filepath.Join(memDir, ".runtime"), 0o755)
+	os.MkdirAll(projDir, 0o755)
+	os.WriteFile(filepath.Join(projDir, "docker.md"),
+		[]byte("---\nname: Docker cache\ntype: mistake\n---\ndocker cache\n"), 0o644)
 	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
+	os.WriteFile(filepath.Join(memDir, ".runtime", "injected-s1.list"), []byte("docker.md\n"), 0o600)
 	res, err := Run(Input{
 		SessionID: "s1", CWD: "/tmp/proj", TranscriptPath: filepath.Join(home, "nope.jsonl"),
 		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir, Today: "2026-05-29",
@@ -59,10 +69,16 @@ func TestRun_MissingTranscriptIsNotFatal(t *testing.T) {
 		t.Fatalf("missing transcript must not error: %v", err)
 	}
 	wal, _ := os.ReadFile(filepath.Join(memDir, ".wal"))
-	if !strings.Contains(string(wal), "|session-close|s1|s1") {
-		t.Errorf("session-close must be emitted even with no transcript:\n%s", wal)
+	w := string(wal)
+	if !strings.Contains(w, "|session-close|s1|s1") {
+		t.Errorf("session-close must be emitted even with no transcript:\n%s", w)
 	}
-	_ = res
+	if strings.Contains(w, "|cite-useful|") || strings.Contains(w, "|cite-silent|") || strings.Contains(w, "|cite-none|") {
+		t.Errorf("unreadable transcript must produce no classification rows at all:\n%s", w)
+	}
+	if res.Useful != 0 || res.Silent != 0 {
+		t.Errorf("Result must report zero classification when the transcript is unreadable: useful=%d silent=%d", res.Useful, res.Silent)
+	}
 }
 
 // session-metrics must carry real transcript-derived numbers, not the
