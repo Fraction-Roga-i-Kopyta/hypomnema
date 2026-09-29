@@ -76,7 +76,8 @@ that Claude Code prepends to the model's context:
 `inject` (mirroring the `--event` flag). `additionalContext` is the ranked
 `# Memory Context` block (top-8 facts, ≤2.5 KB per body, ≤8 KB total for
 `SessionStart`/`UserPromptSubmit`; top-5, ≤5 KB total for `SubagentStart` —
-see §8 below). Empty context is valid and means nothing matched.
+same ≤2.5 KB per-fact body cap, just a smaller total and a smaller K — see
+§8 below). Empty context is valid and means nothing matched.
 
 `guard`, `skill-active`, and `close` produce **no** stdout envelope. `guard`
 communicates via exit code + stderr; `skill-active` and `close` are
@@ -115,7 +116,7 @@ Read by `memoryctl` (from its `--help` usage) and by the shims:
 | `HYPOMNEMA_NOW` | Freeze the self-profile `generated:` stamp (`YYYY-MM-DD HH:MM`). | now |
 | `HYPOMNEMA_ALLOW_SECRETS` | Set to `1` to bypass the `guard` secrets gate for a single invocation. | unset |
 | `CLAUDE_HOME` | Test/parallel-install override for hypomnema's own state root, and — checked before `CLAUDE_CONFIG_DIR` — for native store resolution too. | `$HOME/.claude` |
-| `HYPOMNEMA_SUBAGENT_SKIP` | Comma-separated `agent_type` list that gets no memory at `SubagentStart`/`SubagentStop`. Checked with `os.LookupEnv`: when SET it fully replaces the default list (trimmed, empty items dropped); set-but-empty means skip nothing. | `fork,Explore,claude-code-guide,statusline-setup` |
+| `HYPOMNEMA_SUBAGENT_SKIP` | Comma-separated `agent_type` list that gets no memory at `SubagentStart`/`SubagentStop`. Checked with `os.LookupEnv`: when SET it fully replaces the default list (trimmed, empty items dropped); set-but-empty means skip nothing; a single `*` entry means skip every agent type — the full opt-out. Set it in `settings.json`'s top-level `env` block so both hooks inherit it. | `fork,Explore,claude-code-guide,statusline-setup` |
 
 Implementations MAY add new variables. They MUST NOT re-purpose the ones above.
 
@@ -378,7 +379,11 @@ on it is kept):
    `agentId: <agent_id>` (the background-launch acknowledgement) picks that
    exact call, even among parallel calls of the same type; failing that, the
    newest same-type call with no `tool_result` yet (a synchronous launch
-   still in flight) is used.
+   still in flight) is used. Parallel launches of the SAME agent type that
+   start before their own acknowledgement lands can be matched to a
+   sibling's call instead (measured 40/46 exact before the acknowledgement
+   is visible, 46/46 after) — the effect is a less relevant ranking query for
+   that launch, not a misclassified citation later (see TROUBLESHOOTING).
 2. Found: query = the call's `description` + agent-type words + the top-40
    terms (`inject.TopTerms`) of its `prompt`. The git-context signal (branch,
    changed files, recent commit subjects) is **not** added — the task
@@ -389,8 +394,9 @@ on it is kept):
 4. Agent-type words are omitted for `general-purpose` (~92% of launches) —
    they carry no ranking signal there.
 
-Budget: `MaxK = 5`, `MaxBytes = 5000` — smaller than the session budget
-(§1.3), since a subagent's context window is scarcer. The citation
+Budget: `MaxK = 5`, `MaxBytes = 5000` total — smaller than the session budget
+(§1.3), since a subagent's context window is scarcer, but the same ≤2.5 KB
+per-fact body cap still applies within that smaller total. The citation
 instruction line and per-fact headers are the same ones `inject.Run` always
 produces.
 
