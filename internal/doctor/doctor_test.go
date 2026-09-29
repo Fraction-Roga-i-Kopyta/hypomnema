@@ -612,6 +612,22 @@ func TestCheckMemoryctl_PredatesSubagentSupportWarns(t *testing.T) {
 	}
 }
 
+// A build that knows `close --subagent` but not `inject --subagent` still
+// leaves SubagentStart doing nothing behind the shims — doctor must say so.
+func TestCheckMemoryctl_InjectSubagentRefusedWarns(t *testing.T) {
+	claude, mem, cwd := newFixture(t)
+	script := "#!/bin/sh\n" +
+		"if [ \"$1\" = \"inject\" ] && [ \"$2\" = \"--subagent\" ]; then exit 2; fi\n" +
+		"exit 0\n"
+	if err := os.WriteFile(filepath.Join(claude, "bin", "memoryctl"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := mustFindCheck(t, Run(claude, mem, native.StoreFor(claude, cwd), cwd), "memoryctl_available", WARN)
+	if !strings.Contains(c.Detail, "inject --subagent") {
+		t.Errorf("expected the detail to name `inject --subagent`, got %q", c.Detail)
+	}
+}
+
 func TestCheckMemoryctl_SubagentSupportedNoPredatesWarning(t *testing.T) {
 	claude, mem, cwd := newFixture(t)
 	memoryctlStub(t, claude, false)
