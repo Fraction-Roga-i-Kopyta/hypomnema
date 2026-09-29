@@ -114,3 +114,19 @@ func TestDecodeStream_OversizeLineDoesNotTruncateRest(t *testing.T) { // review 
 		t.Errorf("text before the oversized line missing: %q", s.Text)
 	}
 }
+
+func TestDecodeStream_ThinkingCollectedSeparately(t *testing.T) {
+	src := `{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"plan <cc-memory filenames=\"a.md\">x</cc-memory>"},{"type":"text","text":"visible"}]}}
+{"type":"assistant","message":{"content":[{"type":"thinking","thinking":""},{"type":"thinking","thinking":"second"}]}}
+`
+	s, err := decodeStream(strings.NewReader(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Text != "visible" {
+		t.Errorf("Text must stay text-only, got %q", s.Text)
+	}
+	if !strings.Contains(s.Thinking, `filenames="a.md"`) || !strings.Contains(s.Thinking, "second") {
+		t.Errorf("Thinking not collected: %q", s.Thinking)
+	}
+}

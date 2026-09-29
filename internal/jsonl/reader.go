@@ -36,6 +36,7 @@ import (
 type Session struct {
 	ID          string // session UUID from the `sessionId` field on record 0
 	Text        string // all assistant `content[].text` joined by `\n\n`
+	Thinking    string // all assistant `content[].thinking` joined by `\n\n` (citations may appear there)
 	ToolCalls   int    // assistant `tool_use` content parts
 	ToolErrors  int    // `tool_result` parts flagged is_error
 	DurationSec int    // last timestamp − first timestamp, in seconds
@@ -55,9 +56,10 @@ type messageRecord struct {
 }
 
 type contentPart struct {
-	Type    string `json:"type"`
-	Text    string `json:"text"`
-	IsError bool   `json:"is_error"`
+	Type     string `json:"type"`
+	Text     string `json:"text"`
+	Thinking string `json:"thinking"`
+	IsError  bool   `json:"is_error"`
 }
 
 // ReadSession opens path and walks every line, returning one Session.
@@ -88,12 +90,13 @@ func decodeStream(r io.Reader) (Session, error) {
 
 	var out Session
 	var b strings.Builder
+	var thinking strings.Builder
 	var firstTS, lastTS time.Time
 	first := true
 	for {
 		line, err := br.ReadBytes('\n')
 		if len(line) > 0 && len(line) <= maxLineBytes {
-			processLine(line, &out, &b, &firstTS, &lastTS, &first)
+			processLine(line, &out, &b, &thinking, &firstTS, &lastTS, &first)
 		}
 		// A line longer than maxLineBytes is skipped (content unneeded) but the
 		// loop continues to the next line — the whole point of the E3 fix.
@@ -102,13 +105,14 @@ func decodeStream(r io.Reader) (Session, error) {
 		}
 	}
 	out.Text = b.String()
+	out.Thinking = thinking.String()
 	if !firstTS.IsZero() && lastTS.After(firstTS) {
 		out.DurationSec = int(lastTS.Sub(firstTS).Seconds())
 	}
 	return out, nil
 }
 
-func processLine(line []byte, out *Session, b *strings.Builder, firstTS, lastTS *time.Time, first *bool) {
+func processLine(line []byte, out *Session, b *strings.Builder, thinking *strings.Builder, firstTS, lastTS *time.Time, first *bool) {
 	var rec record
 	if err := json.Unmarshal(line, &rec); err != nil {
 		return // malformed line — skip, don't fail the whole session
@@ -137,6 +141,11 @@ func processLine(line []byte, out *Session, b *strings.Builder, firstTS, lastTS 
 				b.WriteString("\n\n")
 			}
 			b.WriteString(p.Text)
+		case rec.Type == "assistant" && p.Type == "thinking" && p.Thinking != "":
+			if thinking.Len() > 0 {
+				thinking.WriteString("\n\n")
+			}
+			thinking.WriteString(p.Thinking)
 		}
 	}
 }
