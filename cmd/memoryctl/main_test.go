@@ -98,6 +98,14 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 
+	// Some tests call package functions in-process. Point the default state
+	// roots at a throwaway dir so one that forgets its own override can never
+	// write the real ~/.claude. Subprocess tests pass their own values after
+	// these in cmd.Env, and the last duplicate key wins.
+	sandbox := filepath.Join(dir, "sandbox-home", ".claude")
+	os.Setenv("CLAUDE_HOME", sandbox)
+	os.Setenv("CLAUDE_MEMORY_DIR", filepath.Join(sandbox, "memory"))
+
 	code := m.Run()
 
 	if outPath := os.Getenv("MEMORYCTL_SUBPROCESS_COVER_OUT"); outPath != "" {
