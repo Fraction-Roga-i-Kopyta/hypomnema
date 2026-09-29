@@ -43,13 +43,15 @@ usefulness reader.
 ### Added
 
 - **`doctor` `citation_signal` check.** Watches for the citation channel
-  going dark — facts get injected but no `cite-useful`/`cite-silent` ever
-  lands — distinct from `open_quanta_last_30d` (which only asks whether a
-  closing event fired at all). OK "no citation data yet" before any
-  `cite-*` history exists; WARN "never cited" once at least 3 sessions
-  injected something in the last 7 days and all of them cited zero facts;
-  OK "M/N injected sessions carried a citation" otherwise. See
-  TROUBLESHOOTING.
+  going dark — facts get injected but no delivered citation ever lands —
+  distinct from `open_quanta_last_30d` (which only asks whether a closing
+  event fired at all). OK "no citation data yet" before any `cite-*`
+  history exists; WARN "never cited" once at least 3 sessions in the last
+  7 days injected something, were classified by a citation-aware `close`
+  (they carry a `cite-*` row), and cited zero delivered facts; OK "M/N
+  injected sessions carried a citation" otherwise. Sessions closed before
+  the upgrade are not counted, so upgrading does not raise a false WARN.
+  See TROUBLESHOOTING.
 - **Citation instruction line and per-path header shapes.** `inject`,
   `recall`, and `skill-inject` now open every delivery with one verbatim
   instruction line telling the model how to cite a fact it used. Each path
