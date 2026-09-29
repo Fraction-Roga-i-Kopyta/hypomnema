@@ -200,16 +200,32 @@ are relevance signal to a single ranker (see CLAUDE.md "How injection ranks
 files"). Both are retired v1 mechanics.
 
 `inject`, `recall`, and `skill-inject` each open their rendered
-`additionalContext` with the citation instruction line, verbatim:
+`additionalContext` with the citation instruction line, verbatim, exactly
+once per delivery:
 
 > When a fact below changes what you say or do, wrap that sentence in
 > `<cc-memory filenames="FILE">…</cc-memory>` (the tag is hidden from the
 > user).
 
-and render every fact's header with its file name —
-`## <name> — <file.md> (<type>, <created>)` — since the file name is the only
-thing the model can put inside `filenames="…"` to cite that fact. Both count
-inside the render budget (§1.3) like any other emitted text.
+Past that line, each path renders its own header shape — but the file name
+is always present in it, since the file name is the only thing the model can
+put inside `filenames="…"` to cite that fact:
+
+- **`inject`** (`internal/inject`, `FactHeader`) — one
+  `## <name> — <file.md> (<type>, <created>)` header per injected fact, in
+  ranked order, each followed by its body.
+- **`recall`** (`cmd/memoryctl/recall.go`, `renderRecall`) — a hybrid
+  render: the top match gets a full header, `## <name> — <file.md> (<type>,
+  score N)` (plus a trailing `[stale]` mark when applicable), followed by
+  its body; runner-ups are index-only numbered lines with no `##` header —
+  `N. <file.md> (score)[stale][ — description]` followed by the file's
+  absolute path on the next line.
+- **`skill-inject`** (`cmd/memoryctl/skillinject.go`, `runSkillInject`) — a
+  flat list, no `##` header at all: one `- (<file.md>) <body>` entry per
+  delivered learning.
+
+All three count inside the render budget (§1.3) like any other emitted
+text.
 
 ## 4. PreToolUse `Write|Edit` — `guard` (secrets gate)
 
