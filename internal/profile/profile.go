@@ -146,13 +146,13 @@ func windowCutoffDate(windowDays int) string {
 }
 
 // computeAmbientFraction derives the share of ambient activations among
-// all reactive trigger fires (per session). Denominator is
-// ambientActivations + triggerUsefulMeas + triggerSilentMeas. When the
+// all reactive citation fires (per session). Denominator is
+// ambientActivations + citeUsefulMeas + citeSilentMeas. When the
 // denominator is 0 the fraction is left undefined so the renderer
 // emits "n/a%" instead of a misleading 0%.
 func computeAmbientFraction(sig *walSignals) {
 	// Per-session reactive fires (consistent with the per-session numerator).
-	total := sig.ambientActivations + sig.triggerUsefulMeas + sig.triggerSilentMeas
+	total := sig.ambientActivations + sig.citeUsefulMeas + sig.citeSilentMeas
 	if total <= 0 {
 		return
 	}
@@ -226,8 +226,8 @@ type walSignals struct {
 	strategyUsed        int
 	strategyGap         int
 	ambientActivations  int
-	triggerUsefulMeas   int
-	triggerSilentMeas   int
+	citeUsefulMeas      int
+	citeSilentMeas      int
 	silentApplied       int
 	silentNoise         int
 	evidenceEmptyUnique int
@@ -251,14 +251,14 @@ type walSignals struct {
 
 	// Intuition-milestone metric (ADR intuition-milestone.md, v1.1).
 	// Windowed counters over the last INTUITION_WINDOW_DAYS (default 30)
-	// for the silent-applied / trigger-useful ratio. Crossing > 1.0
+	// for the silent-applied / cite-useful ratio. Crossing > 1.0
 	// sustained over the window is the operational definition of the
 	// "intuition tier" — rules applied silently more often than they
 	// are cited explicitly.
-	silentAppliedRecent     int
-	triggerUsefulMeasRecent int
-	intuitionRatio          float64
-	intuitionRatioDefined   bool
+	silentAppliedRecent   int
+	citeUsefulMeasRecent  int
+	intuitionRatio        float64
+	intuitionRatioDefined bool
 
 	domainTotal map[string]int
 	domainErr   map[string]int
@@ -288,7 +288,7 @@ func collectWALSignals(walPath string, ambient map[string]bool, outcomeCutoff, i
 
 	// For silent-applied correlation we need to cross-reference two event
 	// types per (slug, session) key, so buffer the keys from each side.
-	silent := map[string]bool{}   // slug|session seen as trigger-silent (non-ambient)
+	silent := map[string]bool{}   // slug|session seen as cite-silent (non-ambient)
 	positive := map[string]bool{} // slug|session seen as outcome-positive
 	evidenceEmpty := map[string]bool{}
 
@@ -305,14 +305,14 @@ func collectWALSignals(walPath string, ambient map[string]bool, outcomeCutoff, i
 	// inflated totals ~20x; and cite slugs carry a `.md` suffix while
 	// ambient slugs are bare, so the ambient lookup must normalize.
 	sessSet := map[string]bool{} // unique session ids → total sessions
-	type trigAgg struct{ useful, ambient, usefulRecent, silentRecentSeen bool }
-	trig := map[string]*trigAgg{} // key: bareSlug|session
-	getTrig := func(bare, sess string) *trigAgg {
+	type citeAgg struct{ useful, ambient, usefulRecent, silentRecentSeen bool }
+	cite := map[string]*citeAgg{} // key: bareSlug|session
+	getCite := func(bare, sess string) *citeAgg {
 		k := bare + "|" + sess
-		a := trig[k]
+		a := cite[k]
 		if a == nil {
-			a = &trigAgg{}
-			trig[k] = a
+			a = &citeAgg{}
+			cite[k] = a
 		}
 		return a
 	}
@@ -376,7 +376,7 @@ func collectWALSignals(walPath string, ambient map[string]bool, outcomeCutoff, i
 		case "cite-useful":
 			if len(fields) >= 4 {
 				bare := strings.TrimSuffix(fields[2], ".md")
-				a := getTrig(bare, fields[3])
+				a := getCite(bare, fields[3])
 				a.useful = true // useful wins over silent within a session
 				a.ambient = ambient[bare]
 				if intuitionCutoff == "" || fields[0] >= intuitionCutoff {
@@ -386,7 +386,7 @@ func collectWALSignals(walPath string, ambient map[string]bool, outcomeCutoff, i
 		case "cite-silent":
 			if len(fields) >= 4 {
 				bare := strings.TrimSuffix(fields[2], ".md")
-				a := getTrig(bare, fields[3])
+				a := getCite(bare, fields[3])
 				a.ambient = ambient[bare]
 				if intuitionCutoff == "" || fields[0] >= intuitionCutoff {
 					a.silentRecentSeen = true
@@ -413,17 +413,17 @@ func collectWALSignals(walPath string, ambient map[string]bool, outcomeCutoff, i
 	// useful-wins-over-silent (review E2). Ambient rules (E1: matched after
 	// .md normalization) are excluded from precision.
 	sig.totalSessions = len(sessSet)
-	for key, a := range trig {
+	for key, a := range cite {
 		switch {
 		case a.ambient:
 			sig.ambientActivations++
 		case a.useful:
-			sig.triggerUsefulMeas++
+			sig.citeUsefulMeas++
 			if a.usefulRecent {
-				sig.triggerUsefulMeasRecent++
+				sig.citeUsefulMeasRecent++
 			}
 		default:
-			sig.triggerSilentMeas++
+			sig.citeSilentMeas++
 			silent[key] = true
 			if a.silentRecentSeen {
 				silentRecent[key] = true
@@ -434,15 +434,15 @@ func collectWALSignals(walPath string, ambient map[string]bool, outcomeCutoff, i
 	// Windowed silent-applied correlation for intuition milestone.
 	// Uses the same positive[] map (positive events that lie outside
 	// the intuition window are still legitimate observations of
-	// "silent rule applied" — what we filter is the trigger-silent
+	// "silent rule applied" — what we filter is the cite-silent
 	// side, which is the noisier signal that benefits from windowing).
 	for k := range silentRecent {
 		if positive[k] {
 			sig.silentAppliedRecent++
 		}
 	}
-	if sig.triggerUsefulMeasRecent > 0 {
-		sig.intuitionRatio = float64(sig.silentAppliedRecent) / float64(sig.triggerUsefulMeasRecent)
+	if sig.citeUsefulMeasRecent > 0 {
+		sig.intuitionRatio = float64(sig.silentAppliedRecent) / float64(sig.citeUsefulMeasRecent)
 		sig.intuitionRatioDefined = true
 	}
 
@@ -452,14 +452,14 @@ func collectWALSignals(walPath string, ambient map[string]bool, outcomeCutoff, i
 			sig.silentApplied++
 		}
 	}
-	sig.silentNoise = sig.triggerSilentMeas - sig.silentApplied
+	sig.silentNoise = sig.citeSilentMeas - sig.silentApplied
 	sig.evidenceEmptyUnique = len(evidenceEmpty)
 
-	total := sig.triggerUsefulMeas + sig.triggerSilentMeas
+	total := sig.citeUsefulMeas + sig.citeSilentMeas
 	if total > 0 {
 		// Match bash's `printf "%.0f"` semantics — round half to even is fine,
 		// numbers involved are whole-percent anyway.
-		num := float64(sig.triggerUsefulMeas+sig.silentApplied) * 100.0 / float64(total)
+		num := float64(sig.citeUsefulMeas+sig.silentApplied) * 100.0 / float64(total)
 		sig.precisionPct = strconv.FormatFloat(num, 'f', 0, 64)
 	} else {
 		sig.precisionPct = "n/a"
@@ -757,7 +757,7 @@ func renderProfile(ts string, sig *walSignals, weak []weakness, strong []strengt
 	fmt.Fprintf(&b, "| strategy-used (clean session + strategy injected) | %d |\n", sig.strategyUsed)
 	fmt.Fprintf(&b, "| strategy-gap (clean session, no strategy) | %d |\n", sig.strategyGap)
 	fmt.Fprintf(&b, "| ambient activations (rules excluded from precision by design) | %d |\n", sig.ambientActivations)
-	fmt.Fprintf(&b, "| cite-useful measurable (referenced explicitly) | %d |\n", sig.triggerUsefulMeas)
+	fmt.Fprintf(&b, "| cite-useful measurable (referenced explicitly) | %d |\n", sig.citeUsefulMeas)
 	fmt.Fprintf(&b, "| silent-applied measurable (silent + outcome-positive) | %d |\n", sig.silentApplied)
 	fmt.Fprintf(&b, "| silent-noise (silent, no application signal — **tuning targets**) | %d |\n", sig.silentNoise)
 	fmt.Fprintf(&b, "| **measurable precision** (useful + applied) / (useful + silent) | **%s%%** |\n", sig.precisionPct)
@@ -775,7 +775,7 @@ func renderProfile(ts string, sig *walSignals, weak []weakness, strong []strengt
 	fmt.Fprintf(&b, "| signal | value |\n")
 	fmt.Fprintf(&b, "|---|---|\n")
 	fmt.Fprintf(&b, "| silent-applied (last 30d) | %d |\n", sig.silentAppliedRecent)
-	fmt.Fprintf(&b, "| cite-useful measurable (last 30d) | %d |\n", sig.triggerUsefulMeasRecent)
+	fmt.Fprintf(&b, "| cite-useful measurable (last 30d) | %d |\n", sig.citeUsefulMeasRecent)
 	fmt.Fprintf(&b, "| **silent_applied_to_useful_ratio_30d** | **%s** |\n", formatRatio(sig.intuitionRatioDefined, sig.intuitionRatio))
 	fmt.Fprintf(&b, "| interpretation | %s |\n", interpretIntuitionRatio(sig.intuitionRatioDefined, sig.intuitionRatio))
 
@@ -835,7 +835,7 @@ func formatFractionPct(defined bool, frac float64) string {
 }
 
 // formatRatio renders the intuition ratio with two decimal places
-// when defined, "n/a" when the denominator (trigger-useful) is 0.
+// when defined, "n/a" when the denominator (cite-useful) is 0.
 // Distinct from formatFractionPct because a ratio is unbounded above
 // 1.0; rendering as a percentage would mislead.
 func formatRatio(defined bool, r float64) string {
@@ -850,7 +850,7 @@ func formatRatio(defined bool, r float64) string {
 // signal a tier crossing, not a precise diagnostic.
 func interpretIntuitionRatio(defined bool, r float64) string {
 	if !defined {
-		return "no measurable trigger-useful events in window — cold start"
+		return "no measurable cite-useful events in window — cold start"
 	}
 	switch {
 	case r >= 1.0:

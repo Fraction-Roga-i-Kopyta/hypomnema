@@ -431,3 +431,26 @@ func TestGenerate_CiteEventsMoveMeasurableCounters(t *testing.T) {
 	mustContain(t, got, "| cite-useful measurable (referenced explicitly) | 1 |")
 	mustContain(t, got, "| silent-noise (silent, no application signal — **tuning targets**) | 1 |")
 }
+
+// TestGenerate_ColdStartInterpretationSaysCiteUseful: interpretIntuitionRatio's
+// undefined-ratio branch (no cite-useful events in the intuition window —
+// the common case for most projects in the 30 days after the v2.14 fresh
+// start) must name the live signal, not the retired trigger-useful one.
+func TestGenerate_ColdStartInterpretationSaysCiteUseful(t *testing.T) {
+	dir := t.TempDir()
+	// A WAL with real activity but no cite-useful/cite-silent rows at all —
+	// citeUsefulMeasRecent stays 0, so intuitionRatioDefined is false and
+	// interpretIntuitionRatio takes the cold-start branch.
+	mustWrite(t, filepath.Join(dir, ".wal"), ""+
+		"2026-04-01|session-metrics|backend|error_count:0,tool_calls:5,duration:30s\n"+
+		"2026-04-02|clean-session|unknown|sess1\n"+
+		"2026-04-03|strategy-used|unknown|sess2\n")
+	if err := Generate(dir, nil); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	got := mustRead(t, filepath.Join(dir, "self-profile.md"))
+	mustContain(t, got, "| interpretation | no measurable cite-useful events in window — cold start |")
+	if strings.Contains(got, "trigger-useful") {
+		t.Errorf("rendered self-profile.md must not mention trigger-useful for a cite-free WAL:\n%s", got)
+	}
+}
