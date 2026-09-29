@@ -107,7 +107,7 @@ func Run(in Input) (Result, error) {
 		}
 		// Ablation observation: facts withheld this session get the same
 		// evidence classification, but the verdict flows to holdout-hit/miss
-		// (ablate report), never to trigger events — a fact cannot earn or
+		// (ablate report), never to cite events — a fact cannot earn or
 		// lose effectiveness in a session where the model never saw it.
 		// A fact also present in the injected set was delivered anyway by a
 		// pull path (recall/skill-inject) — the model saw it, the
