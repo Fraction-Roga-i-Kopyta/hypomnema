@@ -6,7 +6,7 @@
 
 **Governance and ranking layer for Claude Code's native file memory — a Go engine (`memoryctl`) + 6 thin shims. No cloud, no embeddings.** Claude Code now ships native file memory; hypomnema adds ranked auto-injection, effectiveness measurement, decay, and a global store that native lacks.
 
-> **Status:** v2.13.0; native-primary. Requires Claude Code ≥ v2.1.59 (native file memory). v1.x stays on its tag for older Claude Code installs — see [MIGRATION.md](docs/MIGRATION.md) for the v1.x → v2.x upgrade path.
+> **Status:** v2.14.0; native-primary. Requires Claude Code ≥ v2.1.59 (native file memory). v1.x stays on its tag for older Claude Code installs — see [MIGRATION.md](docs/MIGRATION.md) for the v1.x → v2.x upgrade path.
 >
 > **Platforms:** macOS (primary, daily-driver) and Linux (`ubuntu-latest`), both covered by CI. The core is the Go binary; the shims are ~5-line `sh` marshallers. Windows: WSL only, native unsupported.
 >
