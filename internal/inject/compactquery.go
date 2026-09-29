@@ -35,7 +35,15 @@ var sectionHeaderRe = regexp.MustCompile(`^(?:#{1,6}\s+(?:\d+\.\s+)?|\d+\.\s+)\*
 // (else the whole summary), reduced to its compactQueryTerms most frequent
 // relevance terms, ties in first-occurrence order, space-joined.
 func CompactQuery(summary string) string {
-	toks := tokenize.Relevance(focusText(summary))
+	return TopTerms(focusText(summary), compactQueryTerms)
+}
+
+// TopTerms reduces text to its n most frequent relevance terms (ties in
+// first-occurrence order), space-joined; n < 0 keeps every term. It is the
+// bounded query shape shared by compaction re-injection and subagent task
+// prompts, so a long text cannot reward the longest fact bodies.
+func TopTerms(text string, n int) string {
+	toks := tokenize.Relevance(text)
 	count := map[string]int{}
 	var order []string
 	for _, t := range toks {
@@ -45,8 +53,8 @@ func CompactQuery(summary string) string {
 		count[t]++
 	}
 	sort.SliceStable(order, func(i, j int) bool { return count[order[i]] > count[order[j]] })
-	if len(order) > compactQueryTerms {
-		order = order[:compactQueryTerms]
+	if n >= 0 && len(order) > n {
+		order = order[:n]
 	}
 	return strings.Join(order, " ")
 }
