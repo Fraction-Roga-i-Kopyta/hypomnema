@@ -34,15 +34,15 @@ fi
 echo "$out" | grep -qi "not valid JSON" || _fail "corrupt settings: no clear error message"
 [ -d "$CD/hooks/v2" ] && _fail "corrupt settings: shims were installed before the abort"
 
-# --- 2. Fresh install: 6 shims, 6 registrations, Next steps → doctor ---
+# --- 2. Fresh install: 8 shims, 8 registrations, Next steps → doctor ---
 CD="$(_sandbox fresh)"
 echo '{}' > "$CD/settings.json"
 out=$(CLAUDE_DIR="$CD" "$REPO/install.sh" 2>&1) || _fail "fresh install exited non-zero: $out"
 n=$(find "$CD/hooks/v2" -name '*.sh' 2>/dev/null | wc -l | tr -d ' ')
-[ "$n" -eq 6 ] || _fail "fresh install: expected 6 shims, got $n"
+[ "$n" -eq 8 ] || _fail "fresh install: expected 8 shims, got $n"
 reg=$(jq '[.hooks // {} | to_entries[] | .value[]?.hooks[]?
            | select((.command // "") | test("hooks/v2/.*\\.sh"))] | length' "$CD/settings.json")
-[ "$reg" -eq 6 ] || _fail "fresh install: expected 6 registered hooks, got $reg"
+[ "$reg" -eq 8 ] || _fail "fresh install: expected 8 registered hooks, got $reg"
 echo "$out" | grep -q "memoryctl doctor" || _fail "next steps must recommend 'memoryctl doctor'"
 echo "$out" | grep -q "memoryctl status" && _fail "next steps still recommends nonexistent 'memoryctl status'"
 _ok "fresh install"
@@ -64,7 +64,7 @@ else
   _ok "dry-run with stale symlink"
 fi
 
-# --- 4. Uninstall removes ALL 6 shims and every settings entry ---
+# --- 4. Uninstall removes ALL 8 shims and every settings entry ---
 CD="$(_sandbox uninstall)"
 echo '{}' > "$CD/settings.json"
 CLAUDE_DIR="$CD" "$REPO/install.sh" >/dev/null 2>&1 || _fail "install (for uninstall case) failed"
@@ -156,6 +156,52 @@ elif [ ! -f "$CD/hooks/v2/session-start.sh" ]; then
   _fail "uninstall --dry-run actually removed a shim"
 else
   _ok "uninstall --dry-run"
+fi
+
+# --- 12. install refuses a binary without subagent support (version guard) ---
+GUARD_REPO="$(_sandbox guard-repo)"
+cp "$REPO/install.sh" "$GUARD_REPO/install.sh"
+chmod +x "$GUARD_REPO/install.sh"
+cp -R "$REPO/hooks" "$GUARD_REPO/hooks"
+mkdir -p "$GUARD_REPO/bin"
+cat > "$GUARD_REPO/bin/memoryctl" <<'EOF'
+#!/bin/sh
+[ "$1 $2" = "close --subagent" ] && exit 2
+exit 0
+EOF
+chmod 755 "$GUARD_REPO/bin/memoryctl"
+CD="$(_sandbox guard)"
+echo '{}' > "$CD/settings.json"
+out=$(CLAUDE_DIR="$CD" "$GUARD_REPO/install.sh" 2>&1)
+rc=$?
+if [ "$rc" -eq 0 ]; then
+  _fail "version guard: install exited 0 with a binary lacking subagent support (output: $out)"
+else
+  _ok "install refuses a binary without subagent support"
+fi
+echo "$out" | grep -q "predates subagent support" || _fail "version guard: missing 'predates subagent support' message"
+n=$(find "$CD/hooks/v2" -name '*.sh' 2>/dev/null | wc -l | tr -d ' ')
+[ "$n" -eq 0 ] || _fail "version guard: $n shim(s) installed before the abort"
+[ -d "$CD/hooks/v2" ] && _fail "version guard: hooks/v2 dir exists before the abort (probe must run pre-flight)"
+[ -L "$CD/bin/memoryctl" ] && _fail "version guard: bin/memoryctl symlink exists before the abort (probe must run pre-flight)"
+[ -e "$CD/bin" ] && _fail "version guard: bin/ dir exists before the abort (probe must run pre-flight)"
+[ -e "$CD/memory-global" ] && _fail "version guard: memory-global/ dir exists before the abort (probe must run pre-flight)"
+
+# --- 13. Stable backup name follows THIS run's pre-change snapshot ---
+CD="$(_sandbox backupstable)"
+echo '{}' > "$CD/settings.json"
+CLAUDE_DIR="$CD" "$REPO/install.sh" >/dev/null 2>&1 || _fail "backup-stable: first install failed"
+echo '{"marker":1}' > "$CD/settings.json"
+sleep 1 # BACKUP_TS is second-resolution; force the two runs into different seconds
+CLAUDE_DIR="$CD" "$REPO/install.sh" >/dev/null 2>&1 || _fail "backup-stable: second install failed"
+if [ -e "$CD/settings.json.backup-hypomnema" ]; then
+  if grep -q '"marker"' "$CD/settings.json.backup-hypomnema"; then
+    _ok "stable backup name points at the pre-second-run snapshot"
+  else
+    _fail "stable backup name does not contain the pre-second-run marker"
+  fi
+else
+  _fail "settings.json.backup-hypomnema missing after second install"
 fi
 
 echo ""

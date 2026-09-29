@@ -74,4 +74,59 @@ printf '%s' '{"tool_name":"Write","tool_input":{"file_path":"'"$TMP"'/.claude/me
   | HYPOMNEMA_MEMORYCTL=/nonexistent/memoryctl bash "$DIR/pre-tool-write.sh"
 [ $? -eq 0 ] || { echo "FAIL: pre-tool-write.sh missing binary must exit 0"; exit 1; }
 
+# subagent-start: a pending Agent call in the parent transcript → envelope; missing binary exits 0
+cat > "$TMP/parent.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Agent","input":{"description":"docker","prompt":"docker cache layer","subagent_type":"general-purpose"}}]}}
+EOF
+out=$(printf '%s' '{"session_id":"s1","cwd":"/tmp/proj","transcript_path":"'"$TMP"'/parent.jsonl","agent_id":"a1","agent_type":"general-purpose"}' \
+  | HYPOMNEMA_MEMORYCTL="$MCTL" CLAUDE_HOME="$TMP/.claude" CLAUDE_MEMORY_DIR="$TMP/.claude/memory" \
+    bash "$DIR/subagent-start.sh")
+echo "$out" | grep -q '"hookEventName":"SubagentStart"' || { echo "FAIL: subagent-start.sh no envelope: $out"; exit 1; }
+
+printf '%s' '{"session_id":"s1","agent_id":"a1","agent_type":"general-purpose"}' \
+  | HYPOMNEMA_MEMORYCTL=/nonexistent/memoryctl bash "$DIR/subagent-start.sh"
+[ $? -eq 0 ] || { echo "FAIL: subagent-start.sh missing binary must exit 0"; exit 1; }
+
+# subagent-stop: classifies under the subagent key; missing binary exits 0
+cat > "$TMP/agent.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"text","text":"<cc-memory filenames=\"docker.md\">used the cache fix</cc-memory>"}]}}
+EOF
+printf '%s' '{"session_id":"s1","cwd":"/tmp/proj","agent_id":"a1","agent_type":"general-purpose","agent_transcript_path":"'"$TMP"'/agent.jsonl"}' \
+  | HYPOMNEMA_MEMORYCTL="$MCTL" CLAUDE_HOME="$TMP/.claude" CLAUDE_MEMORY_DIR="$TMP/.claude/memory" \
+    bash "$DIR/subagent-stop.sh"
+[ $? -eq 0 ] || { echo "FAIL: subagent-stop.sh must exit 0"; exit 1; }
+grep -q '|cite-useful|.*docker\.md|s1:a1$' "$TMP/.claude/memory/.wal" \
+  || { echo "FAIL: subagent-stop.sh did not classify under s1:a1"; cat "$TMP/.claude/memory/.wal"; exit 1; }
+
+printf '%s' '{"session_id":"s1","agent_id":"a1","agent_type":"general-purpose","agent_transcript_path":"/x"}' \
+  | HYPOMNEMA_MEMORYCTL=/nonexistent/memoryctl bash "$DIR/subagent-stop.sh"
+[ $? -eq 0 ] || { echo "FAIL: subagent-stop.sh missing binary must exit 0"; exit 1; }
+
+# subagent-start / subagent-stop: a memoryctl that predates subagent support
+# refuses --subagent (exit 2, no stdout) instead of silently treating the
+# subagent's envelope as the parent's SessionStart — the shims must swallow
+# that refusal and exit 0 with EMPTY stdout, never surface it to the harness.
+OLDBIN="$TMP/old-memoryctl.sh"
+cat > "$OLDBIN" <<'EOF'
+#!/bin/sh
+for a in "$@"; do
+  [ "$a" = "--subagent" ] && exit 2
+done
+printf '%s' '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"x"}}'
+exit 0
+EOF
+chmod +x "$OLDBIN"
+
+out=$(printf '%s' '{"session_id":"s1","cwd":"/tmp/proj","agent_id":"a1","agent_type":"general-purpose"}' \
+  | HYPOMNEMA_MEMORYCTL="$OLDBIN" bash "$DIR/subagent-start.sh")
+rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL: subagent-start.sh with a pre-subagent binary must exit 0, got $rc"; exit 1; }
+[ -z "$out" ] || { echo "FAIL: subagent-start.sh with a pre-subagent binary must print nothing, got: $out"; exit 1; }
+
+out=$(printf '%s' '{"session_id":"s1","cwd":"/tmp/proj","agent_id":"a1","agent_type":"general-purpose","agent_transcript_path":"/x"}' \
+  | HYPOMNEMA_MEMORYCTL="$OLDBIN" bash "$DIR/subagent-stop.sh")
+rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL: subagent-stop.sh with a pre-subagent binary must exit 0, got $rc"; exit 1; }
+[ -z "$out" ] || { echo "FAIL: subagent-stop.sh with a pre-subagent binary must print nothing, got: $out"; exit 1; }
+
 echo "PASS"

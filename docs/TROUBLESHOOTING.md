@@ -15,7 +15,7 @@ It checks:
 - `claude_dir` / `memory_dir` exist
 - every hypomnema hook is registered in `settings.json` **under the correct
   event** (not just present somewhere)
-- all six v2 shims exist and are executable in `~/.claude/hooks/v2/`
+- all eight v2 shims exist and are executable in `~/.claude/hooks/v2/`
 - no broken symlinks in `~/.claude/hooks/` or `~/.claude/bin/`
 - `memoryctl` is installed and on `$PATH`
 - native corpus counts by type (empty corpus is flagged)
@@ -52,6 +52,84 @@ doctor points at a specific check."
    Look for `additionalContext` in the JSON. If absent, check stderr. Note the
    path is `~/.claude/hooks/v2/session-start.sh` — there is no
    `memory-session-start.sh` in v2.
+
+## A subagent got no memory
+
+1. **Check whether the agent type is meant to be skipped.** By default
+   `fork`, `Explore`, `claude-code-guide`, and `statusline-setup` get no
+   memory — `HYPOMNEMA_SUBAGENT_SKIP` fully replaces that list when set (a
+   set-but-empty value means skip nothing, and a single `*` entry means skip
+   every agent type — the full opt-out):
+
+   ```bash
+   echo "$HYPOMNEMA_SUBAGENT_SKIP"
+   ```
+
+   To opt every subagent out permanently, set `HYPOMNEMA_SUBAGENT_SKIP=*` in
+   `settings.json`'s top-level `env` block so both the `SubagentStart` and
+   `SubagentStop` hooks inherit it — deleting the hook entries themselves
+   instead is undone by the next `./install.sh`.
+2. **A resumed agent getting nothing is by design**, not a bug: the harness
+   never adds a second `SubagentStart` context to a transcript that already
+   carries one, and `memoryctl` mirrors that — a key whose
+   `rendered-<key>.list` already exists is a no-op on every later start for
+   that key.
+3. **Run `memoryctl doctor`.** A missing or misrouted `SubagentStart`/
+   `SubagentStop` registration shows up in `settings_hooks_registered` with
+   the same wording as any other missing hook, e.g.:
+
+   ```
+   settings_hooks_registered FAIL: subagent-start.sh missing (want SubagentStart); subagent-stop.sh missing (want SubagentStop) — re-run ./install.sh
+   ```
+
+   A `memoryctl_available` line whose detail contains `predates subagent
+   support` means the resolved binary itself is too old. With the current
+   shims that is a no-op, not a harness-visible error — `subagent-start.sh`
+   / `subagent-stop.sh` swallow the binary's exit-2 refusal on `--subagent`
+   and exit 0 either way, so a subagent just runs without memory instead of
+   looping or corrupting the parent session (§1, §8, §9 of
+   hooks-contract.md). `doctor` still warns because the subagent gets no
+   memory either way: `make build` then re-run `./install.sh` (it refuses to
+   proceed against a `bin/memoryctl` that doesn't understand `close
+   --subagent`).
+4. **Claude Code older than the verified version (2.1.284) may not deliver
+   `additionalContext` on `SubagentStart`**, even though the hook fires and
+   `memoryctl` still writes its `inject` WAL row — the subagent's context
+   never actually receives the text, but `ref_count` keeps climbing as if it
+   had. Update Claude Code, or, until that's an option, set
+   `HYPOMNEMA_SUBAGENT_SKIP=*` in `settings.json`'s top-level `env` block
+   (item 1 above) rather than deleting the `SubagentStart` registration —
+   deleting it is undone by the next `./install.sh`.
+5. **Nested agents (a subagent launching its own subagent) and a launching
+   call this hook cannot find at all** both fall back to ranking against the
+   parent's 3 most recent prompts instead of a specific task — expected, not
+   a bug; the subagent still gets memory, just against a less specific
+   query. This fallback fires when the agent has no launch acknowledgement
+   and no unanswered, unclaimed call of its type is left in the transcript
+   tail — every such call already answered or taken by a sibling, or none
+   there at all (a nested agent's launching call lives in its *parent
+   subagent's* transcript, not the top-level one this hook reads) —
+   not merely because the acknowledgement hasn't landed yet; see the next
+   section for that case.
+
+## A subagent got memory for a sibling's task
+
+Only an **acknowledged** launch is matched exactly: the `tool_result` naming
+`agentId: <id>` identifies that agent's own call even among several parallel
+calls of the same type. A synchronous launch is never acknowledged, and a
+background launch's acknowledgement can still be unwritten when
+`SubagentStart` fires. Either way, the subagent instead claims the **oldest
+still-unclaimed** call of its type (`.runtime/agentcall-<id>.claim`, an
+atomic create) — so N parallel launches of one type, none yet acknowledged,
+get N *distinct* calls, assigned in the order their `SubagentStart` hooks
+actually fire, not in launch order. A mismatch (a subagent ranked against a
+sibling's task) now needs the hooks themselves to fire out of launch order —
+still possible under enough concurrency, but no longer the default outcome
+of parallel launches the way "newest pending call wins" was. The effect,
+when it does happen, is a less relevant fact set for that one subagent's
+launch, not data corruption or a wrong classification later — `SubagentStop`
+still classifies citations under the correct agent's own key regardless of
+what `SubagentStart` ranked against.
 
 ## Hooks not firing after install
 
@@ -208,6 +286,24 @@ few different reasons. Check, in order:
 `citation_signal` reports OK with "no citation data yet" before any `cite-*`
 row has ever been written (a fresh install, or one that hasn't seen a Stop
 hook since the v2.14 cutover) — that is expected, not a problem.
+
+**Subagent keys count as their own sessions here.** A WAL row whose session
+column (`$4`) contains `:` (`<session_id>:<agent_id>`) came from a
+subagent's own `SubagentStop`, and both `citation_signal` and
+`open_quanta_last_30d` treat it as a session in its own right — it is not
+folded back into its parent. If the WARN is puzzling given how quiet the
+orchestrating sessions actually are, split the rows and check the two
+populations separately:
+
+```bash
+awk -F'|' '$4 ~ /:/'  ~/.claude/memory/.wal | tail -50   # subagent keys
+awk -F'|' '$4 !~ /:/' ~/.claude/memory/.wal | tail -50   # parent sessions
+```
+
+A subagent whose own transcript was unreadable (a bad or missing
+`agent_transcript_path`) still gets a `session-close` row for its key, but no
+`cite-*` row at all — the same "transcript unreadable" case as a normal
+session, just keyed to the subagent.
 
 ## My rule shows under "ambient" in `self-profile.md`, never as cite-useful/silent
 

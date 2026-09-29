@@ -583,6 +583,65 @@ func TestRun_MissingShimFilesFail(t *testing.T) {
 	mustFindCheck(t, Run(claude, mem, native.StoreFor(claude, cwd), cwd), "shim_files_present", FAIL)
 }
 
+// memoryctlStub writes an executable shell stub over the fixture's
+// bin/memoryctl. --help always succeeds; `close --subagent` exits 2 when
+// subagentExit2 is true (simulating a binary built before subagent support
+// landed) and 0 otherwise.
+func memoryctlStub(t *testing.T, claude string, subagentExit2 bool) {
+	t.Helper()
+	closeExit := "0"
+	if subagentExit2 {
+		closeExit = "2"
+	}
+	script := "#!/bin/sh\n" +
+		"if [ \"$1\" = \"--help\" ]; then exit 0; fi\n" +
+		"if [ \"$1\" = \"close\" ] && [ \"$2\" = \"--subagent\" ]; then exit " + closeExit + "; fi\n" +
+		"exit 0\n"
+	p := filepath.Join(claude, "bin", "memoryctl")
+	if err := os.WriteFile(p, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCheckMemoryctl_PredatesSubagentSupportWarns(t *testing.T) {
+	claude, mem, cwd := newFixture(t)
+	memoryctlStub(t, claude, true)
+	c := mustFindCheck(t, Run(claude, mem, native.StoreFor(claude, cwd), cwd), "memoryctl_available", WARN)
+	if !strings.Contains(c.Detail, "predates subagent support") {
+		t.Errorf("expected %q to contain \"predates subagent support\"", c.Detail)
+	}
+}
+
+// A build that knows `close --subagent` but not `inject --subagent` still
+// leaves SubagentStart doing nothing behind the shims — doctor must say so.
+func TestCheckMemoryctl_InjectSubagentRefusedWarns(t *testing.T) {
+	claude, mem, cwd := newFixture(t)
+	script := "#!/bin/sh\n" +
+		"if [ \"$1\" = \"inject\" ] && [ \"$2\" = \"--subagent\" ]; then exit 2; fi\n" +
+		"exit 0\n"
+	if err := os.WriteFile(filepath.Join(claude, "bin", "memoryctl"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := mustFindCheck(t, Run(claude, mem, native.StoreFor(claude, cwd), cwd), "memoryctl_available", WARN)
+	if !strings.Contains(c.Detail, "inject --subagent") {
+		t.Errorf("expected the detail to name `inject --subagent`, got %q", c.Detail)
+	}
+}
+
+func TestCheckMemoryctl_SubagentSupportedNoPredatesWarning(t *testing.T) {
+	claude, mem, cwd := newFixture(t)
+	memoryctlStub(t, claude, false)
+	report := Run(claude, mem, native.StoreFor(claude, cwd), cwd)
+	for _, c := range report.Checks {
+		if c.Name != "memoryctl_available" {
+			continue
+		}
+		if strings.Contains(c.Detail, "predates subagent support") {
+			t.Errorf("did not expect \"predates subagent support\", got %q (status=%s)", c.Detail, c.Status)
+		}
+	}
+}
+
 func TestRun_NonExecutableShimFails(t *testing.T) {
 	claude, mem, cwd := newFixture(t)
 	p := filepath.Join(claude, "hooks", "v2", "session-start.sh")
@@ -937,5 +996,27 @@ func TestCheckCitationSignal_PreCutoverSessionsNotCounted(t *testing.T) {
 	c := checkCitationSignal(filepath.Join(mem, ".wal"), now)
 	if c.Status != OK || !strings.Contains(c.Detail, "0/1") {
 		t.Fatalf("got %+v, want OK containing '0/1' (pre-cutover sessions excluded from N)", c)
+	}
+}
+
+func TestCheckCandidates_SubagentKeysCountAsOneSession(t *testing.T) {
+	home := t.TempDir()
+	claudeHome := filepath.Join(home, ".claude")
+	memDir := filepath.Join(claudeHome, "memory")
+	projDir := filepath.Join(claudeHome, "projects", "-tmp-proj", "memory")
+	for _, d := range []string{memDir, projDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	os.WriteFile(filepath.Join(projDir, "dud.md"),
+		[]byte("---\nname: dud\ntype: mistake\nstatus: candidate\n---\nx\n"), 0o644)
+	var wal strings.Builder
+	for i := 1; i <= 5; i++ {
+		fmt.Fprintf(&wal, "2026-07-11|cite-silent|-tmp-proj\x1fdud.md|s1:a%d\n", i)
+	}
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(wal.String()), 0o644)
+	if c := checkCandidates(memDir, claudeHome, native.StoreFor(claudeHome, "/tmp/proj")); c.Status != OK {
+		t.Fatalf("five silent subagents of one session are one silent session: %+v", c)
 	}
 }

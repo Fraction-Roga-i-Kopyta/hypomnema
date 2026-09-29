@@ -26,6 +26,12 @@ type Input struct {
 	// Store is the resolved native store. Zero value → resolved from CWD
 	// (tests and legacy callers); the memoryctl verb always sets it.
 	Store native.Store
+	// Subagent marks a SubagentStop close: SessionID is the subagent's
+	// observation key and TranscriptPath its own transcript. Only the
+	// citation classification and a session-close row run; session-level
+	// work (metrics, holdout, sidecar reprojection, decay, MEMORY.md,
+	// self-profile) is left to the parent's next Stop.
+	Subagent bool
 }
 
 func (in Input) store() native.Store {
@@ -134,7 +140,7 @@ func Run(in Input) (Result, error) {
 		// one. A session with only undelivered citations still writes this
 		// (undelivered never arms the guard above).
 		if len(delivered) == 0 && len(injected) > 0 {
-			wal.Append(in.MemoryDir, fmt.Sprintf("%s|cite-none|%s|%s", in.Today, sid, sid), "|cite-none|"+sid+"|"+sid)
+			wal.AppendSuffixUnique(in.MemoryDir, fmt.Sprintf("%s|cite-none|%s|%s", in.Today, sid, sid), "|cite-none|"+sid+"|"+sid)
 		}
 		// Ablation observation: facts withheld this session get the same
 		// evidence classification, but the verdict flows to holdout-hit/miss
@@ -144,7 +150,7 @@ func Run(in Input) (Result, error) {
 		// pull path (recall/skill-inject) — the model saw it, the
 		// observation is contaminated, so it is excluded here.
 		holdout := readHoldoutSet(in.MemoryDir, in.SessionID)
-		if len(holdout) > 0 {
+		if len(holdout) > 0 && !in.Subagent {
 			wasInjected := make(map[string]bool, len(injected))
 			for _, s := range injected {
 				wasInjected[s] = true
@@ -163,6 +169,10 @@ func Run(in Input) (Result, error) {
 				appendWAL(in.MemoryDir, in.Today, "holdout-miss", qualify(projectOf, slug), sid)
 			}
 		}
+	}
+	if in.Subagent {
+		wal.AppendSuffixUnique(in.MemoryDir, fmt.Sprintf("%s|session-close|%s|%s", in.Today, sid, sid), "|session-close|"+sid+"|"+sid)
+		return res, nil
 	}
 	metrics := fmt.Sprintf("%s|session-metrics|domains:_global_,error_count:%d,tool_calls:%d,duration:%ds|%s",
 		in.Today, sess.ToolErrors, sess.ToolCalls, sess.DurationSec, sid)
@@ -241,7 +251,7 @@ func slugMeta(claudeHome string, st native.Store) (names map[string]string, evid
 func appendWAL(memDir, day, event, slug, sid string) {
 	target := wal.SanitizeField(slug)
 	line := fmt.Sprintf("%s|%s|%s|%s", day, event, target, sid)
-	wal.Append(memDir, line, "|"+event+"|"+target+"|"+sid)
+	wal.AppendSuffixUnique(memDir, line, "|"+event+"|"+target+"|"+sid)
 }
 
 // projectBySlug maps each in-scope fact's slug to its owning project, project-

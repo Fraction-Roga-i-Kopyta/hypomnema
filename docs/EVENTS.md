@@ -21,6 +21,19 @@ and newlines in source data MUST be replaced with `_` before write — see
 [`FORMAT.md § 5`](FORMAT.md#5-wal-grammar) and the `wal.SanitizeField`
 sanitiser.
 
+The `session` column (`$4`) may itself be `<session_id>:<agent_id>` — a
+subagent's own observation key, written by the `SubagentStart`/`SubagentStop`
+shims (`memoryctl inject --event=SubagentStart`, `memoryctl close
+--subagent`). Readers that count "how many sessions" (`memoryctl promote`,
+`doctor` candidate checks) fold a key back to its parent (`wal.ParentSession`
+— the part before the first `:`) so a session and its subagents count as one
+observation; sidecar effectiveness, `ab`, self-profile, and doctor's
+`citation_signal`/`open_quanta_last_30d` instead treat each subagent key as
+its own session. Per-session dedup on `cite-*`/`holdout-*`/`session-close`
+rows is end-anchored (`wal.AppendSuffixUnique`, matching `strings.HasSuffix`)
+rather than plain substring, precisely so a subagent row ending in
+`s1:a1` never suppresses the parent's own row ending in plain `s1`.
+
 ## Status legend
 
 - **Active** — emitted by current v2 code; readers MUST handle.
@@ -42,14 +55,14 @@ Exactly these events are written by v2 code. Producers verified by grep of
 
 | event | target shape | producer (verb) | consumer | notes |
 |---|---|---|---|---|
-| `inject` | `<slug>` | `memoryctl inject` — `SessionStart` + `UserPromptSubmit` shims (`cmd/memoryctl/inject.go` → `persistInjected`) | `internal/sidecar` reproject (ref_count, last_injected); `internal/closer` via the session injected-set | one line per injected fact per delivery |
+| `inject` | `<slug>` | `memoryctl inject` — `SessionStart` + `UserPromptSubmit` + `SubagentStart` shims (`cmd/memoryctl/inject.go` → `persistInjected`; `cmd/memoryctl/subagent.go` → `runSubagentStart`) | `internal/sidecar` reproject (ref_count, last_injected); `internal/closer` via the session injected-set | one line per injected fact per delivery; a `SubagentStart` delivery writes under the subagent's own `<session_id>:<agent_id>` key |
 | `recall` | `<slug>` | `memoryctl recall` (pull CLI) and `skill-inject` (`cmd/memoryctl/recall.go`) | `internal/sidecar` reproject; `internal/closer` (joined into injected-set) | same-day repeat of one fact in one session dedups to a single ref bump; does NOT feed last_useful (delivery, not use) |
 | `cite-useful` | `<slug>` | `memoryctl close` — `internal/closer` (`Citations` + `resolveCitations`) | `internal/sidecar` (effectiveness `pos`); `internal/profile`; sidecar last_useful (ranking recency); `internal/promote`; `internal/ab`; `internal/doctor` candidates | slug/file name appears in an assistant-authored `<cc-memory filenames="…">` citation in the transcript; written once per (fact, session) — a later changed verdict adds its own row. Credit requires **delivery**, not just the citation text: the fact must have been injected/recalled/skill-injected this session (in `injected-<sid>.list`) OR read directly with the Read tool from its resolved project-store or global-store path — a resolved citation for an undelivered fact writes `cite-undelivered` instead. Delivery is session-scoped, not ordered: a citation earlier in the session still earns credit if the fact is delivered later in the same session. Read-path delivery matches the cleaned path string, so a store reached through a symlinked alias is not recognised (fails closed to `cite-undelivered`); on a project/global basename tie, the project copy gets the credit |
 | `cite-silent` | `<slug>` | `memoryctl close` — `internal/closer` | `internal/sidecar` (effectiveness `neg`); `internal/profile`; `internal/doctor` candidates | injected fact went uncited; written only in a session with ≥1 resolvable **delivered** citation (see `cite-none`) — never fabricated for a session where the citation channel itself may be broken, and an undelivered citation alone does not arm this guard either; written once per (fact, session) — a later changed verdict adds its own row |
 | `cite-undelivered` | `<slug>` | `memoryctl close` — `internal/closer` | none — diagnostic only | a citation resolved to an in-scope fact that was neither injected/recalled/skill-injected this session nor read directly with the Read tool — counts for nothing else: not useful, not candidate-confirmed, and does not arm the `cite-silent` guard; written once per (fact, session) |
 | `cite-none` | `<session_id>` (both `$3` and `$4`) | `memoryctl close` — `internal/closer` | `internal/doctor` `open_quanta_last_30d` (via `closingEvents`); `internal/doctor` `citation_signal` counts it (any `cite-*` prefix) as proof the v2.14+ citation channel has run at all, and as the mark that a session was classified — N counts injected sessions carrying any `cite-*` row, M the subset that also carries `cite-useful` | one per session, only when the transcript was readable, had ≥1 injected fact, and resolved zero **delivered** citations (a session with only `cite-undelivered` citations still writes this); marks the session's classification pass as closed so a citation-less-but-readable session does not read as an open/lost quantum |
-| `session-metrics` | `domains:_global_,error_count:N,tool_calls:M,duration:Ss` (`$3`); session id (`$4`) | `memoryctl close` — `internal/closer` | `internal/profile` (rollup); tolerated by `ab`, `doctor` | one per closed session |
-| `session-close` | `<session_id>` (in both `$3` and `$4`) | `memoryctl close` — `internal/closer` | session-boundary marker; `internal/profile` | emitted for any error count |
+| `session-metrics` | `domains:_global_,error_count:N,tool_calls:M,duration:Ss` (`$3`); session id (`$4`) | `memoryctl close` — `internal/closer` | `internal/profile` (rollup); tolerated by `ab`, `doctor` | one per closed session; not written by `close --subagent` — a subagent key never gets a `session-metrics` row, that stays with the parent's own `Stop` |
+| `session-close` | `<session_id>` (in both `$3` and `$4`) | `memoryctl close` — `internal/closer` (also `memoryctl close --subagent` — `SubagentStop` — under the subagent's `<session_id>:<agent_id>` key) | session-boundary marker; `internal/profile` | emitted for any error count; deduped end-anchored (`wal.AppendSuffixUnique`) so a repeated `SubagentStop` for the same key adds nothing |
 | `dedup-blocked` | `<new-slug>><existing-slug>` (`>` sub-delim) | `memoryctl dedup check` (pre-tool) — `internal/dedup` | informational (`doctor` tolerates) | see note below |
 | `dedup-merged` | `<new-slug>><existing-slug>` | `memoryctl dedup check` (post-tool) — `internal/dedup` | informational | emitted only after the on-disk recurrence bump succeeds |
 | `dedup-candidate` | `<new-slug>~<existing-slug>` (`~` sub-delim) | `memoryctl dedup check` — `internal/dedup` | informational | soft-similarity, below the merge threshold |
@@ -63,7 +76,7 @@ Exactly these events are written by v2 code. Producers verified by grep of
 | `holdout-miss` | `<qslug>` | `memoryctl close` — `internal/closer` | `ablate report` | evidence absent without injection; never feeds effectiveness; written once per (fact, session) — a later changed verdict adds its own row |
 
 > **Dedup is not a default hook.** `memoryctl dedup check` is a real verb that
-> emits the three `dedup-*` events, but the six installed shims do not wire it —
+> emits the three `dedup-*` events, but the eight installed shims do not wire it —
 > it fires only when invoked explicitly. See `docs/ARCHITECTURE.md`.
 
 ---

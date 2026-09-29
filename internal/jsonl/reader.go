@@ -106,6 +106,18 @@ func readFilePath(raw json.RawMessage) string {
 	return in.FilePath
 }
 
+// handbackMessage extracts input.message from a SubagentHandback tool_use,
+// tolerating an odd input shape the same way readFilePath does.
+func handbackMessage(raw json.RawMessage) string {
+	var in struct {
+		Message string `json:"message"`
+	}
+	if len(raw) == 0 || json.Unmarshal(raw, &in) != nil {
+		return ""
+	}
+	return in.Message
+}
+
 // readState tracks Read tool_use calls by path. A path is delivered once
 // ANY Read of it came back with a successful tool_result; a call whose
 // result was an error, or never appeared at all, leaves its path
@@ -253,6 +265,17 @@ func processLine(line []byte, out *Session, b *strings.Builder, thinking *string
 			out.ToolCalls++
 			if p.Name == "Read" {
 				rs.recordCall(p.ID, readFilePath(p.Input))
+			}
+			// A subagent's final report is the input of its SubagentHandback
+			// call, not assistant text — the sentences (and citations) that
+			// state what it did live there.
+			if p.Name == "SubagentHandback" {
+				if m := handbackMessage(p.Input); m != "" {
+					if b.Len() > 0 {
+						b.WriteString("\n\n")
+					}
+					b.WriteString(m)
+				}
 			}
 		case p.Type == "tool_result":
 			if p.IsError {

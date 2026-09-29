@@ -62,7 +62,7 @@ Code patterns and conventions (read the code), git history (`git log`/`blame`), 
 
 ## Injection and ranking
 
-`memoryctl inject` (SessionStart + UserPromptSubmit hooks) ranks all `active`/`pinned` files in the current project's store plus the global store, and injects the top-8 (2.5KB per body, 8KB total) once per context — again after a compaction/clear wipes the model's context. You do not set ranks — write good `keywords` / `domains` / `description` and let the ranker score by overlap + recency + effectiveness. `session_keywords` come from prompt tokens, CWD basename, and git context.
+`memoryctl inject` (SessionStart + UserPromptSubmit hooks) ranks all `active`/`pinned` files in the current project's store plus the global store, and injects the top-8 (2.5KB per body, 8KB total) once per context — again after a compaction/clear wipes the model's context. You do not set ranks — write good `keywords` / `domains` / `description` and let the ranker score by overlap + recency + effectiveness. `session_keywords` come from prompt tokens, CWD basename, and git context. `SubagentStart` runs the same ranker for each eligible subagent against its own task, injecting a smaller top-5 (5KB total) under that subagent's own key.
 
 ## Citing memory
 
@@ -88,4 +88,4 @@ The top match arrives with its body; runner-ups come as an index of paths to Rea
 
 ## Subagents
 
-There is no auto-generated subagent context file (`_agent_context.md` was retired with v1). When you spawn a subagent, pass the relevant facts inline in its prompt.
+Subagents receive ranked memory automatically at `SubagentStart` — query = the agent's own launch task, else the parent's recent prompts — except a short skip list (`fork`, `Explore`, `claude-code-guide`, `statusline-setup`, overridable via `HYPOMNEMA_SUBAGENT_SKIP`). Its citations are measured under its own key, separate from the parent session. There is still no auto-generated context file (`_agent_context.md` was retired with v1) — pass inline only what is specific to the task beyond what the ranker already covers.
