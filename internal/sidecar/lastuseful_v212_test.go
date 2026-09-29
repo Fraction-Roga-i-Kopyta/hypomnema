@@ -8,21 +8,21 @@ import (
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 )
 
-// last_useful is the latest trigger-useful date — the model's own use
+// last_useful is the latest cite-useful date — the model's own use
 // signal, distinct from last_injected (the ranker's output). recall does not
 // count: skill-inject writes the same event as a push, and a recalled fact
-// that is actually used shows up as trigger-useful at close.
+// that is actually used shows up as cite-useful at close.
 func TestReproject_LastUseful(t *testing.T) {
 	dir := t.TempDir()
 	walPath := filepath.Join(dir, ".wal")
 	wal := "2026-04-01|inject|x.md|s1\n" +
-		"2026-04-02|trigger-silent|x.md|s1\n" +
+		"2026-04-02|cite-silent|x.md|s1\n" +
 		"2026-04-03|inject|x.md|s2\n" +
-		"2026-04-03|trigger-useful|x.md|s2\n" +
+		"2026-04-03|cite-useful|x.md|s2\n" +
 		"2026-04-05|recall|x.md|s3\n" + // delivery, not use — bumps last_injected only
 		"2026-04-06|holdout-hit|x.md|s4\n" + // never counts
 		"2026-04-07|inject|x.md|s5\n" + // injection alone does not move last_useful
-		"2026-04-07|trigger-silent|x.md|s5\n"
+		"2026-04-07|cite-silent|x.md|s5\n"
 	if err := os.WriteFile(walPath, []byte(wal), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,7 @@ func TestReproject_LastUseful(t *testing.T) {
 	}
 	r, _, _ := s.Get("x.md")
 	if r.LastUseful != "2026-04-03" {
-		t.Errorf("last_useful = %q, want 2026-04-03 (only trigger-useful counts; recall/holdout/silent/inject do not)", r.LastUseful)
+		t.Errorf("last_useful = %q, want 2026-04-03 (only cite-useful counts; recall/holdout/silent/inject do not)", r.LastUseful)
 	}
 	if r.LastInjected != "2026-04-07" {
 		t.Errorf("last_injected = %q, want 2026-04-07 (unchanged semantics)", r.LastInjected)
@@ -48,7 +48,7 @@ func TestReproject_LastUseful(t *testing.T) {
 func TestReproject_LastUsefulEmptyWhenNeverUseful(t *testing.T) {
 	dir := t.TempDir()
 	walPath := filepath.Join(dir, ".wal")
-	os.WriteFile(walPath, []byte("2026-04-01|inject|y.md|s1\n2026-04-01|trigger-silent|y.md|s1\n"), 0o644)
+	os.WriteFile(walPath, []byte("2026-04-01|inject|y.md|s1\n2026-04-01|cite-silent|y.md|s1\n"), 0o644)
 	s, _ := Open(filepath.Join(dir, ".sidecar.db"))
 	defer s.Close()
 	if err := Reproject(s, []native.MemFile{{Slug: "y.md", ContentSHA: "y"}}, walPath, nil); err != nil {
@@ -65,8 +65,8 @@ func TestReproject_LastUsefulMergesLegacyAndQualified(t *testing.T) {
 	dir := t.TempDir()
 	walPath := filepath.Join(dir, ".wal")
 	os.WriteFile(walPath, []byte(
-		"2026-04-01|trigger-useful|z.md|s1\n"+
-			"2026-04-09|trigger-useful|-p\x1fz.md|s2\n"), 0o644)
+		"2026-04-01|cite-useful|z.md|s1\n"+
+			"2026-04-09|cite-useful|-p\x1fz.md|s2\n"), 0o644)
 	s, _ := Open(filepath.Join(dir, ".sidecar.db"))
 	defer s.Close()
 	if err := Reproject(s, []native.MemFile{{Slug: "z.md", ContentSHA: "z", Project: "-p"}}, walPath, []string{"-p"}); err != nil {
