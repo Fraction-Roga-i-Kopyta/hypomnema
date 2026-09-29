@@ -104,9 +104,11 @@ doctor points at a specific check."
    call this hook cannot find at all** both fall back to ranking against the
    parent's 3 most recent prompts instead of a specific task — expected, not
    a bug; the subagent still gets memory, just against a less specific
-   query. This fallback fires only when no call of the agent's type is found
-   in the transcript at all (a nested agent's launching call lives in its
-   *parent subagent's* transcript, not the top-level one this hook reads) —
+   query. This fallback fires when the agent has no launch acknowledgement
+   and no unanswered, unclaimed call of its type is left in the transcript
+   tail — every such call already answered or taken by a sibling, or none
+   there at all (a nested agent's launching call lives in its *parent
+   subagent's* transcript, not the top-level one this hook reads) —
    not merely because the acknowledgement hasn't landed yet; see the next
    section for that case.
 

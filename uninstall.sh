@@ -210,7 +210,7 @@ echo "=== Done ==="
 echo ""
 if [ -f "$SETTINGS.backup-hypomnema" ]; then
   echo "Note: settings backup from the most recent install still at $SETTINGS.backup-hypomnema"
-  echo "      (that is THIS run's pre-change snapshot, not the original pre-hypomnema settings —"
+  echo "      (that is the most recent install run's pre-change snapshot, not the original pre-hypomnema settings —"
   echo "      the original, if you still have it, is the OLDEST $SETTINGS.backup-hypomnema-* file)"
   echo "      (not auto-restored; delete or keep as you prefer)"
 fi

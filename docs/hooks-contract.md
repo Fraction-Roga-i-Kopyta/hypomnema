@@ -146,9 +146,11 @@ Verbs may read and write:
   — the marker `skill-active` writes; and the store-resolution session pin
   `project-<session_id>.json`, written by `inject` at `SessionStart` and read
   back by later CLI verbs in the same session via
-  `CLAUDE_CODE_SESSION_ID`/`HYPOMNEMA_SESSION_ID`). The three `*.list` families
-  plus the session pin are pruned after 7 days of inactivity (`inject`'s
-  `pruneRuntimeLists`); `active-skill-<sid>` ages out separately and sooner —
+  `CLAUDE_CODE_SESSION_ID`/`HYPOMNEMA_SESSION_ID`; and `agentcall-<tool_use_id>.claim`
+  — the empty marker a SubagentStart writes when it takes a launching Agent
+  call, so parallel launches of one type get distinct calls, §8). The three
+  `*.list` families, the session pin and the `agentcall-*.claim` markers are
+  pruned after 7 days of inactivity (`inject`'s `pruneRuntimeLists`); `active-skill-<sid>` ages out separately and sooner —
   `close` removes it after 24 h (§5) — since a stale skill marker would
   mis-tag `skill-learning` captures long before a week is up.
 
