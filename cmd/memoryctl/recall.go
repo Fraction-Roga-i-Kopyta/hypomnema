@@ -194,12 +194,19 @@ func recordRecallWithSession(slug, project, sid string) {
 	if sid == "" {
 		return // no session — nothing to dedup against, no close to classify
 	}
-	writeSessionList(readInjectedList(sid), []string{slug}, sid)
+	injected := readInjectedList(sid)
+	writeSessionList(injected, []string{slug}, sid)
 	// A pull delivery lands the slug straight in the model's context, same
 	// as a push render — so the rendered list (post-compaction dedup source)
 	// must reflect it too, or a later compact render could offer it again
-	// while it is still on screen from this recall.
-	rendered, _ := readRenderedList(sid)
+	// while it is still on screen from this recall. A session that predates
+	// the rendered list (ok=false) has no per-render history to seed from —
+	// fall back to the injected union so this recall doesn't make every
+	// earlier-injected fact in the session look re-offerable.
+	rendered, ok := readRenderedList(sid)
+	if !ok {
+		rendered = injected
+	}
 	writeRenderedList(rendered, []string{slug}, sid)
 }
 
