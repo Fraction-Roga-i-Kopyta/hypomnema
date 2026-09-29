@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/inject"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/sidecar"
 )
@@ -44,8 +45,11 @@ func TestRecallVerb(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("recall exit=%d stderr=%s", code, errOut)
 	}
-	if !strings.Contains(out, "## docker-cache (mistake, score ") {
-		t.Errorf("missing top-1 header, got:\n%s", out)
+	if !strings.Contains(out, inject.CiteInstruction) {
+		t.Errorf("missing citation instruction line, got:\n%s", out)
+	}
+	if !strings.Contains(out, "## docker-cache — docker.md (mistake, score ") {
+		t.Errorf("missing top-1 header with citable file name, got:\n%s", out)
 	}
 	if !strings.Contains(out, "docker layer cache body") {
 		t.Errorf("missing top-1 body, got:\n%s", out)

@@ -201,16 +201,22 @@ func recordRecallWithSession(slug, project, sid string) {
 // injection) plus an index of runner-ups with paths for follow-up reads.
 func renderRecall(top rank.Scored, rest []rank.Scored, bySlug map[string]native.MemFile) string {
 	var b strings.Builder
-	f := bySlug[top.Slug]
+	b.WriteString(inject.CiteInstruction + "\n\n")
+	f, ok := bySlug[top.Slug]
+	if !ok {
+		// Sidecar row survived, native file vanished — keep the header
+		// citable even when the body render below finds nothing.
+		f.Slug = top.Slug
+	}
 	title := f.Name
 	if title == "" {
-		title = top.Slug
+		title = f.Slug
 	}
 	typ := top.Type
 	if typ == "" {
 		typ = "note"
 	}
-	fmt.Fprintf(&b, "## %s (%s, score %.2f)%s\n", title, typ, top.Score, staleMark(top.Status))
+	fmt.Fprintf(&b, "## %s — %s (%s, score %.2f)%s\n", title, f.Slug, typ, top.Score, staleMark(top.Status))
 	if f.Body != "" {
 		b.WriteString(inject.CapBody(f.Body, inject.MaxBodyBytes, inject.PathHint(f)))
 		b.WriteString("\n")
