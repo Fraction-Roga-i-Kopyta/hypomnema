@@ -314,7 +314,7 @@ Every delivery (`inject`, `recall`, `skill-inject`) opens with one instruction l
 
 > When a fact below changes what you say or do, wrap that sentence in `<cc-memory filenames="FILE">…</cc-memory>` (the tag is hidden from the user).
 
-`FILE` is the fact's file name, shown in its header (`## <name> — <file.md> (<type>, <created>)`). This citation — not a keyword or name match — is the only thing `close` reads to mark a fact `cite-useful`; an injected fact with no citation in a session that had at least one resolvable citation is `cite-silent` instead. Cite only the facts that actually changed what you said or did; the tag is hidden from the user, so there is no cost to citing honestly and no benefit to citing everything.
+`FILE` is the fact's file name, shown in its header (`## <name> — <file.md> (<type>, <created>)`). This citation — not a keyword or name match — is the only thing `close` reads to mark a fact `cite-useful`; an injected fact with no citation in a session that had at least one resolvable citation is `cite-silent` instead. Only a fact actually delivered in the session earns credit for a citation — injected/recalled/skill-injected, or read directly with the Read tool from its file — so citing a filename you never saw content from lands as `cite-undelivered`, not `cite-useful`. Cite only the facts that actually changed what you said or did; the tag is hidden from the user, so there is no cost to citing honestly and no benefit to citing everything.
 
 ## Pull retrieval
 

@@ -30,6 +30,16 @@ usefulness reader.
   measurable counters, the `ab` replay harness, and `doctor`'s candidate
   check — now reads only `cite-*`; `trigger-*`/`outcome-*` rows stay in the
   WAL as history but are ignored.
+- **A citation only earns credit if the fact was actually delivered.** A
+  resolved `<cc-memory>` citation now earns `cite-useful` only when the fact
+  was injected/recalled/skill-injected this session OR read directly with
+  the Read tool from its resolved project-store or global-store path —
+  otherwise it writes `cite-undelivered` (counts for nothing: not useful,
+  not candidate-confirmed, does not arm the `cite-silent` guard). Without
+  this gate, `close` credited any in-scope filename the model happened to
+  type in a citation tag — fabricated, echoed, or name-only — with durable
+  usefulness. `Session.ReadPaths` (`internal/jsonl`) collects every Read
+  tool_use's `file_path` so `close` can check direct-read delivery.
 
 ### Added
 

@@ -211,20 +211,29 @@ Written by the v2 hooks / verbs:
 |---|---|---|
 | `inject` | `inject` (SessionStart / UserPromptSubmit) | slug |
 | `recall` | `recall`, `skill-inject` | slug |
-| `trigger-useful` | `close` | slug (cited injected fact) |
-| `trigger-silent` | `close` | slug (uncited injected fact) |
+| `cite-useful` | `close` | slug (citation resolved AND delivered this session — injected/recalled/skill-injected, or read directly with the Read tool) |
+| `cite-silent` | `close` | slug (injected fact went uncited; written only in a session with ≥1 delivered citation) |
+| `cite-undelivered` | `close` | slug (citation resolved to an in-scope fact but never delivered this session; diagnostic only — feeds no reader) |
+| `cite-none` | `close` | session id (both `$3` and `$4`); one per session with injected facts and zero delivered citations |
 | `session-metrics` | `close` | `$3 = domains:<csv>,error_count:N,tool_calls:M,duration:Ss`; `$4 = session id` |
 | `session-close` | `close` | session id (canonical `$4`) |
 | `dedup-blocked` / `dedup-candidate` / `dedup-merged` | `dedup check` (manual CLI, not hook-wired) | `new>existing` / `new~existing` |
 
+`trigger-useful` / `trigger-silent` are **legacy since v2.14** (superseded by
+`cite-useful`/`cite-silent`) — `close` no longer writes them; see
+`docs/EVENTS.md` for the full registry and status legend.
+
 Additionally **consumed** by the sidecar projection for effectiveness/ranking
 (read for back-compat even if not actively written by v2 hooks): `inject-agg`
 (WAL compaction fold, `target = slug,count`), `outcome-positive`,
-`outcome-negative`, and `trigger-silent-retro`.
+`outcome-negative`, and `trigger-silent-retro` (along with `trigger-useful`/
+`trigger-silent` themselves — tolerated as history, no longer emitted or
+scored).
 
-Effectiveness is the Bayesian `(pos+1)/(pos+neg+2)` over legacy `outcome-*`
-events plus one trigger observation per `(slug, session)` — `trigger-useful`
-wins over `trigger-silent` within a session.
+Effectiveness is the Bayesian `(pos+1)/(pos+neg+2)` over one citation
+observation per `(slug, session)` — `cite-useful` wins over `cite-silent`
+within a session; legacy `outcome-*`/`trigger-*` rows are tolerated on read
+but no longer scored (see `docs/EVENTS.md`).
 
 ### 5.2 `session-metrics` back-compat
 
@@ -303,6 +312,6 @@ A minimal valid WAL:
 ```
 # hypomnema-wal v2
 2026-04-22|inject|bsd-sed-range|session-abc
-2026-04-22|trigger-useful|bsd-sed-range|session-abc
+2026-04-22|cite-useful|bsd-sed-range|session-abc
 2026-04-22|session-close|session-abc|session-abc
 ```
