@@ -245,6 +245,11 @@ func TestSubagentStart_ResumeIsNoop(t *testing.T) {
 }
 
 func TestSubagentQuery_FromTaskFlag(t *testing.T) {
+	// subagentQuery calls pickAgentCall, which claims the call it picks under
+	// memoryDir()/.runtime/ — isolate that or an in-process call (unlike
+	// runStdin's subprocess, which gets a hermetic environment) falls back to
+	// the real ~/.claude/memory.
+	t.Setenv("CLAUDE_MEMORY_DIR", t.TempDir())
 	own := writeTranscript(t, agentCallLine("t1", "general-purpose", "Fix migration", "Investigate the pgmigration lock"))
 	query, fromTask := subagentQuery(own, "general-purpose", "a1")
 	if !fromTask {
@@ -262,6 +267,86 @@ func TestSubagentQuery_FromTaskFlag(t *testing.T) {
 	_, fromTask2 := subagentQuery(fallback, "general-purpose", "a2")
 	if fromTask2 {
 		t.Errorf("want fromTask=false when falling back to the parent's recent prompts")
+	}
+}
+
+func agentAckLine(id, agent string) string {
+	b, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{
+		"content": []map[string]any{{"type": "tool_result", "tool_use_id": id,
+			"content": []map[string]any{{"type": "text", "text": "Async agent launched successfully.\nagentId: " + agent + " (internal ID)"}}}}}})
+	return string(b)
+}
+
+func TestSubagentStart_ParallelLaunchesGetDistinctCalls(t *testing.T) {
+	f := newStoreFixture(t)
+	f.fact(t, "/tmp/proj", "f1", "alpha widget content")
+	f.fact(t, "/tmp/proj", "f2", "bravo widget content")
+	f.fact(t, "/tmp/proj", "f3", "charlie widget content")
+	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
+	parent := writeTranscript(t,
+		agentCallLine("t1", "general-purpose", "task one", "alpha widget content"),
+		agentCallLine("t2", "general-purpose", "task two", "bravo widget content"),
+		agentCallLine("t3", "general-purpose", "task three", "charlie widget content"),
+	)
+	ranksFirst := func(agentID, want string, others ...string) {
+		t.Helper()
+		out, _, code := runStdin(t, f.env, subagentEnv("s1", agentID, "general-purpose", "/tmp/proj", parent, ""),
+			"inject", "--event=SubagentStart")
+		if code != 0 {
+			t.Fatalf("%s: exit %d", agentID, code)
+		}
+		ctx := additionalContext(t, out)
+		wi := strings.Index(ctx, want)
+		if wi < 0 {
+			t.Fatalf("%s: want %q in ctx=%q", agentID, want, ctx)
+		}
+		for _, o := range others {
+			if oi := strings.Index(ctx, o); oi >= 0 && oi < wi {
+				t.Fatalf("%s: %q ranked before %q; ctx=%q", agentID, o, want, ctx)
+			}
+		}
+	}
+	// Started in launch order: a1 claims t1 (f1), a2 claims t2 (f2), a3
+	// claims t3 (f3) — none of the three parallel launches ranks against a
+	// sibling's task.
+	ranksFirst("a1", "alpha widget content", "bravo widget content", "charlie widget content")
+	ranksFirst("a2", "bravo widget content", "alpha widget content", "charlie widget content")
+	ranksFirst("a3", "charlie widget content", "alpha widget content", "bravo widget content")
+}
+
+func TestSubagentStart_OwnAckBeatsOlderUnclaimedCall(t *testing.T) {
+	f := newStoreFixture(t)
+	f.fact(t, "/tmp/proj", "f1", "alpha widget content")
+	f.fact(t, "/tmp/proj", "f2", "bravo widget content")
+	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
+	parent := writeTranscript(t,
+		agentCallLine("t1", "general-purpose", "task one", "alpha widget content"),
+		agentCallLine("t2", "general-purpose", "task two", "bravo widget content"),
+		agentAckLine("t2", "ab2"),
+	)
+	// ab2 is the acknowledged owner of t2 — even though t1 is the older
+	// unclaimed call, ab2's own acknowledgement wins.
+	out, _, code := runStdin(t, f.env, subagentEnv("s1", "ab2", "general-purpose", "/tmp/proj", parent, ""),
+		"inject", "--event=SubagentStart")
+	if code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	ctx := additionalContext(t, out)
+	bi, ai := strings.Index(ctx, "bravo widget content"), strings.Index(ctx, "alpha widget content")
+	if bi < 0 || (ai >= 0 && ai < bi) {
+		t.Fatalf("ab2 (own ack for t2) must rank t2's fact first; ctx=%q", ctx)
+	}
+	// ax1 has no acknowledgement; t2 is already answered (by ab2's own ack)
+	// so the only pending call left is t1.
+	out2, _, code2 := runStdin(t, f.env, subagentEnv("s1", "ax1", "general-purpose", "/tmp/proj", parent, ""),
+		"inject", "--event=SubagentStart")
+	if code2 != 0 {
+		t.Fatalf("exit %d", code2)
+	}
+	ctx2 := additionalContext(t, out2)
+	ai2, bi2 := strings.Index(ctx2, "alpha widget content"), strings.Index(ctx2, "bravo widget content")
+	if ai2 < 0 || (bi2 >= 0 && bi2 < ai2) {
+		t.Fatalf("ax1 (no ack, t2 already claimed) must fall back to t1's fact; ctx=%q", ctx2)
 	}
 }
 

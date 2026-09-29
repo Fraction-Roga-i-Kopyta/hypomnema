@@ -46,7 +46,7 @@ func userString(text string) string {
 	return string(b)
 }
 
-func TestPendingAgentCall_MatchesTypeAndPending(t *testing.T) {
+func TestAgentCalls_MatchesTypeAndPending(t *testing.T) {
 	p := writeLines(t,
 		agentCall("Agent", "t1", "general-purpose", "old", "answered already"),
 		toolResult("t1"),
@@ -54,19 +54,25 @@ func TestPendingAgentCall_MatchesTypeAndPending(t *testing.T) {
 		agentCall("Agent", "t3", "general-purpose", "first pending", "first"),
 		agentCall("Agent", "t4", "general-purpose", "fix migration", "pgmigration lock"),
 	)
-	desc, prompt, ok := PendingAgentCall(p, "general-purpose", "")
-	if !ok || desc != "fix migration" || prompt != "pgmigration lock" {
-		t.Fatalf("got (%q, %q, %v), want the newest pending general-purpose call", desc, prompt, ok)
+	pending, own, readable := AgentCalls(p, "general-purpose", "")
+	if !readable || own != nil {
+		t.Fatalf("got pending=%+v own=%v readable=%v, want readable with no own call", pending, own, readable)
 	}
-	if desc, _, ok := PendingAgentCall(p, "reviewer", ""); !ok || desc != "review" {
-		t.Fatalf("reviewer: got (%q, %v)", desc, ok)
+	if len(pending) != 2 || pending[0].Description != "first pending" || pending[0].Prompt != "first" ||
+		pending[1].Description != "fix migration" || pending[1].Prompt != "pgmigration lock" {
+		t.Fatalf("got %+v, want the two pending general-purpose calls oldest-first (t3, t4)", pending)
 	}
-	if _, _, ok := PendingAgentCall(p, "Explore", ""); ok {
-		t.Fatal("no Explore call exists; want ok=false")
+	rPending, _, ok := AgentCalls(p, "reviewer", "")
+	if !ok || len(rPending) != 1 || rPending[0].Description != "review" {
+		t.Fatalf("reviewer: got %+v ok=%v", rPending, ok)
+	}
+	ePending, eOwn, ok := AgentCalls(p, "Explore", "")
+	if !ok || len(ePending) != 0 || eOwn != nil {
+		t.Fatalf("no Explore call exists; want readable=true with nothing found, got pending=%+v own=%v", ePending, eOwn)
 	}
 }
 
-func TestPendingAgentCall_OwnLaunchAckWinsAmongSameType(t *testing.T) {
+func TestAgentCalls_OwnAckWinsAndIsExcludedFromPending(t *testing.T) {
 	// Two background launches of the same type; t1's acknowledgement names
 	// agent a0000000000000001 and has already landed.
 	p := writeLines(t,
@@ -74,60 +80,86 @@ func TestPendingAgentCall_OwnLaunchAckWinsAmongSameType(t *testing.T) {
 		agentCall("Agent", "t2", "general-purpose", "task two", "two"),
 		launchAck("t1", "a0000000000000001"),
 	)
-	if desc, _, ok := PendingAgentCall(p, "general-purpose", "a0000000000000001"); !ok || desc != "task one" {
-		t.Fatalf("got (%q, %v), want this agent's own call", desc, ok)
+	pending, own, ok := AgentCalls(p, "general-purpose", "a0000000000000001")
+	if !ok || own == nil || own.Description != "task one" {
+		t.Fatalf("got own=%v ok=%v, want this agent's own call", own, ok)
+	}
+	if len(pending) != 1 || pending[0].Description != "task two" {
+		t.Fatalf("got pending=%+v, want only the sibling's still-unanswered call", pending)
 	}
 }
 
-func TestPendingAgentCall_EmptyTypeIsGeneralPurposeAndTaskName(t *testing.T) {
+func TestAgentCalls_EmptyTypeIsGeneralPurposeAndTaskName(t *testing.T) {
 	p := writeLines(t, agentCall("Task", "t1", "", "legacy", "legacy prompt"))
-	if desc, _, ok := PendingAgentCall(p, "general-purpose", ""); !ok || desc != "legacy" {
-		t.Fatalf("got (%q, %v), want the Task call with no subagent_type", desc, ok)
+	pending, _, ok := AgentCalls(p, "general-purpose", "")
+	if !ok || len(pending) != 1 || pending[0].Description != "legacy" {
+		t.Fatalf("got %+v ok=%v, want the Task call with no subagent_type", pending, ok)
 	}
 }
 
-func TestPendingAgentCall_AllAnsweredIsNotFound(t *testing.T) {
+func TestAgentCalls_AnsweredCallIsNotPending(t *testing.T) {
 	p := writeLines(t, agentCall("Agent", "t1", "general-purpose", "d", "p"), toolResult("t1"))
-	if _, _, ok := PendingAgentCall(p, "general-purpose", "someone-else"); ok {
-		t.Fatal("an answered call that is not this agent's must not be returned")
+	pending, own, ok := AgentCalls(p, "general-purpose", "someone-else")
+	if !ok || len(pending) != 0 || own != nil {
+		t.Fatalf("an answered call that is not this agent's must not be pending or own; got pending=%+v own=%v", pending, own)
 	}
 }
 
-func TestPendingAgentCall_OutsideTailWindowIsNotSeen(t *testing.T) {
+func TestAgentCalls_PendingOrderOldestFirst(t *testing.T) {
+	p := writeLines(t,
+		agentCall("Agent", "t1", "general-purpose", "first", "f1"),
+		agentCall("Agent", "t2", "general-purpose", "second", "f2"),
+		agentCall("Agent", "t3", "general-purpose", "third", "f3"),
+	)
+	pending, _, ok := AgentCalls(p, "general-purpose", "")
+	if !ok || len(pending) != 3 {
+		t.Fatalf("want 3 pending calls, got %+v", pending)
+	}
+	for i, want := range []string{"first", "second", "third"} {
+		if pending[i].Description != want {
+			t.Fatalf("pending[%d] = %q, want %q (oldest-first): %+v", i, pending[i].Description, want, pending)
+		}
+	}
+}
+
+func TestAgentCalls_OutsideTailWindowIsNotSeen(t *testing.T) {
 	filler := userString(strings.Repeat("x", 1000))
 	lines := []string{agentCall("Agent", "t1", "general-purpose", "too old", "p")}
 	for i := 0; i < (agentTailBytes/1000)+100; i++ {
 		lines = append(lines, filler)
 	}
 	p := writeLines(t, lines...)
-	if _, _, ok := PendingAgentCall(p, "general-purpose", ""); ok {
-		t.Fatal("a call before the tail window must not be found")
+	pending, _, ok := AgentCalls(p, "general-purpose", "")
+	if !ok || len(pending) != 0 {
+		t.Fatalf("a call before the tail window must not be found; got %+v", pending)
 	}
 	// A call at the end of the same big file is found; the partial first
 	// line of the window does not break parsing.
 	lines = append(lines, agentCall("Agent", "t2", "general-purpose", "fresh", "p"))
 	p = writeLines(t, lines...)
-	if desc, _, ok := PendingAgentCall(p, "general-purpose", ""); !ok || desc != "fresh" {
-		t.Fatalf("got (%q, %v), want the call at the end of a large file", desc, ok)
+	pending, _, ok = AgentCalls(p, "general-purpose", "")
+	if !ok || len(pending) != 1 || pending[0].Description != "fresh" {
+		t.Fatalf("got %+v ok=%v, want the call at the end of a large file", pending, ok)
 	}
 }
 
-func TestPendingAgentCall_WindowStartingOnLineBoundaryKeepsFirstLine(t *testing.T) {
+func TestAgentCalls_WindowStartingOnLineBoundaryKeepsFirstLine(t *testing.T) {
 	call := agentCall("Agent", "t1", "general-purpose", "boundary", "p")
 	empty := userString("")
 	pad := userString(strings.Repeat("y", agentTailBytes-len(call)-1-len(empty)-1))
 	p := writeLines(t, userString(strings.Repeat("x", 5000)), call, pad)
-	if desc, _, ok := PendingAgentCall(p, "general-purpose", ""); !ok || desc != "boundary" {
-		t.Fatalf("got (%q, %v), want the call that starts exactly at the window edge", desc, ok)
+	pending, _, ok := AgentCalls(p, "general-purpose", "")
+	if !ok || len(pending) != 1 || pending[0].Description != "boundary" {
+		t.Fatalf("got %+v ok=%v, want the call that starts exactly at the window edge", pending, ok)
 	}
 }
 
-func TestPendingAgentCall_UnreadablePath(t *testing.T) {
-	if _, _, ok := PendingAgentCall("", "general-purpose", ""); ok {
-		t.Fatal("empty path must be ok=false")
+func TestAgentCalls_UnreadablePath(t *testing.T) {
+	if _, _, ok := AgentCalls("", "general-purpose", ""); ok {
+		t.Fatal("empty path must be readable=false")
 	}
-	if _, _, ok := PendingAgentCall(filepath.Join(t.TempDir(), "missing.jsonl"), "general-purpose", ""); ok {
-		t.Fatal("missing file must be ok=false")
+	if _, _, ok := AgentCalls(filepath.Join(t.TempDir(), "missing.jsonl"), "general-purpose", ""); ok {
+		t.Fatal("missing file must be readable=false")
 	}
 }
 
