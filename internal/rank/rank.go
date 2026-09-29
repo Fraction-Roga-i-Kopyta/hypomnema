@@ -23,7 +23,7 @@ type Candidate struct {
 	Status        string
 	Created       string // YYYY-MM-DD, may be ""
 	LastInjected  string // YYYY-MM-DD, may be ""
-	LastUseful    string // YYYY-MM-DD, may be "" — latest trigger-useful citation (v2.12)
+	LastUseful    string // YYYY-MM-DD, may be "" — latest cite-useful citation (v2.12; formerly trigger-useful)
 	Overlap       int
 }
 

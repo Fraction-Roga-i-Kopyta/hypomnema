@@ -94,11 +94,15 @@ PostToolUse(Skill) ──► skill-inject ────────────�
                                                                 │
 Stop ──► close ────────────────────────────────────────────────┤
    read the session transcript (JSONL) for assistant text       │
-   closer.Classify(injected-set): evidence phrase / name cite   │
-     hit → trigger-useful ; miss → trigger-silent               │
+   closer.Citations(assistant text): <cc-memory> tags           │
+     cited + delivered → cite-useful ; cited, undelivered       │
+       → cite-undelivered ; uncited, session had ≥1             │
+       delivered cite → cite-silent ; no delivered citation     │
+       this session → cite-none                                 │
      (skipped entirely if the transcript was unreadable —       │
       never fabricate silent evidence for a whole session)      │
-   WAL: trigger-useful|<slug>, trigger-silent|<slug>            │
+   WAL: cite-useful|<slug>, cite-silent|<slug>,                 │
+     cite-undelivered|<slug>, cite-none|<sid>                   │
    WAL: session-metrics (error_count/tool_calls/duration)       │
    WAL: session-close|<sid>                                     │
    sidecar.Reproject: ref_count, effectiveness,                 │
@@ -129,7 +133,7 @@ single pure ranker in `internal/rank`. The authoritative formula lives in
 ```
 score = 3.0 × overlap(session_keywords, file keywords+name+description+body)
       + 1.0 × log10(1 + ref_count) × effGate   # popularity, gated by usefulness
-      + 2.0 × recency                  # 1/(1 + days/30) from last USEFUL citation (trigger-useful; fallback created)
+      + 2.0 × recency                  # 1/(1 + days/30) from last USEFUL citation (cite-useful; fallback created)
       + 2.0 × effectiveness            # Bayesian (pos+1)/(pos+neg+2); neutral 0.5 until signal
       + 1.0 if project-local           # project facts outrank global on ties
 
@@ -145,7 +149,7 @@ neutral at the prior and capped at 1.0, so it only *damps* unearned popularity.
 
 **Filters:** `status ∈ {active, pinned}` (sidecar-managed `stale` excluded);
 scope = current project's store + the global store only (other projects never
-inject); result cap top-8, ≤8KB total, once per session per fact. `session_keywords`
+inject); result cap top-8, ≤8KB total, once per context per fact (again after compaction/clear). `session_keywords`
 come from prompt tokens, cwd basename, and git context (branch, changed
 filenames, recent commit subjects) on both `SessionStart` and `UserPromptSubmit`.
 
@@ -236,9 +240,9 @@ One package, one responsibility. `memoryctl` (in `cmd/memoryctl/`) wires them.
 | `migrate` | One-shot v1 → v2 conversion + pruning |
 | `memindex` | Renders the native `MEMORY.md` index (flat slug links) |
 | `pathutil` | Shared slug/filename sanitisers |
-| `ab` | Offline A/B harness: replay historical WAL, ranked-top-K vs dump-all on `trigger-useful` proxy |
+| `ab` | Offline A/B harness: replay historical WAL, ranked-top-K vs dump-all on `cite-useful` proxy |
 | `invariants` | Automated checks for the mechanically-checkable rules in `docs/INVARIANTS.md` |
-| `jsonl` | Streams the session-transcript JSONL, extracting assistant-authored text for evidence classification |
+| `jsonl` | Streams the session-transcript JSONL, extracting assistant-authored text and Read-tool paths for citation classification |
 
 ### `memoryctl` command surface
 

@@ -145,6 +145,7 @@ func Run(claudeDir, memoryDir string, st native.Store, anchor string) Report {
 		checkCorpus(claudeDir, memoryDir, st),
 		checkWALErrors(filepath.Join(memoryDir, ".wal"), now),
 		checkOpenQuanta(filepath.Join(memoryDir, ".wal"), now),
+		checkCitationSignal(filepath.Join(memoryDir, ".wal"), now),
 		checkSidecar(memoryDir, now),
 		checkCorpusQuality(claudeDir, st),
 		checkOversized(claudeDir, st),
@@ -162,8 +163,8 @@ func Run(claudeDir, memoryDir string, st native.Store, anchor string) Report {
 const candidateSilentMin = 5
 
 // checkCandidates flags candidate facts that keep injecting without ever
-// being applied: ≥candidateSilentMin trigger-silent sessions and no
-// trigger-useful / candidate-confirmed. Suggests retire or a keyword
+// being applied: ≥candidateSilentMin cite-silent sessions and no
+// cite-useful / candidate-confirmed. Suggests retire or a keyword
 // rewrite. WARN-only — corroboration failure is advice, not breakage.
 func checkCandidates(memoryDir, claudeHome string, st native.Store) Check {
 	type tally struct {
@@ -185,6 +186,14 @@ func checkCandidates(memoryDir, claudeHome string, st native.Store) Check {
 				continue
 			}
 			event := parts[1]
+			// cite-none's target is the session id, not a fact slug — keying
+			// it would create a phantom per-key tally under that session id,
+			// and cite-undelivered (a real qualified slug, but diagnostic
+			// only) must not create or contribute to a tally either. Skip
+			// both before any key is computed.
+			if event == "cite-none" || event == "cite-undelivered" {
+				continue
+			}
 			project, slug, qualified := native.ParseQKey(parts[2])
 			slug = strings.TrimSuffix(slug, ".md")
 			key := slug
@@ -197,12 +206,12 @@ func checkCandidates(memoryDir, claudeHome string, st native.Store) Check {
 				byKey[key] = t
 			}
 			switch event {
-			case "trigger-useful":
+			case "cite-useful":
 				if k := key + "\x00" + parts[3] + "\x00u"; !seen[k] {
 					seen[k] = true
 					t.useful++
 				}
-			case "trigger-silent":
+			case "cite-silent":
 				if k := key + "\x00" + parts[3] + "\x00s"; !seen[k] {
 					seen[k] = true
 					t.silent++
@@ -843,6 +852,11 @@ func checkSidecar(memoryDir string, now time.Time) Check {
 // docs/notes/measurement-bias.md for why session-metrics is intentionally
 // excluded (it doesn't carry session_id in column 4, a FORMAT.md §5.2
 // violation).
+//
+// cite-useful / cite-silent / cite-none are the v2.14+ citation-based
+// closing signals (close writes these now, never trigger-*); the
+// trigger-*/outcome-* entries stay so sessions closed before that cutover
+// still count as closed — old WAL history must not suddenly read as open.
 var closingEvents = map[string]bool{
 	"trigger-useful":       true,
 	"trigger-silent":       true,
@@ -850,6 +864,9 @@ var closingEvents = map[string]bool{
 	"outcome-positive":     true,
 	"outcome-negative":     true,
 	"clean-session":        true,
+	"cite-useful":          true,
+	"cite-silent":          true,
+	"cite-none":            true,
 }
 
 // openQuantaWindowDays bounds the window checkOpenQuanta examines. Older
@@ -924,6 +941,109 @@ func checkOpenQuanta(walPath string, now time.Time) Check {
 		detail += " — skews Bayesian `eff`; see docs/notes/measurement-bias.md"
 	}
 	return Check{Name: name, Status: status, Detail: detail}
+}
+
+// citationSignalWindowDays bounds the recent-activity window
+// checkCitationSignal examines — a short horizon so the check reacts to a
+// citation channel that just broke, not one that broke months ago.
+const citationSignalWindowDays = 7
+
+// citationSignalMinSessions is the minimum count of distinct inject-carrying
+// sessions in the window before an all-silent outcome is worth a WARN. Below
+// this, low volume alone could explain zero citations.
+const citationSignalMinSessions = 3
+
+// checkCitationSignal watches for the citation channel going dark: facts get
+// injected but the model's <cc-memory> citations never reach the transcript
+// (or are never written), so close has nothing to classify as useful. Distinct
+// from open_quanta_last_30d, which asks "did a closing event fire at all" —
+// this asks "when it fired, did any citation land."
+//
+// A row with ANY cite- prefix (cite-useful, cite-silent, cite-none,
+// cite-undelivered) proves the v2.14+ citation channel has run at least
+// once — cite-none alone (close reached a classification pass but resolved
+// no delivered citation) is exactly the "channel went dark" case this check
+// exists to catch, so it must count as history the same as the others.
+// Pre-v2.14 WAL history carries no cite-* rows at all, so an install that
+// hasn't seen a Stop hook since the cutover reports OK rather than a false
+// WARN.
+//
+// The window stats stay narrower: N is sessions in the window that injected
+// something AND carry a cite-* row — i.e. sessions a citation-aware close
+// actually classified. Every such close that saw injections writes one of
+// cite-useful/cite-silent/cite-none, so this excludes exactly the sessions
+// closed before the cutover, whose model was never told to cite; counting
+// them would raise a false WARN for the first week after an upgrade. M is
+// the subset of N that ALSO carries a cite-useful — the intersection, not a
+// raw cite-useful session count. A session with a citation but no inject
+// this window (e.g. recall-only) must not inflate M; it never showed the
+// channel doing its job on an injected fact.
+func checkCitationSignal(walPath string, now time.Time) Check {
+	const name = "citation_signal"
+	f, err := os.Open(walPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return Check{Name: name, Status: OK, Detail: "no citation data yet (pre-v2.14 history)"}
+		}
+		return Check{Name: name, Status: WARN, Detail: err.Error()}
+	}
+	defer f.Close()
+
+	cutoff := now.AddDate(0, 0, -citationSignalWindowDays).Format("2006-01-02")
+	hasCiteHistory := false
+	injSess := map[string]bool{}
+	classifiedSess := map[string]bool{}
+	usefulSess := map[string]bool{}
+
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for sc.Scan() {
+		parts := strings.SplitN(sc.Text(), "|", 4)
+		if len(parts) < 4 {
+			continue
+		}
+		event, sess := parts[1], parts[3]
+		if strings.HasPrefix(event, "cite-") {
+			hasCiteHistory = true
+		}
+		if parts[0] < cutoff {
+			continue
+		}
+		if strings.HasPrefix(event, "cite-") {
+			classifiedSess[sess] = true
+		}
+		switch event {
+		case "inject":
+			injSess[sess] = true
+		case "cite-useful":
+			usefulSess[sess] = true
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return Check{Name: name, Status: WARN, Detail: "scan error: " + err.Error()}
+	}
+
+	if !hasCiteHistory {
+		return Check{Name: name, Status: OK, Detail: "no citation data yet (pre-v2.14 history)"}
+	}
+	n, m := 0, 0
+	for sess := range injSess {
+		if !classifiedSess[sess] {
+			continue
+		}
+		n++
+		if usefulSess[sess] {
+			m++
+		}
+	}
+	if n >= citationSignalMinSessions && m == 0 {
+		return Check{Name: name, Status: WARN,
+			Detail: fmt.Sprintf("facts were injected in %d session(s) over %d days but never cited — the usefulness signal is off (the model is not citing, or citations are not reaching the transcript); see TROUBLESHOOTING",
+				n, citationSignalWindowDays)}
+	}
+	return Check{Name: name, Status: OK,
+		Detail: fmt.Sprintf("%d/%d injected sessions carried a citation (%dd)",
+			m, n, citationSignalWindowDays)}
 }
 
 // checkStoreResolution reports the native store this invocation resolved

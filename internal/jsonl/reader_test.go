@@ -1,6 +1,8 @@
 package jsonl
 
 import (
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -112,5 +114,143 @@ func TestDecodeStream_OversizeLineDoesNotTruncateRest(t *testing.T) { // review 
 	}
 	if !strings.Contains(s.Text, "before") {
 		t.Errorf("text before the oversized line missing: %q", s.Text)
+	}
+}
+
+func TestDecodeStream_ReadPathsCollected(t *testing.T) {
+	src := `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"r1","name":"Read","input":{"file_path":"/proj/memory/docker.md"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"r1"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"r2","name":"Read","input":{"file_path":"/proj/memory/docker.md"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"r2"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"r-bash","name":"Bash","input":{"command":"ls"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"r3","name":"Read","input":{"file_path":"/proj/memory/sql.md"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"r3"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"r4","name":"Read"}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"r4"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"r5","name":"Read","input":"not-an-object"}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"r5"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"r6","name":"Read","input":{"file_path":123}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"r6"}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"still here"}]}}
+`
+	s, err := decodeStream(strings.NewReader(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"/proj/memory/docker.md", "/proj/memory/sql.md"}
+	if len(s.ReadPaths) != len(want) {
+		t.Fatalf("ReadPaths = %v, want %v", s.ReadPaths, want)
+	}
+	for i, w := range want {
+		if s.ReadPaths[i] != w {
+			t.Errorf("ReadPaths[%d] = %q, want %q", i, s.ReadPaths[i], w)
+		}
+	}
+	// A malformed/odd `input` on a Read tool_use must not drop the rest of
+	// the session's content — the plain text line after it still parses.
+	if s.Text != "still here" {
+		t.Errorf("text after odd tool_use input was lost: %q", s.Text)
+	}
+}
+
+func TestDecodeStream_ReadPathsCappedAt1024(t *testing.T) {
+	var b strings.Builder
+	for i := 0; i < 1100; i++ {
+		fmt.Fprintf(&b, `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"r%d","name":"Read","input":{"file_path":"/proj/memory/f%d.md"}}]}}`+"\n", i, i)
+		fmt.Fprintf(&b, `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"r%d"}]}}`+"\n", i)
+	}
+	s, err := decodeStream(strings.NewReader(b.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.ReadPaths) != 1024 {
+		t.Errorf("ReadPaths length = %d, want capped at 1024", len(s.ReadPaths))
+	}
+}
+
+// TestDecodeStream_RepeatedReadsDoNotExhaustCap: the cap counts distinct
+// paths, so re-reading one file more than maxReadPaths times still leaves
+// room for a later, different path.
+func TestDecodeStream_RepeatedReadsDoNotExhaustCap(t *testing.T) {
+	var b strings.Builder
+	for i := 0; i < 1100; i++ {
+		fmt.Fprintf(&b, `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"r%d","name":"Read","input":{"file_path":"/proj/memory/same.md"}}]}}`+"\n", i)
+		fmt.Fprintf(&b, `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"r%d"}]}}`+"\n", i)
+	}
+	b.WriteString(`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"late","name":"Read","input":{"file_path":"/proj/memory/late.md"}}]}}` + "\n")
+	b.WriteString(`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"late"}]}}` + "\n")
+	s, err := decodeStream(strings.NewReader(b.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"/proj/memory/same.md", "/proj/memory/late.md"}
+	if !reflect.DeepEqual(s.ReadPaths, want) {
+		t.Errorf("ReadPaths = %v, want %v", s.ReadPaths, want)
+	}
+}
+
+// TestDecodeStream_ReadPathSuccessKept: a Read tool_use whose matching
+// tool_result comes back without is_error is delivery — the path is kept.
+func TestDecodeStream_ReadPathSuccessKept(t *testing.T) {
+	src := `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"r1","name":"Read","input":{"file_path":"/proj/memory/docker.md"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"r1","is_error":false}]}}
+`
+	s, err := decodeStream(strings.NewReader(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.ReadPaths) != 1 || s.ReadPaths[0] != "/proj/memory/docker.md" {
+		t.Errorf("ReadPaths = %v, want [/proj/memory/docker.md]", s.ReadPaths)
+	}
+}
+
+// TestDecodeStream_ReadPathErrorResultDropped: a Read tool_use whose
+// matching tool_result reports is_error:true is NOT delivery — the path
+// must be dropped even though the model did attempt the read.
+func TestDecodeStream_ReadPathErrorResultDropped(t *testing.T) {
+	src := `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"r1","name":"Read","input":{"file_path":"/proj/memory/docker.md"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"r1","is_error":true}]}}
+`
+	s, err := decodeStream(strings.NewReader(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.ReadPaths) != 0 {
+		t.Errorf("ReadPaths = %v, want empty (is_error:true result must drop the path)", s.ReadPaths)
+	}
+	if s.ToolErrors != 1 {
+		t.Errorf("ToolErrors = %d, want 1", s.ToolErrors)
+	}
+}
+
+// TestDecodeStream_ReadPathMissingResultDropped: a Read tool_use whose
+// tool_result never appears at all (e.g. the transcript was cut mid-turn)
+// counts as NOT delivered, same as an explicit error — absence of proof is
+// not proof of delivery.
+func TestDecodeStream_ReadPathMissingResultDropped(t *testing.T) {
+	src := `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"r1","name":"Read","input":{"file_path":"/proj/memory/docker.md"}}]}}
+`
+	s, err := decodeStream(strings.NewReader(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.ReadPaths) != 0 {
+		t.Errorf("ReadPaths = %v, want empty (a Read whose result never arrives is not delivery)", s.ReadPaths)
+	}
+}
+
+func TestDecodeStream_ThinkingCollectedSeparately(t *testing.T) {
+	src := `{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"plan <cc-memory filenames=\"a.md\">x</cc-memory>"},{"type":"text","text":"visible"}]}}
+{"type":"assistant","message":{"content":[{"type":"thinking","thinking":""},{"type":"thinking","thinking":"second"}]}}
+`
+	s, err := decodeStream(strings.NewReader(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Text != "visible" {
+		t.Errorf("Text must stay text-only, got %q", s.Text)
+	}
+	if !strings.Contains(s.Thinking, `filenames="a.md"`) || !strings.Contains(s.Thinking, "second") {
+		t.Errorf("Thinking not collected: %q", s.Thinking)
 	}
 }

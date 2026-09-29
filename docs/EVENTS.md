@@ -24,9 +24,12 @@ sanitiser.
 ## Status legend
 
 - **Active** — emitted by current v2 code; readers MUST handle.
-- **Legacy** — emitted only by v1 (≤ `v1.1.2`); v2 does NOT emit it, but v2
-  readers still tolerate it (aggregating or skipping) because historical WALs
-  and migrated stores carry it. Do NOT emit from new code.
+- **Legacy** — emitted only by v1 (≤ `v1.1.2`), or by v2 before a later
+  cutover superseded it (e.g. `trigger-useful`/`trigger-silent`, v2.0–v2.13,
+  superseded by `cite-useful`/`cite-silent` in v2.14); the current v2 code
+  does NOT emit it, but v2 readers still tolerate it (aggregating or
+  skipping) because historical WALs and migrated stores carry it. Do NOT
+  emit from new code.
 - **Retired** — a v1 event that no v2 reader treats specially; skipped as an
   unknown line. Listed so the row reads as deliberate, not an oversight.
 
@@ -41,8 +44,10 @@ Exactly these events are written by v2 code. Producers verified by grep of
 |---|---|---|---|---|
 | `inject` | `<slug>` | `memoryctl inject` — `SessionStart` + `UserPromptSubmit` shims (`cmd/memoryctl/inject.go` → `persistInjected`) | `internal/sidecar` reproject (ref_count, last_injected); `internal/closer` via the session injected-set | one line per injected fact per delivery |
 | `recall` | `<slug>` | `memoryctl recall` (pull CLI) and `skill-inject` (`cmd/memoryctl/recall.go`) | `internal/sidecar` reproject; `internal/closer` (joined into injected-set) | same-day repeat of one fact in one session dedups to a single ref bump; does NOT feed last_useful (delivery, not use) |
-| `trigger-useful` | `<slug>` | `memoryctl close` — `internal/closer` (`Classify`) | `internal/sidecar` (effectiveness `pos`); `internal/profile`; sidecar last_useful (ranking recency) | evidence phrase or name/slug cited in assistant transcript text; written once per (fact, session) — a later changed verdict adds its own row |
-| `trigger-silent` | `<slug>` | `memoryctl close` — `internal/closer` (`Classify`) | `internal/sidecar` (effectiveness `neg`); `internal/profile` | injected fact went uncited; skipped if the transcript was unreadable; written once per (fact, session) — a later changed verdict adds its own row |
+| `cite-useful` | `<slug>` | `memoryctl close` — `internal/closer` (`Citations` + `resolveCitations`) | `internal/sidecar` (effectiveness `pos`); `internal/profile`; sidecar last_useful (ranking recency); `internal/promote`; `internal/ab`; `internal/doctor` candidates | slug/file name appears in an assistant-authored `<cc-memory filenames="…">` citation in the transcript; written once per (fact, session) — a later changed verdict adds its own row. Credit requires **delivery**, not just the citation text: the fact must have been injected/recalled/skill-injected this session (in `injected-<sid>.list`) OR read directly with the Read tool from its resolved project-store or global-store path — a resolved citation for an undelivered fact writes `cite-undelivered` instead. Delivery is session-scoped, not ordered: a citation earlier in the session still earns credit if the fact is delivered later in the same session. Read-path delivery matches the cleaned path string, so a store reached through a symlinked alias is not recognised (fails closed to `cite-undelivered`); on a project/global basename tie, the project copy gets the credit |
+| `cite-silent` | `<slug>` | `memoryctl close` — `internal/closer` | `internal/sidecar` (effectiveness `neg`); `internal/profile`; `internal/doctor` candidates | injected fact went uncited; written only in a session with ≥1 resolvable **delivered** citation (see `cite-none`) — never fabricated for a session where the citation channel itself may be broken, and an undelivered citation alone does not arm this guard either; written once per (fact, session) — a later changed verdict adds its own row |
+| `cite-undelivered` | `<slug>` | `memoryctl close` — `internal/closer` | none — diagnostic only | a citation resolved to an in-scope fact that was neither injected/recalled/skill-injected this session nor read directly with the Read tool — counts for nothing else: not useful, not candidate-confirmed, and does not arm the `cite-silent` guard; written once per (fact, session) |
+| `cite-none` | `<session_id>` (both `$3` and `$4`) | `memoryctl close` — `internal/closer` | `internal/doctor` `open_quanta_last_30d` (via `closingEvents`); `internal/doctor` `citation_signal` counts it (any `cite-*` prefix) as proof the v2.14+ citation channel has run at all, and as the mark that a session was classified — N counts injected sessions carrying any `cite-*` row, M the subset that also carries `cite-useful` | one per session, only when the transcript was readable, had ≥1 injected fact, and resolved zero **delivered** citations (a session with only `cite-undelivered` citations still writes this); marks the session's classification pass as closed so a citation-less-but-readable session does not read as an open/lost quantum |
 | `session-metrics` | `domains:_global_,error_count:N,tool_calls:M,duration:Ss` (`$3`); session id (`$4`) | `memoryctl close` — `internal/closer` | `internal/profile` (rollup); tolerated by `ab`, `doctor` | one per closed session |
 | `session-close` | `<session_id>` (in both `$3` and `$4`) | `memoryctl close` — `internal/closer` | session-boundary marker; `internal/profile` | emitted for any error count |
 | `dedup-blocked` | `<new-slug>><existing-slug>` (`>` sub-delim) | `memoryctl dedup check` (pre-tool) — `internal/dedup` | informational (`doctor` tolerates) | see note below |
@@ -71,10 +76,12 @@ migrated WALs. Do not emit them from new code.
 | event | target shape | consumed by (v2 reader) | was produced by (v1) |
 |---|---|---|---|
 | `inject-agg` | `<slug>` (`$3`), aggregated count (`$4`) | `internal/sidecar` reproject (adds to ref_count); `internal/ab` | `hooks/wal-compact.sh` |
-| `outcome-positive` | `<slug>` | `internal/sidecar` (effectiveness `pos`); `internal/profile`; `internal/ab` | `hooks/memory-outcome.sh` |
-| `outcome-negative` | `<slug>` | `internal/sidecar` (effectiveness `neg`); `internal/profile`; `internal/ab` | `hooks/memory-outcome.sh` |
+| `outcome-positive` | `<slug>` | `internal/sidecar` (raw `outcome` table only — ignored for `effectiveness` since v2.14); `internal/profile` (separate mistake-not-repeated Meta-signals row, untouched by the v2.14 cutover) | `hooks/memory-outcome.sh` |
+| `outcome-negative` | `<slug>` | `internal/sidecar` (raw `outcome` table only — ignored for `effectiveness` since v2.14); `internal/profile` (separate mistake-repeated Meta-signals row, untouched by the v2.14 cutover) | `hooks/memory-outcome.sh` |
 | `outcome-new` | `<slug>` | `internal/profile` | `hooks/memory-outcome.sh` (new mistake written) |
-| `trigger-silent-retro` | `<slug>` | `internal/sidecar` (treated as `trigger-silent`); `internal/profile` | `hooks/wal-retro-silent.sh` |
+| `trigger-useful` | `<slug>` | none — ignored by every usefulness reader (sidecar effectiveness, `promote`, self-profile, `ab`, `doctor` candidates); `internal/doctor` `open_quanta_last_30d` still tolerates it as a closing event so pre-cutover sessions don't read as open | `memoryctl close` — `internal/closer` (`Classify`), v2.0–v2.13; ignored since v2.14 |
+| `trigger-silent` | `<slug>` | same as `trigger-useful` — ignored by usefulness readers, tolerated only by `open_quanta_last_30d` | `memoryctl close` — `internal/closer` (`Classify`), v2.0–v2.13; ignored since v2.14 |
+| `trigger-silent-retro` | `<slug>` | `internal/doctor` `open_quanta_last_30d` (tolerated as a closing event); ignored by usefulness readers, same as `trigger-silent` | `hooks/wal-retro-silent.sh` |
 | `clean-session` | `<domain>` or `_global_` | `internal/profile` | `hooks/session-stop.sh` (zero errors) |
 | `strategy-used` | `<slug>` | `internal/profile` | `hooks/memory-outcome.sh` |
 | `strategy-gap` | `<domain>` | `internal/profile` | `hooks/session-stop.sh` |

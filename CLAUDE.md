@@ -7,7 +7,7 @@ You are working inside the hypomnema project: a governance + ranking layer for C
 Claude Code v2.1.59+ ships native file memory: the harness stores markdown files in `~/.claude/projects/<slug>/memory/` and injects only a `MEMORY.md` index. Hypomnema adds what native lacks:
 
 - **Ranked auto-injection** — `memoryctl inject` (SessionStart + UserPromptSubmit shims) ranks native facts by relevance and injects the top-K via `additionalContext`, not just a table of contents.
-- **Effectiveness measurement** — WAL tracks `trigger-useful`/`trigger-silent` per session; Bayesian effectiveness feeds back into ranking.
+- **Effectiveness measurement** — WAL tracks `<cc-memory>` citations (`cite-useful`/`cite-silent`) per session; Bayesian effectiveness feeds back into ranking.
 - **Decay + lifecycle** — `memoryctl close` (Stop shim) down-ranks stale facts in the sidecar; content is never mutated by hooks.
 - **Secrets gate** — `memoryctl guard` (PreToolUse:Write shim) blocks credential patterns before they land in a memory file.
 - **Global store** — `~/.claude/memory-global/` for facts that apply across every project (native memory is per-project only).
@@ -34,9 +34,10 @@ Logical types:
 Injection budget: a single ranked **top-8** across all types, capped at
 **2.5KB per body and 8KB total** (Claude Code diverts oversized hook output
 to a file the model never reads inline, so the budget is what keeps memory
-actually visible). A fact injects **once per session** — later prompts only
-add facts that newly enter the top-8. Per-type quotas are not implemented;
-type balance emerges from relevance.
+actually visible). A fact injects **once per context** — later prompts only
+add facts that newly enter the top-8, and a fact re-enters offerable state
+after a compaction or `/clear` wipes it from the model's context. Per-type
+quotas are not implemented; type balance emerges from relevance.
 
 ## Frontmatter schema
 
@@ -91,15 +92,23 @@ success_count: <integer>
 
 **feedback** (additional):
 ```yaml
-evidence:                  # phrases that signal the rule applies (case-insensitive)
+evidence:                  # phrases used for the ablation holdout only (case-insensitive)
   - "phrase one"
   - "phrase two"
 precision_class: ambient   # optional — excludes file from precision denominator
 ```
 
-`evidence:` is type-agnostic — the close hook reads it from any injected memory file (mistake, strategy, knowledge, …). If body mining would give ambiguous tokens for a given rule, add explicit `evidence:` regardless of type.
+`evidence:` no longer creates usefulness — `cite-useful`/`cite-silent` come solely from an
+explicit `<cc-memory filenames="…">` citation in the assistant's own text (see "Citing
+memory" below). `evidence:` is type-agnostic and still read from any injected memory file
+(mistake, strategy, knowledge, …), but only to classify the `memoryctl ablate` holdout
+observation (`holdout-hit`/`holdout-miss`) for a fact withheld this session — there is no
+citation channel to compare against when a fact was never shown to the model.
 
-**Sizing — keep it short.** ≤5 carefully-chosen phrases score best. Long evidence lists pile on specific wordings that rarely appear verbatim in assistant text, so the classifier ends up marking the file silent. Pick phrases the assistant would actually write when applying the rule, not exhaustive paraphrases.
+**Sizing — keep it short.** ≤5 carefully-chosen phrases score best for the holdout
+comparison. Long evidence lists pile on specific wordings that rarely appear verbatim in
+assistant text, diluting the ablation signal. Pick phrases the assistant would actually
+write when applying the rule, not exhaustive paraphrases.
 
 `precision_class: ambient` marks rules that shape behaviour silently (e.g. language preference, security baseline, meta-philosophy). These files continue to be injected and ranked normally; they are excluded from the self-profile precision denominator so they don't drag the ratio down.
 
@@ -228,8 +237,24 @@ shows `[retired <date> → successor]` instead of silently forgetting.
 `memoryctl revive <slug>` undoes it.
 
 `memoryctl close` runs after every turn (Claude Code fires Stop per turn):
-- Classifies the session's injected set as `trigger-useful` / `trigger-silent` (evidence phrases or slug/name citation in assistant text) and writes the events to the WAL.
-- Recomputes effectiveness from the WAL: `(pos+1)/(pos+neg+2)` over legacy `outcome-*` events **plus** one trigger observation per (slug, session) — useful wins over silent within a session.
+- Classifies the session's injected set from explicit `<cc-memory filenames="…">` citations
+  in the assistant transcript (the tag is hidden from the user by Claude Code): a cited
+  in-scope fact that was actually **delivered** this session (injected, recalled,
+  skill-injected, or read directly with the Read tool) is `cite-useful`; a cited in-scope
+  fact that was never delivered is `cite-undelivered` instead — diagnostic only, not useful,
+  does not arm the silent guard, does not confirm a candidate. An injected-but-uncited fact
+  is `cite-silent` — but only in a session with at least one resolvable **delivered**
+  citation, so a broken citation channel never fabricates a session of silent facts (a
+  session that resolved zero delivered citations — nothing cited, or every citation was
+  `cite-undelivered` — writes one session-level `cite-none` instead). Frontmatter
+  `evidence:`/name substring matching no longer creates usefulness — it now drives only the
+  `ablate` holdout observation (`holdout-hit`/`holdout-miss`).
+- Recomputes effectiveness from the WAL: `(pos+1)/(pos+neg+2)` over one citation observation
+  per (slug, session) — `cite-useful` wins over `cite-silent` within a session. Usefulness
+  history restarted at v2.14: every fact begins back at the neutral 0.5 prior, and
+  pre-cutover `trigger-*`/`outcome-*` WAL rows stay on disk but are no longer read by any
+  usefulness reader (sidecar effectiveness, `promote`, self-profile, `ab`, `doctor`
+  candidates).
 - Marks facts `stale` in the sidecar when unused past their type threshold — age counts from **last injection** (fallback `created`), so facts in rotation stay alive. No native content mutation.
 - Archiving ships as `memoryctl retire` (see the lifecycle loop above): the file moves to the store's `.archive/`, the sidecar row becomes `retired`, and recall shows a tombstone redirect. Stale facts that were never retired simply stop injecting.
 - `status: pinned` files and `continuity`/`project` facts never decay.
@@ -242,7 +267,7 @@ score is an additive blend — no single zero signal annihilates a candidate:
 ```
 score = 3.0 × overlap(session_keywords, file keywords+name+description+body)
       + 1.0 × log10(1 + ref_count) × effGate   # popularity, GATED by proven usefulness
-      + 2.0 × recency                  # 1/(1 + days/30) from last USEFUL citation (trigger-useful; fallback created)
+      + 2.0 × recency                  # 1/(1 + days/30) from last USEFUL citation (cite-useful; fallback created)
       + 2.0 × effectiveness            # Bayesian (pos+1)/(pos+neg+2); neutral 0.5 until signal lands
       + 1.0 if project-local           # project facts outrank global ones on ties
 
@@ -250,10 +275,10 @@ effGate = clamp(2 × effectiveness, 0, 1)   # 1.0 at the prior (0.5); only damps
 ```
 
 **Recency is the model's signal, not the ranker's.** Recency decays from the
-last `trigger-useful` date (sidecar `last_useful`), falling back to
+last `cite-useful` date (sidecar `last_useful`), falling back to
 frontmatter `created`. `recall` deliveries do not count — the same event is
 written by `skill-inject` as a push, and a recalled fact that is actually
-used surfaces as `trigger-useful` at close. It does not use `last_injected`: injection is the
+used surfaces as `cite-useful` at close. It does not use `last_injected`: injection is the
 ranker's own output, and keying recency on it let every pick refresh itself.
 Staleness (`MarkStale`) still counts from last injection — a fact the ranker
 demotes stops being injected and then ages out; nothing is staled by fiat.
@@ -266,7 +291,7 @@ an inflated one.
 
 **Zero-safe:** a new fact with `ref_count=0` and no outcomes gets the neutral prior and its frontmatter `created` as recency — it is injectable from day one. The gate cannot hurt it either: an extreme low `effectiveness` *requires* substantial negative evidence (the prior holds new facts near 0.5), so `effGate≈1.0` until a fact has genuinely under-performed.
 
-Status filter: `active` and `pinned` only (sidecar-managed `stale` is excluded). Scope filter: only the current project's facts plus the global store — other projects' rows never inject. Result cap: top-8, 8KB total, once per session per fact.
+Status filter: `active` and `pinned` only (sidecar-managed `stale` is excluded). Scope filter: only the current project's facts plus the global store — other projects' rows never inject. Result cap: top-8, 8KB total, once per context per fact (again after compaction/`/clear`).
 
 `session_keywords` come from prompt tokens, CWD basename, and git context (branch name, changed filenames, recent commit subjects) on both SessionStart and UserPromptSubmit (reactive re-rank).
 
@@ -286,7 +311,17 @@ Do not route around the gate by stripping the value; either whitelist the path o
 
 ## Reading what was injected
 
-Look at the start of your context for a `# Memory Context` block with one `## <name>` section per injected fact (large hook payloads may arrive as a persisted-output file reference — the 8KB budget exists precisely to avoid that).
+Look at the start of your context for a `# Memory Context` block with one `## <name> — <file.md> (<type>, <created>)` section per injected fact — the file name in the header is what you cite (see "Citing memory" below); large hook payloads may arrive as a persisted-output file reference — the 8KB budget exists precisely to avoid that.
+
+## Citing memory
+
+Every delivery (`inject`, `recall`, `skill-inject`) opens with one instruction line, verbatim:
+
+> When a fact below changes what you say or do, wrap that sentence in `<cc-memory filenames="FILE">…</cc-memory>` (the tag is hidden from the user).
+
+`FILE` is the fact's file name, shown in its header (`## <name> — <file.md> (<type>, <created>)`). This citation — not a keyword or name match — is the only thing `close` reads to mark a fact `cite-useful`; an injected fact with no citation in a session that had at least one delivered citation is `cite-silent` instead. Only a fact actually delivered in the session earns credit for a citation — injected/recalled/skill-injected, or read directly with the Read tool from its file — so citing a filename you never saw content from lands as `cite-undelivered`, not `cite-useful`. Cite only the facts that actually changed what you said or did; the tag is hidden from the user, so there is no cost to citing honestly and no benefit to citing everything.
+
+"Hidden from the user" holds for the interactive CLI; headless invocation (`claude -p`) or raw SDK output may surface the tag literally, since there is no interactive renderer to strip it.
 
 ## Pull retrieval
 

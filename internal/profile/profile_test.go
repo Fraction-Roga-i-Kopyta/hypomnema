@@ -68,10 +68,10 @@ func TestGenerate(t *testing.T) {
 
 	// Meta-signals: counts come straight from the fixture.
 	// 3 session-metrics rows, 1 clean-session, 1 outcome-positive, 1 outcome-negative,
-	// 1 strategy-used, 1 strategy-gap. Trigger buckets:
-	//   ambient activations = 1 (only `trigger-useful|ambient-rule`)
-	//   trigger-useful measurable = 1 (bar-mistake — ambient-rule excluded)
-	//   trigger-silent measurable = 2 (foo-mistake|sess2 + noise-rule|sess7)
+	// 1 strategy-used, 1 strategy-gap. Citation buckets:
+	//   ambient activations = 1 (only `cite-useful|ambient-rule`)
+	//   cite-useful measurable = 1 (bar-mistake — ambient-rule excluded)
+	//   cite-silent measurable = 2 (foo-mistake|sess2 + noise-rule|sess7)
 	mustContain(t, got, "| total sessions (logged) | 3 |")
 	mustContain(t, got, "| clean sessions (0 errors) | 1 |")
 	mustContain(t, got, "| outcome-positive (mistake not repeated) | 1 |")
@@ -79,12 +79,12 @@ func TestGenerate(t *testing.T) {
 	mustContain(t, got, "| strategy-used (clean session + strategy injected) | 1 |")
 	mustContain(t, got, "| strategy-gap (clean session, no strategy) | 1 |")
 	mustContain(t, got, "| ambient activations (rules excluded from precision by design) | 1 |")
-	mustContain(t, got, "| trigger-useful measurable (referenced explicitly) | 1 |")
+	mustContain(t, got, "| cite-useful measurable (referenced explicitly) | 1 |")
 
-	// silent-applied: trigger-silent on foo-mistake|sess2 + outcome-positive
+	// silent-applied: cite-silent on foo-mistake|sess2 + outcome-positive
 	// on foo-mistake|sess2 share the key → silent_applied = 1.
 	mustContain(t, got, "| silent-applied measurable (silent + outcome-positive) | 1 |")
-	// silent-noise = trigger_silent_measurable(2) - silent_applied(1) = 1.
+	// silent-noise = cite_silent_measurable(2) - silent_applied(1) = 1.
 	mustContain(t, got, "| silent-noise (silent, no application signal — **tuning targets**) | 1 |")
 
 	// Precision = (useful + applied) / (useful + silent) * 100
@@ -279,13 +279,13 @@ const walFixture = `2026-04-01|session-metrics|backend,testing|error_count:3,too
 2026-04-02|clean-session|unknown|sess1
 2026-04-03|session-metrics|frontend|error_count:1,tool_calls:5,duration:30s
 2026-04-04|outcome-positive|foo-mistake|sess2
-2026-04-04|trigger-silent|foo-mistake|sess2
+2026-04-04|cite-silent|foo-mistake|sess2
 2026-04-04|outcome-negative|bar-mistake|sess3
-2026-04-05|trigger-useful|bar-mistake|sess4
+2026-04-05|cite-useful|bar-mistake|sess4
 2026-04-06|strategy-used|unknown|sess5
 2026-04-06|strategy-gap|unknown|sess6
-2026-04-07|trigger-useful|ambient-rule|sess7
-2026-04-07|trigger-silent|noise-rule|sess7
+2026-04-07|cite-useful|ambient-rule|sess7
+2026-04-07|cite-silent|noise-rule|sess7
 2026-04-08|evidence-empty|bar-mistake|sess8
 2026-04-08|evidence-empty|baz-mistake|sess9
 2026-04-09|outcome-new|new-mistake|sess10
@@ -355,7 +355,7 @@ func mustMkdir(t *testing.T, path string) {
 }
 
 // TestGenerate_MdSlugAndPerSession is the v2.6.0 regression for review E1+E2:
-// (E1) trigger events carry a `.md` slug (close writes f.Slug) while ambient
+// (E1) cite events carry a `.md` slug (close writes f.Slug) while ambient
 // slugs are bare — the ambient lookup must normalize, or ambient activations
 // read 0; (E2) the same (slug,session) is written every turn, so counts must
 // dedup per session, not sum per event.
@@ -370,8 +370,8 @@ func TestGenerate_MdSlugAndPerSession(t *testing.T) {
 	// One real session, recorded across many turns (per-turn duplication).
 	for i := 0; i < 40; i++ {
 		b.WriteString("2026-04-10|session-metrics|domains:_global_,error_count:0,tool_calls:1,duration:1s|sessX\n")
-		b.WriteString("2026-04-10|trigger-silent|bar-mistake.md|sessX\n")  // .md slug, repeated
-		b.WriteString("2026-04-10|trigger-useful|ambient-rule.md|sessX\n") // .md slug, ambient
+		b.WriteString("2026-04-10|cite-silent|bar-mistake.md|sessX\n")  // .md slug, repeated
+		b.WriteString("2026-04-10|cite-useful|ambient-rule.md|sessX\n") // .md slug, ambient
 	}
 	mustWrite(t, filepath.Join(dir, ".wal"), b.String())
 
@@ -397,4 +397,60 @@ func mustRead(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+// TestGenerate_LegacyTriggerEventsDoNotMoveMeasurableCounters: trigger-useful/
+// trigger-silent used to drive the "measurable" useful/silent counters
+// (pre-v2.14); the fresh start reads only cite-useful/cite-silent, so a
+// legacy-only WAL leaves both counters at zero.
+func TestGenerate_LegacyTriggerEventsDoNotMoveMeasurableCounters(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, ".wal"), ""+
+		"2026-04-10|trigger-useful|a-mistake|sess1\n"+
+		"2026-04-10|trigger-silent|b-mistake|sess2\n")
+	if err := Generate(dir, nil); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	got := mustRead(t, filepath.Join(dir, "self-profile.md"))
+	mustContain(t, got, "| cite-useful measurable (referenced explicitly) | 0 |")
+	mustContain(t, got, "| silent-noise (silent, no application signal — **tuning targets**) | 0 |")
+}
+
+// TestGenerate_CiteEventsMoveMeasurableCounters is the live-signal
+// counterpart of the test above: the same shape of WAL, but with
+// cite-useful/cite-silent, does move the counters.
+func TestGenerate_CiteEventsMoveMeasurableCounters(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, ".wal"), ""+
+		"2026-04-10|cite-useful|a-mistake|sess1\n"+
+		"2026-04-10|cite-silent|b-mistake|sess2\n")
+	if err := Generate(dir, nil); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	got := mustRead(t, filepath.Join(dir, "self-profile.md"))
+	mustContain(t, got, "| cite-useful measurable (referenced explicitly) | 1 |")
+	mustContain(t, got, "| silent-noise (silent, no application signal — **tuning targets**) | 1 |")
+}
+
+// TestGenerate_ColdStartInterpretationSaysCiteUseful: interpretIntuitionRatio's
+// undefined-ratio branch (no cite-useful events in the intuition window —
+// the common case for most projects in the 30 days after the v2.14 fresh
+// start) must name the live signal, not the retired trigger-useful one.
+func TestGenerate_ColdStartInterpretationSaysCiteUseful(t *testing.T) {
+	dir := t.TempDir()
+	// A WAL with real activity but no cite-useful/cite-silent rows at all —
+	// citeUsefulMeasRecent stays 0, so intuitionRatioDefined is false and
+	// interpretIntuitionRatio takes the cold-start branch.
+	mustWrite(t, filepath.Join(dir, ".wal"), ""+
+		"2026-04-01|session-metrics|backend|error_count:0,tool_calls:5,duration:30s\n"+
+		"2026-04-02|clean-session|unknown|sess1\n"+
+		"2026-04-03|strategy-used|unknown|sess2\n")
+	if err := Generate(dir, nil); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	got := mustRead(t, filepath.Join(dir, "self-profile.md"))
+	mustContain(t, got, "| interpretation | no measurable cite-useful events in window — cold start |")
+	if strings.Contains(got, "trigger-useful") {
+		t.Errorf("rendered self-profile.md must not mention trigger-useful for a cite-free WAL:\n%s", got)
+	}
 }

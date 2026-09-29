@@ -327,8 +327,11 @@ signals, not pattern-match gates.
 existing memory files are ignored by the ranker (not an error) — it scores
 on keyword overlap against name/description/body, so those two fields
 provide no lift and do not need to be removed. `evidence:` is **not**
-ignored: the close hook (`internal/closer`) reads it to classify each
-injected fact as `trigger-useful` vs `trigger-silent` (evidence-phrase or
-name/slug citation in the assistant's text), and that classification feeds
-effectiveness scoring. Keep `evidence:` on rules whose body tokens would be
-ambiguous.
+ignored, but as of v2.14 it no longer drives usefulness: the close hook
+(`internal/closer`) classifies each injected-and-delivered fact as
+`cite-useful` vs `cite-silent` from an explicit `<cc-memory
+filenames="…">` citation in the assistant's own text, and that
+classification feeds effectiveness scoring. `evidence:` now feeds only the
+`ablate` holdout observation for a fact withheld this session. Keep
+`evidence:` short regardless — long lists rarely match verbatim for that
+comparison.

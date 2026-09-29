@@ -14,7 +14,7 @@ func TestReplay_RankedBeatsRandomWhenSignalPredicts(t *testing.T) {
 	b.WriteString("2026-04-01|inject-agg|hot.md|50\n")
 	b.WriteString("2026-04-01|outcome-positive|hot.md|s0\n")
 	b.WriteString("2026-04-10|inject|hot.md|s1\n")
-	b.WriteString("2026-04-10|trigger-useful|hot.md|s1\n")
+	b.WriteString("2026-04-10|cite-useful|hot.md|s1\n")
 
 	events, _ := ParseWAL(writeWAL(t, b.String()))
 
@@ -46,7 +46,7 @@ func TestReplay_RankedBeatsRandomWhenSignalPredicts(t *testing.T) {
 }
 
 func TestReplay_Deterministic(t *testing.T) {
-	events, _ := ParseWAL(writeWAL(t, "2026-04-01|inject|a.md|s0\n2026-04-05|trigger-useful|a.md|s1\n2026-04-05|inject|b.md|s1\n"))
+	events, _ := ParseWAL(writeWAL(t, "2026-04-01|inject|a.md|s0\n2026-04-05|cite-useful|a.md|s1\n2026-04-05|inject|b.md|s1\n"))
 	a := Replay(events, []int{1, 2}, 7)
 	b := Replay(events, []int{1, 2}, 7)
 	for i := range a {
@@ -62,7 +62,7 @@ func TestReplay_ColdStartUsefulSlugMissedByStaticSignals(t *testing.T) {
 	// score and break by slug ascending. The useful slug sorts last, so a
 	// small-K ranked pick misses it: static signals can't predict a
 	// first-time-useful fact. (Honest limitation the harness should surface.)
-	wal := "2026-04-10|trigger-useful|zzz.md|s1\n" +
+	wal := "2026-04-10|cite-useful|zzz.md|s1\n" +
 		"2026-04-10|inject|aaa.md|s1\n" +
 		"2026-04-10|inject|bbb.md|s1\n" +
 		"2026-04-10|inject|ccc.md|s1\n" +
