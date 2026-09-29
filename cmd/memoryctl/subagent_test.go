@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -240,6 +241,52 @@ func TestSubagentQuery_FromTaskFlag(t *testing.T) {
 	_, fromTask2 := subagentQuery(fallback, "general-purpose", "a2")
 	if fromTask2 {
 		t.Errorf("want fromTask=false when falling back to the parent's recent prompts")
+	}
+}
+
+func TestSubagentStart_ConcurrentSameKeyRendersOnce(t *testing.T) {
+	f := newStoreFixture(t)
+	f.fact(t, "/tmp/proj", "dockercache", "docker layer cache")
+	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
+	parent := writeTranscript(t, agentCallLine("t1", "general-purpose", "docker", "dockercache"))
+	in := subagentEnv("s1", "a1", "general-purpose", "/tmp/proj", parent, "")
+
+	const n = 10
+	outs := make([]string, n)
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			defer wg.Done()
+			out, _, _ := runStdin(t, f.env, in, "inject", "--event=SubagentStart")
+			outs[i] = out
+		}(i)
+	}
+	wg.Wait()
+
+	nonEmpty := 0
+	for _, o := range outs {
+		if strings.TrimSpace(o) != "" {
+			nonEmpty++
+		}
+	}
+	if nonEmpty != 1 {
+		t.Errorf("want exactly 1 non-empty output across %d concurrent starts, got %d", n, nonEmpty)
+	}
+
+	wal, _ := os.ReadFile(filepath.Join(f.mem, ".wal"))
+	if !hasRow(string(wal), "inject", "dockercache.md", "s1:a1") {
+		t.Errorf("missing inject row under the subagent key:\n%s", wal)
+	}
+	count := 0
+	for _, ln := range strings.Split(string(wal), "\n") {
+		if fld := strings.Split(ln, "|"); len(fld) == 4 && fld[1] == "inject" &&
+			strings.HasSuffix(fld[2], "dockercache.md") && fld[3] == "s1:a1" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("want exactly 1 inject row for dockercache under s1:a1, got %d:\n%s", count, wal)
 	}
 }
 

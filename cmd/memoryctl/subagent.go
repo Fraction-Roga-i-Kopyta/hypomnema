@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/closer"
@@ -90,6 +91,23 @@ func subagentQuery(parentTranscript, agentType, agentID string) (query string, f
 	return typ, false
 }
 
+// claimSubagentStart atomically creates the key's rendered list as the
+// "first start happened" marker. Only the creator proceeds: a resumed
+// agent (the harness does not add a second SubagentStart context) or a
+// concurrent duplicate start finds the file and does nothing. Any other
+// error is treated the same way — fail-safe, no rows without a claim.
+func claimSubagentStart(key string) bool {
+	if err := os.MkdirAll(filepath.Join(memoryDir(), ".runtime"), 0o755); err != nil {
+		return false
+	}
+	f, err := os.OpenFile(renderedListPath(key), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return false
+	}
+	_ = f.Close()
+	return true
+}
+
 // runSubagentStart is `inject --event=SubagentStart`: rank the store for
 // the subagent's task and hand the top facts to the subagent's context.
 func runSubagentStart(raw []byte) {
@@ -101,10 +119,10 @@ func runSubagentStart(raw []byte) {
 		return
 	}
 	key := subagentKey(in.SessionID, in.AgentID)
-	if _, started := readRenderedList(key); started {
-		// Resumed agent: the harness does not add a second SubagentStart
-		// context to a transcript that already carries one, so rows written
-		// now would claim a delivery that never happens.
+	if !claimSubagentStart(key) {
+		// Resumed agent (the harness does not add a second SubagentStart
+		// context to a transcript that already carries one) or a concurrent
+		// duplicate start: someone else already claimed this key.
 		return
 	}
 	query, fromTask := subagentQuery(in.TranscriptPath, in.AgentType, in.AgentID)
