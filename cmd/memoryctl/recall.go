@@ -195,6 +195,12 @@ func recordRecallWithSession(slug, project, sid string) {
 		return // no session — nothing to dedup against, no close to classify
 	}
 	writeSessionList(readInjectedList(sid), []string{slug}, sid)
+	// A pull delivery lands the slug straight in the model's context, same
+	// as a push render — so the rendered list (post-compaction dedup source)
+	// must reflect it too, or a later compact render could offer it again
+	// while it is still on screen from this recall.
+	rendered, _ := readRenderedList(sid)
+	writeRenderedList(rendered, []string{slug}, sid)
 }
 
 // renderRecall renders the hybrid pull output: top-1 full body (same cap as

@@ -69,7 +69,15 @@ func runInject(args []string) {
 		writePin(in.SessionID, r)
 	}
 	already := readInjectedList(in.SessionID)
+	// The rendered list — what is in the model's CURRENT context — is the
+	// dedup source of truth: a fact the session union remembers delivering
+	// but a later compaction/clear render dropped is no longer in context
+	// and must be re-offerable. Sessions that predate the rendered list
+	// (readRenderedList ok=false) fall back to the old union dedup.
 	renderDedup, prompt := already, in.Prompt
+	if rl, ok := readRenderedList(in.SessionID); ok {
+		renderDedup = rl
+	}
 	if contextWiped(event, in.Source) {
 		renderDedup = nil
 		if in.Source == "compact" {
@@ -93,6 +101,10 @@ func runInject(args []string) {
 	}
 	if in.SessionID != "" {
 		persistHoldoutSkips(res, in.SessionID)
+		// compact/clear reset renderDedup to nil above, so the union below
+		// collapses to exactly res.Injected — matching "the rendered list is
+		// what this render showed, nothing carried over from before the wipe".
+		writeRenderedList(renderDedup, res.Injected, in.SessionID)
 	}
 	emitEnvelope(event, res.Markdown)
 	os.Exit(0)
@@ -126,6 +138,61 @@ func readListFile(path string) []string {
 		}
 	}
 	return out
+}
+
+func renderedListPath(sessionID string) string {
+	return filepath.Join(memoryDir(), ".runtime",
+		"rendered-"+pathutil.SafeFileName(sessionID)+".list")
+}
+
+// readRenderedList returns the slugs in the model's CURRENT context (the
+// most recent render this session), distinguishing "no rendered list yet"
+// (ok=false — a session that predates this file, or has not rendered at
+// all) from "the last render showed nothing" (ok=true, nil).
+func readRenderedList(sessionID string) (list []string, ok bool) {
+	if sessionID == "" {
+		return nil, false
+	}
+	b, err := os.ReadFile(renderedListPath(sessionID))
+	if err != nil {
+		return nil, false
+	}
+	for _, ln := range strings.Split(string(b), "\n") {
+		if ln = strings.TrimSpace(ln); ln != "" {
+			list = append(list, ln)
+		}
+	}
+	return list, true
+}
+
+// writeRenderedList rewrites the session's rendered list with the set-union
+// of current + add. Called after every render (inject) and every pull
+// delivery (recall/skill-inject) so the file always reflects what is
+// actually in the model's context right now. On compact/clear, callers pass
+// current=nil so the result collapses to exactly what the new render showed.
+func writeRenderedList(current, add []string, sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	if err := os.MkdirAll(filepath.Join(memoryDir(), ".runtime"), 0o755); err != nil {
+		return
+	}
+	seen := make(map[string]bool, len(current)+len(add))
+	union := append(make([]string, 0, len(current)+len(add)), current...)
+	for _, s := range current {
+		seen[s] = true
+	}
+	for _, s := range add {
+		if !seen[s] {
+			union = append(union, s)
+			seen[s] = true
+		}
+	}
+	content := ""
+	if len(union) > 0 {
+		content = strings.Join(union, "\n") + "\n"
+	}
+	_ = pathutil.WriteFileAtomic(renderedListPath(sessionID), []byte(content), 0o600)
 }
 
 func holdoutListPath(sessionID string) string {
@@ -237,7 +304,8 @@ func pruneRuntimeLists(dir string) {
 	cutoff := time.Now().Add(-7 * 24 * time.Hour)
 	for _, e := range entries {
 		name := e.Name()
-		isList := (strings.HasPrefix(name, "injected-") || strings.HasPrefix(name, "holdout-")) &&
+		isList := (strings.HasPrefix(name, "injected-") || strings.HasPrefix(name, "holdout-") ||
+			strings.HasPrefix(name, "rendered-")) &&
 			strings.HasSuffix(name, ".list")
 		isPin := strings.HasPrefix(name, "project-") && strings.HasSuffix(name, ".json")
 		if !isList && !isPin {
