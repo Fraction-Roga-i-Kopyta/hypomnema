@@ -476,6 +476,19 @@ func checkMemoryctl(claudeDir string) Check {
 			Detail: local + " present but does not run (`--help` failed) — rebuild it: " + rerr.Error(),
 		}
 	}
+	// The subagent shims call `close --subagent`; a binary rebuilt from an
+	// older ref (make build writes the symlink target in place) exits 2 on
+	// that flag and treats SubagentStart as the parent's own SessionStart.
+	// With `{}` on stdin a current binary is a silent no-op.
+	probe := exec.CommandContext(ctx, local, "close", "--subagent")
+	probe.Stdin = strings.NewReader("{}")
+	if perr := probe.Run(); perr != nil {
+		return Check{
+			Name:   "memoryctl_available",
+			Status: WARN,
+			Detail: local + " predates subagent support (`close --subagent` failed) — run `make build && ./install.sh`",
+		}
+	}
 	if _, err := exec.LookPath("memoryctl"); err != nil {
 		return Check{
 			Name:   "memoryctl_available",

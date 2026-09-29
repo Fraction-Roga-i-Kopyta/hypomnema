@@ -583,6 +583,49 @@ func TestRun_MissingShimFilesFail(t *testing.T) {
 	mustFindCheck(t, Run(claude, mem, native.StoreFor(claude, cwd), cwd), "shim_files_present", FAIL)
 }
 
+// memoryctlStub writes an executable shell stub over the fixture's
+// bin/memoryctl. --help always succeeds; `close --subagent` exits 2 when
+// subagentExit2 is true (simulating a binary built before subagent support
+// landed) and 0 otherwise.
+func memoryctlStub(t *testing.T, claude string, subagentExit2 bool) {
+	t.Helper()
+	closeExit := "0"
+	if subagentExit2 {
+		closeExit = "2"
+	}
+	script := "#!/bin/sh\n" +
+		"if [ \"$1\" = \"--help\" ]; then exit 0; fi\n" +
+		"if [ \"$1\" = \"close\" ] && [ \"$2\" = \"--subagent\" ]; then exit " + closeExit + "; fi\n" +
+		"exit 0\n"
+	p := filepath.Join(claude, "bin", "memoryctl")
+	if err := os.WriteFile(p, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCheckMemoryctl_PredatesSubagentSupportWarns(t *testing.T) {
+	claude, mem, cwd := newFixture(t)
+	memoryctlStub(t, claude, true)
+	c := mustFindCheck(t, Run(claude, mem, native.StoreFor(claude, cwd), cwd), "memoryctl_available", WARN)
+	if !strings.Contains(c.Detail, "predates subagent support") {
+		t.Errorf("expected %q to contain \"predates subagent support\"", c.Detail)
+	}
+}
+
+func TestCheckMemoryctl_SubagentSupportedNoPredatesWarning(t *testing.T) {
+	claude, mem, cwd := newFixture(t)
+	memoryctlStub(t, claude, false)
+	report := Run(claude, mem, native.StoreFor(claude, cwd), cwd)
+	for _, c := range report.Checks {
+		if c.Name != "memoryctl_available" {
+			continue
+		}
+		if strings.Contains(c.Detail, "predates subagent support") {
+			t.Errorf("did not expect \"predates subagent support\", got %q (status=%s)", c.Detail, c.Status)
+		}
+	}
+}
+
 func TestRun_NonExecutableShimFails(t *testing.T) {
 	claude, mem, cwd := newFixture(t)
 	p := filepath.Join(claude, "hooks", "v2", "session-start.sh")
