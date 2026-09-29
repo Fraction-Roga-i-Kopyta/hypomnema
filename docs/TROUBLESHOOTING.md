@@ -58,22 +58,34 @@ doctor points at a specific check."
 1. **Check whether the agent type is meant to be skipped.** By default
    `fork`, `Explore`, `claude-code-guide`, and `statusline-setup` get no
    memory — `HYPOMNEMA_SUBAGENT_SKIP` fully replaces that list when set (a
-   set-but-empty value means skip nothing):
+   set-but-empty value means skip nothing, and a single `*` entry means skip
+   every agent type — the full opt-out):
 
    ```bash
    echo "$HYPOMNEMA_SUBAGENT_SKIP"
    ```
 
+   To opt every subagent out permanently, set `HYPOMNEMA_SUBAGENT_SKIP=*` in
+   `settings.json`'s top-level `env` block so both the `SubagentStart` and
+   `SubagentStop` hooks inherit it — deleting the hook entries themselves
+   instead is undone by the next `./install.sh`.
 2. **A resumed agent getting nothing is by design**, not a bug: the harness
    never adds a second `SubagentStart` context to a transcript that already
    carries one, and `memoryctl` mirrors that — a key whose
    `rendered-<key>.list` already exists is a no-op on every later start for
    that key.
-3. **Run `memoryctl doctor`.** It should report 8 hooks registered
-   (`SubagentStart` and `SubagentStop` included). If it still shows 6, the
-   install predates subagent support — `make build` then re-run
-   `./install.sh` (it refuses to proceed if `bin/memoryctl` doesn't
-   understand `close --subagent` yet).
+3. **Run `memoryctl doctor`.** A missing or misrouted `SubagentStart`/
+   `SubagentStop` registration shows up in `settings_hooks_registered` with
+   the same wording as any other missing hook, e.g.:
+
+   ```
+   settings_hooks_registered FAIL: subagent-start.sh missing (want SubagentStart); subagent-stop.sh missing (want SubagentStop) — re-run ./install.sh
+   ```
+
+   A `memoryctl_available` line whose detail contains `predates subagent
+   support` means the resolved binary itself is too old — `make build` then
+   re-run `./install.sh` (it refuses to proceed against a `bin/memoryctl`
+   that doesn't understand `close --subagent`).
 4. **Claude Code older than the verified version (2.1.284) may not deliver
    `additionalContext` on `SubagentStart`**, even though the hook fires and
    `memoryctl` still writes its `inject` WAL row — the subagent's context
@@ -85,6 +97,20 @@ doctor points at a specific check."
    to ranking against the parent's 3 most recent prompts instead of the
    launching `Agent`/`Task` call — expected, not a bug; the subagent still
    gets memory, just against a less specific query.
+
+## A subagent got memory for a sibling's task
+
+Parallel launches of the **same** agent type that start before their launch
+acknowledgement is written back into the parent transcript can be matched to
+a concurrently-launched sibling's `Agent`/`Task` call instead of their own —
+`SubagentStart` has nothing yet to tell the two apart. Measured on a live
+session: 40/46 exact matches before the acknowledgement lands, 46/46 once it
+has (the acknowledgement is usually visible within about 100ms of the
+subagent's first transcript record). The effect is a less relevant fact set
+for that one subagent's launch, not data corruption or a wrong classification
+later — `SubagentStop` still classifies citations under the correct agent's
+own key regardless of what `SubagentStart` ranked against. Nothing to fix;
+expected under enough launch concurrency.
 
 ## Hooks not firing after install
 

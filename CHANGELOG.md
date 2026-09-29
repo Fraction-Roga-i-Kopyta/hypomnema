@@ -11,25 +11,35 @@
   subagent's first turn, under its own observation key
   (`<session_id>:<agent_id>`). A short default skip list (`fork`, `Explore`,
   `claude-code-guide`, `statusline-setup`) gets no memory; override with
-  `HYPOMNEMA_SUBAGENT_SKIP`. A fact the parent session is withholding under
-  an ablation stays withheld from its subagents. `close --subagent`
-  (`SubagentStop`) classifies the subagent's own citations — including its
-  `SubagentHandback` report — under that same key, independent of the
-  parent session's classification.
+  `HYPOMNEMA_SUBAGENT_SKIP`, or set it to `*` to opt every subagent out.
+  A fact the parent session is withholding under an ablation stays withheld
+  from its subagents. `close --subagent` (`SubagentStop`) classifies the
+  subagent's own citations — including its `SubagentHandback` report —
+  under that same key, independent of the parent session's classification.
+- **`doctor`'s `memoryctl_available` check warns when the resolved binary
+  predates subagent support** — it probes `close --subagent` directly, so a
+  `make build` from an older ref that still passes `--help` is caught before
+  the subagent shims start silently no-oping.
 
 ### Fixed
 
-- **`close`'s per-session WAL dedup is end-anchored, not substring.**
-  `session-close` and `cite-none` now dedup with `wal.AppendSuffixUnique`
+- **`close`'s per-session WAL dedup is end-anchored, not substring**, across
+  every per-session close row: `cite-useful`, `cite-silent`,
+  `cite-undelivered`, `cite-none`, `holdout-hit`/`holdout-miss`, and a
+  subagent's `session-close` all now dedup with `wal.AppendSuffixUnique`
   (matching on `strings.HasSuffix`), so a subagent key like `s1:a1` can no
   longer suppress — or be suppressed by — the parent's own row ending in
-  plain `s1`.
+  plain `s1` (see `docs/EVENTS.md`).
 
 ### Changed
 
 - **The installer registers 8 hooks** (`SubagentStart`, `SubagentStop`
   added) and refuses to proceed against a `bin/memoryctl` that predates
   subagent support.
+- **The installer's stable backup name (`settings.json.backup-hypomnema`)
+  now always points at THIS run's pre-change snapshot**, not the very first
+  one ever taken — every earlier snapshot stays available under its own
+  timestamped name.
 - **`promote` and `doctor`'s candidate check count a session and its
   subagents as one observation** (`wal.ParentSession`), while sidecar
   effectiveness, `ab`, self-profile, and doctor's `citation_signal` /

@@ -201,8 +201,9 @@ memoryctl doctor # verify: all checks OK
 `./install.sh`:
 - Verifies Claude Code ≥ v2.1.59 and that `settings.json` is valid JSON — before touching anything.
 - Symlinks the pre-built `memoryctl` into `~/.claude/bin/`.
-- Copies the 8 hook shims into `~/.claude/hooks/v2/` and registers them in `~/.claude/settings.json` (timestamped backup first).
+- Copies the 8 hook shims into `~/.claude/hooks/v2/` and registers them in `~/.claude/settings.json` (timestamped backup first — the stable `settings.json.backup-hypomnema` name always points at this run's pre-change snapshot).
 - Creates `~/.claude/memory-global/` for global facts.
+- Refuses to proceed if `bin/memoryctl` predates subagent support (run `make build` first).
 
 **Upgrading from v1.x:** run `memoryctl migrate --dry-run` first — it shows what will be kept, pruned, and routed to global vs. project store. Then `memoryctl migrate --execute` (backs up the old store, does NOT delete it). See [docs/MIGRATION.md](docs/MIGRATION.md).
 
@@ -323,7 +324,7 @@ precision_class: ambient  # excludes from precision denominator (use for languag
 
 ## Subagents
 
-Subagents get their own ranked memory at `SubagentStart`: `memoryctl` builds a query from the agent's own launch task (its `Agent`/`Task` call — description + prompt — read back out of the parent transcript) or, failing that, the parent's recent prompts, and injects its own top-5 (5 KB cap) before the subagent's first turn. Lookup-only agents (`fork`, `Explore`, `claude-code-guide`, `statusline-setup` by default; override with `HYPOMNEMA_SUBAGENT_SKIP`) are skipped — memory would be noise there. A subagent's citations are classified at `SubagentStop` under its own key (`<session_id>:<agent_id>`), separate from the parent session, so its usefulness signal never mixes with the parent's. There is still no auto-generated context file (`_agent_context.md` was a v1 artefact) — pass inline only what is specific to the task beyond what the ranker already covers.
+Subagents get their own ranked memory at `SubagentStart`: `memoryctl` builds a query from the agent's own launch task (its `Agent`/`Task` call — description + prompt — read back out of the parent transcript) or, failing that, the parent's recent prompts, and injects its own top-5 (5 KB cap) before the subagent's first turn. Lookup-only agents (`fork`, `Explore`, `claude-code-guide`, `statusline-setup` by default; override with `HYPOMNEMA_SUBAGENT_SKIP`) are skipped — memory would be noise there; set `HYPOMNEMA_SUBAGENT_SKIP=*` (in `settings.json`'s `env` block, so both subagent hooks inherit it) to opt every subagent out. A subagent's citations are classified at `SubagentStop` under its own key (`<session_id>:<agent_id>`), separate from the parent session, so its usefulness signal never mixes with the parent's. There is still no auto-generated context file (`_agent_context.md` was a v1 artefact) — pass inline only what is specific to the task beyond what the ranker already covers.
 
 ## Design decisions
 

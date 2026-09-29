@@ -11,7 +11,7 @@ import (
 
 func TestCheckSettings_InvalidJSONFails(t *testing.T) { // review O4
 	claude, mem, cwd := newFixture(t)
-	// Corrupt JSON that nonetheless contains all eight shim substrings.
+	// Corrupt JSON that nonetheless contains the six original shim substrings.
 	broken := "{ BROKEN " +
 		`hooks/v2/session-start.sh hooks/v2/user-prompt-submit.sh hooks/v2/pre-tool-write.sh ` +
 		`hooks/v2/skill-learnings-inject.sh hooks/v2/skill-active.sh hooks/v2/session-stop.sh`

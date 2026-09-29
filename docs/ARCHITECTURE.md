@@ -136,7 +136,7 @@ SubagentStart ──► inject --event=SubagentStart ─────────
    write injected-<key>.list (if non-empty), rendered-<key>.list│
      (always — marks the claim as fulfilled)                    │
                                                                 │
-SubagentStop ──► close --subagent ───────────────────────────────┤
+SubagentStop ──► close --subagent ──────────────────────────────┤
    agent_transcript_path = the SUBAGENT's own transcript        │
    agent_type in skip list, or any of session_id/agent_id/      │
      agent_transcript_path empty → exit 0, nothing written      │
@@ -144,15 +144,15 @@ SubagentStop ──► close --subagent ─────────────�
      path, Subagent=true): same citation classification as      │
      close, jsonl folds SubagentHandback.input.message into the │
      transcript text first                                      │
-   WAL: cite-useful|<slug>|<key>, cite-silent, cite-undelivered, │
-     cite-none|<key>|<key> as usual — no session-metrics, no     │
+   WAL: cite-useful|<slug>|<key>, cite-silent/cite-undelivered, │
+     cite-none|<key>|<key> as usual — no session-metrics, no    │
      holdout classification, no sidecar reproject/MarkStale, no │
      MEMORY.md/self-profile regen (left to the parent's Stop)   │
-   WAL: session-close|<key>|<key>, deduped END-ANCHORED          │
-     (wal.AppendSuffixUnique) so it never suppresses — or is     │
+   WAL: session-close|<key>|<key>, deduped END-ANCHORED         │
+     (wal.AppendSuffixUnique) so it never suppresses — or is    │
      suppressed by — the parent's own session-close|<sid>|<sid> │
-   unreadable subagent transcript: session-close only, no        │
-     cite-* row for this key                                     │
+   unreadable subagent transcript: session-close only, no       │
+     cite-* row for this key                                    │
    ── session-level work stays with the parent's next Stop ─────┘
 ```
 
