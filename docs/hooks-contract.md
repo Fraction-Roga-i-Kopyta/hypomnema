@@ -14,6 +14,15 @@ is not an optional dependency. The shim's only defensive behaviour is that if
 the binary is missing from its resolved path it exits 0 (so a broken install
 never breaks a session); it does not degrade to a bash fallback.
 
+The two subagent shims (`subagent-start.sh`, `subagent-stop.sh`) do not
+`exec` — they run `memoryctl` and then unconditionally `exit 0`, stderr
+redirected to `/dev/null`, regardless of what `memoryctl` itself returned.
+`subagent-start.sh` also always passes `--subagent` alongside
+`--event=SubagentStart` (§1.2). Both exist to swallow the exit-2 refusal a
+memoryctl older than subagent support gives on `--subagent` (§8, §9) — a
+hook for a feature the resolved binary lacks must be a no-op to the harness,
+never a loud or silently-corrupting error.
+
 The invariants here are what `install.sh` wires into `~/.claude/settings.json`.
 This document describes **hypomnema's own commitments**, not the upstream Claude
 Code envelope (new event types / tool-input fields are tracked separately).
@@ -34,7 +43,7 @@ Code envelope (new event types / tool-input fields are tracked separately).
 | `PreToolUse` | `Skill` | `skill-active.sh` | `skill-active` | 10 s | Record the activated skill for this session |
 | `PostToolUse` | `Skill` | `skill-learnings-inject.sh` | `skill-inject` | 10 s | Inject skill-learning facts for the skill |
 | `Stop` | — | `session-stop.sh` | `close` | 10 s | Close the session: classify, decay, rollup |
-| `SubagentStart` | — | `subagent-start.sh` | `inject --event=SubagentStart` | 15 s | Rank + inject memory for a subagent's own task |
+| `SubagentStart` | — | `subagent-start.sh` | `inject --event=SubagentStart --subagent` | 15 s | Rank + inject memory for a subagent's own task |
 | `SubagentStop` | — | `subagent-stop.sh` | `close --subagent` | 10 s | Classify the subagent's own citations under its key |
 
 Compaction is handled on `SessionStart` with `source=compact`; **no
@@ -55,7 +64,7 @@ each verb actually reads:
 | `skill-active` | `session_id`, `tool_input.skill` |
 | `skill-inject` | `session_id`, `cwd` (resolves the store the learnings are read from), `tool_input.skill` |
 | `close` | `session_id`, `cwd`, `transcript_path` |
-| `inject --event=SubagentStart` | `session_id`, `cwd`, `transcript_path`, `agent_id`, `agent_type` — `session_id` and `transcript_path` are the **parent's**, not the subagent's |
+| `inject --event=SubagentStart --subagent` | `session_id`, `cwd`, `transcript_path`, `agent_id`, `agent_type` — `session_id` and `transcript_path` are the **parent's**, not the subagent's. `--subagent` forces the `SubagentStart` path regardless of `--event=`; it exists so a memoryctl older than subagent support refuses the unrecognised flag (exit 2, before stdin is even read) rather than defaulting `--event=SubagentStart` to `SessionStart` and silently misreading the subagent's envelope as the parent's (§8, §9) |
 | `close --subagent` | `session_id`, `cwd`, `agent_id`, `agent_type`, `agent_transcript_path` — again `session_id` is the parent's; `agent_transcript_path` is the subagent's own transcript |
 
 ### 1.3 Output
@@ -374,16 +383,20 @@ Query — built from the **parent's** transcript, tail-bounded to the last
 2 MiB (a line straddling the window boundary is dropped; one landing exactly
 on it is kept):
 
-1. `jsonl.PendingAgentCall` scans that tail for the assistant `Agent`/`Task`
-   tool_use that launched this agent. A `tool_result` naming
-   `agentId: <agent_id>` (the background-launch acknowledgement) picks that
-   exact call, even among parallel calls of the same type; failing that, the
-   newest same-type call with no `tool_result` yet (a synchronous launch
-   still in flight) is used. Parallel launches of the SAME agent type that
-   start before their own acknowledgement lands can be matched to a
-   sibling's call instead (measured 40/46 exact before the acknowledgement
-   is visible, 46/46 after) — the effect is a less relevant ranking query for
-   that launch, not a misclassified citation later (see TROUBLESHOOTING).
+1. `jsonl.AgentCalls` scans that tail for assistant `Agent`/`Task` tool_use
+   calls of this agent's type, split into `pending` (no `tool_result` yet,
+   oldest first) and `own` (the call whose `tool_result` names
+   `agentId: <agent_id>` — the background-launch acknowledgement). `pickAgentCall`
+   assigns this subagent a call: `own`, if this launch has already been
+   acknowledged, wins outright — exact even among parallel calls of the same
+   type. Otherwise it walks `pending` oldest-first and atomically claims the
+   first call no sibling has taken yet (`O_CREATE|O_EXCL` on
+   `.runtime/agentcall-<id>.claim`, pruned after 7 days alongside the other
+   runtime lists) and uses that one. A synchronous launch is never
+   acknowledged, so parallel synchronous launches of one type are
+   distinguished entirely by claim order — each hook that reaches the claim
+   first keeps its call, so two launches racing for the same call get
+   different ones, in the order their hooks actually fire.
 2. Found: query = the call's `description` + agent-type words + the top-40
    terms (`inject.TopTerms`) of its `prompt`. The git-context signal (branch,
    changed files, recent commit subjects) is **not** added — the task
@@ -445,14 +458,24 @@ holdout classification, no sidecar reprojection (`Reproject`/`MarkStale`), no
 `MEMORY.md` regeneration, no self-profile regeneration. Session-level work
 stays with the parent.
 
-It writes one `session-close|<key>|<key>` row. Because `SubagentStop` can
-fire more than once for the same key (a repeated stop, a retried hook), that
-row — and the `cite-none` row above — is deduped with `wal.AppendSuffixUnique`,
-which matches by `strings.HasSuffix` rather than plain substring: an
-end-anchored check so a subagent key like `s1:a1` never suppresses the
-parent's own `session-close|s1|s1` row (`s1` is a substring — but not a
-suffix — of `s1:a1`). `candidate-confirmed` keeps the old substring dedup; it
-is intentionally session-free.
+It writes one `session-close|<key>|<key>` row, and — unlike the parent's own
+`session-close|<sid>|<sid>` row from §7 (a plain, undeduped `wal.Append`, one
+per turn since Stop fires every turn) — this one IS deduped, with
+`wal.AppendSuffixUnique`: `SubagentStop` can fire more than once for the same
+key (a repeated stop, a retried hook), and a repeat must add nothing. The same
+dedup guards the `cite-none` row above.
+
+End-anchoring is what makes that dedup safe to share with the parent's own
+rows in the first place. Every per-session close row keys off `|event|target|sid`,
+and the parent's plain session id can be a literal prefix of a subagent's
+compound one — `s1` vs. `s1:a1`. A plain-substring dedup check would let the
+shorter parent key match INSIDE an already-written longer subagent row:
+`|cite-useful|t|s1` is a substring of `|cite-useful|t|s1:a1`, since the
+latter starts with exactly those characters — and would silently drop the
+parent's own legitimate row. `wal.AppendSuffixUnique` checks
+`strings.HasSuffix` instead — end-anchored, so `s1` (a substring but never a
+suffix of `s1:a1`) cannot collide with it either way. `candidate-confirmed`
+keeps the old substring dedup; it is intentionally session-free.
 
 ---
 
