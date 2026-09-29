@@ -261,3 +261,93 @@ func TestSubagentStart_MissingIDsAndBadStdin(t *testing.T) {
 		}
 	}
 }
+
+func assistantCiteLine(text string) string {
+	b, _ := json.Marshal(map[string]any{"type": "assistant", "message": map[string]any{
+		"content": []map[string]any{{"type": "text", "text": text}}}})
+	return string(b)
+}
+
+func handbackLine(message string) string {
+	b, _ := json.Marshal(map[string]any{"type": "assistant", "message": map[string]any{
+		"content": []map[string]any{{"type": "tool_use", "id": "h1", "name": "SubagentHandback",
+			"input": map[string]any{"message": message}}}}})
+	return string(b)
+}
+
+func TestSubagentStop_ClassifiesUnderSubagentKey(t *testing.T) {
+	f := newStoreFixture(t)
+	f.fact(t, "/tmp/proj", "dockercache", "docker layer cache")
+	f.fact(t, "/tmp/proj", "pgmigration", "postgres migration lock")
+	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
+	parent := writeTranscript(t, agentCallLine("t1", "general-purpose", "Fix migration", "pgmigration postgres lock dockercache"))
+	runStdin(t, f.env, subagentEnv("s1", "a1", "general-purpose", "/tmp/proj", parent, ""),
+		"inject", "--event=SubagentStart")
+	agent := writeTranscript(t, assistantCiteLine(`<cc-memory filenames="pgmigration.md">released the lock first</cc-memory>`))
+	out, stderr, code := runStdin(t, f.env, subagentEnv("s1", "a1", "general-purpose", "/tmp/proj", parent, agent),
+		"close", "--subagent")
+	if code != 0 || strings.TrimSpace(out) != "" || stderr != "" {
+		t.Fatalf("close --subagent: code=%d out=%q stderr=%q", code, out, stderr)
+	}
+	w, _ := os.ReadFile(filepath.Join(f.mem, ".wal"))
+	wal := string(w)
+	for _, want := range [][2]string{
+		{"cite-useful", "pgmigration.md"},
+		{"cite-silent", "dockercache.md"},
+		{"session-close", "s1:a1"},
+	} {
+		if !hasRow(wal, want[0], want[1], "s1:a1") {
+			t.Errorf("missing %s row for %s under s1:a1:\n%s", want[0], want[1], wal)
+		}
+	}
+	if strings.Contains(wal, "|session-metrics|") || strings.Contains(wal, "|s1\n") {
+		t.Errorf("no session-metrics and no parent-session rows expected:\n%s", wal)
+	}
+	if exists(filepath.Join(f.mem, ".runtime", "injected-s1.list")) {
+		t.Error("parent session list must not exist")
+	}
+}
+
+func TestSubagentStop_CitationInHandbackReport(t *testing.T) {
+	f := newStoreFixture(t)
+	f.fact(t, "/tmp/proj", "pgmigration", "postgres migration lock")
+	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
+	parent := writeTranscript(t, agentCallLine("t1", "general-purpose", "Fix migration", "pgmigration postgres lock"))
+	runStdin(t, f.env, subagentEnv("s1", "a1", "general-purpose", "/tmp/proj", parent, ""),
+		"inject", "--event=SubagentStart")
+	agent := writeTranscript(t, handbackLine(`Done. <cc-memory filenames="pgmigration.md">released the lock first</cc-memory>`))
+	runStdin(t, f.env, subagentEnv("s1", "a1", "general-purpose", "/tmp/proj", parent, agent), "close", "--subagent")
+	w, _ := os.ReadFile(filepath.Join(f.mem, ".wal"))
+	if !hasRow(string(w), "cite-useful", "pgmigration.md", "s1:a1") {
+		t.Errorf("a citation in the SubagentHandback report must count:\n%s", w)
+	}
+}
+
+func TestSubagentStop_NoopCases(t *testing.T) {
+	f := newStoreFixture(t)
+	f.fact(t, "/tmp/proj", "dockercache", "docker layer cache")
+	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
+	agent := writeTranscript(t, assistantCiteLine(`<cc-memory filenames="dockercache.md">x</cc-memory>`))
+	for _, in := range []string{
+		subagentEnv("s1", "e1", "Explore", "/tmp/proj", "", agent),
+		subagentEnv("s1", "a1", "general-purpose", "/tmp/proj", "", ""),
+		subagentEnv("s1", "", "general-purpose", "/tmp/proj", "", agent),
+		"not json",
+	} {
+		out, stderr, code := runStdin(t, f.env, in, "close", "--subagent")
+		if code != 0 || strings.TrimSpace(out) != "" || stderr != "" {
+			t.Errorf("input %q: want silent exit 0; code=%d out=%q stderr=%q", in, code, out, stderr)
+		}
+	}
+	w, _ := os.ReadFile(filepath.Join(f.mem, ".wal"))
+	if strings.TrimSpace(string(w)) != "" {
+		t.Errorf("no-op cases must not write the WAL:\n%s", w)
+	}
+}
+
+func TestClose_UnknownFlagStillExitsTwo(t *testing.T) {
+	f := newStoreFixture(t)
+	if _, _, code := runStdin(t, f.env, "{}", "close", "--bogus"); code != 2 {
+		t.Fatalf("unknown flag: exit %d, want 2", code)
+	}
+}

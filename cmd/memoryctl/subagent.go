@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/closer"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/inject"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/jsonl"
 )
@@ -125,4 +126,23 @@ func runSubagentStart(raw []byte) {
 	if strings.TrimSpace(res.Markdown) != "" {
 		emitEnvelope("SubagentStart", res.Markdown)
 	}
+}
+
+// runSubagentStop is `close --subagent`: classify the subagent's own
+// transcript under its observation key. Session-level work stays with the
+// parent's Stop.
+func runSubagentStop(raw []byte) {
+	var in subagentStdin
+	if json.Unmarshal(raw, &in) != nil || in.SessionID == "" || in.AgentID == "" || in.AgentTranscriptPath == "" {
+		return
+	}
+	if subagentSkipped(in.AgentType) {
+		return
+	}
+	_, _ = closer.Run(closer.Input{
+		SessionID: subagentKey(in.SessionID, in.AgentID), CWD: in.CWD,
+		TranscriptPath: in.AgentTranscriptPath,
+		ClaudeHome:     claudeDir(), MemoryDir: memoryDir(), Today: today(),
+		Store: resolveStore(in.CWD).Store, Subagent: true,
+	})
 }
