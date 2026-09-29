@@ -457,3 +457,39 @@ func TestClose_UnknownFlagStillExitsTwo(t *testing.T) {
 		t.Fatalf("unknown flag: exit %d, want 2", code)
 	}
 }
+
+func TestInject_SubagentFlagActsAsSubagentStart(t *testing.T) {
+	f := newStoreFixture(t)
+	f.fact(t, "/tmp/proj", "dockercache", "docker layer cache")
+	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
+	parent := writeTranscript(t, agentCallLine("t1", "general-purpose", "docker", "dockercache"))
+	out, _, code := runStdin(t, f.env, subagentEnv("s1", "a1", "general-purpose", "/tmp/proj", parent, ""),
+		"inject", "--subagent")
+	if code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if ev := hookEventName(t, out); ev != "SubagentStart" {
+		t.Fatalf("hookEventName = %q, want SubagentStart", ev)
+	}
+	if !strings.Contains(additionalContext(t, out), "docker layer cache") {
+		t.Errorf("want the fact rendered; out=%q", out)
+	}
+	wal, _ := os.ReadFile(filepath.Join(f.mem, ".wal"))
+	if !hasRow(string(wal), "inject", "dockercache.md", "s1:a1") {
+		t.Errorf("missing inject row under the subagent key:\n%s", wal)
+	}
+	rt := filepath.Join(f.mem, ".runtime")
+	if !exists(filepath.Join(rt, "injected-s1_a1.list")) || !exists(filepath.Join(rt, "rendered-s1_a1.list")) {
+		t.Errorf("subagent lists missing in %s", rt)
+	}
+	if exists(filepath.Join(rt, "injected-s1.list")) || exists(filepath.Join(rt, "rendered-s1.list")) {
+		t.Errorf("parent session lists must not be written")
+	}
+}
+
+func TestInject_UnknownFlagStillExitsTwo(t *testing.T) {
+	f := newStoreFixture(t)
+	if _, _, code := runStdin(t, f.env, "{}", "inject", "--bogus"); code != 2 {
+		t.Fatalf("unknown flag: exit %d, want 2", code)
+	}
+}

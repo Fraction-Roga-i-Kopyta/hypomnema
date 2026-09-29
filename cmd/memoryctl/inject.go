@@ -41,10 +41,19 @@ func contextWiped(event, src string) bool {
 
 func runInject(args []string) {
 	event := "SessionStart"
+	subagent := false
 	for _, a := range args {
 		switch {
 		case strings.HasPrefix(a, "--event="):
 			event = strings.TrimPrefix(a, "--event=")
+		case a == "--subagent":
+			// Forces the SubagentStart path regardless of --event=. A
+			// memoryctl built before subagent support does not recognize
+			// this flag and exits 2 (unknown flag, below) before reading
+			// stdin — that refusal is what lets a pre-subagent shim detect
+			// and swallow an incompatible binary instead of silently
+			// treating the subagent's envelope as the parent's SessionStart.
+			subagent = true
 		case a == "-h" || a == "--help":
 			fmt.Print(usage)
 			return
@@ -52,6 +61,9 @@ func runInject(args []string) {
 			fmt.Fprintf(os.Stderr, "memoryctl inject: unknown flag %q\n", a)
 			os.Exit(2)
 		}
+	}
+	if subagent {
+		event = "SubagentStart"
 	}
 	if event != "SessionStart" && event != "UserPromptSubmit" && event != "SubagentStart" {
 		event = "SessionStart"
