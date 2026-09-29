@@ -95,11 +95,14 @@ PostToolUse(Skill) ──► skill-inject ────────────�
 Stop ──► close ────────────────────────────────────────────────┤
    read the session transcript (JSONL) for assistant text       │
    closer.Citations(assistant text): <cc-memory> tags           │
-     cited → cite-useful ; uncited, session had ≥1 cite         │
-       → cite-silent ; no citation this session → cite-none     │
+     cited + delivered → cite-useful ; cited, undelivered       │
+       → cite-undelivered ; uncited, session had ≥1             │
+       delivered cite → cite-silent ; no delivered citation     │
+       this session → cite-none                                 │
      (skipped entirely if the transcript was unreadable —       │
       never fabricate silent evidence for a whole session)      │
-   WAL: cite-useful|<slug>, cite-silent|<slug>, cite-none|<sid> │
+   WAL: cite-useful|<slug>, cite-silent|<slug>,                 │
+     cite-undelivered|<slug>, cite-none|<sid>                   │
    WAL: session-metrics (error_count/tool_calls/duration)       │
    WAL: session-close|<sid>                                     │
    sidecar.Reproject: ref_count, effectiveness,                 │
@@ -146,7 +149,7 @@ neutral at the prior and capped at 1.0, so it only *damps* unearned popularity.
 
 **Filters:** `status ∈ {active, pinned}` (sidecar-managed `stale` excluded);
 scope = current project's store + the global store only (other projects never
-inject); result cap top-8, ≤8KB total, once per session per fact. `session_keywords`
+inject); result cap top-8, ≤8KB total, once per context per fact (again after compaction/clear). `session_keywords`
 come from prompt tokens, cwd basename, and git context (branch, changed
 filenames, recent commit subjects) on both `SessionStart` and `UserPromptSubmit`.
 
@@ -239,7 +242,7 @@ One package, one responsibility. `memoryctl` (in `cmd/memoryctl/`) wires them.
 | `pathutil` | Shared slug/filename sanitisers |
 | `ab` | Offline A/B harness: replay historical WAL, ranked-top-K vs dump-all on `cite-useful` proxy |
 | `invariants` | Automated checks for the mechanically-checkable rules in `docs/INVARIANTS.md` |
-| `jsonl` | Streams the session-transcript JSONL, extracting assistant-authored text for evidence classification |
+| `jsonl` | Streams the session-transcript JSONL, extracting assistant-authored text and Read-tool paths for citation classification |
 
 ### `memoryctl` command surface
 

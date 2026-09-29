@@ -104,7 +104,7 @@ type Input struct {
 	Today           string
 	MaxK            int
 	MaxBytes        int      // total render budget; <=0 → maxTotalBytes
-	AlreadyInjected []string // slugs already injected this session — never re-rendered
+	AlreadyInjected []string // slugs already injected this session — not re-rendered while still in the current context
 	// Store is the resolved native store. Zero value → resolved from CWD
 	// (tests and legacy callers); the memoryctl verb always sets it.
 	Store native.Store

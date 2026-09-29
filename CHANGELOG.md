@@ -16,30 +16,29 @@ usefulness reader.
 
 ### Changed
 
-- **Usefulness signal is now citation-based, not evidence/name substring
-  matching.** `close` classifies the session's injected set from explicit
-  `<cc-memory filenames="…">` citations in the assistant transcript: every
-  cited in-scope fact is `cite-useful`; an injected-but-uncited fact is
-  `cite-silent`, but only in a session with at least one resolvable
-  citation (a citation-less-but-readable session instead writes one
-  session-level `cite-none`, so a broken citation channel never fabricates a
-  session of silent facts). Frontmatter `evidence:`/name substring matching
-  no longer produces `cite-*` — it now drives only the `ablate` holdout
-  observation (`holdout-hit`/`holdout-miss`). Every usefulness reader —
-  sidecar effectiveness and `last_useful`, `promote`, self-profile's
-  measurable counters, the `ab` replay harness, and `doctor`'s candidate
-  check — now reads only `cite-*`; `trigger-*`/`outcome-*` rows stay in the
-  WAL as history but are ignored.
-- **A citation only earns credit if the fact was actually delivered.** A
-  resolved `<cc-memory>` citation now earns `cite-useful` only when the fact
-  was injected/recalled/skill-injected this session OR read directly with
-  the Read tool from its resolved project-store or global-store path —
-  otherwise it writes `cite-undelivered` (counts for nothing: not useful,
-  not candidate-confirmed, does not arm the `cite-silent` guard). Without
-  this gate, `close` credited any in-scope filename the model happened to
-  type in a citation tag — fabricated, echoed, or name-only — with durable
-  usefulness. `Session.ReadPaths` (`internal/jsonl`) collects every Read
-  tool_use's `file_path` so `close` can check direct-read delivery.
+- **Usefulness signal is now citation-based and delivery-gated, not
+  evidence/name substring matching.** `close` classifies the session's
+  injected set from explicit `<cc-memory filenames="…">` citations in the
+  assistant transcript: a cited in-scope fact that was actually **delivered**
+  this session — injected, recalled, skill-injected, or read directly with
+  the Read tool from its resolved project-store or global-store path — is
+  `cite-useful`; a cited in-scope fact that was never delivered is
+  `cite-undelivered` instead (counts for nothing: not useful, not
+  candidate-confirmed, does not arm the `cite-silent` guard). An
+  injected-but-uncited fact is `cite-silent`, but only in a session with at
+  least one resolvable **delivered** citation (a session that resolved zero
+  delivered citations instead writes one session-level `cite-none`, so a
+  broken citation channel never fabricates a session of silent facts).
+  Frontmatter `evidence:`/name substring matching no longer produces
+  `cite-*` — it now drives only the `ablate` holdout observation
+  (`holdout-hit`/`holdout-miss`). Every usefulness reader — sidecar
+  effectiveness and `last_useful`, `promote`, self-profile's measurable
+  counters, the `ab` replay harness, and `doctor`'s candidate check — now
+  reads only `cite-*`; `trigger-*`/`outcome-*` rows stay in the WAL as
+  history but are ignored. `Session.ReadPaths` (`internal/jsonl`) collects
+  every successfully-completed Read tool_use's `file_path` (a Read whose
+  tool result errored or never arrived does not count) so `close` can check
+  direct-read delivery.
 
 ### Added
 
