@@ -744,8 +744,8 @@ func TestReproject_HoldoutEventsDontTouchEffectiveness(t *testing.T) {
 
 // TestReadWALAgg_CiteNoneAndUndeliveredNoPhantomEntries: cite-none's target
 // is the session id, not a fact slug — indexing it would create a phantom
-// per-key aggregate keyed by a session id (ruling W6). cite-undelivered
-// carries a real qualified slug but is diagnostic-only per ruling W4 and
+// per-key aggregate keyed by a session id. cite-undelivered
+// carries a real qualified slug but is diagnostic-only and
 // must not create or contribute to a per-fact aggregate either. Neither
 // event should leave a trace in readWALAgg's map, and a real inject event
 // for an unrelated fact must still aggregate normally alongside them.
