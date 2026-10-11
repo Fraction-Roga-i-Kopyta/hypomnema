@@ -226,11 +226,11 @@ There is no substring-trigger matching and no negation-token logic; all tokens
 are relevance signal to a single ranker (see CLAUDE.md "How injection ranks
 files"). Both are retired v1 mechanics.
 
-`inject`, `recall`, and `skill-inject` each open their rendered
+`inject` (SessionStart/UserPromptSubmit), `recall`, and `skill-inject` each open their rendered
 `additionalContext` with the citation instruction line, verbatim, exactly
 once per delivery:
 
-> When a fact below changes what you say or do, wrap that sentence in
+> When a fact below changes what you say, do, or decide, wrap that sentence in
 > `<cc-memory filenames="FILE">…</cc-memory>` (the tag is hidden from the
 > user).
 
@@ -411,9 +411,10 @@ on it is kept):
 
 Budget: `MaxK = 5`, `MaxBytes = 5000` total — smaller than the session budget
 (§1.3), since a subagent's context window is scarcer, but the same ≤2.5 KB
-per-fact body cap still applies within that smaller total. The citation
-instruction line and per-fact headers are the same ones `inject.Run` always
-produces.
+per-fact body cap still applies within that smaller total. Per-fact headers
+are the same ones `inject.Run` always produces; the instruction line is
+`inject.SubagentCiteInstruction` (cite in the final report), not the parent
+line.
 
 The parent's holdout list (`holdout-<session_id>.list`) is read-only input
 here: a fact the parent session is withholding for an ablation observation

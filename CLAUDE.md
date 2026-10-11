@@ -64,7 +64,9 @@ user gave you) start `active` or `pinned` as before. Graduation is
 sidecar-managed: the close hook emits `candidate-confirmed` on the first
 useful citation; you never edit the frontmatter back yourself. `doctor`
 flags candidates with ≥5 silent sessions and none useful — retire those or
-rewrite their keywords/evidence.
+rewrite their keywords/evidence. A subagent's `cite-silent` counts toward its
+parent session, so a parent that itself cited nothing can still contribute a
+silent session.
 
 `ref_count` and `effectiveness` are sidecar-managed — `memoryctl` reads and updates them. Do not set them manually.
 
@@ -250,8 +252,8 @@ shows `[retired <date> → successor]` instead of silently forgetting.
   `cite-undelivered` — writes one session-level `cite-none` instead). Frontmatter
   `evidence:`/name substring matching no longer creates usefulness — it now drives only the
   `ablate` holdout observation (`holdout-hit`/`holdout-miss`).
-- Recomputes effectiveness from the WAL: `(pos+1)/(pos+neg+2)` over one citation observation
-  per (slug, session) — `cite-useful` wins over `cite-silent` within a session. Usefulness
+- Recomputes effectiveness from the WAL: `(pos+1)/(pos+0.25·neg+2)` (cite-silent counts ¼ — the model under-cites, so silence is weak evidence) over one citation observation
+  per (slug, parent session) — a session and its subagents count once; `cite-useful` wins over `cite-silent` within a session. Usefulness
   history restarted at v2.14: every fact begins back at the neutral 0.5 prior, and
   pre-cutover `trigger-*`/`outcome-*` WAL rows stay on disk but are no longer read by any
   usefulness reader (sidecar effectiveness, `promote`, self-profile, `ab`, `doctor`
@@ -270,7 +272,7 @@ score is an additive blend — no single zero signal annihilates a candidate:
 score = 3.0 × overlap(session_keywords, file keywords+name+description+body)
       + 1.0 × log10(1 + ref_count) × effGate   # popularity, GATED by proven usefulness
       + 2.0 × recency                  # 1/(1 + days/30) from last USEFUL citation (cite-useful; fallback created)
-      + 2.0 × effectiveness            # Bayesian (pos+1)/(pos+neg+2); neutral 0.5 until signal lands
+      + 2.0 × effectiveness            # Bayesian (pos+1)/(pos+0.25·neg+2); silent counts ¼; neutral 0.5 until signal lands
       + 1.0 if project-local           # project facts outrank global ones on ties
 
 effGate = clamp(2 × effectiveness, 0, 1)   # 1.0 at the prior (0.5); only damps, never amplifies
@@ -317,11 +319,13 @@ Look at the start of your context for a `# Memory Context` block with one `## <n
 
 ## Citing memory
 
-Every delivery (`inject` — SessionStart, UserPromptSubmit, SubagentStart — `recall`, `skill-inject`) opens with one instruction line, verbatim:
+Every parent delivery (`inject` — SessionStart, UserPromptSubmit — `recall`, `skill-inject`) opens with one instruction line, verbatim:
 
-> When a fact below changes what you say or do, wrap that sentence in `<cc-memory filenames="FILE">…</cc-memory>` (the tag is hidden from the user).
+> When a fact below changes what you say, do, or decide, wrap that sentence in `<cc-memory filenames="FILE">…</cc-memory>` (the tag is hidden from the user).
 
-`FILE` is the fact's file name, shown in its header (`## <name> — <file.md> (<type>, <created>)`). This citation — not a keyword or name match — is the only thing `close` reads to mark a fact `cite-useful`; an injected fact with no citation in a session that had at least one delivered citation is `cite-silent` instead. Only a fact actually delivered in the session earns credit for a citation — injected/recalled/skill-injected, or read directly with the Read tool from its file — so citing a filename you never saw content from lands as `cite-undelivered`, not `cite-useful`. Cite only the facts that actually changed what you said or did; the tag is hidden from the user, so there is no cost to citing honestly and no benefit to citing everything.
+SubagentStart deliveries carry a different line — `When a fact below shapes your work, cite it in your final report: <cc-memory filenames="FILE">one line on how it was applied</cc-memory>.` — because a subagent's text reaches its parent, not the user; `close --subagent` reads the final report. A `<cc-memory>` tag inside a subagent's report is that subagent's citation — do not copy it into your own text; cite only facts that changed what you yourself say, do, or decide.
+
+`FILE` is the fact's file name, shown in its header (`## <name> — <file.md> (<type>, <created>)`). This citation — not a keyword or name match — is the only thing `close` reads to mark a fact `cite-useful`; an injected fact with no citation in a session that had at least one delivered citation is `cite-silent` instead. Only a fact actually delivered in the session earns credit for a citation — injected/recalled/skill-injected, or read directly with the Read tool from its file — so citing a filename you never saw content from lands as `cite-undelivered`, not `cite-useful`. Cite only the facts that actually changed what you said, did, or decided; the tag is hidden from the user, so there is no cost to citing honestly and no benefit to citing everything.
 
 "Hidden from the user" holds for the interactive CLI; headless invocation (`claude -p`) or raw SDK output may surface the tag literally, since there is no interactive renderer to strip it.
 
@@ -343,7 +347,7 @@ any injected memory.
 
 ## Subagent context
 
-Subagents receive ranked memory automatically at `SubagentStart` — query = this agent's Agent-call description + prompt, else the parent's recent prompts — except `fork`, `Explore`, `claude-code-guide`, `statusline-setup` (override with `HYPOMNEMA_SUBAGENT_SKIP`, a comma list; set-but-empty means none skipped, and a `*` entry means skip every agent type — set it in `settings.json`'s `env` block to opt every subagent out). A fact the parent session is withholding under an ablation stays withheld from its subagents. The subagent's citations are measured under its own key, separately from the parent's. Pass inline only what is specific to the task at hand — the ranker already covers general recall. `memoryctl recall` run inside a subagent records against the parent session (there is no agent id in the subagent's Bash environment); `skill-inject` run inside a subagent does the same, for the same reason.
+Subagents receive ranked memory automatically at `SubagentStart` — query = this agent's Agent-call description + prompt, else the parent's recent prompts — except `fork`, `Explore`, `claude-code-guide`, `statusline-setup` (override with `HYPOMNEMA_SUBAGENT_SKIP`, a comma list; set-but-empty means none skipped, and a `*` entry means skip every agent type — set it in `settings.json`'s `env` block to opt every subagent out). A fact the parent session is withholding under an ablation stays withheld from its subagents. The subagent's citations are measured under its own key, separately from the parent's; subagents are told to cite in their final report. Pass inline only what is specific to the task at hand — the ranker already covers general recall. `memoryctl recall` run inside a subagent records against the parent session (there is no agent id in the subagent's Bash environment); `skill-inject` run inside a subagent does the same, for the same reason.
 
 ## Source of truth
 

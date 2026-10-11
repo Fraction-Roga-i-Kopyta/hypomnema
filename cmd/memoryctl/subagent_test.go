@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/inject"
 )
 
 func writeTranscript(t *testing.T, lines ...string) string {
@@ -106,6 +108,9 @@ func TestSubagentStart_RanksByPendingTask(t *testing.T) {
 	}
 	if exists(filepath.Join(rt, "injected-s1.list")) || exists(filepath.Join(rt, "rendered-s1.list")) {
 		t.Errorf("parent session lists must not be written")
+	}
+	if !strings.Contains(ctx, inject.SubagentCiteInstruction) || strings.Contains(ctx, inject.CiteInstruction) {
+		t.Errorf("SubagentStart context must carry the report instruction only; ctx=%q", ctx)
 	}
 }
 

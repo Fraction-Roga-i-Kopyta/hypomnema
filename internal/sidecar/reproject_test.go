@@ -1,6 +1,7 @@
 package sidecar
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -321,13 +322,13 @@ func TestReproject_EffectivenessFromCiteEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// m: useful s1 + silent s2 → (1+1)/(1+1+2) = 0.5
-	if r, _, _ := s.Get("m.md"); r.Effectiveness != 0.5 {
-		t.Errorf("m.md effectiveness = %v, want 0.5 (1 useful session vs 1 silent session)", r.Effectiveness)
+	// m: useful s1 + silent s2 → (1+1)/(1+0.25·1+2) = 2/3.25
+	if r, _, _ := s.Get("m.md"); math.Abs(r.Effectiveness-2/3.25) > 1e-9 {
+		t.Errorf("m.md effectiveness = %v, want %v (1 useful vs 1 silent at weight 0.25)", r.Effectiveness, 2/3.25)
 	}
-	// n: three silent sessions, never useful → (0+1)/(0+3+2) = 0.2
-	if r, _, _ := s.Get("n.md"); r.Effectiveness != 0.2 {
-		t.Errorf("n.md effectiveness = %v, want 0.2 (3 silent sessions)", r.Effectiveness)
+	// n: three silent sessions, never useful → 1/(0.75+2)
+	if r, _, _ := s.Get("n.md"); math.Abs(r.Effectiveness-1/2.75) > 1e-9 {
+		t.Errorf("n.md effectiveness = %v, want %v (3 silent sessions at weight 0.25)", r.Effectiveness, 1/2.75)
 	}
 }
 
@@ -421,8 +422,8 @@ func TestReproject_FreshStartIgnoresLegacySignal(t *testing.T) {
 	}
 
 	b, _, _ := s.Get("b.md")
-	if b.Effectiveness != 0.6 {
-		t.Errorf("b.md effectiveness = %v, want 0.6 (2 cite-useful sessions + 1 cite-silent session)", b.Effectiveness)
+	if math.Abs(b.Effectiveness-3/4.25) > 1e-9 { // (2+1)/(2+0.25·1+2)
+		t.Errorf("b.md effectiveness = %v, want %v (2 cite-useful sessions + 1 cite-silent session)", b.Effectiveness, 3/4.25)
 	}
 	if b.LastUseful != "2026-09-25" {
 		t.Errorf("b.md last_useful = %q, want 2026-09-25 (latest cite-useful date)", b.LastUseful)
@@ -769,5 +770,81 @@ func TestReadWALAgg_CiteNoneAndUndeliveredNoPhantomEntries(t *testing.T) {
 	a, ok := aggs[native.QKey("proj", "fact")]
 	if !ok || a.injects != 1 {
 		t.Errorf("normal inject aggregation broken alongside the noise events: %+v ok=%v", a, ok)
+	}
+}
+
+// Reproject records the WAL size it projected from, so doctor can tell a
+// genuinely stale sidecar from one that merely trails mid-session appends.
+func TestReproject_RecordsWALOffset(t *testing.T) {
+	dir := t.TempDir()
+	walPath := filepath.Join(dir, ".wal")
+	wal := "2026-04-01|inject|m.md|s1\n2026-04-01|session-close|s1|s1\n"
+	if err := os.WriteFile(walPath, []byte(wal), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(filepath.Join(dir, ".sidecar.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, ok, err := s.WALOffset(); ok || err != nil {
+		t.Fatalf("fresh sidecar: WALOffset ok=%v err=%v; want absent without error", ok, err)
+	}
+	if err := Reproject(s, []native.MemFile{{Slug: "m.md", ContentSHA: "m"}}, walPath, nil); err != nil {
+		t.Fatal(err)
+	}
+	off, ok, err := s.WALOffset()
+	if err != nil || !ok || off != int64(len(wal)) {
+		t.Fatalf("WALOffset = %d,%v,%v; want %d,true,nil", off, ok, err, len(wal))
+	}
+	// Missing WAL → offset 0 (nothing projected), still recorded.
+	if err := os.Remove(walPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := Reproject(s, nil, walPath, nil); err != nil {
+		t.Fatal(err)
+	}
+	if off, ok, err := s.WALOffset(); err != nil || !ok || off != 0 {
+		t.Fatalf("missing WAL: WALOffset = %d,%v,%v; want 0,true,nil", off, ok, err)
+	}
+	// A closed handle is "unreadable", not "absent".
+	s.Close()
+	if _, ok, err := s.WALOffset(); ok || err == nil {
+		t.Fatalf("closed store: WALOffset ok=%v err=%v; want an error", ok, err)
+	}
+}
+
+// A subagent observation folds into its parent session: k sibling subagents
+// sharing a top-5 yield one observation per (slug, parent session), not k.
+func TestReproject_SubagentObservationsFoldIntoParentSession(t *testing.T) {
+	dir := t.TempDir()
+	walPath := filepath.Join(dir, ".wal")
+	wal := "" +
+		"2026-04-01|cite-silent|m.md|s1:a1\n" +
+		"2026-04-01|cite-silent|m.md|s1:a2\n" +
+		"2026-04-01|cite-silent|m.md|s1:a3\n" +
+		"2026-04-01|cite-useful|m.md|s1:a4\n" +
+		"2026-04-02|cite-silent|n.md|s2:a1\n" +
+		"2026-04-02|cite-silent|n.md|s2:a2\n" +
+		"2026-04-02|cite-silent|n.md|s2:a3\n"
+	if err := os.WriteFile(walPath, []byte(wal), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(filepath.Join(dir, ".sidecar.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	files := []native.MemFile{{Slug: "m.md", ContentSHA: "m"}, {Slug: "n.md", ContentSHA: "n"}}
+	if err := Reproject(s, files, walPath, nil); err != nil {
+		t.Fatal(err)
+	}
+	// m: one useful observation for parent s1 -> (1+1)/(1+0+2)
+	if r, _, _ := s.Get("m.md"); math.Abs(r.Effectiveness-2.0/3) > 1e-9 {
+		t.Errorf("m.md effectiveness = %v, want %v", r.Effectiveness, 2.0/3)
+	}
+	// n: one silent observation for parent s2 -> 1/(0.25+2)
+	if r, _, _ := s.Get("n.md"); math.Abs(r.Effectiveness-1/2.25) > 1e-9 {
+		t.Errorf("n.md effectiveness = %v, want %v", r.Effectiveness, 1/2.25)
 	}
 }

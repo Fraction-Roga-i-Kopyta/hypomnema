@@ -111,11 +111,12 @@ func score(q Query, c Candidate, today time.Time) float64 {
 // (a single proven fact must not snowball on volume).
 //
 // Zero-safe by construction: a new or low-evidence fact sits near 0.5 — the
-// (pos+1)/(pos+neg+2) prior pulls it there until many outcomes accrue, so an
-// extreme low eff *requires* substantial negative evidence — hence its ref
-// reward is untouched; only well-evidenced low-effectiveness facts are
-// suppressed. Overlap, recency and the standalone effectiveness term are
-// unaffected, so no candidate is annihilated (spec §3.3).
+// (pos+1)/(pos+0.25·neg+2) prior (see internal/usefulness) pulls it there
+// until many outcomes accrue, so an extreme low eff *requires* substantial
+// negative evidence — hence its ref reward is untouched; only well-evidenced
+// low-effectiveness facts are suppressed. Overlap, recency and the standalone
+// effectiveness term are unaffected, so no candidate is annihilated (spec
+// §3.3).
 func effGate(effectiveness float64) float64 {
 	g := 2.0 * effectiveness
 	if g > 1.0 {

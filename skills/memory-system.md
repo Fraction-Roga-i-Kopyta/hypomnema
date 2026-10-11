@@ -66,7 +66,7 @@ Code patterns and conventions (read the code), git history (`git log`/`blame`), 
 
 ## Citing memory
 
-Every delivery opens with one instruction line: when a fact changes what you say or do, wrap that sentence in `<cc-memory filenames="FILE">…</cc-memory>` (hidden from the user). This citation — not a keyword or evidence-phrase match — is what `close` reads to credit a fact as useful; cite only the facts that actually changed your answer.
+Every parent delivery opens with one instruction line: when a fact changes what you say, do, or decide, wrap that sentence in `<cc-memory filenames="FILE">…</cc-memory>` (hidden from the user). This citation — not a keyword or evidence-phrase match — is what `close` reads to credit a fact as useful; cite only the facts that actually changed your answer. A subagent's delivery asks it to cite in its final report instead; do not copy `<cc-memory>` tags from a subagent's report.
 
 ## Lifecycle
 

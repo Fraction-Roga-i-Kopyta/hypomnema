@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/sidecar"
 )
 
 func TestRun_EmitsClosingEvents(t *testing.T) {
@@ -43,6 +45,50 @@ func TestRun_EmitsClosingEvents(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(memDir, "self-profile.md")); err != nil {
 		t.Errorf("self-profile not generated: %v", err)
+	}
+}
+
+// A parent close appends its session-close row BEFORE the sidecar
+// projection, so the recorded wal_offset covers it: doctor's staleness check
+// ("a session closed after the last projection") depends on this order.
+func TestRun_ProjectionCoversSessionClose(t *testing.T) {
+	home := t.TempDir()
+	memDir := filepath.Join(home, ".claude", "memory")
+	projDir := filepath.Join(home, ".claude", "projects", "-tmp-proj", "memory")
+	os.MkdirAll(filepath.Join(memDir, ".runtime"), 0o755)
+	os.MkdirAll(projDir, 0o755)
+	os.WriteFile(filepath.Join(projDir, "docker.md"),
+		[]byte("---\nname: Docker cache\ntype: mistake\n---\ndocker cache\n"), 0o644)
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
+	os.WriteFile(filepath.Join(memDir, ".runtime", "injected-s1.list"), []byte("docker.md\n"), 0o600)
+	tx := filepath.Join(home, "t.jsonl")
+	os.WriteFile(tx, []byte(`{"type":"assistant","sessionId":"s1","message":{"content":[{"type":"text","text":"ok"}]}}`+"\n"), 0o644)
+
+	if _, err := Run(Input{
+		SessionID: "s1", CWD: "/tmp/proj", TranscriptPath: tx,
+		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir, Today: "2026-05-29",
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	fi, err := os.Stat(filepath.Join(memDir, ".wal"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wal, _ := os.ReadFile(filepath.Join(memDir, ".wal"))
+	if !strings.Contains(string(wal), "|session-close|s1|s1") {
+		t.Fatalf("WAL missing session-close:\n%s", wal)
+	}
+	s, err := sidecar.Open(filepath.Join(memDir, ".sidecar.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	off, ok, err := s.WALOffset()
+	if err != nil || !ok {
+		t.Fatalf("WALOffset = %d,%v,%v; want recorded", off, ok, err)
+	}
+	if off != fi.Size() {
+		t.Errorf("wal_offset = %d, .wal size = %d: session-close was appended after the projection", off, fi.Size())
 	}
 }
 

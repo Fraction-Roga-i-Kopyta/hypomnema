@@ -18,7 +18,7 @@ When you open a new Claude Code session in a project, hypomnema injects a `# Mem
 
 ```markdown
 # Memory Context
-When a fact below changes what you say or do, wrap that sentence in <cc-memory filenames="FILE">…</cc-memory> (the tag is hidden from the user).
+When a fact below changes what you say, do, or decide, wrap that sentence in <cc-memory filenames="FILE">…</cc-memory> (the tag is hidden from the user).
 
 ## sqlalchemy-metadata-reserved-name — sqlalchemy-metadata-reserved-name.md (mistake, 2026-03-02)
 Root cause: `metadata_` mapped to column "metadata" collides with `Base.metadata`
@@ -109,7 +109,7 @@ A single relevance ranker (merged from the two v1 pipelines) scores every candid
 score = 3.0 × overlap(keywords, file keywords+name+description+body)
       + 1.0 × log10(1 + ref_count) × effGate   # popularity, GATED by proven usefulness
       + 2.0 × recency                  # 1/(1 + days/30) from last USEFUL citation (cite-useful; fallback created)
-      + 2.0 × effectiveness            # Bayesian (pos+1)/(pos+neg+2) — neutral 0.5 until signal lands
+      + 2.0 × effectiveness            # Bayesian (pos+1)/(pos+0.25·neg+2) (silent counts ¼) — neutral 0.5 until signal lands
       + 1.0 × project boost            # project-local facts beat global ones on ties
 
 effGate = clamp(2 × effectiveness, 0, 1)       # 1.0 at the prior 0.5; only damps unearned volume
@@ -338,7 +338,7 @@ Subagents get their own ranked memory at `SubagentStart`: `memoryctl` builds a q
 
 **Why a global store?** Native memory is per-project only. Rules like "always respond in Russian" or "list 2-3 root causes before the first fix" apply everywhere. `~/.claude/memory-global/` is hypomnema-owned, injected alongside project-local facts, with the same ranking pipeline.
 
-**Why spaced repetition (ref_count + effectiveness)?** Raw frequency is noisy (a record injected 50 times during a benchmark run isn't 50× more useful). Effectiveness (Bayesian `(pos+1)/(pos+neg+2)`) rewards records that actually help and down-ranks those that don't. The neutral prior means a new fact starts injectable, not suppressed.
+**Why spaced repetition (ref_count + effectiveness)?** Raw frequency is noisy (a record injected 50 times during a benchmark run isn't 50× more useful). Effectiveness (Bayesian `(pos+1)/(pos+0.25·neg+2)`; cite-silent counts ¼ — the model under-cites, so silence is weak evidence) rewards records that actually help and down-ranks those that don't. The neutral prior means a new fact starts injectable, not suppressed.
 
 **Why not multiple pipelines?** v1 had two: a composite-score SessionStart pipeline and a substring-trigger UserPromptSubmit pipeline. They solved similar problems with different mechanics, creating maintenance overhead and edge-case conflicts. v2 merges them: one ranker, all tokens (git context + prompt) as relevance signal. The old negation-window mechanism disappears.
 
