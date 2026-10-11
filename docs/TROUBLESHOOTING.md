@@ -202,11 +202,22 @@ their old WAL rows stay attributed to the legacy project tag.
 
 The sidecar (`~/.claude/memory/.sidecar.db`) is a rebuildable projection of
 the WAL + native frontmatter. If doctor's `sidecar` check is WARN
-("stale vs WAL" or "missing but .wal exists"):
+("stale vs WAL: a session closed after the last projection", "carries no WAL
+offset (written before v2.16)", "WAL no longer matches the sidecar's
+projection offset", or "missing but .wal exists"):
 
 ```bash
 memoryctl sidecar rebuild
 ```
+
+Mid-session injects, recalls and subagent closes no longer warn: the sidecar
+records the WAL size it projected, and doctor warns only when a parent
+`session-close` landed after it.
+
+If the warning says "sidecar unreadable", rebuild alone cannot open a corrupt
+file: remove `.sidecar.db`, `.sidecar.db-wal` and `.sidecar.db-shm` in the
+memory dir, then run `memoryctl sidecar rebuild` (the next inject also
+self-heals it).
 
 Run this after bulk imports or a migration too.
 

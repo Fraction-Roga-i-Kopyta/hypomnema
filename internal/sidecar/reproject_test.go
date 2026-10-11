@@ -772,3 +772,39 @@ func TestReadWALAgg_CiteNoneAndUndeliveredNoPhantomEntries(t *testing.T) {
 		t.Errorf("normal inject aggregation broken alongside the noise events: %+v ok=%v", a, ok)
 	}
 }
+
+// Reproject records the WAL size it projected from, so doctor can tell a
+// genuinely stale sidecar from one that merely trails mid-session appends.
+func TestReproject_RecordsWALOffset(t *testing.T) {
+	dir := t.TempDir()
+	walPath := filepath.Join(dir, ".wal")
+	wal := "2026-04-01|inject|m.md|s1\n2026-04-01|session-close|s1|s1\n"
+	if err := os.WriteFile(walPath, []byte(wal), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(filepath.Join(dir, ".sidecar.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, ok := s.WALOffset(); ok {
+		t.Fatalf("fresh sidecar must have no wal_offset")
+	}
+	if err := Reproject(s, []native.MemFile{{Slug: "m.md", ContentSHA: "m"}}, walPath, nil); err != nil {
+		t.Fatal(err)
+	}
+	off, ok := s.WALOffset()
+	if !ok || off != int64(len(wal)) {
+		t.Fatalf("WALOffset = %d,%v; want %d,true", off, ok, len(wal))
+	}
+	// Missing WAL → offset 0 (nothing projected), still recorded.
+	if err := os.Remove(walPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := Reproject(s, nil, walPath, nil); err != nil {
+		t.Fatal(err)
+	}
+	if off, ok := s.WALOffset(); !ok || off != 0 {
+		t.Fatalf("missing WAL: WALOffset = %d,%v; want 0,true", off, ok)
+	}
+}

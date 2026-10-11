@@ -11,6 +11,14 @@
   uncited session already dropped a fact to 0.33. Applied at read time — the
   WAL is unchanged and the next projection re-derives all history.
 
+### Fixed
+
+- **doctor `sidecar` no longer cries wolf mid-session.** Projections record
+  the WAL size they read (`meta.wal_offset`); doctor warns only when a parent
+  `session-close` landed after it. Injects, recalls and subagent closes between
+  Stops — which made the old mtime comparison warn on almost every run — are
+  expected. Sidecars from before v2.16 ask for one `memoryctl sidecar rebuild`.
+
 ## [2.15.0] — 2026-10-01
 
 ### Added
