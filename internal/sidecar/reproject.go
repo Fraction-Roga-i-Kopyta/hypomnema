@@ -9,6 +9,7 @@ import (
 
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/usefulness"
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/wal"
 )
 
 type agg struct {
@@ -391,12 +392,12 @@ func readWALAgg(walPath string) map[string]*agg {
 		// fires on every turn, so a fact silent at turn 1 may be cited at
 		// turn 5).
 		case "cite-useful":
-			a.classify(field4, true)
+			a.classify(wal.ParentSession(field4), true)
 			if date > a.lastUseful {
 				a.lastUseful = date
 			}
 		case "cite-silent":
-			a.classify(field4, false)
+			a.classify(wal.ParentSession(field4), false)
 		case "trigger-useful", "trigger-silent", "trigger-silent-retro", "outcome-positive", "outcome-negative":
 			// Usefulness history restarted in v2.14 — only cite-* (explicit
 			// model citations) feed effectiveness and recency. These legacy

@@ -787,15 +787,15 @@ func TestReproject_RecordsWALOffset(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if _, ok := s.WALOffset(); ok {
-		t.Fatalf("fresh sidecar must have no wal_offset")
+	if _, ok, err := s.WALOffset(); ok || err != nil {
+		t.Fatalf("fresh sidecar: WALOffset ok=%v err=%v; want absent without error", ok, err)
 	}
 	if err := Reproject(s, []native.MemFile{{Slug: "m.md", ContentSHA: "m"}}, walPath, nil); err != nil {
 		t.Fatal(err)
 	}
-	off, ok := s.WALOffset()
-	if !ok || off != int64(len(wal)) {
-		t.Fatalf("WALOffset = %d,%v; want %d,true", off, ok, len(wal))
+	off, ok, err := s.WALOffset()
+	if err != nil || !ok || off != int64(len(wal)) {
+		t.Fatalf("WALOffset = %d,%v,%v; want %d,true,nil", off, ok, err, len(wal))
 	}
 	// Missing WAL → offset 0 (nothing projected), still recorded.
 	if err := os.Remove(walPath); err != nil {
@@ -804,7 +804,47 @@ func TestReproject_RecordsWALOffset(t *testing.T) {
 	if err := Reproject(s, nil, walPath, nil); err != nil {
 		t.Fatal(err)
 	}
-	if off, ok := s.WALOffset(); !ok || off != 0 {
-		t.Fatalf("missing WAL: WALOffset = %d,%v; want 0,true", off, ok)
+	if off, ok, err := s.WALOffset(); err != nil || !ok || off != 0 {
+		t.Fatalf("missing WAL: WALOffset = %d,%v,%v; want 0,true,nil", off, ok, err)
+	}
+	// A closed handle is "unreadable", not "absent".
+	s.Close()
+	if _, ok, err := s.WALOffset(); ok || err == nil {
+		t.Fatalf("closed store: WALOffset ok=%v err=%v; want an error", ok, err)
+	}
+}
+
+// A subagent observation folds into its parent session: k sibling subagents
+// sharing a top-5 yield one observation per (slug, parent session), not k.
+func TestReproject_SubagentObservationsFoldIntoParentSession(t *testing.T) {
+	dir := t.TempDir()
+	walPath := filepath.Join(dir, ".wal")
+	wal := "" +
+		"2026-04-01|cite-silent|m.md|s1:a1\n" +
+		"2026-04-01|cite-silent|m.md|s1:a2\n" +
+		"2026-04-01|cite-silent|m.md|s1:a3\n" +
+		"2026-04-01|cite-useful|m.md|s1:a4\n" +
+		"2026-04-02|cite-silent|n.md|s2:a1\n" +
+		"2026-04-02|cite-silent|n.md|s2:a2\n" +
+		"2026-04-02|cite-silent|n.md|s2:a3\n"
+	if err := os.WriteFile(walPath, []byte(wal), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(filepath.Join(dir, ".sidecar.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	files := []native.MemFile{{Slug: "m.md", ContentSHA: "m"}, {Slug: "n.md", ContentSHA: "n"}}
+	if err := Reproject(s, files, walPath, nil); err != nil {
+		t.Fatal(err)
+	}
+	// m: one useful observation for parent s1 -> (1+1)/(1+0+2)
+	if r, _, _ := s.Get("m.md"); math.Abs(r.Effectiveness-2.0/3) > 1e-9 {
+		t.Errorf("m.md effectiveness = %v, want %v", r.Effectiveness, 2.0/3)
+	}
+	// n: one silent observation for parent s2 -> 1/(0.25+2)
+	if r, _, _ := s.Get("n.md"); math.Abs(r.Effectiveness-1/2.25) > 1e-9 {
+		t.Errorf("n.md effectiveness = %v, want %v", r.Effectiveness, 1/2.25)
 	}
 }
