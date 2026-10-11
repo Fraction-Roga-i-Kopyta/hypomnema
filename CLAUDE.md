@@ -64,7 +64,9 @@ user gave you) start `active` or `pinned` as before. Graduation is
 sidecar-managed: the close hook emits `candidate-confirmed` on the first
 useful citation; you never edit the frontmatter back yourself. `doctor`
 flags candidates with ≥5 silent sessions and none useful — retire those or
-rewrite their keywords/evidence.
+rewrite their keywords/evidence. A subagent's `cite-silent` counts toward its
+parent session, so a parent that itself cited nothing can still contribute a
+silent session.
 
 `ref_count` and `effectiveness` are sidecar-managed — `memoryctl` reads and updates them. Do not set them manually.
 
@@ -251,7 +253,7 @@ shows `[retired <date> → successor]` instead of silently forgetting.
   `evidence:`/name substring matching no longer creates usefulness — it now drives only the
   `ablate` holdout observation (`holdout-hit`/`holdout-miss`).
 - Recomputes effectiveness from the WAL: `(pos+1)/(pos+0.25·neg+2)` (cite-silent counts ¼ — the model under-cites, so silence is weak evidence) over one citation observation
-  per (slug, session) — `cite-useful` wins over `cite-silent` within a session. Usefulness
+  per (slug, parent session) — a session and its subagents count once; `cite-useful` wins over `cite-silent` within a session. Usefulness
   history restarted at v2.14: every fact begins back at the neutral 0.5 prior, and
   pre-cutover `trigger-*`/`outcome-*` WAL rows stay on disk but are no longer read by any
   usefulness reader (sidecar effectiveness, `promote`, self-profile, `ab`, `doctor`
@@ -323,7 +325,7 @@ Every parent delivery (`inject` — SessionStart, UserPromptSubmit — `recall`,
 
 SubagentStart deliveries carry a different line — `When a fact below shapes your work, cite it in your final report: <cc-memory filenames="FILE">one line on how it was applied</cc-memory>.` — because a subagent's text reaches its parent, not the user; `close --subagent` reads the final report. A `<cc-memory>` tag inside a subagent's report is that subagent's citation — do not copy it into your own text; cite only facts that changed what you yourself say, do, or decide.
 
-`FILE` is the fact's file name, shown in its header (`## <name> — <file.md> (<type>, <created>)`). This citation — not a keyword or name match — is the only thing `close` reads to mark a fact `cite-useful`; an injected fact with no citation in a session that had at least one delivered citation is `cite-silent` instead. Only a fact actually delivered in the session earns credit for a citation — injected/recalled/skill-injected, or read directly with the Read tool from its file — so citing a filename you never saw content from lands as `cite-undelivered`, not `cite-useful`. Cite only the facts that actually changed what you said or did; the tag is hidden from the user, so there is no cost to citing honestly and no benefit to citing everything.
+`FILE` is the fact's file name, shown in its header (`## <name> — <file.md> (<type>, <created>)`). This citation — not a keyword or name match — is the only thing `close` reads to mark a fact `cite-useful`; an injected fact with no citation in a session that had at least one delivered citation is `cite-silent` instead. Only a fact actually delivered in the session earns credit for a citation — injected/recalled/skill-injected, or read directly with the Read tool from its file — so citing a filename you never saw content from lands as `cite-undelivered`, not `cite-useful`. Cite only the facts that actually changed what you said, did, or decided; the tag is hidden from the user, so there is no cost to citing honestly and no benefit to citing everything.
 
 "Hidden from the user" holds for the interactive CLI; headless invocation (`claude -p`) or raw SDK output may surface the tag literally, since there is no interactive renderer to strip it.
 
