@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **`cite-silent` is weak evidence.** Effectiveness is now
+  `(pos+1)/(pos+0.25·neg+2)`: a session where a fact was shown but not cited
+  counts a quarter of a useful citation. The model under-cites, so full-weight
+  silence had pushed 339 of 605 live facts below the neutral prior — a single
+  uncited session already dropped a fact to 0.33. Applied at read time — the
+  WAL is unchanged and the next projection re-derives all history.
+
 ## [2.15.0] — 2026-10-01
 
 ### Added

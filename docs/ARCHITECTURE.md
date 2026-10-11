@@ -177,7 +177,7 @@ single pure ranker in `internal/rank`. The authoritative formula lives in
 score = 3.0 × overlap(session_keywords, file keywords+name+description+body)
       + 1.0 × log10(1 + ref_count) × effGate   # popularity, gated by usefulness
       + 2.0 × recency                  # 1/(1 + days/30) from last USEFUL citation (cite-useful; fallback created)
-      + 2.0 × effectiveness            # Bayesian (pos+1)/(pos+neg+2); neutral 0.5 until signal
+      + 2.0 × effectiveness            # Bayesian (pos+1)/(pos+0.25·neg+2); silent counts ¼; neutral 0.5 until signal
       + 1.0 if project-local           # project facts outrank global on ties
 
 effGate = clamp(2 × effectiveness, 0, 1)   # 1.0 at the prior (0.5); only damps, never amplifies

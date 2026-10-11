@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/usefulness"
 )
 
 type agg struct {
@@ -188,7 +189,7 @@ func reprojectIn(e dbtx, files []native.MemFile, walPath string, scope []string)
 		if f.PrecisionClass == "ambient" {
 			neg = 0
 		}
-		eff := float64(pos+1) / float64(pos+neg+2)
+		eff := usefulness.Effectiveness(pos, neg)
 		// Frontmatter created is the author's recency claim; WAL-earliest is
 		// only the fallback for files that never declared one.
 		created := f.Created

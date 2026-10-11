@@ -1,6 +1,7 @@
 package sidecar
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -321,13 +322,13 @@ func TestReproject_EffectivenessFromCiteEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// m: useful s1 + silent s2 → (1+1)/(1+1+2) = 0.5
-	if r, _, _ := s.Get("m.md"); r.Effectiveness != 0.5 {
-		t.Errorf("m.md effectiveness = %v, want 0.5 (1 useful session vs 1 silent session)", r.Effectiveness)
+	// m: useful s1 + silent s2 → (1+1)/(1+0.25·1+2) = 2/3.25
+	if r, _, _ := s.Get("m.md"); math.Abs(r.Effectiveness-2/3.25) > 1e-9 {
+		t.Errorf("m.md effectiveness = %v, want %v (1 useful vs 1 silent at weight 0.25)", r.Effectiveness, 2/3.25)
 	}
-	// n: three silent sessions, never useful → (0+1)/(0+3+2) = 0.2
-	if r, _, _ := s.Get("n.md"); r.Effectiveness != 0.2 {
-		t.Errorf("n.md effectiveness = %v, want 0.2 (3 silent sessions)", r.Effectiveness)
+	// n: three silent sessions, never useful → 1/(0.75+2)
+	if r, _, _ := s.Get("n.md"); math.Abs(r.Effectiveness-1/2.75) > 1e-9 {
+		t.Errorf("n.md effectiveness = %v, want %v (3 silent sessions at weight 0.25)", r.Effectiveness, 1/2.75)
 	}
 }
 
@@ -421,8 +422,8 @@ func TestReproject_FreshStartIgnoresLegacySignal(t *testing.T) {
 	}
 
 	b, _, _ := s.Get("b.md")
-	if b.Effectiveness != 0.6 {
-		t.Errorf("b.md effectiveness = %v, want 0.6 (2 cite-useful sessions + 1 cite-silent session)", b.Effectiveness)
+	if math.Abs(b.Effectiveness-3/4.25) > 1e-9 { // (2+1)/(2+0.25·1+2)
+		t.Errorf("b.md effectiveness = %v, want %v (2 cite-useful sessions + 1 cite-silent session)", b.Effectiveness, 3/4.25)
 	}
 	if b.LastUseful != "2026-09-25" {
 		t.Errorf("b.md last_useful = %q, want 2026-09-25 (latest cite-useful date)", b.LastUseful)
