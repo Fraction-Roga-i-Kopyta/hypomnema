@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/usefulness"
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/wal"
 )
 
 type agg struct {
@@ -163,6 +165,15 @@ func Reproject(s *Store, files []native.MemFile, walPath string, scope []string)
 }
 
 func reprojectIn(e dbtx, files []native.MemFile, walPath string, scope []string) error {
+	// Size BEFORE reading, so the offset never runs ahead of what this
+	// projection read. The key is global while projections are per-project:
+	// a failed projection in one project can be masked by a later one in
+	// another, and concurrent commits can move it backwards (a transient
+	// false WARN).
+	var walOff int64
+	if fi, err := os.Stat(walPath); err == nil {
+		walOff = fi.Size()
+	}
 	aggs := readWALAgg(walPath)
 
 	if _, err := e.Exec(`DELETE FROM outcome`); err != nil {
@@ -188,7 +199,7 @@ func reprojectIn(e dbtx, files []native.MemFile, walPath string, scope []string)
 		if f.PrecisionClass == "ambient" {
 			neg = 0
 		}
-		eff := float64(pos+1) / float64(pos+neg+2)
+		eff := usefulness.Effectiveness(pos, neg)
 		// Frontmatter created is the author's recency claim; WAL-earliest is
 		// only the fallback for files that never declared one.
 		created := f.Created
@@ -298,6 +309,10 @@ func reprojectIn(e dbtx, files []native.MemFile, walPath string, scope []string)
 	if err := populateKeywordsIn(e, files); err != nil {
 		return fmt.Errorf("sidecar.Reproject: keywords: %w", err)
 	}
+	// Best-effort: a failed write leaves the previous (smaller) offset, which
+	// can only make doctor warn.
+	_, _ = e.Exec(`INSERT OR REPLACE INTO meta (k, v) VALUES ('wal_offset', ?)`,
+		strconv.FormatInt(walOff, 10))
 	return nil
 }
 
@@ -377,12 +392,12 @@ func readWALAgg(walPath string) map[string]*agg {
 		// fires on every turn, so a fact silent at turn 1 may be cited at
 		// turn 5).
 		case "cite-useful":
-			a.classify(field4, true)
+			a.classify(wal.ParentSession(field4), true)
 			if date > a.lastUseful {
 				a.lastUseful = date
 			}
 		case "cite-silent":
-			a.classify(field4, false)
+			a.classify(wal.ParentSession(field4), false)
 		case "trigger-useful", "trigger-silent", "trigger-silent-retro", "outcome-positive", "outcome-negative":
 			// Usefulness history restarted in v2.14 — only cite-* (explicit
 			// model citations) feed effectiveness and recency. These legacy

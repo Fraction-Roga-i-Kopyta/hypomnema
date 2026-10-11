@@ -340,20 +340,125 @@ func TestSidecar_AbsentWithWALWarns(t *testing.T) {
 	}
 }
 
+// projectSidecar runs a real Reproject over mem/.wal so .sidecar.db carries
+// a wal_offset equal to the WAL's current size.
+func projectSidecar(t *testing.T, mem string) {
+	t.Helper()
+	s, err := sidecar.Open(filepath.Join(mem, ".sidecar.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := sidecar.Reproject(s, nil, filepath.Join(mem, ".wal"), nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func appendWALLines(t *testing.T, mem string, lines ...string) {
+	t.Helper()
+	f, err := os.OpenFile(filepath.Join(mem, ".wal"), os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	for _, l := range lines {
+		if _, err := f.WriteString(l + "\n"); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestCheckSidecar_MidSessionAppendsAreOK(t *testing.T) {
+	_, mem, _ := newFixture(t)
+	mustWriteWAL(t, mem, []string{"2026-10-11|session-close|s0|s0"})
+	projectSidecar(t, mem)
+	appendWALLines(t, mem,
+		"2026-10-11|inject|a.md|s1",
+		"2026-10-11|session-close|s1:a1|s1:a1", // subagent close: no reprojection by design
+	)
+	if c := checkSidecar(mem, time.Now()); c.Status != OK {
+		t.Fatalf("inject + subagent close after projection must be OK: %+v", c)
+	}
+}
+
+func TestCheckSidecar_ParentCloseAfterOffsetWarns(t *testing.T) {
+	_, mem, _ := newFixture(t)
+	mustWriteWAL(t, mem, []string{"2026-10-11|session-close|s0|s0"})
+	projectSidecar(t, mem)
+	appendWALLines(t, mem, "2026-10-11|session-close|s1|s1")
+	c := checkSidecar(mem, time.Now())
+	if c.Status != WARN || !strings.Contains(c.Detail, "sidecar rebuild") {
+		t.Fatalf("parent close after projection must WARN with rebuild advice: %+v", c)
+	}
+}
+
+func TestCheckSidecar_NoOffsetWarns(t *testing.T) {
+	_, mem, _ := newFixture(t)
+	mustWriteWAL(t, mem, []string{"2026-10-11|inject|a.md|s1"})
+	s, err := sidecar.Open(filepath.Join(mem, ".sidecar.db")) // never projected → no wal_offset
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	c := checkSidecar(mem, time.Now())
+	if c.Status != WARN || !strings.Contains(c.Detail, "sidecar rebuild") {
+		t.Fatalf("sidecar without wal_offset must WARN with rebuild advice: %+v", c)
+	}
+}
+
+func TestCheckSidecar_OffsetBeyondWALWarns(t *testing.T) {
+	_, mem, _ := newFixture(t)
+	mustWriteWAL(t, mem, []string{"2026-10-11|inject|a.md|s1", "2026-10-11|session-close|s1|s1"})
+	projectSidecar(t, mem)
+	mustWriteWAL(t, mem, []string{"x"}) // compaction shrank the WAL below the offset
+	c := checkSidecar(mem, time.Now())
+	if c.Status != WARN || !strings.Contains(c.Detail, "sidecar rebuild") {
+		t.Fatalf("offset beyond WAL size must WARN: %+v", c)
+	}
+}
+
+func TestCheckSidecar_MisalignedOffsetWarns(t *testing.T) {
+	_, mem, _ := newFixture(t)
+	mustWriteWAL(t, mem, []string{"2026-10-11|inject|a.md|s1", "2026-10-11|session-close|s1|s1"})
+	projectSidecar(t, mem)
+	// Truncated by hand, then regrown past the old offset: it lands mid-line.
+	mustWriteWAL(t, mem, []string{"2026-10-11|inject|abcdefghijklmnopqrstuvwxyz.md|s2", "2026-10-11|inject|b.md|s2", "2026-10-11|inject|b.md|s2"})
+	if c := checkSidecar(mem, time.Now()); c.Status != WARN || !strings.Contains(c.Detail, "no longer matches") {
+		t.Fatalf("regrown WAL with offset mid-line must WARN: %+v", c)
+	}
+}
+
+func TestCheckSidecar_OversizedLineBeforeParentCloseWarns(t *testing.T) {
+	_, mem, _ := newFixture(t)
+	mustWriteWAL(t, mem, []string{"2026-10-11|session-close|s0|s0"})
+	projectSidecar(t, mem)
+	appendWALLines(t, mem,
+		"2026-10-11|inject|"+strings.Repeat("x", 1100*1024)+"|s1",
+		"2026-10-11|session-close|s1|s1",
+	)
+	c := checkSidecar(mem, time.Now())
+	if c.Status != WARN {
+		t.Fatalf("unscannable WAL past offset must WARN, not OK: %+v", c)
+	}
+}
+
+func TestCheckSidecar_UnreadableWarns(t *testing.T) {
+	_, mem, _ := newFixture(t)
+	mustWriteWAL(t, mem, []string{"2026-10-11|inject|a.md|s1"})
+	if err := os.WriteFile(filepath.Join(mem, ".sidecar.db"), []byte("db"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if c := checkSidecar(mem, time.Now()); c.Status != WARN || !strings.Contains(c.Detail, "unreadable") {
+		t.Fatalf("corrupt sidecar must WARN unreadable: %+v", c)
+	}
+}
+
 func TestSidecar_StaleVsWALWarns(t *testing.T) {
 	claude, mem, cwd := newFixture(t)
-	// Write the sidecar first, then the WAL — so the WAL is newer (mtime).
-	sidecar := filepath.Join(mem, ".sidecar.db")
-	if err := os.WriteFile(sidecar, []byte("db"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	old := time.Now().Add(-time.Hour)
-	if err := os.Chtimes(sidecar, old, old); err != nil {
-		t.Fatal(err)
-	}
-	mustWriteWAL(t, mem, []string{
-		time.Now().Format("2006-01-02") + "|inject|slug-a|s1",
-	})
+	today := time.Now().Format("2006-01-02")
+	mustWriteWAL(t, mem, []string{today + "|inject|slug-a|s1"})
+	projectSidecar(t, mem)
+	appendWALLines(t, mem, today+"|session-close|s1|s1")
 	r := Run(claude, mem, native.StoreFor(claude, cwd), cwd)
 	c := mustFindCheck(t, r, "sidecar", WARN)
 	if !strings.Contains(c.Detail, "stale") {
@@ -363,18 +468,10 @@ func TestSidecar_StaleVsWALWarns(t *testing.T) {
 
 func TestSidecar_FreshIsOK(t *testing.T) {
 	claude, mem, cwd := newFixture(t)
-	// WAL first, then the sidecar — sidecar is newer, so it is up to date.
 	mustWriteWAL(t, mem, []string{
 		time.Now().Format("2006-01-02") + "|inject|slug-a|s1",
 	})
-	sidecar := filepath.Join(mem, ".sidecar.db")
-	if err := os.WriteFile(sidecar, []byte("db"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	now := time.Now().Add(time.Hour)
-	if err := os.Chtimes(sidecar, now, now); err != nil {
-		t.Fatal(err)
-	}
+	projectSidecar(t, mem)
 	r := Run(claude, mem, native.StoreFor(claude, cwd), cwd)
 	mustFindCheck(t, r, "sidecar", OK)
 }
@@ -1018,5 +1115,68 @@ func TestCheckCandidates_SubagentKeysCountAsOneSession(t *testing.T) {
 	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(wal.String()), 0o644)
 	if c := checkCandidates(memDir, claudeHome, native.StoreFor(claudeHome, "/tmp/proj")); c.Status != OK {
 		t.Fatalf("five silent subagents of one session are one silent session: %+v", c)
+	}
+}
+
+// Parent and subagent sessions are tallied apart: 400 silent subagents must
+// neither hide nor dilute a healthy parent channel, and parent fact counts
+// are reported.
+func TestCheckCitationSignal_SplitsParentAndSubagent(t *testing.T) {
+	_, mem, _ := newFixture(t)
+	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	d := now.Format("2006-01-02")
+	lines := []string{
+		d + "|inject|a.md|p1", d + "|cite-silent|a.md|p1", d + "|cite-useful|a.md|p1", d + "|cite-silent|b.md|p1",
+		d + "|inject|a.md|p2", d + "|cite-none|p2|p2",
+	}
+	for i := 0; i < 25; i++ {
+		k := fmt.Sprintf("p1:ag%d", i)
+		lines = append(lines, d+"|inject|a.md|"+k, d+"|cite-none|"+k+"|"+k)
+	}
+	mustWriteWAL(t, mem, lines)
+	c := checkCitationSignal(filepath.Join(mem, ".wal"), now)
+	for _, want := range []string{"parent 1/2 sessions cited", "facts 1 useful / 1 silent", "subagent 0/25 sessions cited"} {
+		if !strings.Contains(c.Detail, want) {
+			t.Errorf("Detail missing %q: %s", want, c.Detail)
+		}
+	}
+	if c.Status != WARN || !strings.Contains(c.Detail, "subagents rarely cite") {
+		t.Errorf("25 subagent sessions with 0 citations must WARN: %+v", c)
+	}
+}
+
+func TestCheckCitationSignal_FewSubagentsNoWarn(t *testing.T) {
+	_, mem, _ := newFixture(t)
+	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	d := now.Format("2006-01-02")
+	lines := []string{d + "|inject|a.md|p1", d + "|cite-useful|a.md|p1"}
+	for i := 0; i < 19; i++ {
+		k := fmt.Sprintf("p1:ag%d", i)
+		lines = append(lines, d+"|inject|a.md|"+k, d+"|cite-none|"+k+"|"+k)
+	}
+	mustWriteWAL(t, mem, lines)
+	if c := checkCitationSignal(filepath.Join(mem, ".wal"), now); c.Status != OK {
+		t.Fatalf("19 subagent sessions is below the 20-session floor: %+v", c)
+	}
+}
+
+func TestCheckCitationSignal_SubagentsCitingIsOK(t *testing.T) {
+	_, mem, _ := newFixture(t)
+	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	d := now.Format("2006-01-02")
+	lines := []string{d + "|inject|a.md|p1", d + "|cite-useful|a.md|p1"}
+	for i := 0; i < 20; i++ {
+		k := fmt.Sprintf("p1:ag%d", i)
+		lines = append(lines, d+"|inject|a.md|"+k)
+		if i == 0 {
+			lines = append(lines, d+"|cite-useful|a.md|"+k) // 1/20 = 5% — not below the floor
+		} else {
+			lines = append(lines, d+"|cite-none|"+k+"|"+k)
+		}
+	}
+	mustWriteWAL(t, mem, lines)
+	c := checkCitationSignal(filepath.Join(mem, ".wal"), now)
+	if c.Status != OK || !strings.Contains(c.Detail, "subagent 1/20 sessions cited") {
+		t.Fatalf("1/20 subagent citations meets the 5%% floor: %+v", c)
 	}
 }

@@ -230,7 +230,7 @@ Additionally **consumed** by the sidecar projection for effectiveness/ranking
 `trigger-silent` themselves — tolerated as history, no longer emitted or
 scored).
 
-Effectiveness is the Bayesian `(pos+1)/(pos+neg+2)` over one citation
+Effectiveness is the Bayesian `(pos+1)/(pos+0.25·neg+2)` (cite-silent counts ¼ — the model under-cites, so silence is weak evidence) over one citation
 observation per `(slug, session)` — `cite-useful` wins over `cite-silent`
 within a session; legacy `outcome-*`/`trigger-*` rows are tolerated on read
 but no longer scored (see `docs/EVENTS.md`).

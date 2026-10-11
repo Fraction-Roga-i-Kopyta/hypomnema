@@ -821,14 +821,17 @@ func checkWALErrors(walPath string, now time.Time) Check {
 }
 
 // checkSidecar reports on the SQLite metadata sidecar (.sidecar.db). The
-// sidecar is rebuildable from the WAL + native frontmatter, so its absence
-// is only a problem once there is a WAL to rebuild from:
+// sidecar is rebuildable from the WAL + native frontmatter:
 //   - absent, no .wal      → OK (fresh install, nothing to rebuild yet)
 //   - absent, .wal present → WARN (run `memoryctl sidecar rebuild`)
-//   - present but older than .wal (by mtime) → WARN (stale vs WAL)
-//   - present and at least as new as .wal    → OK
-//
-// v2 has no FTS / TF-IDF / analytics derived indices, so none are checked.
+//   - no wal_offset in meta (pre-v2.16 sidecar) → WARN (rebuild)
+//   - sidecar cannot be opened → WARN (unreadable)
+//   - wal_offset beyond the WAL's size or not on a line boundary
+//     (compacted/rotated/regrown) → WARN (rebuild)
+//   - a PARENT session-close after wal_offset → WARN (a Stop ran without
+//     reprojecting)
+//   - otherwise OK. Injects, recalls and subagent closes land between Stops
+//     by design and are projected at the next parent close.
 func checkSidecar(memoryDir string, now time.Time) Check {
 	const name = "sidecar"
 	sidecarPath := filepath.Join(memoryDir, ".sidecar.db")
@@ -851,19 +854,93 @@ func checkSidecar(memoryDir string, now time.Time) Check {
 			Detail: ".sidecar.db missing but .wal exists — run `memoryctl sidecar rebuild`",
 		}
 	}
+	if walErr != nil {
+		return Check{Name: name, Status: OK,
+			Detail: fmt.Sprintf(".sidecar.db present (mtime %s), no .wal yet", sidecarInfo.ModTime().Format("2006-01-02 15:04"))}
+	}
 
-	if walErr == nil && sidecarInfo.ModTime().Before(walInfo.ModTime()) {
-		return Check{
-			Name:   name,
-			Status: WARN,
-			Detail: "sidecar stale vs WAL — run `memoryctl sidecar rebuild`",
-		}
+	off, ok, err := sidecarWALOffset(sidecarPath)
+	if err != nil {
+		return Check{Name: name, Status: WARN,
+			Detail: "sidecar unreadable (" + err.Error() + ") — if it persists, remove .sidecar.db, .sidecar.db-wal and .sidecar.db-shm in the memory dir, then run `memoryctl sidecar rebuild` (the next inject also self-heals a corrupt sidecar)"}
+	}
+	if !ok {
+		return Check{Name: name, Status: WARN,
+			Detail: "sidecar carries no WAL offset (written before v2.16) — run `memoryctl sidecar rebuild`"}
+	}
+	if off > walInfo.Size() || !atLineStart(walPath, off) {
+		return Check{Name: name, Status: WARN,
+			Detail: "WAL no longer matches the sidecar's projection offset (compacted or rotated) — run `memoryctl sidecar rebuild`"}
+	}
+	closed, scanErr := parentCloseAfter(walPath, off)
+	if scanErr != nil {
+		return Check{Name: name, Status: WARN,
+			Detail: "cannot scan WAL past the projection offset (" + scanErr.Error() + ") — run `memoryctl sidecar rebuild`"}
+	}
+	if closed {
+		return Check{Name: name, Status: WARN,
+			Detail: "sidecar stale vs WAL: a session closed after the last projection — run `memoryctl sidecar rebuild`"}
 	}
 	return Check{
 		Name:   name,
 		Status: OK,
-		Detail: fmt.Sprintf(".sidecar.db present (mtime %s)", sidecarInfo.ModTime().Format("2006-01-02 15:04")),
+		Detail: fmt.Sprintf(".sidecar.db present (mtime %s), projected through WAL byte %d", sidecarInfo.ModTime().Format("2006-01-02 15:04"), off),
 	}
+}
+
+// sidecarWALOffset reads meta.wal_offset. The caller has already confirmed
+// the file exists, so sidecar.Open does not create one (same contract as
+// sidecarStatusMap). err is non-nil when the DB cannot be opened or queried.
+func sidecarWALOffset(dbPath string) (int64, bool, error) {
+	s, err := sidecar.Open(dbPath)
+	if err != nil {
+		return 0, false, err
+	}
+	defer s.Close()
+	return s.WALOffset()
+}
+
+// atLineStart reports whether off falls on a line boundary of the WAL
+// (offset 0, or the byte before it is '\n'). A WAL truncated by hand and
+// regrown past the old offset fails this and is treated as rotated.
+func atLineStart(walPath string, off int64) bool {
+	if off == 0 {
+		return true
+	}
+	f, err := os.Open(walPath)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	b := make([]byte, 1)
+	if _, err := f.ReadAt(b, off-1); err != nil {
+		return false
+	}
+	return b[0] == '\n'
+}
+
+// parentCloseAfter reports whether the WAL holds a parent session-close
+// (session column without ':') at or after byte offset off. Any open, seek or
+// scan error (including a line over the 1 MB scanner buffer) is returned, so
+// the caller can fail toward WARN rather than report a false "no close".
+func parentCloseAfter(walPath string, off int64) (bool, error) {
+	f, err := os.Open(walPath)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+	if _, err := f.Seek(off, io.SeekStart); err != nil {
+		return false, err
+	}
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for sc.Scan() {
+		parts := strings.SplitN(sc.Text(), "|", 4)
+		if len(parts) == 4 && parts[1] == "session-close" && !strings.Contains(parts[3], ":") {
+			return true, nil
+		}
+	}
+	return false, sc.Err()
 }
 
 // closingEvents are the WAL event types that signal "Stop hook reached a
@@ -973,6 +1050,18 @@ const citationSignalWindowDays = 7
 // this, low volume alone could explain zero citations.
 const citationSignalMinSessions = 3
 
+// citationSubagentMinSessions / citationSubagentMinRate: subagent sessions
+// are judged on their own — they cite in a final report, not to the user,
+// and they outnumber parent sessions ~30:1, so mixing the two hid both.
+const (
+	citationSubagentMinSessions = 20
+	citationSubagentMinRate     = 0.05
+)
+
+// isSubagentKey: v2.15 keys a subagent's observations <session>:<agent>;
+// parent session ids never contain ':'.
+func isSubagentKey(sess string) bool { return strings.Contains(sess, ":") }
+
 // checkCitationSignal watches for the citation channel going dark: facts get
 // injected but the model's <cc-memory> citations never reach the transcript
 // (or are never written), so close has nothing to classify as useful. Distinct
@@ -998,6 +1087,11 @@ const citationSignalMinSessions = 3
 // raw cite-useful session count. A session with a citation but no inject
 // this window (e.g. recall-only) must not inflate M; it never showed the
 // channel doing its job on an injected fact.
+//
+// N and M are computed separately for parent sessions and for subagent keys
+// (<session>:<agent>). The parent WARN rule is unchanged (N >= 3 and M == 0);
+// subagents WARN at >= 20 sessions with under 5% cited. Parent fact counts
+// are one observation per (slug, session), useful winning.
 func checkCitationSignal(walPath string, now time.Time) Check {
 	const name = "citation_signal"
 	f, err := os.Open(walPath)
@@ -1014,6 +1108,7 @@ func checkCitationSignal(walPath string, now time.Time) Check {
 	injSess := map[string]bool{}
 	classifiedSess := map[string]bool{}
 	usefulSess := map[string]bool{}
+	factSess := map[string]bool{} // parent "slug|session" → cited useful
 
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -1037,33 +1132,60 @@ func checkCitationSignal(walPath string, now time.Time) Check {
 			injSess[sess] = true
 		case "cite-useful":
 			usefulSess[sess] = true
+			if !isSubagentKey(sess) {
+				factSess[parts[2]+"|"+sess] = true
+			}
+		case "cite-silent":
+			if !isSubagentKey(sess) {
+				if _, seen := factSess[parts[2]+"|"+sess]; !seen {
+					factSess[parts[2]+"|"+sess] = false
+				}
+			}
 		}
 	}
 	if err := sc.Err(); err != nil {
 		return Check{Name: name, Status: WARN, Detail: "scan error: " + err.Error()}
 	}
+	factUseful, factSilent := 0, 0
+	for _, useful := range factSess {
+		if useful {
+			factUseful++
+		} else {
+			factSilent++
+		}
+	}
 
 	if !hasCiteHistory {
 		return Check{Name: name, Status: OK, Detail: "no citation data yet (pre-v2.14 history)"}
 	}
-	n, m := 0, 0
+	type tally struct{ n, m int }
+	var par, sub tally
 	for sess := range injSess {
 		if !classifiedSess[sess] {
 			continue
 		}
-		n++
+		t := &par
+		if isSubagentKey(sess) {
+			t = &sub
+		}
+		t.n++
 		if usefulSess[sess] {
-			m++
+			t.m++
 		}
 	}
-	if n >= citationSignalMinSessions && m == 0 {
+	detail := fmt.Sprintf("parent %d/%d sessions cited (facts %d useful / %d silent); subagent %d/%d sessions cited (%dd)",
+		par.m, par.n, factUseful, factSilent, sub.m, sub.n, citationSignalWindowDays)
+	if par.n >= citationSignalMinSessions && par.m == 0 {
 		return Check{Name: name, Status: WARN,
-			Detail: fmt.Sprintf("facts were injected in %d session(s) over %d days but never cited — the usefulness signal is off (the model is not citing, or citations are not reaching the transcript); see TROUBLESHOOTING",
-				n, citationSignalWindowDays)}
+			Detail: fmt.Sprintf("facts were injected in %d parent session(s) over %d days but never cited — the usefulness signal is off (the model is not citing, or citations are not reaching the transcript); see TROUBLESHOOTING. %s",
+				par.n, citationSignalWindowDays, detail)}
 	}
-	return Check{Name: name, Status: OK,
-		Detail: fmt.Sprintf("%d/%d injected sessions carried a citation (%dd)",
-			m, n, citationSignalWindowDays)}
+	if sub.n >= citationSubagentMinSessions && float64(sub.m) < citationSubagentMinRate*float64(sub.n) {
+		return Check{Name: name, Status: WARN,
+			Detail: "subagents rarely cite injected facts in their final report — " + detail +
+				"; see TROUBLESHOOTING (may persist up to 7 days after upgrading)"}
+	}
+	return Check{Name: name, Status: OK, Detail: detail}
 }
 
 // checkStoreResolution reports the native store this invocation resolved
