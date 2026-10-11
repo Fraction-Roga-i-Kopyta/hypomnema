@@ -7,19 +7,24 @@
 - **`cite-silent` is weak evidence.** Effectiveness is now
   `(pos+1)/(pos+0.25·neg+2)`: a session where a fact was shown but not cited
   counts a quarter of a useful citation. The model under-cites, so full-weight
-  silence had pushed 339 of 605 live facts below the neutral prior — a single
+  silence had pushed (at measurement time, 2026-10-11) 339 of 605 live facts below the neutral prior — a single
   uncited session already dropped a fact to 0.33. Applied at read time — the
-  WAL is unchanged and the next projection re-derives all history.
+  WAL is unchanged and each project's next projection (its next Stop, or
+  `memoryctl sidecar rebuild` run there) re-derives its history. Subagent
+  observations fold into their parent session (one per fact per parent
+  session), so a fan-out of sibling subagents sharing a top-5 cannot multiply
+  a fact's credit or penalty.
 - **doctor `citation_signal` reports parent and subagent sessions apart.**
   Subagents (`<session>:<agent>` keys) outnumber parent sessions ~30:1 and
   almost never cited, so the old mixed ratio ("7/369") hid a healthy parent
-  channel (7/13) and a silent subagent one (1/443). Detail now shows both plus
+  channel (7/13) and a silent subagent one (1/443), measured before this release. Detail now shows both plus
   the parent's useful/silent fact counts; subagents WARN at >=20 sessions and
-  <5% cited.
+  <5% cited. Right after upgrading, the subagent line can WARN for up to 7
+  days while sessions that ran under the old instruction age out of the window.
 - **Subagents are asked to cite in their final report.** SubagentStart
   deliveries now carry `SubagentCiteInstruction` instead of the parent line
   ("wrap that sentence … hidden from the user" had nothing to attach to in a
-  subagent: 1 of 443 cited). `close --subagent` already classified the
+  subagent: 1 of 443 cited before this release). `close --subagent` already classified the
   report, so no parsing changed. A parent must not copy a subagent's
   `<cc-memory>` tags into its own reply — they are the subagent's citations.
 - **Parent instruction covers decisions:** "changes what you say, do, or
