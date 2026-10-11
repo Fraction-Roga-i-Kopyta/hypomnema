@@ -298,13 +298,11 @@ few different reasons. Check, in order:
 row has ever been written (a fresh install, or one that hasn't seen a Stop
 hook since the v2.14 cutover) — that is expected, not a problem.
 
-**Subagent keys count as their own sessions here.** A WAL row whose session
-column (`$4`) contains `:` (`<session_id>:<agent_id>`) came from a
-subagent's own `SubagentStop`, and both `citation_signal` and
-`open_quanta_last_30d` treat it as a session in its own right — it is not
-folded back into its parent. If the WARN is puzzling given how quiet the
-orchestrating sessions actually are, split the rows and check the two
-populations separately:
+## doctor warns `citation_signal: subagents rarely cite injected facts in their final report`
+
+Parent and subagent sessions are tallied separately: Detail reads `parent M/N sessions cited (facts U useful / S silent); subagent M/N sessions cited (7d)`. A WAL row whose session column (`$4`) contains `:` (`<session_id>:<agent_id>`) came from a subagent's own `SubagentStop`. The parent WARN rule is unchanged (>=3 sessions, 0 cited); subagents WARN at >=20 sessions and <5% cited. Fix: v2.16 `SubagentCiteInstruction` (cite in the final report). Right after upgrading to v2.16 this WARN can persist for up to 7 days: the window still holds subagent sessions that ran under the old instruction; it clears as they age out.
+
+To inspect the two populations by hand:
 
 ```bash
 awk -F'|' '$4 ~ /:/'  ~/.claude/memory/.wal | tail -50   # subagent keys
@@ -313,7 +311,7 @@ awk -F'|' '$4 !~ /:/' ~/.claude/memory/.wal | tail -50   # parent sessions
 
 A subagent whose own transcript was unreadable (a bad or missing
 `agent_transcript_path`) still gets a `session-close` row for its key, but no
-`cite-*` row at all — the same "transcript unreadable" case as a normal
+`cite-*` row at all, the same "transcript unreadable" case as a normal
 session, just keyed to the subagent.
 
 ## My rule shows under "ambient" in `self-profile.md`, never as cite-useful/silent
