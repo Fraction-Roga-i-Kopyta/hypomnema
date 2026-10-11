@@ -250,7 +250,7 @@ shows `[retired <date> → successor]` instead of silently forgetting.
   `cite-undelivered` — writes one session-level `cite-none` instead). Frontmatter
   `evidence:`/name substring matching no longer creates usefulness — it now drives only the
   `ablate` holdout observation (`holdout-hit`/`holdout-miss`).
-- Recomputes effectiveness from the WAL: `(pos+1)/(pos+neg+2)` over one citation observation
+- Recomputes effectiveness from the WAL: `(pos+1)/(pos+0.25·neg+2)` (cite-silent counts ¼ — the model under-cites, so silence is weak evidence) over one citation observation
   per (slug, session) — `cite-useful` wins over `cite-silent` within a session. Usefulness
   history restarted at v2.14: every fact begins back at the neutral 0.5 prior, and
   pre-cutover `trigger-*`/`outcome-*` WAL rows stay on disk but are no longer read by any
@@ -270,7 +270,7 @@ score is an additive blend — no single zero signal annihilates a candidate:
 score = 3.0 × overlap(session_keywords, file keywords+name+description+body)
       + 1.0 × log10(1 + ref_count) × effGate   # popularity, GATED by proven usefulness
       + 2.0 × recency                  # 1/(1 + days/30) from last USEFUL citation (cite-useful; fallback created)
-      + 2.0 × effectiveness            # Bayesian (pos+1)/(pos+neg+2); neutral 0.5 until signal lands
+      + 2.0 × effectiveness            # Bayesian (pos+1)/(pos+0.25·neg+2); silent counts ¼; neutral 0.5 until signal lands
       + 1.0 if project-local           # project facts outrank global ones on ties
 
 effGate = clamp(2 × effectiveness, 0, 1)   # 1.0 at the prior (0.5); only damps, never amplifies

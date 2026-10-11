@@ -4,6 +4,7 @@ import (
 	"math/rand"
 
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/rank"
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/usefulness"
 )
 
 // Result is the mean recall@K for one budget K across all eval sessions.
@@ -43,7 +44,7 @@ func Replay(events []Event, ks []int, seed int64) []Result {
 				Slug:          slug,
 				Status:        "active",
 				RefCount:      g.RefCount,
-				Effectiveness: float64(g.Pos+1) / float64(g.Pos+g.Neg+2),
+				Effectiveness: usefulness.Effectiveness(g.Pos, g.Neg),
 				LastInjected:  g.LastInject,
 				LastUseful:    g.LastUseful,
 				Overlap:       0, // historical prompt keywords unavailable
