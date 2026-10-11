@@ -10,6 +10,12 @@
   silence had pushed 339 of 605 live facts below the neutral prior — a single
   uncited session already dropped a fact to 0.33. Applied at read time — the
   WAL is unchanged and the next projection re-derives all history.
+- **doctor `citation_signal` reports parent and subagent sessions apart.**
+  Subagents (`<session>:<agent>` keys) outnumber parent sessions ~30:1 and
+  almost never cited, so the old mixed ratio ("7/369") hid a healthy parent
+  channel (7/13) and a silent subagent one (1/443). Detail now shows both plus
+  the parent's useful/silent fact counts; subagents WARN at >=20 sessions and
+  <5% cited.
 
 ### Fixed
 

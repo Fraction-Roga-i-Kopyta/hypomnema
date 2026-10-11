@@ -1051,6 +1051,18 @@ const citationSignalWindowDays = 7
 // this, low volume alone could explain zero citations.
 const citationSignalMinSessions = 3
 
+// citationSubagentMinSessions / citationSubagentMinRate: subagent sessions
+// are judged on their own — they cite in a final report, not to the user,
+// and they outnumber parent sessions ~30:1, so mixing the two hid both.
+const (
+	citationSubagentMinSessions = 20
+	citationSubagentMinRate     = 0.05
+)
+
+// isSubagentKey: v2.15 keys a subagent's observations <session>:<agent>;
+// parent session ids never contain ':'.
+func isSubagentKey(sess string) bool { return strings.Contains(sess, ":") }
+
 // checkCitationSignal watches for the citation channel going dark: facts get
 // injected but the model's <cc-memory> citations never reach the transcript
 // (or are never written), so close has nothing to classify as useful. Distinct
@@ -1076,6 +1088,11 @@ const citationSignalMinSessions = 3
 // raw cite-useful session count. A session with a citation but no inject
 // this window (e.g. recall-only) must not inflate M; it never showed the
 // channel doing its job on an injected fact.
+//
+// N and M are computed separately for parent sessions and for subagent keys
+// (<session>:<agent>). The parent WARN rule is unchanged (N >= 3 and M == 0);
+// subagents WARN at >= 20 sessions with under 5% cited. Parent fact counts
+// are one observation per (slug, session), useful winning.
 func checkCitationSignal(walPath string, now time.Time) Check {
 	const name = "citation_signal"
 	f, err := os.Open(walPath)
@@ -1092,6 +1109,7 @@ func checkCitationSignal(walPath string, now time.Time) Check {
 	injSess := map[string]bool{}
 	classifiedSess := map[string]bool{}
 	usefulSess := map[string]bool{}
+	factSess := map[string]bool{} // parent "slug|session" → cited useful
 
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -1115,33 +1133,59 @@ func checkCitationSignal(walPath string, now time.Time) Check {
 			injSess[sess] = true
 		case "cite-useful":
 			usefulSess[sess] = true
+			if !isSubagentKey(sess) {
+				factSess[parts[2]+"|"+sess] = true
+			}
+		case "cite-silent":
+			if !isSubagentKey(sess) {
+				if _, seen := factSess[parts[2]+"|"+sess]; !seen {
+					factSess[parts[2]+"|"+sess] = false
+				}
+			}
 		}
 	}
 	if err := sc.Err(); err != nil {
 		return Check{Name: name, Status: WARN, Detail: "scan error: " + err.Error()}
 	}
+	factUseful, factSilent := 0, 0
+	for _, useful := range factSess {
+		if useful {
+			factUseful++
+		} else {
+			factSilent++
+		}
+	}
 
 	if !hasCiteHistory {
 		return Check{Name: name, Status: OK, Detail: "no citation data yet (pre-v2.14 history)"}
 	}
-	n, m := 0, 0
+	type tally struct{ n, m int }
+	var par, sub tally
 	for sess := range injSess {
 		if !classifiedSess[sess] {
 			continue
 		}
-		n++
+		t := &par
+		if isSubagentKey(sess) {
+			t = &sub
+		}
+		t.n++
 		if usefulSess[sess] {
-			m++
+			t.m++
 		}
 	}
-	if n >= citationSignalMinSessions && m == 0 {
+	detail := fmt.Sprintf("parent %d/%d sessions cited (facts %d useful / %d silent); subagent %d/%d sessions cited (%dd)",
+		par.m, par.n, factUseful, factSilent, sub.m, sub.n, citationSignalWindowDays)
+	if par.n >= citationSignalMinSessions && par.m == 0 {
 		return Check{Name: name, Status: WARN,
-			Detail: fmt.Sprintf("facts were injected in %d session(s) over %d days but never cited — the usefulness signal is off (the model is not citing, or citations are not reaching the transcript); see TROUBLESHOOTING",
-				n, citationSignalWindowDays)}
+			Detail: fmt.Sprintf("facts were injected in %d parent session(s) over %d days but never cited — the usefulness signal is off (the model is not citing, or citations are not reaching the transcript); see TROUBLESHOOTING. %s",
+				par.n, citationSignalWindowDays, detail)}
 	}
-	return Check{Name: name, Status: OK,
-		Detail: fmt.Sprintf("%d/%d injected sessions carried a citation (%dd)",
-			m, n, citationSignalWindowDays)}
+	if sub.n >= citationSubagentMinSessions && float64(sub.m) < citationSubagentMinRate*float64(sub.n) {
+		return Check{Name: name, Status: WARN,
+			Detail: "subagents rarely cite injected facts in their final report — " + detail}
+	}
+	return Check{Name: name, Status: OK, Detail: detail}
 }
 
 // checkStoreResolution reports the native store this invocation resolved

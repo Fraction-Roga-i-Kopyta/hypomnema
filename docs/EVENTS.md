@@ -29,7 +29,8 @@ shims (`memoryctl inject --event=SubagentStart`, `memoryctl close
 — the part before the first `:`) so a session and its subagents count as one
 observation; sidecar effectiveness, `ab`, self-profile, and doctor's
 `citation_signal`/`open_quanta_last_30d` instead treat each subagent key as
-its own session. Per-session dedup on `cite-*`/`holdout-*`/`session-close`
+its own session (reported as a separate subagent tally in doctor's
+`citation_signal`). Per-session dedup on `cite-*`/`holdout-*`/`session-close`
 rows is end-anchored (`wal.AppendSuffixUnique`, matching `strings.HasSuffix`)
 rather than plain substring, precisely so a subagent row ending in
 `s1:a1` never suppresses the parent's own row ending in plain `s1`.
