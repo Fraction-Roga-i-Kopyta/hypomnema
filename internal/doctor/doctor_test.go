@@ -428,6 +428,20 @@ func TestCheckSidecar_MisalignedOffsetWarns(t *testing.T) {
 	}
 }
 
+func TestCheckSidecar_OversizedLineBeforeParentCloseWarns(t *testing.T) {
+	_, mem, _ := newFixture(t)
+	mustWriteWAL(t, mem, []string{"2026-10-11|session-close|s0|s0"})
+	projectSidecar(t, mem)
+	appendWALLines(t, mem,
+		"2026-10-11|inject|"+strings.Repeat("x", 1100*1024)+"|s1",
+		"2026-10-11|session-close|s1|s1",
+	)
+	c := checkSidecar(mem, time.Now())
+	if c.Status != WARN {
+		t.Fatalf("unscannable WAL past offset must WARN, not OK: %+v", c)
+	}
+}
+
 func TestCheckSidecar_UnreadableWarns(t *testing.T) {
 	_, mem, _ := newFixture(t)
 	mustWriteWAL(t, mem, []string{"2026-10-11|inject|a.md|s1"})
