@@ -275,8 +275,9 @@ few different reasons. Check, in order:
 
 1. **Is the instruction line actually reaching the model?** The injected
    `# Memory Context` block should start with "When a fact below changes
-   what you say or do, wrap that sentence in `<cc-memory filenames="FILE">…
-   </cc-memory>`". If the block is missing entirely, see "SessionStart
+   what you say, do, or decide, wrap that sentence in `<cc-memory filenames="FILE">…
+   </cc-memory>`". A SubagentStart block opens with `SubagentCiteInstruction`
+   instead. If the block is missing entirely, see "SessionStart
    injects nothing" above. If it's present but the model's context doesn't
    actually show it, check whether `additionalContext` is being diverted to
    a file by an oversized payload — see the 8 KB budget in "Memory layout"

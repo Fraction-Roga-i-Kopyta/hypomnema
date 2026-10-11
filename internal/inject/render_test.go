@@ -18,7 +18,7 @@ func TestRender_CapsLongBodies(t *testing.T) {
 		"big.md": {Slug: "big.md", Name: "Big", Body: big},
 	}
 
-	out, _ := render(ranked, bySlug, 500, 0)
+	out, _ := render(ranked, bySlug, CiteInstruction, 500, 0)
 
 	if n := strings.Count(out, "Z"); n > 500 {
 		t.Errorf("body not capped: %d body chars emitted (cap 500 bytes)", n)
@@ -35,7 +35,7 @@ func TestRender_MissingBySlugStillCarriesFileName(t *testing.T) {
 	ranked := []rank.Scored{{Candidate: rank.Candidate{Slug: "ghost.md"}}}
 	bySlug := map[string]native.MemFile{} // native file gone; sidecar row remains
 
-	out, injected := render(ranked, bySlug, 500, 0)
+	out, injected := render(ranked, bySlug, CiteInstruction, 500, 0)
 
 	if len(injected) != 1 || injected[0] != "ghost.md" {
 		t.Fatalf("ghost.md should still render: %v", injected)
@@ -52,7 +52,7 @@ func TestRender_ShortBodyVerbatim(t *testing.T) {
 		"x.md": {Slug: "x.md", Name: "X", Body: "short body"},
 	}
 
-	out, _ := render(ranked, bySlug, 500, 0)
+	out, _ := render(ranked, bySlug, CiteInstruction, 500, 0)
 
 	if !strings.Contains(out, "short body") {
 		t.Errorf("short body must survive verbatim; got:\n%s", out)

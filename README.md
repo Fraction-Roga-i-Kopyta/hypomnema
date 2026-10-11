@@ -18,7 +18,7 @@ When you open a new Claude Code session in a project, hypomnema injects a `# Mem
 
 ```markdown
 # Memory Context
-When a fact below changes what you say or do, wrap that sentence in <cc-memory filenames="FILE">…</cc-memory> (the tag is hidden from the user).
+When a fact below changes what you say, do, or decide, wrap that sentence in <cc-memory filenames="FILE">…</cc-memory> (the tag is hidden from the user).
 
 ## sqlalchemy-metadata-reserved-name — sqlalchemy-metadata-reserved-name.md (mistake, 2026-03-02)
 Root cause: `metadata_` mapped to column "metadata" collides with `Base.metadata`
