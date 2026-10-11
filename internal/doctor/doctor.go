@@ -872,7 +872,12 @@ func checkSidecar(memoryDir string, now time.Time) Check {
 		return Check{Name: name, Status: WARN,
 			Detail: "WAL no longer matches the sidecar's projection offset (compacted or rotated) — run `memoryctl sidecar rebuild`"}
 	}
-	if parentCloseAfter(walPath, off) {
+	closed, scanErr := parentCloseAfter(walPath, off)
+	if scanErr != nil {
+		return Check{Name: name, Status: WARN,
+			Detail: "cannot scan WAL past the projection offset (" + scanErr.Error() + ") — run `memoryctl sidecar rebuild`"}
+	}
+	if closed {
 		return Check{Name: name, Status: WARN,
 			Detail: "sidecar stale vs WAL: a session closed after the last projection — run `memoryctl sidecar rebuild`"}
 	}
@@ -916,25 +921,27 @@ func atLineStart(walPath string, off int64) bool {
 }
 
 // parentCloseAfter reports whether the WAL holds a parent session-close
-// (session column without ':') at or after byte offset off.
-func parentCloseAfter(walPath string, off int64) bool {
+// (session column without ':') at or after byte offset off. Any open, seek or
+// scan error (including a line over the 1 MB scanner buffer) is returned, so
+// the caller can fail toward WARN rather than report a false "no close".
+func parentCloseAfter(walPath string, off int64) (bool, error) {
 	f, err := os.Open(walPath)
 	if err != nil {
-		return false
+		return false, err
 	}
 	defer f.Close()
 	if _, err := f.Seek(off, io.SeekStart); err != nil {
-		return false
+		return false, err
 	}
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for sc.Scan() {
 		parts := strings.SplitN(sc.Text(), "|", 4)
 		if len(parts) == 4 && parts[1] == "session-close" && !strings.Contains(parts[3], ":") {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, sc.Err()
 }
 
 // closingEvents are the WAL event types that signal "Stop hook reached a
