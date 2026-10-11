@@ -890,15 +890,14 @@ func checkSidecar(memoryDir string, now time.Time) Check {
 
 // sidecarWALOffset reads meta.wal_offset. The caller has already confirmed
 // the file exists, so sidecar.Open does not create one (same contract as
-// sidecarStatusMap). err is non-nil only when the DB cannot be opened.
+// sidecarStatusMap). err is non-nil when the DB cannot be opened or queried.
 func sidecarWALOffset(dbPath string) (int64, bool, error) {
 	s, err := sidecar.Open(dbPath)
 	if err != nil {
 		return 0, false, err
 	}
 	defer s.Close()
-	off, ok := s.WALOffset()
-	return off, ok, nil
+	return s.WALOffset()
 }
 
 // atLineStart reports whether off falls on a line boundary of the WAL
@@ -1183,7 +1182,8 @@ func checkCitationSignal(walPath string, now time.Time) Check {
 	}
 	if sub.n >= citationSubagentMinSessions && float64(sub.m) < citationSubagentMinRate*float64(sub.n) {
 		return Check{Name: name, Status: WARN,
-			Detail: "subagents rarely cite injected facts in their final report — " + detail}
+			Detail: "subagents rarely cite injected facts in their final report — " + detail +
+				"; see TROUBLESHOOTING (may persist up to 7 days after upgrading)"}
 	}
 	return Check{Name: name, Status: OK, Detail: detail}
 }

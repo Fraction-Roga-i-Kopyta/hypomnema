@@ -5,6 +5,7 @@ package sidecar
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -183,18 +184,23 @@ ON CONFLICT(slug, project) DO UPDATE SET
 func (s *Store) All() ([]Record, error) { return allIn(s.db) }
 
 // WALOffset returns the .wal size in bytes recorded when the last
-// projection started. ok is false when the key is absent or unparsable —
-// a sidecar written before v2.16.
-func (s *Store) WALOffset() (int64, bool) {
+// projection started. ok is false with a nil error when the key is absent or
+// unparsable — a sidecar written before v2.16. A query failure (corrupt or
+// closed DB) comes back as a non-nil error so callers can tell "unreadable"
+// from "absent".
+func (s *Store) WALOffset() (int64, bool, error) {
 	var v string
 	if err := s.db.QueryRow(`SELECT v FROM meta WHERE k='wal_offset'`).Scan(&v); err != nil {
-		return 0, false
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, false, nil
+		}
+		return 0, false, fmt.Errorf("sidecar.WALOffset: %w", err)
 	}
 	n, err := strconv.ParseInt(v, 10, 64)
 	if err != nil || n < 0 {
-		return 0, false
+		return 0, false, nil
 	}
-	return n, true
+	return n, true, nil
 }
 
 func allIn(e dbtx) ([]Record, error) {
