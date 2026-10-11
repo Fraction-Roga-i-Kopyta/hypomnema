@@ -34,14 +34,30 @@ const MaxBodyBytes = maxBodyBytes
 // (skill-inject) enforce the same budget the injection render path does.
 const MaxTotalBytes = maxTotalBytes
 
-// CiteInstruction is the verbatim line every delivery path (inject render,
-// recall, skill-inject) shows exactly once: it tells the model how to mark a
-// fact as actually used, by wrapping the sentence it changed in a
-// <cc-memory filenames="FILE">…</cc-memory> tag. Claude Code hides the tag
-// from the user; the close hook parses it as the honest usefulness signal
-// (internal/closer/cite.go) in place of substring matching. It counts inside
-// the render budget like any other rendered text.
-const CiteInstruction = `When a fact below changes what you say or do, wrap that sentence in <cc-memory filenames="FILE">…</cc-memory> (the tag is hidden from the user).`
+// CiteInstruction is the verbatim line every PARENT delivery path (inject
+// render on SessionStart/UserPromptSubmit, recall, skill-inject) shows exactly
+// once: it tells the model how to mark a fact as actually used, by wrapping
+// the sentence it changed in a <cc-memory filenames="FILE">…</cc-memory> tag.
+// Claude Code hides the tag from the user; the close hook parses it as the
+// honest usefulness signal (internal/closer/cite.go) in place of substring
+// matching. It counts inside the render budget like any other rendered text.
+// SubagentStart uses SubagentCiteInstruction instead.
+const CiteInstruction = `When a fact below changes what you say, do, or decide, wrap that sentence in <cc-memory filenames="FILE">…</cc-memory> (the tag is hidden from the user).`
+
+// SubagentCiteInstruction replaces CiteInstruction on SubagentStart. A
+// subagent's text goes to its parent, not the user, so "wrap that sentence"
+// had nothing to attach to — 1 of 443 subagents cited. close --subagent
+// already reads the final report (SubagentHandback), so a citation there is
+// classified like any other.
+const SubagentCiteInstruction = `When a fact below shapes your work, cite it in your final report: <cc-memory filenames="FILE">one line on how it was applied</cc-memory>.`
+
+// instructionFor picks the citation line for a delivery event.
+func instructionFor(event string) string {
+	if event == "SubagentStart" {
+		return SubagentCiteInstruction
+	}
+	return CiteInstruction
+}
 
 // FactHeader renders one fact's citation-ready header line. The file name
 // (Slug) is always present — it is the only thing the model can put inside
@@ -208,7 +224,7 @@ func Run(in Input) (Result, error) {
 	if maxTotal <= 0 {
 		maxTotal = maxTotalBytes
 	}
-	md, injected := render(ranked, bySlug, maxBodyBytes, maxTotal)
+	md, injected := render(ranked, bySlug, instructionFor(in.Event), maxBodyBytes, maxTotal)
 	projectSlug := st.Project
 	localSlug := map[string]bool{}
 	for _, f := range files {
@@ -369,13 +385,13 @@ func splitCSV(s string) []string {
 // bookkeeping (WAL events, session set) must follow what the model can see,
 // not what the ranker picked. The top entry always lands, truncated to the
 // budget if it alone overflows.
-func render(ranked []rank.Scored, bySlug map[string]native.MemFile, maxBody, maxTotal int) (string, []string) {
+func render(ranked []rank.Scored, bySlug map[string]native.MemFile, instruction string, maxBody, maxTotal int) (string, []string) {
 	if len(ranked) == 0 {
 		return "", nil
 	}
 	var b strings.Builder
 	b.WriteString("# Memory Context\n")
-	b.WriteString(CiteInstruction + "\n")
+	b.WriteString(instruction + "\n")
 	var injected []string
 	for _, sc := range ranked {
 		f, ok := bySlug[sc.Slug]

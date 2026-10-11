@@ -317,9 +317,11 @@ Look at the start of your context for a `# Memory Context` block with one `## <n
 
 ## Citing memory
 
-Every delivery (`inject` — SessionStart, UserPromptSubmit, SubagentStart — `recall`, `skill-inject`) opens with one instruction line, verbatim:
+Every parent delivery (`inject` — SessionStart, UserPromptSubmit — `recall`, `skill-inject`) opens with one instruction line, verbatim:
 
-> When a fact below changes what you say or do, wrap that sentence in `<cc-memory filenames="FILE">…</cc-memory>` (the tag is hidden from the user).
+> When a fact below changes what you say, do, or decide, wrap that sentence in `<cc-memory filenames="FILE">…</cc-memory>` (the tag is hidden from the user).
+
+SubagentStart deliveries carry a different line — `When a fact below shapes your work, cite it in your final report: <cc-memory filenames="FILE">one line on how it was applied</cc-memory>.` — because a subagent's text reaches its parent, not the user; `close --subagent` reads the final report. A `<cc-memory>` tag inside a subagent's report is that subagent's citation — do not copy it into your own text; cite only facts that changed what you yourself say, do, or decide.
 
 `FILE` is the fact's file name, shown in its header (`## <name> — <file.md> (<type>, <created>)`). This citation — not a keyword or name match — is the only thing `close` reads to mark a fact `cite-useful`; an injected fact with no citation in a session that had at least one delivered citation is `cite-silent` instead. Only a fact actually delivered in the session earns credit for a citation — injected/recalled/skill-injected, or read directly with the Read tool from its file — so citing a filename you never saw content from lands as `cite-undelivered`, not `cite-useful`. Cite only the facts that actually changed what you said or did; the tag is hidden from the user, so there is no cost to citing honestly and no benefit to citing everything.
 
@@ -343,7 +345,7 @@ any injected memory.
 
 ## Subagent context
 
-Subagents receive ranked memory automatically at `SubagentStart` — query = this agent's Agent-call description + prompt, else the parent's recent prompts — except `fork`, `Explore`, `claude-code-guide`, `statusline-setup` (override with `HYPOMNEMA_SUBAGENT_SKIP`, a comma list; set-but-empty means none skipped, and a `*` entry means skip every agent type — set it in `settings.json`'s `env` block to opt every subagent out). A fact the parent session is withholding under an ablation stays withheld from its subagents. The subagent's citations are measured under its own key, separately from the parent's. Pass inline only what is specific to the task at hand — the ranker already covers general recall. `memoryctl recall` run inside a subagent records against the parent session (there is no agent id in the subagent's Bash environment); `skill-inject` run inside a subagent does the same, for the same reason.
+Subagents receive ranked memory automatically at `SubagentStart` — query = this agent's Agent-call description + prompt, else the parent's recent prompts — except `fork`, `Explore`, `claude-code-guide`, `statusline-setup` (override with `HYPOMNEMA_SUBAGENT_SKIP`, a comma list; set-but-empty means none skipped, and a `*` entry means skip every agent type — set it in `settings.json`'s `env` block to opt every subagent out). A fact the parent session is withholding under an ablation stays withheld from its subagents. The subagent's citations are measured under its own key, separately from the parent's; subagents are told to cite in their final report. Pass inline only what is specific to the task at hand — the ranker already covers general recall. `memoryctl recall` run inside a subagent records against the parent session (there is no agent id in the subagent's Bash environment); `skill-inject` run inside a subagent does the same, for the same reason.
 
 ## Source of truth
 

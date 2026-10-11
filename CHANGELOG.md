@@ -16,6 +16,15 @@
   channel (7/13) and a silent subagent one (1/443). Detail now shows both plus
   the parent's useful/silent fact counts; subagents WARN at >=20 sessions and
   <5% cited.
+- **Subagents are asked to cite in their final report.** SubagentStart
+  deliveries now carry `SubagentCiteInstruction` instead of the parent line
+  ("wrap that sentence … hidden from the user" had nothing to attach to in a
+  subagent: 1 of 443 cited). `close --subagent` already classified the
+  report, so no parsing changed. A parent must not copy a subagent's
+  `<cc-memory>` tags into its own reply — they are the subagent's citations.
+- **Parent instruction covers decisions:** "changes what you say, do, or
+  decide" — facts that shape a choice rather than a sentence were going
+  uncited.
 
 ### Fixed
 

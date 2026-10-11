@@ -392,6 +392,9 @@ func TestRun_CiteInstructionAndFactHeaders(t *testing.T) {
 		}
 		t.Errorf("markdown must start with heading + CiteInstruction, got:\n%s", res.Markdown[:n])
 	}
+	if strings.Contains(res.Markdown, SubagentCiteInstruction) {
+		t.Errorf("parent delivery must not carry the subagent instruction")
+	}
 	if len(res.Markdown) > MaxTotalBytes {
 		t.Errorf("markdown exceeds MaxTotalBytes with 8 fat facts + instruction line: %d bytes", len(res.Markdown))
 	}
@@ -584,5 +587,38 @@ func TestRun_HoldoutSkip(t *testing.T) {
 		if s == "docker.md" {
 			t.Fatalf("session-sticky holdout was delivered: %v", res.Injected)
 		}
+	}
+}
+
+// A subagent never writes to the user, so its delivery tells it to cite in
+// the final report; the parent line must not appear there, and vice versa.
+func TestRun_SubagentGetsReportCiteInstruction(t *testing.T) {
+	memDir, projDir, home := setup(t)
+	os.WriteFile(filepath.Join(projDir, "a.md"),
+		[]byte("---\nname: a\ntype: knowledge\ncreated: 2026-05-01\n---\ndocker layer cache\n"), 0o644)
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
+
+	sub, err := Run(Input{
+		Event: "SubagentStart", SessionID: "s1:a1", CWD: "/tmp/proj", Prompt: "docker",
+		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir,
+		Today: "2026-05-29", MaxK: 5, MaxBytes: 5000,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.HasPrefix(sub.Markdown, "# Memory Context\n"+SubagentCiteInstruction+"\n") {
+		t.Errorf("subagent delivery must open with SubagentCiteInstruction:\n%s", sub.Markdown)
+	}
+	if strings.Contains(sub.Markdown, CiteInstruction) {
+		t.Errorf("subagent delivery must not carry the parent instruction")
+	}
+	if len(sub.Markdown) > 5000 {
+		t.Errorf("subagent payload %d bytes exceeds MaxBytes 5000", len(sub.Markdown))
+	}
+}
+
+func TestCiteInstruction_CoversDecisions(t *testing.T) {
+	if !strings.Contains(CiteInstruction, "changes what you say, do, or decide") {
+		t.Errorf("CiteInstruction must cover decisions: %q", CiteInstruction)
 	}
 }
