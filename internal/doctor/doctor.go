@@ -821,14 +821,17 @@ func checkWALErrors(walPath string, now time.Time) Check {
 }
 
 // checkSidecar reports on the SQLite metadata sidecar (.sidecar.db). The
-// sidecar is rebuildable from the WAL + native frontmatter, so its absence
-// is only a problem once there is a WAL to rebuild from:
+// sidecar is rebuildable from the WAL + native frontmatter:
 //   - absent, no .wal      → OK (fresh install, nothing to rebuild yet)
 //   - absent, .wal present → WARN (run `memoryctl sidecar rebuild`)
-//   - present but older than .wal (by mtime) → WARN (stale vs WAL)
-//   - present and at least as new as .wal    → OK
-//
-// v2 has no FTS / TF-IDF / analytics derived indices, so none are checked.
+//   - no wal_offset in meta (pre-v2.16 sidecar) → WARN (rebuild)
+//   - sidecar cannot be opened → WARN (unreadable)
+//   - wal_offset beyond the WAL's size or not on a line boundary
+//     (compacted/rotated/regrown) → WARN (rebuild)
+//   - a PARENT session-close after wal_offset → WARN (a Stop ran without
+//     reprojecting)
+//   - otherwise OK. Injects, recalls and subagent closes land between Stops
+//     by design and are projected at the next parent close.
 func checkSidecar(memoryDir string, now time.Time) Check {
 	const name = "sidecar"
 	sidecarPath := filepath.Join(memoryDir, ".sidecar.db")
@@ -851,19 +854,87 @@ func checkSidecar(memoryDir string, now time.Time) Check {
 			Detail: ".sidecar.db missing but .wal exists — run `memoryctl sidecar rebuild`",
 		}
 	}
+	if walErr != nil {
+		return Check{Name: name, Status: OK,
+			Detail: fmt.Sprintf(".sidecar.db present (mtime %s), no .wal yet", sidecarInfo.ModTime().Format("2006-01-02 15:04"))}
+	}
 
-	if walErr == nil && sidecarInfo.ModTime().Before(walInfo.ModTime()) {
-		return Check{
-			Name:   name,
-			Status: WARN,
-			Detail: "sidecar stale vs WAL — run `memoryctl sidecar rebuild`",
-		}
+	off, ok, err := sidecarWALOffset(sidecarPath)
+	if err != nil {
+		return Check{Name: name, Status: WARN,
+			Detail: "sidecar unreadable (" + err.Error() + ") — if it persists, remove .sidecar.db, .sidecar.db-wal and .sidecar.db-shm in the memory dir, then run `memoryctl sidecar rebuild` (the next inject also self-heals a corrupt sidecar)"}
+	}
+	if !ok {
+		return Check{Name: name, Status: WARN,
+			Detail: "sidecar carries no WAL offset (written before v2.16) — run `memoryctl sidecar rebuild`"}
+	}
+	if off > walInfo.Size() || !atLineStart(walPath, off) {
+		return Check{Name: name, Status: WARN,
+			Detail: "WAL no longer matches the sidecar's projection offset (compacted or rotated) — run `memoryctl sidecar rebuild`"}
+	}
+	if parentCloseAfter(walPath, off) {
+		return Check{Name: name, Status: WARN,
+			Detail: "sidecar stale vs WAL: a session closed after the last projection — run `memoryctl sidecar rebuild`"}
 	}
 	return Check{
 		Name:   name,
 		Status: OK,
-		Detail: fmt.Sprintf(".sidecar.db present (mtime %s)", sidecarInfo.ModTime().Format("2006-01-02 15:04")),
+		Detail: fmt.Sprintf(".sidecar.db present (mtime %s), projected through WAL byte %d", sidecarInfo.ModTime().Format("2006-01-02 15:04"), off),
 	}
+}
+
+// sidecarWALOffset reads meta.wal_offset. The caller has already confirmed
+// the file exists, so sidecar.Open does not create one (same contract as
+// sidecarStatusMap). err is non-nil only when the DB cannot be opened.
+func sidecarWALOffset(dbPath string) (int64, bool, error) {
+	s, err := sidecar.Open(dbPath)
+	if err != nil {
+		return 0, false, err
+	}
+	defer s.Close()
+	off, ok := s.WALOffset()
+	return off, ok, nil
+}
+
+// atLineStart reports whether off falls on a line boundary of the WAL
+// (offset 0, or the byte before it is '\n'). A WAL truncated by hand and
+// regrown past the old offset fails this and is treated as rotated.
+func atLineStart(walPath string, off int64) bool {
+	if off == 0 {
+		return true
+	}
+	f, err := os.Open(walPath)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	b := make([]byte, 1)
+	if _, err := f.ReadAt(b, off-1); err != nil {
+		return false
+	}
+	return b[0] == '\n'
+}
+
+// parentCloseAfter reports whether the WAL holds a parent session-close
+// (session column without ':') at or after byte offset off.
+func parentCloseAfter(walPath string, off int64) bool {
+	f, err := os.Open(walPath)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	if _, err := f.Seek(off, io.SeekStart); err != nil {
+		return false
+	}
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for sc.Scan() {
+		parts := strings.SplitN(sc.Text(), "|", 4)
+		if len(parts) == 4 && parts[1] == "session-close" && !strings.Contains(parts[3], ":") {
+			return true
+		}
+	}
+	return false
 }
 
 // closingEvents are the WAL event types that signal "Stop hook reached a

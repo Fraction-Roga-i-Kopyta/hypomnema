@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -180,6 +181,21 @@ ON CONFLICT(slug, project) DO UPDATE SET
 
 // All returns every memory row, ordered by slug for stable output.
 func (s *Store) All() ([]Record, error) { return allIn(s.db) }
+
+// WALOffset returns the .wal size in bytes recorded when the last
+// projection started. ok is false when the key is absent or unparsable —
+// a sidecar written before v2.16.
+func (s *Store) WALOffset() (int64, bool) {
+	var v string
+	if err := s.db.QueryRow(`SELECT v FROM meta WHERE k='wal_offset'`).Scan(&v); err != nil {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || n < 0 {
+		return 0, false
+	}
+	return n, true
+}
 
 func allIn(e dbtx) ([]Record, error) {
 	rows, err := e.Query(`SELECT slug, content_sha, type, name, description,
