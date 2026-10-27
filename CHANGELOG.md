@@ -1,5 +1,34 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **UserPromptSubmit injected facts unrelated to the prompt.** The ranker is
+  zero-safe by design, so once the prompt-matching facts were placed, recency
+  and popularity alone filled the remaining top-8 slots on every prompt. A
+  fact now injects on UserPromptSubmit only if the prompt names what it is
+  about (a prompt term in its name, description, keywords or domains) or
+  shares at least two terms with it; a single body-only hit — in replayed
+  sessions mostly a filler word — does not pass, and cwd/git terms rank but
+  do not count. A prompt with no relevance terms injects nothing.
+  SessionStart and SubagentStart are unchanged. Fixtures of budget/session
+  tests now carry `keywords: [docker]` so their facts pass the gate.
+  Measured on one install (blind judgement inside replayed sessions):
+  precision on human prompts 12.9 % → 27.8 % at unchanged injection volume —
+  `docs/measurements/2026-10-27-prompt-gate.md`.
+- **Home-directory basename used as a query term.** For a session launched
+  from `~` the cwd basename is the login name, which occurs in every fact that
+  quotes an absolute path — it matched an arbitrary subset of the corpus on
+  every prompt and was the only SessionStart term. It is skipped when cwd is
+  the home directory.
+- **Russian function-word case forms counted as relevance.** The stopword
+  list held base forms only; inflected forms ("этом", "тому", "тех", "ним",
+  "своих"…) and particles ("давай", "пусть") each scored a full overlap point
+  (3.0 — more than the recency maximum). They are now stopwords; no rebuild
+  is required (query terms are filtered the same way), `memoryctl sidecar
+  rebuild` drops the dead keyword rows.
+
 ## [2.16.0] — 2026-10-11
 
 ### Changed
