@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Pull-only mode: `HYPOMNEMA_PROMPT_INJECT=off`.** UserPromptSubmit injects
+  nothing; memory reaches the model through the harness-loaded `MEMORY.md`
+  index and the model's own reads — Claude Code's own design. SessionStart,
+  SubagentStart, citations (a Read of a fact counts as delivery), decay and
+  the secrets guard are unchanged.
+- **Global store index.** The Stop hook and `memoryctl reindex` also write
+  `~/.claude/memory-global/MEMORY.md`, linking each global fact by absolute
+  path. The harness never loads the global store, so without push it was
+  invisible; import the index from the user CLAUDE.md
+  (`@~/.claude/memory-global/MEMORY.md`).
+
 ### Fixed
 
 - **UserPromptSubmit injected facts unrelated to the prompt.** The ranker is
