@@ -599,3 +599,37 @@ func TestRun_CitationSignal_NoResolvableCitationEmitsCiteNoneOnce(t *testing.T) 
 		t.Errorf("cite-none must not appear when a citation resolved:\n%s", wal2)
 	}
 }
+
+// With UserPromptSubmit injection off the global store would be invisible:
+// the harness loads only the project's MEMORY.md. A parent close therefore
+// also regenerates the global store's index (absolute links), which the
+// user's CLAUDE.md can import.
+func TestRun_WritesGlobalIndex(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HYPOMNEMA_GLOBAL_DIR", "")
+	memDir := filepath.Join(home, ".claude", "memory")
+	projDir := filepath.Join(home, ".claude", "projects", "-tmp-proj", "memory")
+	globalDir := filepath.Join(home, ".claude", "memory-global")
+	for _, d := range []string{filepath.Join(memDir, ".runtime"), projDir, globalDir} {
+		os.MkdirAll(d, 0o755)
+	}
+	os.WriteFile(filepath.Join(projDir, "docker.md"),
+		[]byte("---\nname: Docker cache\ntype: mistake\n---\ndocker cache\n"), 0o644)
+	os.WriteFile(filepath.Join(globalDir, "creds.md"),
+		[]byte("---\nname: creds\ndescription: Where credentials live\ntype: reference\n---\nkeychain\n"), 0o644)
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
+
+	if _, err := Run(Input{
+		SessionID: "s1", CWD: "/tmp/proj", TranscriptPath: filepath.Join(home, "none.jsonl"),
+		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir, Today: "2026-05-29",
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(globalDir, "MEMORY.md"))
+	if err != nil {
+		t.Fatalf("global MEMORY.md not written: %v", err)
+	}
+	if !strings.Contains(string(got), "]("+filepath.Join(globalDir, "creds.md")+") — Where credentials live") {
+		t.Errorf("global index must link the fact by absolute path; got:\n%s", got)
+	}
+}

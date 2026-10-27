@@ -27,14 +27,34 @@ const descCap = 120
 // on a complete line: entries are emitted in the order given (callers pass
 // them ranked) and the tail is dropped once the budget is reached.
 func Render(files []native.MemFile, maxBytes int) string {
+	return render("# Memory Index\n", files, maxBytes, func(f native.MemFile) string { return f.Slug })
+}
+
+// RenderGlobal builds the index of the global store. The harness never loads
+// that store and it is no project's sibling, so each fact links by absolute
+// path: the model can Read it from any project. Written beside the global
+// facts; a user who turns off UserPromptSubmit injection (pull-only mode)
+// imports it from CLAUDE.md so the global store stays visible.
+func RenderGlobal(files []native.MemFile, maxBytes int) string {
+	const header = "# Global Memory Index\n" +
+		"Facts that apply in every project. Read a file when its description fits the task.\n"
+	return render(header, files, maxBytes, func(f native.MemFile) string {
+		if f.Path != "" {
+			return f.Path
+		}
+		return f.Slug
+	})
+}
+
+func render(header string, files []native.MemFile, maxBytes int, link func(native.MemFile) string) string {
 	var b strings.Builder
-	b.WriteString("# Memory Index\n")
+	b.WriteString(header)
 	for _, f := range files {
 		name := f.Name
 		if name == "" {
 			name = strings.TrimSuffix(f.Slug, ".md")
 		}
-		line := fmt.Sprintf("- [%s](%s) — %s\n", name, f.Slug, truncate(f.Description, descCap))
+		line := fmt.Sprintf("- [%s](%s) — %s\n", name, link(f), truncate(f.Description, descCap))
 		if b.Len()+len(line) > maxBytes {
 			break
 		}

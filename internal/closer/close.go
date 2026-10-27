@@ -188,11 +188,17 @@ func Run(in Input) (Result, error) {
 		s.Close()
 	}
 	// Regenerate the native MEMORY.md index for this project (best-effort).
-	// v2 owns this file; v1 left an orphan with ../../../ links. Project scope
-	// only — the global store surfaces via the ranked injection.
+	// v2 owns this file; v1 left an orphan with ../../../ links.
 	projDir := st.Dir
 	if projFiles, lerr := native.List(projDir); lerr == nil && len(projFiles) > 0 {
 		_ = memindex.Write(projDir, memindex.Render(projFiles, memindex.DefaultMaxBytes))
+	}
+	// And the global store's own index (absolute links). The harness loads only
+	// the project index; the global store surfaces via ranked injection, or —
+	// in pull-only mode — via this file imported from the user's CLAUDE.md.
+	globalDir := native.GlobalMemoryDir(filepath.Dir(in.ClaudeHome))
+	if globalFiles, gerr := native.List(globalDir); gerr == nil && len(globalFiles) > 0 {
+		_ = memindex.Write(globalDir, memindex.RenderGlobal(globalFiles, memindex.DefaultMaxBytes))
 	}
 
 	_ = profile.Generate(in.MemoryDir, nativeFiles)
