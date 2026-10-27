@@ -1,13 +1,18 @@
-# UserPromptSubmit relevance — prompt gate, home-dir basename, Russian function-word forms
+# UserPromptSubmit relevance — prompt gate, home-dir basename, Russian function-word forms, pull-only mode
 
-Date: 2026-10-27. Install: one live v2.16.0 install, Russian-language prompts,
-69 facts in the home-directory scope (project store + global) plus four
-project stores; WAL ~66 K lines. Sessions analysed: the 41 interactive
-sessions (652 prompts) since the v2.16.0 upgrade (2026-10-17).
+Date: 2026-10-27, with a pull-only follow-up the same day. Install: one live
+v2.16.0 install, Russian-language prompts, 69 facts in the home-directory
+scope (project store + global) plus four project stores; WAL ~66 K lines.
+Sessions analysed: the 41 interactive sessions (652 prompts) since the
+v2.16.0 upgrade (2026-10-17).
 
 **Result.** Inside replayed sessions, precision on prompts rose from 12.9 %
 to 27.8 % at the same injection volume (A2, B). Ranked per prompt without
 dedup, it rose from 8.6 % to 42.5 % with 71 % fewer injected facts (A).
+Most in-session injections were still irrelevant, so the install then moved
+to pull-only mode — Claude Code's own design — with a global index and
+rewritten descriptions. See "Follow-up on this install"; an LLM selection
+stage is proposed in "Idea for hypomnema".
 
 > **Correction (same day).** The first version of this report also replayed
 > 123 headless SDK sessions — the security-review runs a Stop-hook plugin
@@ -197,6 +202,88 @@ measures.
   `~/.claude/projects/<project>/`. Any replay or measurement over
   transcripts should filter on `entrypoint` (`sdk-py` here) or on presence
   in the WAL.
+
+## Follow-up on this install: pull-only mode
+
+Even with the gate, most in-session injections stayed irrelevant (A2: 57 of
+79). The causes left — no IDF, no morphology — are limits of word matching
+itself, so we looked at how Claude Code handles the same problem.
+
+**What Claude Code 2.1.311 does** (from its documentation and its shipped
+client). The documented base design is pull: the project `MEMORY.md` index
+is loaded every session, and the model reads the facts whose descriptions
+fit the task. The client also contains a recall stage that is not
+documented and is not enabled for this account. A separate small request
+gets the list of memory files with their descriptions and the user's
+message, and returns up to five files that are *clearly* useful, or none.
+It is instructed to judge what the message is about rather than word
+overlap, to be wary of profile and project-overview notes, and not to
+repeat files it already returned in the session. It runs in parallel with
+the main request and has a per-session byte budget. That stage targets the
+same failure modes this report measured — and it selects only on names and
+descriptions.
+
+**What we changed on the install.**
+
+1. **Pull-only mode.** `HYPOMNEMA_PROMPT_INJECT=off` (new, in `settings.json`
+   `env`) leaves UserPromptSubmit silent. SessionStart, SubagentStart,
+   citations, decay and the secrets guard are unchanged. A fact the model
+   reads with the Read tool still counts as delivered, so `cite-useful`
+   keeps measuring usefulness.
+2. **Global index.** Without push the global store was invisible: the
+   harness loads only the project index (`close.go` said so — "the global
+   store surfaces via the ranked injection"). The Stop hook and
+   `memoryctl reindex` now also write `~/.claude/memory-global/MEMORY.md`,
+   linking each fact by absolute path. The user `CLAUDE.md` imports it
+   (`@~/.claude/memory-global/MEMORY.md`) — 27 facts, 6.6 KB, visible in
+   every project.
+3. **Descriptions as the retrieval signal.** The index shows the first 120
+   characters of each description, and that is now what the model picks
+   from. 14 weak descriptions were rewritten: split parts that said only
+   "part 2/4 — <first words>", and one-liners such as "Tools and services"
+   or "User profile". The rule we adopted: the first ~120 characters say
+   what the fact is about.
+
+**Verification.** New tests, red first: `TestInjectVerb_PromptInjectOff`,
+`TestRenderGlobal_LinksByAbsolutePath`, `TestRun_WritesGlobalIndex`,
+`TestReindex_WritesGlobalIndex`. `go test -race ./...` is green and doctor
+reports 15 OK / 0 FAIL. A fresh headless session saw the global index
+through the import and got no UserPromptSubmit injection; SessionStart
+still primed (6 facts in the WAL).
+
+**Not measured yet.** Whether the model reads the right facts on its own
+needs real sessions. The citation rate on Read-delivered facts over the
+next weeks is the signal; the gated push above (A2: 27.8 %) is the
+baseline.
+
+## Idea for hypomnema: an LLM selection stage
+
+Lexical ranking cannot tell "a fact about X" from "a fact that mentions a
+word from the prompt", and in Russian it also misses inflected forms.
+Claude Code's recall stage suggests a design hypomnema could adopt:
+
+- **Candidates.** For a small corpus, the full manifest (name +
+  description). For a large one, the existing ranker's top 20–30 by
+  overlap plus recency.
+- **Selection.** A small model returns at most 5 facts that are clearly
+  useful for this message, or none. It judges the topic, not word overlap,
+  is conservative with user-profile and project-overview facts, and does
+  not repeat facts already delivered in the session. The manifest is the
+  first, cached message of a per-session conversation; each prompt is one
+  short turn.
+- **The hook constraint.** Claude Code runs its selector in parallel with
+  the main request. A UserPromptSubmit hook blocks, so a model call adds
+  latency (a `claude -p` call is 2–5 s), and subscription users have no API
+  key. Options: select asynchronously and deliver on the next prompt;
+  select only for prompts with enough content terms; use a local model.
+- **Descriptions become the main signal**, as they are for pull-only mode
+  and for Claude Code's own recall. A doctor check could flag weak ones:
+  "part N/M"-style, under ~40 characters, or longer than 120 characters
+  with the subject cut off.
+
+If Claude Code enables its own recall stage for an account, UserPromptSubmit
+push duplicates it. Pull-only mode plus good descriptions is exactly the
+input that stage uses.
 
 ## Reproduce
 
