@@ -15,7 +15,7 @@
   SessionStart and SubagentStart are unchanged. Fixtures of budget/session
   tests now carry `keywords: [docker]` so their facts pass the gate.
   Measured on one install (blind judgement inside replayed sessions):
-  precision on human prompts 12.9 % → 27.8 % at unchanged injection volume —
+  precision on interactive prompts 12.9 % → 27.8 % at unchanged injection volume —
   `docs/measurements/2026-10-27-prompt-gate.md`.
 - **Home-directory basename used as a query term.** For a session launched
   from `~` the cwd basename is the login name, which occurs in every fact that
