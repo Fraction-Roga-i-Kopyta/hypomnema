@@ -140,3 +140,25 @@ func TestGitSignal_BoundedByTimeout(t *testing.T) {
 		t.Fatalf("gitSignal took %v — git calls are unbounded", elapsed)
 	}
 }
+
+// The home directory's basename is the user's login name, which appears in
+// every fact that quotes an absolute path — as a query term it matched an
+// arbitrary subset of the corpus on every prompt launched from ~. A project
+// directory's basename stays a useful hint.
+func TestKeywords_HomeDirBasenameDropped(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "zqlogin")
+	if err := os.MkdirAll(filepath.Join(home, "my-service"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+
+	if got := keywords(home, "docker", false); has(got, "zqlogin") {
+		t.Errorf("home dir basename must not be a query term, got %v", got)
+	}
+	if got := keywords(home+"/", "docker", false); has(got, "zqlogin") {
+		t.Errorf("trailing slash must not defeat the home check, got %v", got)
+	}
+	if got := keywords(filepath.Join(home, "my-service"), "docker", false); !has(got, "service") {
+		t.Errorf("project dir basename must stay a query term, got %v", got)
+	}
+}
