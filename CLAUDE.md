@@ -297,7 +297,9 @@ an inflated one.
 
 Status filter: `active` and `pinned` only (sidecar-managed `stale` is excluded). Scope filter: only the current project's facts plus the global store — other projects' rows never inject. Result cap: top-8, 8KB total, once per context per fact (again after compaction/`/clear`).
 
-`session_keywords` come from prompt tokens, CWD basename, and git context (branch name, changed filenames, recent commit subjects) on both SessionStart and UserPromptSubmit (reactive re-rank).
+`session_keywords` come from prompt tokens, CWD basename (skipped when CWD is the home directory — its basename is the login name, present in every fact that quotes an absolute path), and git context (branch name, changed filenames, recent commit subjects) on both SessionStart and UserPromptSubmit (reactive re-rank).
+
+**Prompt gate.** On UserPromptSubmit a fact injects only if the prompt names what it is about — a prompt term in its `name`, `description`, `keywords` or `domains` — or shares at least two terms with it anywhere; a single body-only hit does not pass (in conversational prompts it is mostly a filler word). CWD and git terms still rank but do not pass the gate. A prompt with no relevance terms ("ok", "да, и что там") injects nothing. SessionStart has no prompt and keeps priming on static signals; SubagentStart queries are full task briefs and are not gated.
 
 **What changed from v1:** the old substring-trigger mechanism and negation-window logic are gone. The ranker treats all tokens as relevance signal. The two v1 pipelines (composite-score SessionStart + deterministic UserPromptSubmit) are now one. TF-IDF body scoring, FTS5 shadow retrieval, and cold-start gates are retired.
 
