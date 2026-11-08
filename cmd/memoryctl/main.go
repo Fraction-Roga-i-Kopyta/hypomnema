@@ -28,6 +28,9 @@ Usage:
       format, event name, slug sanitisation, non-empty session.
       Exit 0 = clean, 1 = at least one row failed, 2 = WAL missing or
       command misuse.
+  memoryctl wal compact [--dry-run]
+      Drop WAL rows no reader uses any more (trigger-*, session-metrics),
+      keep the original as .wal.pre-compact-<date>, re-project the sidecar.
   memoryctl audit invariants [--repo PATH]
       Run every automated invariant check from internal/invariants
       against the repo at PATH (default: current working directory).
