@@ -13,7 +13,9 @@
   `~/.claude/memory-global/MEMORY.md`, linking each global fact by absolute
   path. The harness never loads the global store, so without push it was
   invisible; import the index from the user CLAUDE.md
-  (`@~/.claude/memory-global/MEMORY.md`).
+  (`@~/.claude/memory-global/MEMORY.md`). A `MEMORY.md` already in the
+  global store that memoryctl did not generate (no `# Global Memory Index`
+  header) is left untouched; `reindex` says so on stderr.
 
 ### Fixed
 
@@ -25,6 +27,8 @@
   shares at least two terms with it; a single body-only hit — in replayed
   sessions mostly a filler word — does not pass, and cwd/git terms rank but
   do not count. A prompt with no relevance terms injects nothing.
+  The overlap is counted on the fact's own file, so a same-named fact in
+  another project (`continuity.md`) cannot lend it its words.
   SessionStart and SubagentStart are unchanged. Fixtures of budget/session
   tests now carry `keywords: [docker]` so their facts pass the gate.
   Measured on one install (blind judgement inside replayed sessions):
