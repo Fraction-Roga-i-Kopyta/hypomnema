@@ -105,7 +105,7 @@ func PathHint(f native.MemFile) string { return pathHint(f) }
 // Exported for the recall verb (pull ignores holdout: an explicit query
 // answers regardless of an ablation in flight).
 func Candidates(memoryDir string, st native.Store, files []native.MemFile, terms []string) []rank.Candidate {
-	c, _, _ := candidates(Input{MemoryDir: memoryDir}, st, files, terms, nil)
+	c, _ := candidates(Input{MemoryDir: memoryDir}, st, files, terms)
 	return c
 }
 
@@ -123,8 +123,11 @@ func requirePromptMatch(event string) bool { return event == "UserPromptSubmit" 
 // keywords or domains — or shares at least two terms with it anywhere. A
 // single body-only hit is too weak: in a conversational prompt it is mostly
 // a filler word ("today", "works", "again") that happens to occur somewhere
-// in a long body. hits is the fact's distinct prompt-term overlap.
-func promptMatch(hits int, f native.MemFile, want map[string]bool) bool {
+// in a long body. The overlap is counted on the fact's own file, not the
+// sidecar's slug-grouped keyword index: same-basename facts of other
+// projects (continuity.md, notes.md) must not lend it their words.
+func promptMatch(f native.MemFile, want map[string]bool) bool {
+	hits := fileOverlap(f, want)
 	if hits >= 2 {
 		return true
 	}
@@ -205,24 +208,23 @@ func Run(in Input) (Result, error) {
 		return Result{}, nil
 	}
 	bySlug := map[string]native.MemFile{}
+	byKey := make(map[string]native.MemFile, len(files)) // project-qualified: the gate's lookup
 	for _, f := range files {
 		bySlug[f.Slug] = f
+		byKey[native.QKey(f.Project, f.Slug)] = f
 	}
 	terms := keywords(in.CWD, in.Prompt, !in.NoGitSignal)
-	gated := requirePromptMatch(in.Event)
-	var gate []string
-	if gated {
-		gate = tokenize.Relevance(in.Prompt)
-	}
-	cands, held, gateHits := candidates(in, st, files, terms, gate)
+	cands, held := candidates(in, st, files, terms)
 	if held == nil {
 		held = map[string]int{} // defense in depth — candidates never returns nil
 	}
-	if gated {
-		want := termSet(gate)
+	if requirePromptMatch(in.Event) {
+		want := termSet(tokenize.Relevance(in.Prompt))
 		kept := cands[:0]
 		for _, c := range cands {
-			if promptMatch(gateHits[c.Slug], bySlug[c.Slug], want) {
+			// A candidate with no native file (sidecar row ahead of a
+			// deletion) cannot render anyway; it fails the gate.
+			if f, ok := byKey[native.QKey(c.Project, c.Slug)]; ok && promptMatch(f, want) {
 				kept = append(kept, c)
 			}
 		}
@@ -298,12 +300,11 @@ func Run(in Input) (Result, error) {
 }
 
 // candidates returns ranker-ready candidates plus the holdout budgets
-// (slug → HoldoutRemaining) for rows under an active ablation, and the
-// per-slug count of distinct gate terms matched (empty when gate is empty).
-// All maps are always non-nil-safe for writing: the degraded native-only
-// path returns an empty holdout map (ablation quietly suspends without a
-// sidecar — best-effort posture), never nil.
-func candidates(in Input, st native.Store, files []native.MemFile, terms, gate []string) ([]rank.Candidate, map[string]int, map[string]int) {
+// (slug → HoldoutRemaining) for rows under an active ablation. Both return
+// values are always non-nil-safe for writing: the degraded native-only path
+// returns an empty map (ablation quietly suspends without a sidecar —
+// best-effort posture), never nil.
+func candidates(in Input, st native.Store, files []native.MemFile, terms []string) ([]rank.Candidate, map[string]int) {
 	sidePath := filepath.Join(in.MemoryDir, ".sidecar.db")
 	walPath := filepath.Join(in.MemoryDir, ".wal")
 	projectSlug := st.Project
@@ -346,12 +347,6 @@ func candidates(in Input, st native.Store, files []native.MemFile, terms, gate [
 			if oerr != nil {
 				overlap = map[string]int{}
 			}
-			// A failed gate query degrades to "nothing matched": the prompt
-			// gate fails closed (no injection) rather than open (noise).
-			gateHits, gerr := s.OverlapScores(gate)
-			if gerr != nil {
-				gateHits = map[string]int{}
-			}
 			out := make([]rank.Candidate, 0, len(scoped))
 			held := map[string]int{}
 			for _, r := range scoped {
@@ -367,10 +362,10 @@ func candidates(in Input, st native.Store, files []native.MemFile, terms, gate [
 					Overlap:    overlap[r.Slug],
 				})
 			}
-			return out, held, gateHits
+			return out, held
 		}
 	}
-	return degradedCandidates(files, terms), map[string]int{}, degradedOverlap(files, gate)
+	return degradedCandidates(files, terms), map[string]int{}
 }
 
 // shouldWipeSidecar reports whether a sidecar.Open error indicates genuine
@@ -410,23 +405,6 @@ func degradedCandidates(files []native.MemFile, terms []string) []rank.Candidate
 			Slug: f.Slug, Type: f.Type, Project: f.Project, Status: "active",
 			Effectiveness: 0.5, Overlap: fileOverlap(f, want),
 		})
-	}
-	return out
-}
-
-// degradedOverlap is the sidecar-free OverlapScores: per slug, the distinct
-// terms a native file matches (a slug present in both the project and the
-// global store keeps its larger count).
-func degradedOverlap(files []native.MemFile, terms []string) map[string]int {
-	out := map[string]int{}
-	if len(terms) == 0 {
-		return out
-	}
-	want := termSet(terms)
-	for _, f := range files {
-		if n := fileOverlap(f, want); n > out[f.Slug] {
-			out[f.Slug] = n
-		}
 	}
 	return out
 }
