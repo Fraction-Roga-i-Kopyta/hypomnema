@@ -676,3 +676,42 @@ func TestRun_UserPromptSubmitRequiresPromptMatch(t *testing.T) {
 		t.Errorf("SessionStart keeps priming without a prompt, got %v", res.Injected)
 	}
 }
+
+// The prompt gate scores a fact on its own file. continuity.md / notes.md
+// exist in every project, and the sidecar's keyword overlap is grouped by
+// slug alone — a gate fed from it let this project's continuity.md pass on
+// the words of another project's continuity.md.
+func TestRun_PromptGateIgnoresSameSlugInOtherProject(t *testing.T) {
+	memDir, projDir, home := setup(t)
+	otherDir := filepath.Join(home, ".claude", "projects", "-tmp-other", "memory")
+	if err := os.MkdirAll(otherDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(otherDir, "continuity.md"),
+		[]byte("---\nname: continuity\ntype: continuity\n---\ndocker cache rebuild pending\n"), 0o644)
+	os.WriteFile(filepath.Join(projDir, "continuity.md"),
+		[]byte("---\nname: continuity\ntype: continuity\n---\npostgres index plan pending\n"), 0o644)
+	os.WriteFile(filepath.Join(projDir, "docker.md"),
+		[]byte("---\nname: Docker cache\ntype: mistake\n---\nlayer cache stale\n"), 0o644)
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
+
+	run := func(cwd, event, prompt string) Result {
+		t.Helper()
+		res, err := Run(Input{
+			Event: event, SessionID: "s1", CWD: cwd, Prompt: prompt,
+			ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir,
+			Today: "2026-05-29", MaxK: 8,
+		})
+		if err != nil {
+			t.Fatalf("Run(%s, %s): %v", cwd, event, err)
+		}
+		return res
+	}
+	// Seed the shared sidecar with the other project's rows first.
+	run("/tmp/other", "SessionStart", "")
+
+	res := run("/tmp/proj", "UserPromptSubmit", "fix the docker cache")
+	if strings.Join(res.Injected, ",") != "docker.md" {
+		t.Errorf("only docker.md matches the prompt in this project, got %v", res.Injected)
+	}
+}
