@@ -196,9 +196,10 @@ func Run(in Input) (Result, error) {
 	// And the global store's own index (absolute links). The harness loads only
 	// the project index; the global store surfaces via ranked injection, or —
 	// in pull-only mode — via this file imported from the user's CLAUDE.md.
+	// A MEMORY.md hypomnema did not generate there is left untouched.
 	globalDir := native.GlobalMemoryDir(filepath.Dir(in.ClaudeHome))
 	if globalFiles, gerr := native.List(globalDir); gerr == nil && len(globalFiles) > 0 {
-		_ = memindex.Write(globalDir, memindex.RenderGlobal(globalFiles, memindex.DefaultMaxBytes))
+		_ = memindex.WriteGlobal(globalDir, memindex.RenderGlobal(globalFiles, memindex.DefaultMaxBytes))
 	}
 
 	_ = profile.Generate(in.MemoryDir, nativeFiles)
