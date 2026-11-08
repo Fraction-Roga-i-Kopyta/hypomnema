@@ -16,7 +16,8 @@ type MemFile struct {
 	Name        string   // frontmatter: name
 	Description string   // frontmatter: description
 	Type        string   // frontmatter: type — native bucket (non-exhaustive); fine-grained type lives in the sidecar
-	Created     string   // frontmatter: created (YYYY-MM-DD) — author's recency claim
+	Created     string   // frontmatter: created (YYYY-MM-DD) — author's recency claim; falls back to Modified
+	Modified    string   // date part of Claude Code's `modified` stamp (set on every Write/Edit), YYYY-MM-DD
 	Status      string   // frontmatter: status — only "pinned" is honoured; lifecycle states are sidecar-owned
 	Keywords    []string // frontmatter: keywords — explicit relevance signal
 	Domains     []string // frontmatter: domains — domain filter tags
@@ -66,13 +67,22 @@ func parseFile(path string) (MemFile, error) {
 	}
 	fm, body := splitFrontmatter(string(raw))
 	sum := sha256.Sum256(raw)
+	modified := stampDate(fm["modified"])
+	created := fm["created"]
+	if created == "" {
+		// Claude Code writes `modified` on every Write/Edit and never
+		// `created`: without the fallback a harness-written fact had no date
+		// at all, so it never aged and scored no recency.
+		created = modified
+	}
 	return MemFile{
 		Slug:           filepath.Base(path),
 		Path:           path,
 		Name:           fm["name"],
 		Description:    fm["description"],
 		Type:           fm["type"],
-		Created:        fm["created"],
+		Created:        created,
+		Modified:       modified,
 		Status:         fm["status"],
 		Keywords:       splitList(fm["keywords"]),
 		Domains:        splitList(fm["domains"]),
@@ -197,4 +207,53 @@ func splitFrontmatter(s string) (map[string]string, string) {
 		}
 	}
 	return fm, strings.TrimSpace(strings.Join(lines[end+1:], "\n"))
+}
+
+// stampDate returns the YYYY-MM-DD prefix of an ISO date or timestamp, or ""
+// when v does not start with one.
+func stampDate(v string) string {
+	v = strings.TrimSpace(v)
+	if len(v) < 10 {
+		return ""
+	}
+	d := v[:10]
+	for i, c := range d {
+		if (i == 4 || i == 7) != (c == '-') || (c != '-' && (c < '0' || c > '9')) {
+			return ""
+		}
+	}
+	return d
+}
+
+// FreshnessDate is a fact's latest known date: the later of its created and
+// modified dates (YYYY-MM-DD compares lexically).
+func FreshnessDate(created, modified string) string {
+	if modified > created {
+		return modified
+	}
+	return created
+}
+
+// NewestContinuity returns, per project, the slug of its freshest continuity
+// fact — the "where we left off" marker that is current. Older continuity
+// files are history: they stay readable but are no longer pushed and age
+// like notes. Ties go to the lexically greater slug, so dated names
+// (continuity-2026-09-03.md) resolve to the latest.
+func NewestContinuity(files []MemFile) map[string]string {
+	best := map[string]MemFile{}
+	for _, f := range files {
+		if f.Type != "continuity" {
+			continue
+		}
+		b, ok := best[f.Project]
+		fd, bd := FreshnessDate(f.Created, f.Modified), FreshnessDate(b.Created, b.Modified)
+		if !ok || fd > bd || (fd == bd && f.Slug > b.Slug) {
+			best[f.Project] = f
+		}
+	}
+	out := make(map[string]string, len(best))
+	for p, f := range best {
+		out[p] = f.Slug
+	}
+	return out
 }
