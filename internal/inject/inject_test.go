@@ -626,3 +626,33 @@ func TestRun_PromptGateIgnoresSameSlugInOtherProject(t *testing.T) {
 		t.Errorf("only docker.md matches the prompt in this project, got %v", res.Injected)
 	}
 }
+
+// Only a project's freshest continuity is pushed: older continuity files are
+// history and would otherwise crowd SessionStart (one file per session, none
+// ever aged). Freshness is the later of created and Claude Code's `modified`
+// stamp, so continuity.md rewritten in place beats an older dated sibling.
+func TestRun_OnlyNewestContinuityInjects(t *testing.T) {
+	memDir, projDir, home := setup(t)
+	os.WriteFile(filepath.Join(projDir, "continuity.md"),
+		[]byte("---\nname: continuity\ntype: continuity\ncreated: 2026-08-01\nmetadata:\n  modified: 2026-10-01T10:00:00Z\n---\nnext: ship docker cache fix\n"), 0o644)
+	os.WriteFile(filepath.Join(projDir, "continuity-2026-09-01.md"),
+		[]byte("---\nname: continuity 2026-09-01\ntype: continuity\ncreated: 2026-09-01\n---\nnext: review docker cache\n"), 0o644)
+	os.WriteFile(filepath.Join(projDir, "docker.md"),
+		[]byte("---\nname: Docker cache\ntype: mistake\n---\nlayer cache stale\n"), 0o644)
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
+
+	for _, ev := range []string{"SessionStart", "UserPromptSubmit"} {
+		res, err := Run(Input{
+			Event: ev, SessionID: "s-" + ev, CWD: "/tmp/proj", Prompt: "docker cache continuity",
+			ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir,
+			Today: "2026-10-05", MaxK: 8,
+		})
+		if err != nil {
+			t.Fatalf("Run(%s): %v", ev, err)
+		}
+		got := strings.Join(res.Injected, ",")
+		if !strings.Contains(got, "continuity.md") || strings.Contains(got, "continuity-2026-09-01.md") {
+			t.Errorf("%s: want the freshest continuity only, got %v", ev, res.Injected)
+		}
+	}
+}

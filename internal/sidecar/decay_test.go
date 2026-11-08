@@ -91,24 +91,65 @@ func TestMarkStale_HarnessTypes(t *testing.T) {
 	}
 }
 
-// continuity/project facts are "where we left off" markers — they must
-// never rotate out by age (CLAUDE.md lifecycle contract).
-func TestMarkStale_ExemptsContinuityAndProject(t *testing.T) {
+// A project's freshest continuity is its "where we left off" marker — it
+// must never rotate out by age, however old the file.
+func TestMarkStale_SoleContinuityNeverAges(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), ".sidecar.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
 	mustUpsert(t, s, Record{Slug: "cont.md", Type: "continuity", Created: "2020-01-01", Status: "active"})
-	mustUpsert(t, s, Record{Slug: "proj.md", Type: "project", Created: "2020-01-01", Status: "active"})
 
 	if _, err := s.MarkStale("2026-06-09"); err != nil {
 		t.Fatal(err)
 	}
 	if r, _, _ := s.Get("cont.md"); r.Status != "active" {
-		t.Errorf("continuity must never rotate, got %q", r.Status)
+		t.Errorf("a project's only (hence freshest) continuity must never rotate, got %q", r.Status)
 	}
-	if r, _, _ := s.Get("proj.md"); r.Status != "active" {
-		t.Errorf("project must never rotate, got %q", r.Status)
+}
+
+// Continuity files pile up (one per session); only the freshest per project
+// is the live "where we left off" marker and stays exempt. Older ones age
+// like notes. Claude Code's own `type: project` means "ongoing work/goals",
+// not a project card, so it ages like knowledge (90 days) — a card that
+// must never age is pinned. Staleness is per (slug, project): a same-named
+// file in another project is a different fact.
+func TestMarkStale_ContinuityAndProjectTypes(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), ".sidecar.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for _, r := range []Record{
+		{Slug: "continuity.md", Project: "p", Type: "continuity", Created: "2026-01-01", Modified: "2026-03-01", Status: "active"},
+		{Slug: "continuity-2026-02-01.md", Project: "p", Type: "continuity", Created: "2026-02-01", Status: "active"},
+		{Slug: "continuity.md", Project: "q", Type: "continuity", Created: "2026-01-01", Status: "active"},
+		{Slug: "continuity-2026-05-01.md", Project: "q", Type: "continuity", Created: "2026-05-01", Status: "active"},
+		{Slug: "plan.md", Project: "p", Type: "project", Created: "2026-01-01", Status: "active"},
+		{Slug: "card.md", Project: "p", Type: "project", Created: "2026-01-01", Status: "pinned"},
+	} {
+		mustUpsert(t, s, r)
+	}
+
+	if _, err := s.MarkStale("2026-06-15"); err != nil {
+		t.Fatalf("MarkStale: %v", err)
+	}
+	want := map[[2]string]string{
+		{"continuity.md", "p"}:            "active", // freshest in p (modified 03-01)
+		{"continuity-2026-02-01.md", "p"}: "stale",
+		{"continuity.md", "q"}:            "stale", // older in q — must not touch p's row
+		{"continuity-2026-05-01.md", "q"}: "active",
+		{"plan.md", "p"}:                  "stale",
+		{"card.md", "p"}:                  "pinned",
+	}
+	recs, err := s.All()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range recs {
+		if w, ok := want[[2]string{r.Slug, r.Project}]; ok && r.Status != w {
+			t.Errorf("%s@%s status = %q, want %q", r.Slug, r.Project, r.Status, w)
+		}
 	}
 }

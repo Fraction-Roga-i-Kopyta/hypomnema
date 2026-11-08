@@ -203,6 +203,7 @@ func reprojectIn(e dbtx, files []native.MemFile, walPath string, scope []string)
 			// behaviour change left for a design cycle.
 			Domains:       strings.Join(f.Domains, ","),
 			Created:       created,
+			Modified:      f.Modified,
 			LastInjected:  a.lastInject,
 			LastUseful:    a.lastUseful,
 			RefCount:      a.injects,

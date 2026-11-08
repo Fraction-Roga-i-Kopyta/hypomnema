@@ -199,6 +199,17 @@ func Run(in Input) (Result, error) {
 	}
 	terms := keywords(in.CWD, in.Prompt, !in.NoGitSignal)
 	cands := candidates(in, st, files, terms)
+	// Only a project's freshest continuity is pushed; older ones are history
+	// (still recallable) and would otherwise pile up in the window.
+	newest := native.NewestContinuity(files)
+	current := cands[:0]
+	for _, c := range cands {
+		if f, ok := byKey[native.QKey(c.Project, c.Slug)]; ok && f.Type == "continuity" && newest[f.Project] != f.Slug {
+			continue
+		}
+		current = append(current, c)
+	}
+	cands = current
 	if requirePromptMatch(in.Event) {
 		want := termSet(tokenize.Relevance(in.Prompt))
 		kept := cands[:0]
