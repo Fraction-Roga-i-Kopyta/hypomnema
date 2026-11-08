@@ -4,6 +4,7 @@ package inject
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"time"
@@ -41,11 +42,27 @@ func keywords(cwd, prompt string, withGit bool) []string {
 		}
 	}
 	add(tokenize.Relevance(prompt))
-	add(tokenize.Relevance(filepath.Base(cwd)))
+	// The home directory's basename is the login name, not a project: it
+	// occurs in every fact that quotes an absolute path, so as a term it
+	// matched an arbitrary slice of the corpus (and was the only SessionStart
+	// term for sessions launched from ~).
+	if !isHomeDir(cwd) {
+		add(tokenize.Relevance(filepath.Base(cwd)))
+	}
 	if withGit {
 		add(gitSignal(cwd))
 	}
 	return out
+}
+
+// isHomeDir reports whether cwd is the user's home directory. An unknown
+// home (no $HOME) is never a match, so the basename hint stays on.
+func isHomeDir(cwd string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" || cwd == "" {
+		return false
+	}
+	return filepath.Clean(cwd) == filepath.Clean(home)
 }
 
 // gitSignal returns tokenized "what am I working on" context from cwd's git

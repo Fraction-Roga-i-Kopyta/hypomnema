@@ -109,6 +109,41 @@ func Candidates(memoryDir string, st native.Store, files []native.MemFile, terms
 	return c
 }
 
+// requirePromptMatch reports whether a delivery event injects only facts
+// that pass promptMatch. UserPromptSubmit re-ranks on what the user just
+// typed; without the gate the remaining top-K slots were filled by recency
+// and popularity alone, so facts with nothing in common with the turn were
+// injected on every prompt. cwd and git terms still rank but do not pass the
+// gate — the user did not ask for them. SessionStart has no prompt and keeps
+// priming on static signals; SubagentStart queries are full task briefs.
+func requirePromptMatch(event string) bool { return event == "UserPromptSubmit" }
+
+// promptMatch is the UserPromptSubmit gate: a fact passes when the prompt
+// names what the fact is about — a prompt term in its name, description,
+// keywords or domains — or shares at least two terms with it anywhere. A
+// single body-only hit is too weak: in a conversational prompt it is mostly
+// a filler word ("today", "works", "again") that happens to occur somewhere
+// in a long body. The overlap is counted on the fact's own file, not the
+// sidecar's slug-grouped keyword index: same-basename facts of other
+// projects (continuity.md, notes.md) must not lend it their words.
+func promptMatch(f native.MemFile, want map[string]bool) bool {
+	hits := fileOverlap(f, want)
+	if hits >= 2 {
+		return true
+	}
+	if hits == 0 {
+		return false
+	}
+	head := f.Name + " " + f.Description + " " +
+		strings.Join(f.Keywords, " ") + " " + strings.Join(f.Domains, " ")
+	for _, tok := range tokenize.Relevance(head) {
+		if want[tok] {
+			return true
+		}
+	}
+	return false
+}
+
 // Input is everything Run needs (parsed by the memoryctl inject verb).
 type Input struct {
 	Event           string
@@ -173,13 +208,27 @@ func Run(in Input) (Result, error) {
 		return Result{}, nil
 	}
 	bySlug := map[string]native.MemFile{}
+	byKey := make(map[string]native.MemFile, len(files)) // project-qualified: the gate's lookup
 	for _, f := range files {
 		bySlug[f.Slug] = f
+		byKey[native.QKey(f.Project, f.Slug)] = f
 	}
 	terms := keywords(in.CWD, in.Prompt, !in.NoGitSignal)
 	cands, held := candidates(in, st, files, terms)
 	if held == nil {
 		held = map[string]int{} // defense in depth — candidates never returns nil
+	}
+	if requirePromptMatch(in.Event) {
+		want := termSet(tokenize.Relevance(in.Prompt))
+		kept := cands[:0]
+		for _, c := range cands {
+			// A candidate with no native file (sidecar row ahead of a
+			// deletion) cannot render anyway; it fails the gate.
+			if f, ok := byKey[native.QKey(c.Project, c.Slug)]; ok && promptMatch(f, want) {
+				kept = append(kept, c)
+			}
+		}
+		cands = kept
 	}
 	for _, s := range in.HoldoutSession {
 		if held[s] == 0 {
@@ -349,28 +398,42 @@ func scopeRecords(recs []sidecar.Record, projectSlug string) []sidecar.Record {
 }
 
 func degradedCandidates(files []native.MemFile, terms []string) []rank.Candidate {
-	want := map[string]bool{}
-	for _, t := range terms {
-		want[t] = true
-	}
+	want := termSet(terms)
 	out := make([]rank.Candidate, 0, len(files))
 	for _, f := range files {
-		seen := map[string]bool{}
-		overlap := 0
-		text := f.Name + " " + f.Description + " " +
-			strings.Join(f.Keywords, " ") + " " + strings.Join(f.Domains, " ") + " " + f.Body
-		for _, tok := range tokenize.Relevance(text) {
-			if want[tok] && !seen[tok] {
-				seen[tok] = true
-				overlap++
-			}
-		}
 		out = append(out, rank.Candidate{
 			Slug: f.Slug, Type: f.Type, Project: f.Project, Status: "active",
-			Effectiveness: 0.5, Overlap: overlap,
+			Effectiveness: 0.5, Overlap: fileOverlap(f, want),
 		})
 	}
 	return out
+}
+
+func termSet(terms []string) map[string]bool {
+	want := make(map[string]bool, len(terms))
+	for _, t := range terms {
+		want[t] = true
+	}
+	return want
+}
+
+// fileOverlap counts the distinct wanted terms in a native file's name,
+// description, frontmatter keywords/domains and body.
+func fileOverlap(f native.MemFile, want map[string]bool) int {
+	if len(want) == 0 {
+		return 0
+	}
+	seen := map[string]bool{}
+	n := 0
+	text := f.Name + " " + f.Description + " " +
+		strings.Join(f.Keywords, " ") + " " + strings.Join(f.Domains, " ") + " " + f.Body
+	for _, tok := range tokenize.Relevance(text) {
+		if want[tok] && !seen[tok] {
+			seen[tok] = true
+			n++
+		}
+	}
+	return n
 }
 
 func splitCSV(s string) []string {

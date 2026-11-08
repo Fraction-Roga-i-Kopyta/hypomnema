@@ -64,3 +64,23 @@ func TestLoadStopwords(t *testing.T) {
 		t.Errorf("missing stopword file: got len=%d err=%v, want 0/nil", len(sw2), err)
 	}
 }
+
+// Russian function words inflect, so the base forms alone left their case
+// forms ("этом", "тому", "тех") and the conversational particle "давай" in
+// the relevance set; each such hit is worth a full overlap point (3.0) and
+// pulled unrelated facts into the injection.
+func TestRelevance_RussianInflectedFunctionWords(t *testing.T) {
+	got := Relevance("перед этом давай посмотрим сборку, как и тому назад, у тех")
+	set := map[string]bool{}
+	for _, tok := range got {
+		set[tok] = true
+	}
+	for _, sw := range []string{"этом", "давай", "тому", "тех"} {
+		if set[sw] {
+			t.Errorf("function word %q must be filtered, got %v", sw, got)
+		}
+	}
+	if !set["сборку"] {
+		t.Errorf("content word 'сборку' must survive, got %v", got)
+	}
+}

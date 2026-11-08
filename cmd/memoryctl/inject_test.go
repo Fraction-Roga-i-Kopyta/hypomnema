@@ -102,7 +102,7 @@ func TestInjectVerb_RuntimeListAccumulatesUnderBudget(t *testing.T) {
 	filler := strings.Repeat("lorem ", 400) // ~2.4KB per body
 	for _, name := range []string{"a.md", "b.md", "c.md", "d.md"} {
 		os.WriteFile(filepath.Join(projDir, name),
-			[]byte("---\nname: "+name+"\ntype: knowledge\n---\ndocker "+filler+"\n"), 0o644)
+			[]byte("---\nname: "+name+"\ntype: knowledge\nkeywords: [docker]\n---\ndocker "+filler+"\n"), 0o644)
 	}
 	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
 	env := map[string]string{
@@ -206,5 +206,41 @@ func TestInjectVerb_FailSafeOnBadStdin(t *testing.T) {
 		if err := json.Unmarshal([]byte(out), &v); err != nil {
 			t.Errorf("fail-safe output must be empty or valid JSON, got: %q", out)
 		}
+	}
+}
+
+// HYPOMNEMA_PROMPT_INJECT=off is the pull-only mode: UserPromptSubmit stays
+// silent (no output, no WAL event, no session list) and memory reaches the
+// model through the harness-loaded index and its own reads. SessionStart
+// still primes.
+func TestInjectVerb_PromptInjectOff(t *testing.T) {
+	home := t.TempDir()
+	memDir := filepath.Join(home, ".claude", "memory")
+	projDir := filepath.Join(home, ".claude", "projects", "-tmp-proj", "memory")
+	os.MkdirAll(projDir, 0o755)
+	os.MkdirAll(memDir, 0o755)
+	os.WriteFile(filepath.Join(projDir, "docker.md"),
+		[]byte("---\nname: Docker cache\ntype: mistake\n---\ndocker layer cache\n"), 0o644)
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
+	env := map[string]string{
+		"CLAUDE_HOME": filepath.Join(home, ".claude"), "CLAUDE_MEMORY_DIR": memDir,
+		"HYPOMNEMA_TODAY": "2026-05-29", "HYPOMNEMA_PROMPT_INJECT": "off",
+	}
+	stdin := `{"session_id":"s1","cwd":"/tmp/proj","prompt":"fix the docker cache"}`
+
+	out, _, code := runStdin(t, env, stdin, "inject", "--event=UserPromptSubmit")
+	if code != 0 || strings.TrimSpace(out) != "" {
+		t.Errorf("UserPromptSubmit must be silent in pull-only mode, exit=%d out=%q", code, out)
+	}
+	if wal, _ := os.ReadFile(filepath.Join(memDir, ".wal")); strings.Contains(string(wal), "|inject|") {
+		t.Errorf("pull-only UserPromptSubmit must not record an injection:\n%s", wal)
+	}
+	if _, err := os.Stat(filepath.Join(memDir, ".runtime", "injected-s1.list")); err == nil {
+		t.Errorf("pull-only UserPromptSubmit must not touch the session list")
+	}
+
+	out, _, _ = runStdin(t, env, `{"session_id":"s1","cwd":"/tmp/proj","prompt":""}`, "inject", "--event=SessionStart")
+	if !strings.Contains(out, "docker.md") {
+		t.Errorf("SessionStart still primes in pull-only mode, got %q", out)
 	}
 }
