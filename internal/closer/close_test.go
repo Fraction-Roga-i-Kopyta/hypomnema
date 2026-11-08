@@ -38,13 +38,10 @@ func TestRun_EmitsClosingEvents(t *testing.T) {
 	}
 	wal, _ := os.ReadFile(filepath.Join(memDir, ".wal"))
 	w := string(wal)
-	for _, want := range []string{"|cite-useful|-tmp-proj\x1fdocker.md|s1", "|cite-silent|-tmp-proj\x1fsql.md|s1", "|session-close|s1|s1", "|session-metrics|"} {
+	for _, want := range []string{"|cite-useful|-tmp-proj\x1fdocker.md|s1", "|cite-silent|-tmp-proj\x1fsql.md|s1", "|session-close|s1|s1"} {
 		if !strings.Contains(w, want) {
 			t.Errorf("WAL missing %q:\n%s", want, w)
 		}
-	}
-	if _, err := os.Stat(filepath.Join(memDir, "self-profile.md")); err != nil {
-		t.Errorf("self-profile not generated: %v", err)
 	}
 }
 
@@ -124,33 +121,6 @@ func TestRun_MissingTranscriptIsNotFatal(t *testing.T) {
 	}
 	if res.Useful != 0 || res.Silent != 0 {
 		t.Errorf("Result must report zero classification when the transcript is unreadable: useful=%d silent=%d", res.Useful, res.Silent)
-	}
-}
-
-// session-metrics must carry real transcript-derived numbers, not the
-// hardcoded zeros v2 shipped with.
-func TestRun_SessionMetricsFromTranscript(t *testing.T) {
-	home := t.TempDir()
-	memDir := filepath.Join(home, ".claude", "memory")
-	os.MkdirAll(filepath.Join(memDir, ".runtime"), 0o755)
-	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
-	tx := filepath.Join(home, "t.jsonl")
-	transcript := `{"type":"user","sessionId":"s1","timestamp":"2026-05-29T10:00:00Z","message":{"content":[{"type":"text","text":"go"}]}}
-{"type":"assistant","timestamp":"2026-05-29T10:00:30Z","message":{"content":[{"type":"text","text":"ok"},{"type":"tool_use"},{"type":"tool_use"}]}}
-{"type":"user","timestamp":"2026-05-29T10:01:00Z","message":{"content":[{"type":"tool_result","is_error":true}]}}
-{"type":"assistant","timestamp":"2026-05-29T10:02:00Z","message":{"content":[{"type":"tool_use"}]}}`
-	os.WriteFile(tx, []byte(transcript+"\n"), 0o644)
-
-	if _, err := Run(Input{
-		SessionID: "s1", CWD: "/tmp/proj", TranscriptPath: tx,
-		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir, Today: "2026-05-29",
-	}); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	wal, _ := os.ReadFile(filepath.Join(memDir, ".wal"))
-	want := "|session-metrics|domains:_global_,error_count:1,tool_calls:3,duration:120s|s1"
-	if !strings.Contains(string(wal), want) {
-		t.Errorf("WAL missing %q:\n%s", want, wal)
 	}
 }
 

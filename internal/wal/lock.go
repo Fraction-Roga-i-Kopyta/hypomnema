@@ -59,7 +59,7 @@ func Acquire(memoryDir string, cfg LockConfig) (*Lock, error) {
 
 // AcquirePath flock-locks the file at lockPath, creating it if needed, retrying
 // non-blockingly until held or the deadline elapses (ErrTimeout). Exposed so
-// non-WAL resources (e.g. self-profile.md writes) reuse the same primitive.
+// non-WAL resources can reuse the same primitive.
 func AcquirePath(lockPath string, cfg LockConfig) (*Lock, error) {
 	if cfg.MaxWait == 0 {
 		cfg.MaxWait = DefaultLockConfig.MaxWait

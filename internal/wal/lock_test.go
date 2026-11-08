@@ -92,8 +92,7 @@ func TestAcquire_NoTakeoverWhenFresh(t *testing.T) {
 
 func TestAcquirePath_AllowsNonWALResources(t *testing.T) {
 	// Regression guard for v0.15 P2.12: AcquirePath must lock an
-	// arbitrary directory, not only .wal.lockd. Profile regen uses
-	// .self-profile.lockd via this entrypoint.
+	// arbitrary directory, not only .wal.lockd.
 	tmp := t.TempDir()
 	lockPath := filepath.Join(tmp, ".self-profile.lockd")
 	l1, err := AcquirePath(lockPath, DefaultLockConfig)

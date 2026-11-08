@@ -13,8 +13,6 @@ import (
 
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/dedup"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/doctor"
-	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/profile"
-	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/wal"
 )
 
 const usage = `memoryctl — hypomnema memory CLI
@@ -25,10 +23,6 @@ Usage:
       from stdin; posttool (file present) reads it from disk. Exits 2 on
       ≥80% similarity in pretool mode, 1 on merge in posttool mode, 0
       otherwise. Drop-in replacement for bin/memory-dedup.py.
-  memoryctl self-profile
-      Regenerate ~/.claude/memory/self-profile.md from WAL + mistakes +
-      strategies. Single-pass WAL aggregation; drop-in replacement for
-      bin/memory-self-profile.sh.
   memoryctl doctor [--json]
       On-demand health check of the install: claude_dir, hook registrations
       in settings.json, broken symlinks in hooks/ and bin/, memoryctl
@@ -121,7 +115,8 @@ Environment:
                           Highest-precedence absolute path used verbatim as
                           the resolved memory dir (see docs/CONFIGURATION.md).
   HYPOMNEMA_TODAY         Freeze "today" in YYYY-MM-DD (for tests/replay).
-  HYPOMNEMA_NOW           Freeze self-profile "generated:" stamp (YYYY-MM-DD HH:MM).
+  HYPOMNEMA_NOW           Freeze doctor's "now" (YYYY-MM-DD HH:MM) when
+                          HYPOMNEMA_TODAY is unset.
   HYPOMNEMA_SESSION_ID    Session id stamped into WAL entries.
   HYPOMNEMA_PROMPT_INJECT "off" = pull-only mode: UserPromptSubmit injects
                           nothing; memory reaches the model through the
@@ -155,8 +150,6 @@ func main() {
 			fmt.Fprintf(os.Stderr, "memoryctl: unknown dedup subcommand %q\n", os.Args[2])
 			os.Exit(2)
 		}
-	case "self-profile":
-		runSelfProfile(os.Args[2:])
 	case "doctor":
 		runDoctor(os.Args[2:])
 	case "wal":
@@ -204,34 +197,6 @@ func main() {
 	default:
 		fmt.Fprintf(os.Stderr, "memoryctl: unknown command %q\n", os.Args[1])
 		os.Exit(2)
-	}
-}
-
-// runSelfProfile regenerates memoryDir/self-profile.md. Fail-safe: any
-// error is silent so session-stop's backgrounded invocation can't leak
-// noise into the user's terminal — matches the bash script's `|| true`
-// posture.
-//
-// Generate is serialised under a dedicated lock (P2.12) so concurrent
-// session-stops cannot clobber each other's writes. The lock file is
-// separate from the WAL lock so profile regen cannot block WAL appends.
-func runSelfProfile(_ []string) {
-	lockPath := filepath.Join(memoryDir(), ".self-profile.lockd")
-	lock, _ := wal.AcquirePath(lockPath, wal.DefaultLockConfig)
-	// Follow the bash script's policy: if the lock cannot be acquired,
-	// run anyway — losing a race is strictly better than skipping the
-	// regen entirely. Release is a no-op on a nil handle.
-	defer lock.Release()
-
-	// v2: content (mistakes/strategies/ambient) comes from native memory, not
-	// memoryDir subdirs. Resolve the merged per-project + global corpus and
-	// pass it to Generate; the WAL + output file still live in memoryDir.
-	files := collectNative(resolveStore("").Store)
-	if err := profile.Generate(memoryDir(), files); err != nil {
-		// Non-zero exit would get swallowed by session-stop's `2>/dev/null &`
-		// anyway; still, propagate for tests that call the binary directly.
-		fmt.Fprintf(os.Stderr, "memoryctl self-profile: %v\n", err)
-		os.Exit(1)
 	}
 }
 

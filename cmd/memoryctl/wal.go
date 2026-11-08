@@ -10,8 +10,7 @@ import (
 )
 
 // runWal dispatches `memoryctl wal <subcommand>` to the right handler.
-// Currently only `validate` is implemented; `migrate` lands in a
-// follow-up PR with the v1→v2 session-metrics rewrite logic.
+// Currently only `validate` is implemented.
 func runWal(args []string) {
 	if len(args) < 1 {
 		fmt.Fprintln(os.Stderr, "memoryctl wal: missing subcommand (try `validate`)")
