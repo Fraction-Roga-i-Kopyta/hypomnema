@@ -54,10 +54,7 @@ func TestRun_SubagentClassifiesUnderItsKey(t *testing.T) {
 			t.Errorf("missing %q in WAL:\n%s", want, wal)
 		}
 	}
-	if strings.Contains(wal, "|session-metrics|") {
-		t.Errorf("subagent close must not write session-metrics:\n%s", wal)
-	}
-	for _, p := range []string{filepath.Join(projDir, "MEMORY.md"), filepath.Join(memDir, "self-profile.md"), filepath.Join(memDir, ".sidecar.db")} {
+	for _, p := range []string{filepath.Join(projDir, "MEMORY.md"), filepath.Join(memDir, ".sidecar.db")} {
 		if _, err := os.Stat(p); err == nil {
 			t.Errorf("subagent close must leave session-level work to the parent's Stop; found %s", p)
 		}

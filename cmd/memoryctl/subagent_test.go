@@ -455,8 +455,8 @@ func TestSubagentStop_ClassifiesUnderSubagentKey(t *testing.T) {
 			t.Errorf("missing %s row for %s under s1:a1:\n%s", want[0], want[1], wal)
 		}
 	}
-	if strings.Contains(wal, "|session-metrics|") || strings.Contains(wal, "|s1\n") {
-		t.Errorf("no session-metrics and no parent-session rows expected:\n%s", wal)
+	if strings.Contains(wal, "|s1\n") {
+		t.Errorf("no parent-session rows expected:\n%s", wal)
 	}
 	if exists(filepath.Join(f.mem, ".runtime", "injected-s1.list")) {
 		t.Error("parent session list must not exist")

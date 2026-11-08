@@ -95,7 +95,7 @@ func TestCloseVerb_UnreadableTranscriptSkipsClassification(t *testing.T) { // re
 	}
 	// transcript_path points at a file that does not exist — usefulness is
 	// unobservable, so close must NOT fabricate cite-silent (or any cite-*)
-	// for the injected facts (review E4). session-metrics/close still get
+	// for the injected facts (review E4). session-close still gets
 	// written. docker.md is both in the project store and injected-s1.list,
 	// so this proves the guard, not just the absence of the (now-retired)
 	// trigger-* event names.

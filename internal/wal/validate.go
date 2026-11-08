@@ -75,8 +75,8 @@ func Validate(walPath string) (ValidationReport, error) {
 	sc := bufio.NewScanner(f)
 	// WAL lines can be long if a target carries a large blob (rare —
 	// the bash side capped most blob fields at 4 KiB long ago — but
-	// session-metrics v2 with many domains can approach that). Bump
-	// the buffer to avoid silent truncation.
+	// legacy session-metrics rows with many domains can approach that).
+	// Bump the buffer to avoid silent truncation.
 	sc.Buffer(make([]byte, 0, 1<<16), 1<<20)
 
 	lineNum := 0

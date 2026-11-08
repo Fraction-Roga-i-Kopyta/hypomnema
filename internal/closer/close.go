@@ -14,7 +14,6 @@ import (
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/memindex"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/pathutil"
-	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/profile"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/sidecar"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/wal"
 )
@@ -33,8 +32,8 @@ type Input struct {
 	// Subagent marks a SubagentStop close: SessionID is the subagent's
 	// observation key and TranscriptPath its own transcript. Only the
 	// citation classification and a session-close row run; session-level
-	// work (metrics, sidecar reprojection, decay, MEMORY.md, self-profile)
-	// is left to the parent's next Stop.
+	// work (sidecar reprojection, decay, MEMORY.md) is left to the parent's
+	// next Stop.
 	Subagent bool
 }
 
@@ -53,7 +52,7 @@ type Result struct {
 }
 
 // Run performs the close path: classify injected memories, emit closing WAL
-// events, refresh the sidecar, regenerate the self-profile, decay stale rows.
+// events, refresh the sidecar, decay stale rows, regenerate MEMORY.md.
 // Best-effort throughout — a failure in one step never aborts the others.
 func Run(in Input) (Result, error) {
 	var res Result
@@ -151,9 +150,6 @@ func Run(in Input) (Result, error) {
 		wal.AppendSuffixUnique(in.MemoryDir, fmt.Sprintf("%s|session-close|%s|%s", in.Today, sid, sid), "|session-close|"+sid+"|"+sid)
 		return res, nil
 	}
-	metrics := fmt.Sprintf("%s|session-metrics|domains:_global_,error_count:%d,tool_calls:%d,duration:%ds|%s",
-		in.Today, sess.ToolErrors, sess.ToolCalls, sess.DurationSec, sid)
-	wal.Append(in.MemoryDir, metrics, "")
 	wal.Append(in.MemoryDir, fmt.Sprintf("%s|session-close|%s|%s", in.Today, sid, sid), "")
 
 	nativeFiles := collectNative(in.ClaudeHome, st)
@@ -178,8 +174,6 @@ func Run(in Input) (Result, error) {
 	if globalFiles, gerr := native.List(globalDir); gerr == nil && len(globalFiles) > 0 {
 		_ = memindex.WriteGlobal(globalDir, memindex.RenderGlobal(globalFiles, memindex.DefaultMaxBytes))
 	}
-
-	_ = profile.Generate(in.MemoryDir, nativeFiles)
 
 	return res, nil
 }
