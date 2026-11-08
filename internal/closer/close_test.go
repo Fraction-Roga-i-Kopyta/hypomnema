@@ -633,3 +633,31 @@ func TestRun_WritesGlobalIndex(t *testing.T) {
 		t.Errorf("global index must link the fact by absolute path; got:\n%s", got)
 	}
 }
+
+// A MEMORY.md in the global store that hypomnema did not generate (the user's
+// or the model's own pointers) is left as is: the Stop hook runs every turn
+// and must not silently replace it.
+func TestRun_KeepsForeignGlobalIndex(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HYPOMNEMA_GLOBAL_DIR", "")
+	memDir := filepath.Join(home, ".claude", "memory")
+	globalDir := filepath.Join(home, ".claude", "memory-global")
+	for _, d := range []string{filepath.Join(memDir, ".runtime"), globalDir} {
+		os.MkdirAll(d, 0o755)
+	}
+	os.WriteFile(filepath.Join(globalDir, "creds.md"),
+		[]byte("---\nname: creds\ndescription: Where credentials live\ntype: reference\n---\nkeychain\n"), 0o644)
+	foreign := "- [creds](creds.md) — hand-written pointer\n"
+	os.WriteFile(filepath.Join(globalDir, "MEMORY.md"), []byte(foreign), 0o644)
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
+
+	if _, err := Run(Input{
+		SessionID: "s1", CWD: "/tmp/proj", TranscriptPath: filepath.Join(home, "none.jsonl"),
+		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir, Today: "2026-05-29",
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(globalDir, "MEMORY.md")); string(got) != foreign {
+		t.Errorf("foreign global MEMORY.md must survive close; got:\n%s", got)
+	}
+}

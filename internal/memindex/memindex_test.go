@@ -1,6 +1,7 @@
 package memindex
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -103,3 +104,45 @@ func TestRenderGlobal_LinksByAbsolutePath(t *testing.T) {
 		t.Errorf("global index must respect the byte budget")
 	}
 }
+
+// The global store is not hypomnema's alone: a MEMORY.md the user or the
+// model keeps there (pointers with hand-written descriptions) must survive
+// the Stop hook. WriteGlobal replaces only an index it generated itself.
+func TestWriteGlobal_LeavesForeignIndexUntouched(t *testing.T) {
+	dir := t.TempDir()
+	foreign := "- [creds](creds.md) — hand-written pointer\n"
+	if err := os.WriteFile(filepath.Join(dir, "MEMORY.md"), []byte(foreign), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := WriteGlobal(dir, "# Global Memory Index\nnew\n")
+	if !errors.Is(err, ErrForeignIndex) {
+		t.Errorf("want ErrForeignIndex, got %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "MEMORY.md")); string(got) != foreign {
+		t.Errorf("foreign index must be left byte-identical; got:\n%s", got)
+	}
+}
+
+func TestWriteGlobal_ReplacesOwnOrMissingIndex(t *testing.T) {
+	for name, existing := range map[string]*string{
+		"missing": nil,
+		"own":     ptr("# Global Memory Index\nold\n"),
+		"empty":   ptr(" \n"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if existing != nil {
+				os.WriteFile(filepath.Join(dir, "MEMORY.md"), []byte(*existing), 0o644)
+			}
+			want := "# Global Memory Index\nnew\n"
+			if err := WriteGlobal(dir, want); err != nil {
+				t.Fatalf("WriteGlobal: %v", err)
+			}
+			if got, _ := os.ReadFile(filepath.Join(dir, "MEMORY.md")); string(got) != want {
+				t.Errorf("got %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func ptr(s string) *string { return &s }
