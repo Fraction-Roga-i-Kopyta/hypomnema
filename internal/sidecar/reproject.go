@@ -311,6 +311,12 @@ func readWALAgg(walPath string) map[string]*agg {
 		// drives — skip entry creation for both before any key is computed.
 		// ablate-*/holdout-* rows are legacy history from the removed
 		// per-fact ablation machinery; they never feed a fact's aggregate.
+		// Nor do the rows `wal compact` drops (wal.LegacyEvents): if they fed
+		// the WAL-earliest created fallback, compaction would change the
+		// projection.
+		if wal.LegacyEvents[event] {
+			continue
+		}
 		switch event {
 		case "cite-none", "cite-undelivered",
 			"ablate-start", "ablate-stop", "holdout-skip", "holdout-hit", "holdout-miss":
@@ -375,7 +381,7 @@ func readWALAgg(walPath string) map[string]*agg {
 			}
 		case "cite-silent":
 			a.classify(wal.ParentSession(field4), false)
-		case "trigger-useful", "trigger-silent", "trigger-silent-retro", "outcome-positive", "outcome-negative":
+		case "outcome-positive", "outcome-negative":
 			// Usefulness history restarted in v2.14 — only cite-* (explicit
 			// model citations) feed effectiveness and recency. These legacy
 			// events stay in the WAL as history but no longer classify

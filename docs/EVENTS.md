@@ -164,7 +164,8 @@ WALs carry it for years.
 the rows of `wal.LegacyEvents` — `trigger-useful`, `trigger-silent`,
 `trigger-silent-retro`, `session-metrics` — and keeps every other row,
 including unknown and malformed ones, byte-for-byte and in order. The
-original stays as `.wal.pre-compact-<date>` (a same-day rerun replaces it);
+original stays as `.wal.pre-compact-<date>` (never replaced — a second
+backup that day gets a `-2` suffix; with nothing to drop nothing is written);
 the sidecar is then re-projected so its recorded WAL offset matches the new
 file. `--dry-run` prints the same counts and writes nothing. Run it when no
 session is mid-turn: an append that times out on the lock writes without it

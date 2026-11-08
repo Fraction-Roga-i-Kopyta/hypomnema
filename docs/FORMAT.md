@@ -249,13 +249,15 @@ but no longer scored (see `docs/EVENTS.md`).
 
 Older WALs carry event types nothing writes any more — `trigger-*`,
 `session-metrics`, `ablate-start`/`ablate-stop`, `holdout-*`, `dedup-*` (see
-`docs/EVENTS.md`); none of them feeds a score or the ranking.
+`docs/EVENTS.md`); none of them feeds the sidecar projection, so compacting
+them away changes no score, recency or decay age.
 `memoryctl wal compact [--dry-run]`
 rewrites the WAL under its lock without the four types no reader consumes —
 `trigger-useful`, `trigger-silent`, `trigger-silent-retro`, `session-metrics` —
 keeping every other row (unknown or malformed ones included) byte-for-byte and
-in order. The original stays as `.wal.pre-compact-<date>`, and the sidecar is
-re-projected so its recorded WAL offset matches the new file. Run it when no
+in order. With nothing to drop it changes nothing. The original stays as
+`.wal.pre-compact-<date>` (never replaced — a second backup that day gets a
+`-2` suffix), and the sidecar is re-projected so its recorded WAL offset matches the new file. Run it when no
 session is mid-turn: an append that times out on the lock writes without it
 and could land in the backup instead.
 

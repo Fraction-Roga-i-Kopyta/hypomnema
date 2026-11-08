@@ -109,11 +109,13 @@ func runWalCompact(args []string) {
 Rewrites $CLAUDE_MEMORY_DIR/.wal without the event types no reader uses
 any more (trigger-useful, trigger-silent, trigger-silent-retro,
 session-metrics). Every other row is kept byte-for-byte and in order; the
-original stays as .wal.pre-compact-<date>. The sidecar is then re-projected
-so its WAL offset matches the new file. Run it when no session is mid-turn.
+original stays as .wal.pre-compact-<date> (an existing backup is never
+replaced; a second one that day gets a -2 suffix). The sidecar is then
+re-projected so its WAL offset matches the new file. Run it when no session is mid-turn.
 
-Exit codes: 0 — done (or nothing to drop); 1 — failed, WAL unchanged;
-2 — command misuse or WAL missing.
+Exit codes: 0 — done (or nothing to drop); 1 — failed (if only the sidecar
+re-projection failed, the WAL is already compacted — run memoryctl sidecar
+rebuild); 2 — command misuse or WAL missing.
 `)
 			return
 		default:
@@ -147,6 +149,9 @@ Exit codes: 0 — done (or nothing to drop); 1 — failed, WAL unchanged;
 	}
 	if dryRun {
 		return
+	}
+	if rep.Backup == "" {
+		return // nothing dropped: the WAL and the sidecar are untouched
 	}
 	fmt.Printf("backup: %s\n", rep.Backup)
 	r := resolveStore("")

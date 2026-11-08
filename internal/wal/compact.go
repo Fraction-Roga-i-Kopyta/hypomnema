@@ -1,7 +1,7 @@
 package wal
 
 import (
-	"bufio"
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -29,23 +29,27 @@ type CompactReport struct {
 	Dropped     map[string]int
 	BytesBefore int64
 	BytesAfter  int64
-	Backup      string // path of the pre-compaction copy; "" on a dry run
+	Backup      string // path of the pre-compaction copy; "" on a dry run or when nothing was dropped
 }
 
 // Compact rewrites memoryDir/.wal without LegacyEvents rows. It runs under
-// the WAL lock: the kept rows go to a temp file in the same directory, the
-// original is hard-linked to .wal.pre-compact-<today> (replacing an earlier
-// same-day backup), and the temp file is renamed over .wal. Rows that are
-// not four pipe-separated columns are kept as they are — Compact removes
-// only what it positively recognises as dead.
+// the WAL lock: kept rows are copied as raw bytes (line endings included) to
+// a temp file in the same directory with the WAL's mode, the original is
+// hard-linked to .wal.pre-compact-<today> (or -2, -3… — a backup is never
+// replaced), and the temp file is renamed over .wal. With nothing to drop it
+// changes nothing. Rows that are not four pipe-separated columns are kept —
+// Compact removes only what it positively recognises as dead. A temp file
+// left by a killed run is removed first.
 //
-// Appenders that time out on the lock write without it (append.go), so a
-// row appended while Compact holds the lock past that timeout can land in
-// the backup instead of the new WAL; run it when no session is mid-turn.
+// Appenders that time out on the lock (1 s) write without it (append.go), so
+// a row appended while Compact holds the lock longer than that could land in
+// the backup instead of the new WAL; compaction of a large WAL takes tens of
+// milliseconds, and it is meant to run when no session is mid-turn.
 func Compact(memoryDir, today string, dryRun bool) (CompactReport, error) {
 	rep := CompactReport{Dropped: map[string]int{}}
 	walPath := filepath.Join(memoryDir, ".wal")
-	if _, err := os.Stat(walPath); err != nil {
+	fi, err := os.Stat(walPath)
+	if err != nil {
 		if os.IsNotExist(err) {
 			return rep, ErrWALMissing
 		}
@@ -56,54 +60,51 @@ func Compact(memoryDir, today string, dryRun bool) (CompactReport, error) {
 		return rep, fmt.Errorf("wal.Compact: lock: %w", err)
 	}
 	defer lock.Release()
+	if !dryRun {
+		if stale, _ := filepath.Glob(filepath.Join(memoryDir, ".wal.compact.*.tmp")); len(stale) > 0 {
+			for _, f := range stale {
+				_ = os.Remove(f)
+			}
+		}
+	}
 
-	in, err := os.Open(walPath)
+	raw, err := os.ReadFile(walPath)
 	if err != nil {
 		return rep, fmt.Errorf("wal.Compact: %w", err)
 	}
-	defer in.Close()
-	if fi, err := in.Stat(); err == nil {
-		rep.BytesBefore = fi.Size()
-	}
-
-	var out *os.File
-	var w *bufio.Writer
-	if !dryRun {
-		out, err = os.CreateTemp(memoryDir, ".wal.compact.*.tmp")
-		if err != nil {
-			return rep, fmt.Errorf("wal.Compact: temp: %w", err)
+	rep.BytesBefore = int64(len(raw))
+	kept := make([]byte, 0, len(raw))
+	for rest := raw; len(rest) > 0; {
+		n := bytes.IndexByte(rest, '\n') + 1
+		if n == 0 {
+			n = len(rest)
 		}
-		defer os.Remove(out.Name()) // no-op once renamed
-		defer out.Close()
-		w = bufio.NewWriter(out)
-	}
-
-	sc := bufio.NewScanner(in)
-	sc.Buffer(make([]byte, 0, 1<<16), 1<<20)
-	for sc.Scan() {
-		line := sc.Text()
-		if f := strings.Split(line, "|"); len(f) == 4 && LegacyEvents[f[1]] {
+		line := rest[:n]
+		rest = rest[n:]
+		f := strings.Split(strings.TrimRight(string(line), "\r\n"), "|")
+		if len(f) == 4 && LegacyEvents[f[1]] {
 			rep.Dropped[f[1]]++
 			continue
 		}
 		rep.Kept++
-		rep.BytesAfter += int64(len(line)) + 1
-		if w != nil {
-			if _, err := w.WriteString(line + "\n"); err != nil {
-				return rep, fmt.Errorf("wal.Compact: write: %w", err)
-			}
-		}
+		kept = append(kept, line...)
 	}
-	if err := sc.Err(); err != nil {
-		// A row over the scanner limit or a read error: stop rather than
-		// write a WAL with its tail cut off.
-		return rep, fmt.Errorf("wal.Compact: read: %w", err)
-	}
-	if dryRun {
+	rep.BytesAfter = int64(len(kept))
+	if dryRun || len(rep.Dropped) == 0 {
 		return rep, nil
 	}
-	if err := w.Flush(); err != nil {
-		return rep, fmt.Errorf("wal.Compact: flush: %w", err)
+
+	out, err := os.CreateTemp(memoryDir, ".wal.compact.*.tmp")
+	if err != nil {
+		return rep, fmt.Errorf("wal.Compact: temp: %w", err)
+	}
+	defer os.Remove(out.Name()) // no-op once renamed
+	defer out.Close()
+	if _, err := out.Write(kept); err != nil {
+		return rep, fmt.Errorf("wal.Compact: write: %w", err)
+	}
+	if err := out.Chmod(fi.Mode().Perm()); err != nil {
+		return rep, fmt.Errorf("wal.Compact: chmod: %w", err)
 	}
 	if err := out.Sync(); err != nil {
 		return rep, fmt.Errorf("wal.Compact: sync: %w", err)
@@ -112,12 +113,22 @@ func Compact(memoryDir, today string, dryRun bool) (CompactReport, error) {
 		return rep, fmt.Errorf("wal.Compact: close: %w", err)
 	}
 	backup := filepath.Join(memoryDir, ".wal.pre-compact-"+today)
-	_ = os.Remove(backup)
-	if err := os.Link(walPath, backup); err != nil {
+	for i := 2; ; i++ {
+		err = os.Link(walPath, backup)
+		if !os.IsExist(err) {
+			break
+		}
+		backup = filepath.Join(memoryDir, fmt.Sprintf(".wal.pre-compact-%s-%d", today, i))
+	}
+	if err != nil {
 		return rep, fmt.Errorf("wal.Compact: backup: %w", err)
 	}
 	if err := os.Rename(out.Name(), walPath); err != nil {
 		return rep, fmt.Errorf("wal.Compact: replace: %w", err)
+	}
+	if d, err := os.Open(memoryDir); err == nil { // persist the rename
+		_ = d.Sync()
+		d.Close()
 	}
 	rep.Backup = backup
 	return rep, nil
