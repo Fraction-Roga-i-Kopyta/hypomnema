@@ -28,8 +28,8 @@ Logical types:
 | `knowledge` | Domain facts, API docs |
 | `decision` | Architecture & technology choices |
 | `note` | Long-form references |
-| `project` | Project description |
-| `continuity` | "Where we left off" last session |
+| `project` | Ongoing work, goals, constraints (Claude Code's own type); pin a project card |
+| `continuity` | "Where we left off" — one `continuity.md` per project, rewritten in place |
 
 Injection budget: a single ranked **top-8** across all types, capped at
 **2.5KB per body and 8KB total** (Claude Code diverts oversized hook output
@@ -64,7 +64,7 @@ user gave you) start `active` or `pinned` as before. Graduation is
 sidecar-managed: the close hook emits `candidate-confirmed` on the first
 useful citation; you never edit the frontmatter back yourself. `doctor`
 flags candidates with ≥5 silent sessions and none useful — retire those or
-rewrite their keywords/evidence. A subagent's `cite-silent` counts toward its
+rewrite their keywords. A subagent's `cite-silent` counts toward its
 parent session, so a parent that itself cited nothing can still contribute a
 silent session.
 
@@ -82,7 +82,7 @@ silent session.
 **mistake** (additional):
 ```yaml
 severity: minor | major | critical
-recurrence: <integer>
+recurrence: <integer>                  # informational: bump when the mistake repeats
 scope: universal | domain | narrow     # informational: how broadly the lesson applies
 root-cause: "..."
 prevention: "..."
@@ -90,30 +90,17 @@ prevention: "..."
 
 **strategy** (additional):
 ```yaml
-success_count: <integer>
+success_count: <integer>               # informational
 ```
 
 **feedback** (additional):
 ```yaml
-evidence:                  # phrases used for the ablation holdout only (case-insensitive)
-  - "phrase one"
-  - "phrase two"
-precision_class: ambient   # optional — excludes file from precision denominator
+precision_class: ambient   # optional — a rule that shapes behaviour silently
 ```
 
-`evidence:` no longer creates usefulness — `cite-useful`/`cite-silent` come solely from an
-explicit `<cc-memory filenames="…">` citation in the assistant's own text (see "Citing
-memory" below). `evidence:` is type-agnostic and still read from any injected memory file
-(mistake, strategy, knowledge, …), but only to classify the `memoryctl ablate` holdout
-observation (`holdout-hit`/`holdout-miss`) for a fact withheld this session — there is no
-citation channel to compare against when a fact was never shown to the model.
+`precision_class: ambient` marks rules that shape behaviour silently (e.g. language preference, security baseline, meta-philosophy). They are injected and ranked normally, but going uncited does not lower their effectiveness (the silence penalty is dropped for them).
 
-**Sizing — keep it short.** ≤5 carefully-chosen phrases score best for the holdout
-comparison. Long evidence lists pile on specific wordings that rarely appear verbatim in
-assistant text, diluting the ablation signal. Pick phrases the assistant would actually
-write when applying the rule, not exhaustive paraphrases.
-
-`precision_class: ambient` marks rules that shape behaviour silently (e.g. language preference, security baseline, meta-philosophy). These files continue to be injected and ranked normally; they are excluded from the self-profile precision denominator so they don't drag the ratio down.
+Usefulness comes solely from an explicit `<cc-memory filenames="…">` citation in the assistant's own text (see "Citing memory" below). An `evidence:` list in older files is ignored.
 
 **knowledge / decision / note** (additional):
 ```yaml
@@ -193,10 +180,6 @@ created: 2026-04-15
 status: pinned
 keywords: [tests, integration, mocking]
 domains: [testing, backend]
-evidence:
-  - "do not mock the database"
-  - "real database in tests"
-  - "integration tests"
 ---
 
 Integration tests must hit a real database, not a mock.
@@ -220,7 +203,7 @@ An architecture or technology choice you want future sessions to defer to rather
 
 ### When to write `continuity`
 
-At session end, if you stopped mid-task. Three lines max: what you were doing, current status, next step. It is a regular file with `type: continuity` in the project's native store (stores are flat — there is no `continuity/` subdirectory).
+At session end, if you stopped mid-task. Three lines max: what you were doing, current status, next step. It is a regular file with `type: continuity` in the project's native store (stores are flat — there is no `continuity/` subdirectory). Keep **one** `continuity.md` per project and rewrite it in place — only the freshest continuity is injected, so a new dated file per session just leaves history behind.
 
 ## When NOT to write
 
@@ -232,8 +215,9 @@ At session end, if you stopped mid-task. Three lines max: what you were doing, c
 
 ## Lifecycle
 
-The full loop: `candidate → active → (ablation check) → promote to a durable
-owner or retire with a tombstone`. Retirement (`memoryctl retire <slug>
+The full loop: `candidate → active → stale (unused) → retire with a tombstone`
+— or, for a lesson that keeps recurring, turn it into a hook/lint/test and
+retire the fact. Retirement (`memoryctl retire <slug>
 [--reason ...] [--superseded-by <ref>]`) moves the file into the store's
 `.archive/`, stamps tombstone frontmatter, and leaves a redirect: `recall`
 shows `[retired <date> → successor]` instead of silently forgetting.
@@ -249,19 +233,17 @@ shows `[retired <date> → successor]` instead of silently forgetting.
   is `cite-silent` — but only in a session with at least one resolvable **delivered**
   citation, so a broken citation channel never fabricates a session of silent facts (a
   session that resolved zero delivered citations — nothing cited, or every citation was
-  `cite-undelivered` — writes one session-level `cite-none` instead). Frontmatter
-  `evidence:`/name substring matching no longer creates usefulness — it now drives only the
-  `ablate` holdout observation (`holdout-hit`/`holdout-miss`).
+  `cite-undelivered` — writes one session-level `cite-none` instead).
 - Recomputes effectiveness from the WAL: `(pos+1)/(pos+0.25·neg+2)` (cite-silent counts ¼ — the model under-cites, so silence is weak evidence) over one citation observation
   per (slug, parent session) — a session and its subagents count once; `cite-useful` wins over `cite-silent` within a session. Usefulness
   history restarted at v2.14: every fact begins back at the neutral 0.5 prior, and
-  pre-cutover `trigger-*`/`outcome-*` WAL rows stay on disk but are no longer read by any
-  usefulness reader (sidecar effectiveness, `promote`, self-profile, `ab`, `doctor`
-  candidates).
-- Marks facts `stale` in the sidecar when unused past their type threshold — age counts from **last injection** (fallback `created`), so facts in rotation stay alive. No native content mutation.
+  pre-cutover `trigger-*`/`outcome-*` WAL rows are no longer read by any usefulness
+  reader; `memoryctl wal compact` drops the `trigger-*` rows (and the retired
+  `session-metrics`), keeping the original as `.wal.pre-compact-<date>`.
+- Marks facts `stale` in the sidecar when unused past their type threshold — age counts from **last injection** (fallback `created`, which falls back to the date of Claude Code's `modified` stamp), so facts in rotation stay alive. No native content mutation.
 - Archiving ships as `memoryctl retire` (see the lifecycle loop above): the file moves to the store's `.archive/`, the sidecar row becomes `retired`, and recall shows a tombstone redirect. Stale facts that were never retired simply stop injecting.
-- `status: pinned` files and `continuity`/`project` facts never decay.
-- `memoryctl close --subagent` (SubagentStop) runs the same citation classification on the subagent's own transcript (including its SubagentHandback report) under the key `<session_id>:<agent_id>`; session-level work stays with the parent's Stop. Counters of "how many sessions" (promote, doctor candidates) count a session and its subagents once.
+- `status: pinned` files and each project's **freshest** `continuity` fact (later of `created`/`modified`) never decay. Only that freshest continuity is injected; older continuity files are history — recallable, aging like notes (30 days). Claude Code's own `type: project` means ongoing work/goals, so it ages like knowledge (90 days); pin a project card that must never age.
+- `memoryctl close --subagent` (SubagentStop) runs the same citation classification on the subagent's own transcript (including its SubagentHandback report) under the key `<session_id>:<agent_id>`; session-level work stays with the parent's Stop. Counters of "how many sessions" (doctor candidates) count a session and its subagents once.
 
 ## How injection ranks files
 
@@ -351,7 +333,7 @@ any injected memory.
 
 ## Subagent context
 
-Subagents receive ranked memory automatically at `SubagentStart` — query = this agent's Agent-call description + prompt, else the parent's recent prompts — except `fork`, `Explore`, `claude-code-guide`, `statusline-setup` (override with `HYPOMNEMA_SUBAGENT_SKIP`, a comma list; set-but-empty means none skipped, and a `*` entry means skip every agent type — set it in `settings.json`'s `env` block to opt every subagent out). A fact the parent session is withholding under an ablation stays withheld from its subagents. The subagent's citations are measured under its own key, separately from the parent's; subagents are told to cite in their final report. Pass inline only what is specific to the task at hand — the ranker already covers general recall. `memoryctl recall` run inside a subagent records against the parent session (there is no agent id in the subagent's Bash environment); `skill-inject` run inside a subagent does the same, for the same reason.
+Subagents receive ranked memory automatically at `SubagentStart` — query = this agent's Agent-call description + prompt, else the parent's recent prompts — except `fork`, `Explore`, `claude-code-guide`, `statusline-setup` (override with `HYPOMNEMA_SUBAGENT_SKIP`, a comma list; set-but-empty means none skipped, and a `*` entry means skip every agent type — set it in `settings.json`'s `env` block to opt every subagent out). The subagent's citations are measured under its own key, separately from the parent's; subagents are told to cite in their final report. Pass inline only what is specific to the task at hand — the ranker already covers general recall. `memoryctl recall` run inside a subagent records against the parent session (there is no agent id in the subagent's Bash environment); `skill-inject` run inside a subagent does the same, for the same reason.
 
 ## Source of truth
 

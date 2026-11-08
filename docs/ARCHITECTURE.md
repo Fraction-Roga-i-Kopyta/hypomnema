@@ -29,7 +29,7 @@ and preserving the exit code.
 | `PreToolUse` | `Write\|Edit` | `pre-tool-write.sh` | `guard` | Secrets gate on memory-path writes (`exit 2` blocks) |
 | `PreToolUse` | `Skill` | `skill-active.sh` | `skill-active` | Record the activated skill for this session |
 | `PostToolUse` | `Skill` | `skill-learnings-inject.sh` | `skill-inject` | Inject accumulated skill-learning facts for that skill |
-| `Stop` | — | `session-stop.sh` | `close` | Attribute outcomes → WAL → effectiveness/decay → self-profile |
+| `Stop` | — | `session-stop.sh` | `close` | Classify citations → WAL → effectiveness/decay → `MEMORY.md` |
 | `SubagentStart` | — | `subagent-start.sh` | `inject --event=SubagentStart` | Rank against the subagent's own task, inject its own top-5 under its own key |
 | `SubagentStop` | — | `subagent-stop.sh` | `close --subagent` | Classify the subagent's own citations (incl. its hand-back report) under its own key |
 
@@ -51,6 +51,8 @@ SessionStart ──► memoryctl inject --event=SessionStart ──────�
              filenames, recent commit subjects                  │
    native.List(project store + global store)                    │
    sidecar reproject if content_sha / mtime drift               │
+   continuity: only each project's freshest (created/modified)  │
+     is a candidate; older ones stay recall-only                │
    rank.TopK(keywords, candidates)  ── pure, I/O-free           │
      filter: status ∈ {active, pinned}; scope ∈ {project,global}│
    emit top-8 (≤2.5KB/body, ≤8KB total) as `# Memory Context`   │
@@ -105,13 +107,12 @@ Stop ──► close ───────────────────�
       never fabricate silent evidence for a whole session)      │
    WAL: cite-useful|<slug>, cite-silent|<slug>,                 │
      cite-undelivered|<slug>, cite-none|<sid>                   │
-   WAL: session-metrics (error_count/tool_calls/duration)       │
    WAL: session-close|<sid>                                     │
    sidecar.Reproject: ref_count, effectiveness,                 │
      last_injected, last_useful                                 │
    sidecar.MarkStale: decay by age from last-injection          │
+     (each project's freshest continuity fact exempt)           │
    memindex.Write: regenerate this project's native MEMORY.md   │
-   profile.Generate: self-profile.md                            │
    ── no native content is ever mutated by a hook ──────────────┤
                                                                 │
 SubagentStart ──► inject --event=SubagentStart ─────────────────┤
@@ -129,8 +130,6 @@ SubagentStart ──► inject --event=SubagentStart ─────────
      + prompt (top-40 terms) + type words, NoGitSignal=true;    │
      else jsonl.RecentUserPrompts(parent, 3) + type words,      │
      git signal kept                                            │
-   HoldoutSession = parent's holdout list, READ-ONLY (never     │
-     persisted for the subagent)                                │
    rank.TopK, MaxK=5, MaxBytes=5000 → emit under key            │
    WAL: inject|<slug>|<key>                                     │
    write injected-<key>.list (if non-empty), rendered-<key>.list│
@@ -145,9 +144,8 @@ SubagentStop ──► close --subagent ─────────────�
      close, jsonl folds SubagentHandback.input.message into the │
      transcript text first                                      │
    WAL: cite-useful|<slug>|<key>, cite-silent/cite-undelivered, │
-     cite-none|<key>|<key> as usual — no session-metrics, no    │
-     holdout classification, no sidecar reproject/MarkStale, no │
-     MEMORY.md/self-profile regen (left to the parent's Stop)   │
+     cite-none|<key>|<key> as usual — no sidecar reproject/     │
+     MarkStale, no MEMORY.md regen (left to the parent's Stop)  │
    WAL: session-close|<key>|<key>, deduped END-ANCHORED         │
      (wal.AppendSuffixUnique) so it never suppresses — or is    │
      suppressed by — the parent's own session-close|<sid>|<sid> │
@@ -155,16 +153,6 @@ SubagentStop ──► close --subagent ─────────────�
      cite-* row for this key                                    │
    ── session-level work stays with the parent's next Stop ─────┘
 ```
-
-### Dedup (CLI verb, not a default hook)
-
-`memoryctl dedup check <file>` fuzzy-compares a proposed `mistake` file's
-`root-cause` against existing mistakes (`internal/dedup` + `internal/fuzzy`,
-a pure-Go rapidfuzz token-set port). At/above the merge threshold it blocks
-(pre-tool) or merges into the existing file's `recurrence` and deletes the new
-one (post-tool); a lower candidate threshold emits an advisory note. It emits
-`dedup-blocked` / `dedup-merged` / `dedup-candidate`. It is a real verb but is
-**not** wired into the eight installed hooks — invoke it explicitly.
 
 ## The relevance ranker (one pipeline)
 
@@ -185,7 +173,8 @@ effGate = clamp(2 × effectiveness, 0, 1)   # 1.0 at the prior (0.5); only damps
 
 **Additive and zero-safe.** No single zero signal annihilates a candidate — a
 brand-new fact with `ref_count=0` and no outcomes gets the neutral effectiveness
-prior (0.5) and its frontmatter `created` as recency, so it is injectable from
+prior (0.5) and its frontmatter `created` as recency (the date of Claude
+Code's `modified` stamp when `created` is absent), so it is injectable from
 day one. The `effGate` term scales `ref_count` by proven usefulness so a fact
 injected hundreds of times that rarely helped cannot coast on volume; it is
 neutral at the prior and capped at 1.0, so it only *damps* unearned popularity.
@@ -255,7 +244,7 @@ hypomnema's own metadata and runtime live under `~/.claude/memory/`:
 |---|---|
 | `.wal` | Append-only text event log — **the source of truth** |
 | `.sidecar.db` | SQLite projection (metadata: ref_count, effectiveness, status, keywords). **Rebuildable** from `.wal` + native frontmatter |
-| `self-profile.md` | Precision report regenerated on `close` |
+| `.wal.pre-compact-<date>` | The pre-compaction WAL that `memoryctl wal compact` keeps; delete it once you no longer need it |
 | `.runtime/` | Per-session injected-set lists, active-skill marker |
 
 The sidecar is a cache, not a replica: delete it and `memoryctl sidecar rebuild`
@@ -271,14 +260,12 @@ One package, one responsibility. `memoryctl` (in `cmd/memoryctl/`) wires them.
 |---|---|
 | `native` | Native-store adapter — the only code that knows the native format: enumerate/parse files, resolve the project memory dir from the anchor chain (`CLAUDE_PROJECT_DIR` → `CLAUDE_PROJECT_CWD` → session pin → cwd) via the canonical git root and the harness sanitizer — cwd is only the last-resort anchor, not the resolution rule itself (§ Store resolution). Content is **read-only** |
 | `sidecar` | SQLite projection — schema, upserts, reproject, rank queries, `MarkStale`. Only place with SQLite |
-| `wal` | Append-only event log; `Append`/`AppendStrict`, `SanitizeField`, lock acquisition. Four-column invariant enforced |
+| `wal` | Append-only event log; `Append`/`AppendStrict`, `SanitizeField`, lock acquisition, `Validate`, `Compact`. Four-column invariant enforced |
 | `rank` | The pure relevance ranker (formula above). No I/O, no storage imports → trivially unit-testable and A/B-able |
 | `inject` | Orchestrator: keywords → `native.List` → `sidecar` → `rank.TopK` → JSON |
-| `closer` | Stop path: transcript classify → WAL → reproject/decay → profile; `Subagent: true` runs the same classification under a subagent's own key and skips the session-level steps |
-| `dedup` + `fuzzy` | Fuzzy dedup on write (token-set ratio) |
+| `closer` | Stop path: transcript classify → WAL → reproject/decay → `MEMORY.md`; `Subagent: true` runs the same classification under a subagent's own key and skips the session-level steps |
 | `secrets` | Secrets gate (credential patterns, `.secretsignore`) |
 | `tokenize` | Unicode-aware tokenizer (salvaged from v1's TF-IDF; Cyrillic/CJK/Greek participate, not just Latin) |
-| `profile` | `self-profile.md` generation from WAL aggregation |
 | `doctor` | Health check (`memoryctl doctor`) |
 | `migrate` | One-shot v1 → v2 conversion + pruning |
 | `memindex` | Renders the native `MEMORY.md` index (flat slug links) |
@@ -290,8 +277,8 @@ One package, one responsibility. `memoryctl` (in `cmd/memoryctl/`) wires them.
 ### `memoryctl` command surface
 
 `inject`, `close`, `guard`, `recall`, `skill-inject`, `skill-active` (hook hot
-paths); `dedup check`, `migrate`, `doctor`, `self-profile`, `sidecar
-rebuild|show`, `wal`, `audit`, `rank`, `reindex`, `ab` (manual / maintenance).
+paths); `migrate`, `doctor`, `retire`, `revive`, `sidecar rebuild|show`,
+`wal validate|compact`, `audit`, `rank`, `reindex`, `ab` (manual / maintenance).
 
 ## Invariants (code-level contracts)
 
@@ -303,7 +290,9 @@ mechanically checks the ones that can be. The load-bearing ones:
    is a project's `MEMORY.md` index, regenerated wholesale on `close`.
 2. **Write-by-agent, read-by-hook.** Agents create memory files via the Write
    tool; hooks only react to existing files.
-3. **Append-only WAL.** Never rewritten; corrections are new events.
+3. **Append-only WAL.** Hooks only append; corrections are new events. The
+   one rewrite is the manual `memoryctl wal compact`, which drops only event
+   types no reader consumes and keeps the original as `.wal.pre-compact-<date>`.
 4. **Four-column WAL.** `date|event|target|session`; pipes/newlines in source
    data are replaced with `_` before write (`wal.SanitizeField`).
 5. **Sidecar is derivable.** State is reconstructable from WAL + native

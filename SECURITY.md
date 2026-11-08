@@ -102,7 +102,7 @@ Consequently:
   I5 in `docs/INVARIANTS.md`). A broken memory file or unreadable
   input does not break the user's Claude Code session; observability
   moves to WAL events + `memoryctl doctor`. The one sanctioned
-  non-zero exit is `PreToolUse` exit 2 for a dedup or secrets block.
+  non-zero exit is `PreToolUse` exit 2 for a secrets block.
   If you think a hook should exit non-zero, that's a design
   conversation for an issue, not a security report.
 - **Memory files are LLM-authored.** Every file under a memory store
@@ -116,8 +116,8 @@ Consequently:
 
 ## What I won't treat as a vulnerability
 
-- Reports that `self-profile.md` can be manipulated by editing
-  `.wal`. The user owns the WAL; manipulation requires local
+- Reports that effectiveness scores in the sidecar can be manipulated by
+  editing `.wal`. The user owns the WAL; manipulation requires local
   filesystem access already.
 - Reports that a memory file can change scoring/ranking behaviour.
   That's the intended purpose — good `keywords`/`domains` are the

@@ -5,7 +5,7 @@ description: "one-line summary of the mistake, shown in the MEMORY.md index and 
 created: YYYY-MM-DD
 status: candidate   # agent-originated facts start as candidate; user-dictated rules use active|pinned
 severity: minor            # critical | major | minor
-recurrence: 1              # bump when the same mistake recurs
+recurrence: 1              # bump when the same mistake recurs — informational, nothing reads it
 scope: narrow              # universal | domain | narrow — informational: how broadly the lesson applies
 keywords: [kw1, kw2]
 domains: [general]

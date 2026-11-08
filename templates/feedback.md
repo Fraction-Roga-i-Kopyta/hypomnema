@@ -6,9 +6,6 @@ created: YYYY-MM-DD
 status: active
 keywords: [kw1, kw2]
 domains: [general]
-evidence:
-  - "phrase Claude would write when following the rule"
-  - "another giveaway phrase"
 # precision_class: ambient   # optional — uncomment for rules that shape behaviour silently
 ---
 
@@ -18,14 +15,11 @@ triggers, or project — they are sidecar-managed or derived from the store.
 
 Usefulness comes only from an explicit <cc-memory filenames="…"> citation of
 a fact delivered this session — the close hook reads that tag, not this
-frontmatter. evidence: phrases (case-insensitive substring) feed only the
-`ablate` holdout observation for a fact withheld this session. ≤5 phrases
-score best — long lists rarely match verbatim. Pick phrases Claude would
-actually write when applying the rule.
+frontmatter.
 
 precision_class: ambient marks rules that shape behaviour silently (tone,
 language preference, security baseline). Such files still inject and rank
-normally but are excluded from the self-profile precision denominator.
+normally, but going uncited does not lower their effectiveness.
 -->
 
 One-sentence rule statement.

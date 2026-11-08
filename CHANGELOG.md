@@ -1,5 +1,53 @@
 # Changelog
 
+## [Unreleased]
+
+### Removed
+
+Usage on the live install showed these were never or no longer used:
+
+- **`memoryctl ablate` and per-fact holdout** — never run (0 `ablate-*` /
+  `holdout-*` events). Frontmatter `evidence:` existed only for it and is
+  now ignored; existing files may keep the key.
+- **`memoryctl promote`** — report-only, no sign of use.
+- **`memoryctl self-profile` and the `session-metrics` WAL event** — written
+  every turn, read by nothing. `precision_class: ambient` stays (it still
+  drops the silence penalty).
+- **`memoryctl dedup check`** and the fuzzy matcher — not wired into any
+  hook since v1.
+
+About 3 900 lines removed (code and tests).
+
+### Added
+
+- **`memoryctl wal compact [--dry-run]`** drops WAL rows no reader consumes
+  (`trigger-useful`, `trigger-silent`, `trigger-silent-retro`,
+  `session-metrics`) under the WAL lock, keeps every other row byte-for-byte,
+  keeps the original as `.wal.pre-compact-<date>`, and re-projects the
+  sidecar. Live install: 18.1 MB → 6.6 MB. Run it when no session is
+  mid-turn.
+
+### Fixed
+
+- **Continuity facts piled up.** A new continuity file per session, none ever
+  aging: 144 lived forever on the live install. Only a project's freshest
+  continuity (later of `created` / `modified`) is now injected and exempt
+  from decay; older ones are history — recallable, aging like notes
+  (30 days). Keep one `continuity.md` and rewrite it.
+- **Claude Code's `type: project` never aged.** It means ongoing work and
+  goals, not a project card; 113 such facts lived forever. It now ages like
+  knowledge (90 days); pin a card that must never age.
+- **Facts written by Claude Code had no date.** The harness stamps
+  `metadata.modified` and never `created`; its date is now read and used
+  when `created` is absent (decay and recency).
+- **Decay marked a same-named fact stale in every project.** `MarkStale`
+  updates by (slug, project).
+
+### Changed
+
+- Sidecar schema v7 (drops `holdout_remaining`, adds `modified`); it rebuilds
+  itself once on first open.
+
 ## [2.17.0] — 2026-11-08
 
 ### Added

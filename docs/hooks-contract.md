@@ -42,7 +42,7 @@ Code envelope (new event types / tool-input fields are tracked separately).
 | `PreToolUse` | `Write\|Edit` | `pre-tool-write.sh` | `guard` | 10 s | Secrets gate — block credential writes |
 | `PreToolUse` | `Skill` | `skill-active.sh` | `skill-active` | 10 s | Record the activated skill for this session |
 | `PostToolUse` | `Skill` | `skill-learnings-inject.sh` | `skill-inject` | 10 s | Inject skill-learning facts for the skill |
-| `Stop` | — | `session-stop.sh` | `close` | 10 s | Close the session: classify, decay, rollup |
+| `Stop` | — | `session-stop.sh` | `close` | 10 s | Close the session: classify, reproject, decay, `MEMORY.md` |
 | `SubagentStart` | — | `subagent-start.sh` | `inject --event=SubagentStart --subagent` | 15 s | Rank + inject memory for a subagent's own task |
 | `SubagentStop` | — | `subagent-stop.sh` | `close --subagent` | 10 s | Classify the subagent's own citations under its key |
 
@@ -103,9 +103,7 @@ side-effect-only (WAL writes, sidecar updates, `.runtime/` markers).
 **Fail-safe rule:** every verb exits `0` on bad or absent input — malformed
 envelope JSON, unreadable memory, missing session id. A broken memory file is
 never a reason to break the user's session. The **only** intentional non-zero
-exit is `2` from `guard` when it finds a secret. (`memoryctl dedup check`, a
-manual CLI verb not wired to any hook, also uses exit 2, but no hook invokes
-it.)
+exit is `2` from `guard` when it finds a secret.
 
 ### 1.5 Environment variables
 
@@ -114,7 +112,7 @@ Read by `memoryctl` (from its `--help` usage) and by the shims:
 | Variable | Purpose | Default |
 |---|---|---|
 | `HYPOMNEMA_MEMORYCTL` | Path the shim uses to locate the `memoryctl` binary. | `$HOME/.claude/bin/memoryctl` |
-| `CLAUDE_MEMORY_DIR` | Runtime memory root (WAL, sidecar, `.runtime/`, self-profile). | `$HOME/.claude/memory` |
+| `CLAUDE_MEMORY_DIR` | Runtime memory root (WAL, sidecar, `.runtime/`). | `$HOME/.claude/memory` |
 | `CLAUDE_PROJECT_DIR` | Project anchor Claude Code sets on every hook invocation; outranks `CLAUDE_PROJECT_CWD`. | (always set by Claude Code inside a hook) |
 | `CLAUDE_PROJECT_CWD` | hypomnema-only explicit override for CLI use; ignored inside hooks — `CLAUDE_PROJECT_DIR` wins there. | current working dir |
 | `CLAUDE_CONFIG_DIR` | Claude Code config dir used for native store resolution (`projects/`, `settings.json`) only; the global store stays at `~/.claude/memory-global`. | `$HOME/.claude` |
@@ -122,7 +120,7 @@ Read by `memoryctl` (from its `--help` usage) and by the shims:
 | `HYPOMNEMA_SESSION_ID` | Session id stamped into WAL entries. | `unknown` |
 | `CLAUDE_CODE_SESSION_ID` | Session id Claude Code exports into Bash; `recall` falls back to it when `HYPOMNEMA_SESSION_ID` is unset, and it is how a CLI verb looks up the session pin written at `SessionStart`. | (inherited) |
 | `HYPOMNEMA_TODAY` | Freeze "today" (`YYYY-MM-DD`) in date-sensitive logic; used by tests/replay. | `$(date +%Y-%m-%d)` |
-| `HYPOMNEMA_NOW` | Freeze the self-profile `generated:` stamp (`YYYY-MM-DD HH:MM`). | now |
+| `HYPOMNEMA_NOW` | Freeze `doctor`'s "now" (`YYYY-MM-DD HH:MM`) when `HYPOMNEMA_TODAY` is unset. | now |
 | `HYPOMNEMA_ALLOW_SECRETS` | Set to `1` to bypass the `guard` secrets gate for a single invocation. | unset |
 | `CLAUDE_HOME` | Test/parallel-install override for hypomnema's own state root, and — checked before `CLAUDE_CONFIG_DIR` — for native store resolution too. | `$HOME/.claude` |
 | `HYPOMNEMA_SUBAGENT_SKIP` | Comma-separated `agent_type` list that gets no memory at `SubagentStart`/`SubagentStop`. Checked with `os.LookupEnv`: when SET it fully replaces the default list (trimmed, empty items dropped); set-but-empty means skip nothing; a single `*` entry means skip every agent type — the full opt-out. Set it in `settings.json`'s top-level `env` block so both hooks inherit it. | `fork,Explore,claude-code-guide,statusline-setup` |
@@ -136,13 +134,14 @@ Verbs may read and write:
 - Native memory files: `~/.claude/projects/<slug>/memory/*.md` (per-project) and
   `~/.claude/memory-global/*.md` (global) — per FORMAT.md §3.
 - The runtime tree `~/.claude/memory/`: `.wal` (§5 of FORMAT.md), `.sidecar.db`
-  (the single derivative index), `self-profile.md`, and `.runtime/`
+  (the single derivative index), `.wal.pre-compact-<date>` (written only by
+  the manual `memoryctl wal compact`), and `.runtime/`
   (session-scoped markers: `injected-<session_id>.list` — the session's
   injected union, for `close` classification, WAL `inject`-row dedup, and
   as the render-dedup fallback when no rendered list exists yet;
   `rendered-<session_id>.list` — what is in the model's *current* context,
   the normative dedup source for the next render, reset on `compact`/`clear`;
-  `holdout-<session_id>.list` — facts withheld for `ablate`; `active-skill-<sid>`
+  `active-skill-<sid>`
   — the marker `skill-active` writes; and the store-resolution session pin
   `project-<session_id>.json`, written by `inject` at `SessionStart` and read
   back by later CLI verbs in the same session via
@@ -168,6 +167,10 @@ and `transcript_path`. Ranks the current project + global native memory
 against `session_keywords` (prompt tokens, CWD basename, git branch / changed
 files / recent commit subjects) and emits the top-8 as
 `hookSpecificOutput.additionalContext` with `hookEventName: SessionStart`.
+Of a project's `continuity` facts only the freshest (later of
+`created`/`modified`; on a tie, the lexically greater filename) is a
+candidate — on every inject event, subagents included; older ones are reachable
+through `recall` only.
 
 `source` distinguishes a fresh session from a re-render after the model's
 context was wiped:
@@ -340,16 +343,16 @@ Contract (see CLAUDE.md "Lifecycle"):
   **delivered** citation — a session that resolved zero delivered
   citations (nothing cited, or every citation was `cite-undelivered`)
   writes one session-level `cite-none` instead, so a broken citation
-  channel never fabricates a session of silent facts. Frontmatter
-  `evidence:`/name substring matching no longer produces `cite-*`; it now
-  feeds only the `ablate` holdout observation (`holdout-hit`/`holdout-miss`).
-- Writes a `session-metrics` (v2 shape) and a `session-close` row per turn
-  (Stop fires once per turn, not once per session). The per-fact
-  classification rows — `cite-useful`/`cite-silent`,
-  `holdout-hit`/`holdout-miss` — are written once per (fact, session).
+  channel never fabricates a session of silent facts.
+- Writes a `session-close` row per turn (Stop fires once per turn, not once
+  per session). The per-fact classification rows — `cite-useful`/`cite-silent`
+  — are written once per (fact, session).
 - Recomputes effectiveness in the sidecar; marks unused facts `stale` past their
-  type threshold (age from last injection). No native content is mutated;
-  `pinned` / `continuity` / `project` facts never decay.
+  type threshold (age from last injection, else `created`, else the date of
+  Claude Code's `modified` stamp). No native content is mutated; `pinned`
+  facts and each project's freshest `continuity` fact never decay — older
+  continuity files age like notes (30 days), `project` like knowledge (90).
+- Regenerates the project's native `MEMORY.md` (and the global index).
 - Ages out stale `active-skill-<sid>` markers (>24 h) from `.runtime/`.
 
 **Continuity files are agent-written in v2**, not generated here. When you stop
@@ -416,11 +419,7 @@ are the same ones `inject.Run` always produces; the instruction line is
 `inject.SubagentCiteInstruction` (cite in the final report), not the parent
 line.
 
-The parent's holdout list (`holdout-<session_id>.list`) is read-only input
-here: a fact the parent session is withholding for an ablation observation
-must not reach its subagent and contaminate that observation. The subagent
-path never writes a holdout list or a store-resolution session pin of its
-own.
+The subagent path never writes a store-resolution session pin of its own.
 
 Output: same envelope shape as §2/§3 with `hookEventName: "SubagentStart"`;
 when nothing renders there is no stdout at all — not even an empty envelope.
@@ -456,9 +455,8 @@ subagent whose transcript could not be read (missing/unreadable
 `agent_transcript_path`) still gets its `session-close` row below, but no
 `cite-*` row.
 
-What it leaves to the parent's own next `Stop`: no `session-metrics` row, no
-holdout classification, no sidecar reprojection (`Reproject`/`MarkStale`), no
-`MEMORY.md` regeneration, no self-profile regeneration. Session-level work
+What it leaves to the parent's own next `Stop`: no sidecar reprojection
+(`Reproject`/`MarkStale`), no `MEMORY.md` regeneration. Session-level work
 stays with the parent.
 
 It writes one `session-close|<key>|<key>` row, and — unlike the parent's own
@@ -506,7 +504,9 @@ echo '{"session_id":"test","cwd":"/tmp","transcript_path":"/tmp/t.jsonl"}' \
 Freeze time for replay/diagnostics with `HYPOMNEMA_TODAY=2026-04-10`.
 
 Validate the WAL grammar (FORMAT.md §5) with `memoryctl wal validate`
-(exit 0 clean, 1 failing rows, 2 WAL missing / misuse).
+(exit 0 clean, 1 failing rows, 2 WAL missing / misuse). Drop legacy rows no
+reader consumes with `memoryctl wal compact [--dry-run]` (FORMAT.md §5.2) —
+run it when no session is mid-turn.
 
 ---
 
@@ -515,8 +515,8 @@ Validate the WAL grammar (FORMAT.md §5) with `memoryctl wal validate`
 These v1 hooks and behaviours are **gone** — do not implement or rely on them:
 
 - `PreCompact` hook and its `systemMessage` reminder.
-- Fuzzy-dedup `PreToolUse` (matcher `Write`). `memoryctl dedup check` survives as
-  a manual CLI verb but is not wired to any hook.
+- Fuzzy-dedup `PreToolUse` (matcher `Write`). The `memoryctl dedup check`
+  verb that outlived it is gone too.
 - `PostToolUse` `memory-outcome.sh` and `memory-error-detect.sh`.
 - Substring `trigger:`/`triggers:` matching and negation-token windows.
 - FTS5 shadow retrieval / `shadow-miss`.
