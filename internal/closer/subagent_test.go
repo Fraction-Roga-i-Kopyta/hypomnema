@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func subagentFixture(t *testing.T, files map[string]string, injected, holdout []string, transcript string) (memDir, projDir string, run func() Result) {
+func subagentFixture(t *testing.T, files map[string]string, injected []string, transcript string) (memDir, projDir string, run func() Result) {
 	t.Helper()
 	home := t.TempDir()
 	memDir = filepath.Join(home, ".claude", "memory")
@@ -19,9 +19,6 @@ func subagentFixture(t *testing.T, files map[string]string, injected, holdout []
 	}
 	os.WriteFile(filepath.Join(memDir, ".wal"), nil, 0o644)
 	os.WriteFile(filepath.Join(memDir, ".runtime", "injected-s1_a1.list"), []byte(strings.Join(injected, "\n")+"\n"), 0o600)
-	if len(holdout) > 0 {
-		os.WriteFile(filepath.Join(memDir, ".runtime", "holdout-s1_a1.list"), []byte(strings.Join(holdout, "\n")+"\n"), 0o600)
-	}
 	tx := filepath.Join(home, "agent.jsonl")
 	os.WriteFile(tx, []byte(transcript+"\n"), 0o644)
 	return memDir, projDir, func() Result {
@@ -42,7 +39,7 @@ var subagentFiles = map[string]string{
 }
 
 func TestRun_SubagentClassifiesUnderItsKey(t *testing.T) {
-	memDir, projDir, run := subagentFixture(t, subagentFiles, []string{"docker.md", "sql.md"}, nil,
+	memDir, projDir, run := subagentFixture(t, subagentFiles, []string{"docker.md", "sql.md"},
 		assistantText(`<cc-memory filenames="docker.md">fixed the cache</cc-memory>`))
 	run()
 	w, _ := os.ReadFile(filepath.Join(memDir, ".wal"))
@@ -68,7 +65,7 @@ func TestRun_SubagentClassifiesUnderItsKey(t *testing.T) {
 }
 
 func TestRun_SubagentUndeliveredCitation(t *testing.T) {
-	memDir, _, run := subagentFixture(t, subagentFiles, []string{"docker.md"}, nil,
+	memDir, _, run := subagentFixture(t, subagentFiles, []string{"docker.md"},
 		assistantText(`<cc-memory filenames="extra.md">per extra</cc-memory>`))
 	run()
 	w, _ := os.ReadFile(filepath.Join(memDir, ".wal"))
@@ -84,18 +81,8 @@ func TestRun_SubagentUndeliveredCitation(t *testing.T) {
 	}
 }
 
-func TestRun_SubagentSkipsHoldout(t *testing.T) {
-	memDir, _, run := subagentFixture(t, subagentFiles, []string{"docker.md"}, []string{"sql.md"},
-		assistantText(`the sql index was the problem`))
-	run()
-	w, _ := os.ReadFile(filepath.Join(memDir, ".wal"))
-	if strings.Contains(string(w), "|holdout-hit|") || strings.Contains(string(w), "|holdout-miss|") {
-		t.Errorf("subagent close must not classify holdout observations:\n%s", w)
-	}
-}
-
 func TestRun_SubagentRepeatStopWritesOneSessionClose(t *testing.T) {
-	memDir, _, run := subagentFixture(t, subagentFiles, []string{"docker.md"}, nil,
+	memDir, _, run := subagentFixture(t, subagentFiles, []string{"docker.md"},
 		assistantText(`<cc-memory filenames="docker.md">fixed the cache</cc-memory>`))
 	run()
 	run()

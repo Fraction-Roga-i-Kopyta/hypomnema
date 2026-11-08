@@ -172,10 +172,6 @@ func runSubagentStart(raw []byte) {
 		ClaudeHome: claudeDir(), MemoryDir: memoryDir(), Today: today(),
 		MaxK: subagentMaxK, MaxBytes: subagentMaxBytes,
 		Store: resolveStore(in.CWD).Store,
-		// Read-only: a fact the parent session is withholding must not reach
-		// its subagent, or the subagent's output would contaminate the
-		// parent's holdout observation.
-		HoldoutSession: readListFile(holdoutListPath(in.SessionID)),
 	})
 	if err != nil {
 		return

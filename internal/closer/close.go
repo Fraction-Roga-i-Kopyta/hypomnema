@@ -1,3 +1,7 @@
+// Package closer implements the Stop-hook close path: it classifies injected
+// memories as cited (cite-useful) or not (cite-silent) based on explicit
+// <cc-memory> citations in the assistant text, and emits the closing WAL
+// events, refreshes the sidecar, and decays stale entries.
 package closer
 
 import (
@@ -29,8 +33,8 @@ type Input struct {
 	// Subagent marks a SubagentStop close: SessionID is the subagent's
 	// observation key and TranscriptPath its own transcript. Only the
 	// citation classification and a session-close row run; session-level
-	// work (metrics, holdout, sidecar reprojection, decay, MEMORY.md,
-	// self-profile) is left to the parent's next Stop.
+	// work (metrics, sidecar reprojection, decay, MEMORY.md, self-profile)
+	// is left to the parent's next Stop.
 	Subagent bool
 }
 
@@ -55,7 +59,7 @@ func Run(in Input) (Result, error) {
 	var res Result
 	st := in.store()
 	injected := readInjectedSet(in.MemoryDir, in.SessionID)
-	names, evidence, status := slugMeta(in.ClaudeHome, st)
+	status := slugStatus(in.ClaudeHome, st)
 
 	sess, sErr := jsonl.ReadSession(in.TranscriptPath)
 
@@ -142,33 +146,6 @@ func Run(in Input) (Result, error) {
 		if len(delivered) == 0 && len(injected) > 0 {
 			wal.AppendSuffixUnique(in.MemoryDir, fmt.Sprintf("%s|cite-none|%s|%s", in.Today, sid, sid), "|cite-none|"+sid+"|"+sid)
 		}
-		// Ablation observation: facts withheld this session get the same
-		// evidence classification, but the verdict flows to holdout-hit/miss
-		// (ablate report), never to cite events — a fact cannot earn or
-		// lose effectiveness in a session where the model never saw it.
-		// A fact also present in the injected set was delivered anyway by a
-		// pull path (recall/skill-inject) — the model saw it, the
-		// observation is contaminated, so it is excluded here.
-		holdout := readHoldoutSet(in.MemoryDir, in.SessionID)
-		if len(holdout) > 0 && !in.Subagent {
-			wasInjected := make(map[string]bool, len(injected))
-			for _, s := range injected {
-				wasInjected[s] = true
-			}
-			clean := holdout[:0]
-			for _, s := range holdout {
-				if !wasInjected[s] {
-					clean = append(clean, s)
-				}
-			}
-			hits, misses := Classify(clean, names, evidence, sess.Text)
-			for _, slug := range hits {
-				appendWAL(in.MemoryDir, in.Today, "holdout-hit", qualify(projectOf, slug), sid)
-			}
-			for _, slug := range misses {
-				appendWAL(in.MemoryDir, in.Today, "holdout-miss", qualify(projectOf, slug), sid)
-			}
-		}
 	}
 	if in.Subagent {
 		wal.AppendSuffixUnique(in.MemoryDir, fmt.Sprintf("%s|session-close|%s|%s", in.Today, sid, sid), "|session-close|"+sid+"|"+sid)
@@ -212,11 +189,6 @@ func readInjectedSet(memDir, sessionID string) []string {
 		"injected-"+pathutil.SafeFileName(sessionID)+".list"))
 }
 
-func readHoldoutSet(memDir, sessionID string) []string {
-	return readRuntimeList(filepath.Join(memDir, ".runtime",
-		"holdout-"+pathutil.SafeFileName(sessionID)+".list"))
-}
-
 func readRuntimeList(path string) []string {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -235,18 +207,14 @@ func collectNative(claudeHome string, st native.Store) []native.MemFile {
 	return native.Collect(claudeHome, st)
 }
 
-func slugMeta(claudeHome string, st native.Store) (names map[string]string, evidence map[string][]string, status map[string]string) {
-	names = map[string]string{}
-	evidence = map[string][]string{}
-	status = map[string]string{}
+// slugStatus maps each in-scope fact's slug to its frontmatter status (the
+// candidate-graduation check reads it).
+func slugStatus(claudeHome string, st native.Store) map[string]string {
+	status := map[string]string{}
 	for _, f := range collectNative(claudeHome, st) {
-		names[f.Slug] = f.Name
 		status[f.Slug] = f.Status
-		if len(f.Evidence) > 0 {
-			evidence[f.Slug] = f.Evidence
-		}
 	}
-	return names, evidence, status
+	return status
 }
 
 // appendWAL writes one classification row, deduplicated per (event, target,

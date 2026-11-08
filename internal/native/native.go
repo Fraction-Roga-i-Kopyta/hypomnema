@@ -21,7 +21,6 @@ type MemFile struct {
 	Status      string   // frontmatter: status — only "pinned" is honoured; lifecycle states are sidecar-owned
 	Keywords    []string // frontmatter: keywords — explicit relevance signal
 	Domains     []string // frontmatter: domains — domain filter tags
-	Evidence    []string // frontmatter: evidence — phrases that mark the rule as applied
 	Skill       string   // frontmatter: skill — binds a skill-learning to a skill name
 	// PrecisionClass — frontmatter: precision_class. "ambient" marks a rule that
 	// shapes behaviour silently (language pref, security baseline, meta-policy);
@@ -85,7 +84,6 @@ func parseFile(path string) (MemFile, error) {
 		Status:         fm["status"],
 		Keywords:       splitList(fm["keywords"]),
 		Domains:        splitList(fm["domains"]),
-		Evidence:       splitList(fm["evidence"]),
 		Skill:          fm["skill"],
 		PrecisionClass: fm["precision_class"],
 		Retired:        fm["retired"],
