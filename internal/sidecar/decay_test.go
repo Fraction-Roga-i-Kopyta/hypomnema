@@ -122,10 +122,10 @@ func TestMarkStale_ContinuityAndProjectTypes(t *testing.T) {
 	}
 	defer s.Close()
 	for _, r := range []Record{
-		{Slug: "continuity.md", Project: "p", Type: "continuity", Created: "2026-01-01", Modified: "2026-03-01", Status: "active"},
-		{Slug: "continuity-2026-02-01.md", Project: "p", Type: "continuity", Created: "2026-02-01", Status: "active"},
-		{Slug: "continuity.md", Project: "q", Type: "continuity", Created: "2026-01-01", Status: "active"},
-		{Slug: "continuity-2026-05-01.md", Project: "q", Type: "continuity", Created: "2026-05-01", Status: "active"},
+		{Slug: "continuity.md", Project: "p", Type: "continuity", Created: "2026-01-01", Fresh: "2026-03-01", Status: "active"},
+		{Slug: "continuity-2026-02-01.md", Project: "p", Type: "continuity", Created: "2026-02-01", Fresh: "2026-02-01", Status: "active"},
+		{Slug: "continuity.md", Project: "q", Type: "continuity", Created: "2026-01-01", Fresh: "2026-01-01", Status: "active"},
+		{Slug: "continuity-2026-05-01.md", Project: "q", Type: "continuity", Created: "2026-05-01", Fresh: "2026-05-01", Status: "active"},
 		{Slug: "plan.md", Project: "p", Type: "project", Created: "2026-01-01", Status: "active"},
 		{Slug: "card.md", Project: "p", Type: "project", Created: "2026-01-01", Status: "pinned"},
 	} {

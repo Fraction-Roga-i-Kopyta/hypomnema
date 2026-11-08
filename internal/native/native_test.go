@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func writeFile(t *testing.T, dir, name, content string) {
@@ -205,5 +206,33 @@ func TestNewestContinuity(t *testing.T) {
 	got := NewestContinuity(files)
 	if got["p"] != "continuity.md" || got["q"] != "continuity-2026-09-03.md" || len(got) != 2 {
 		t.Errorf("NewestContinuity = %v", got)
+	}
+}
+
+// `modified` is a UTC stamp; its date is taken in the local zone so it
+// compares with local created/today — an edit at 01:30 local (22:30Z the
+// day before) belongs to the local day.
+func TestParse_ModifiedStampIsLocalDate(t *testing.T) {
+	saved := time.Local
+	time.Local = time.FixedZone("UTC+3", 3*3600)
+	defer func() { time.Local = saved }()
+	dir := t.TempDir()
+	writeFile(t, dir, "late.md", "---\nname: l\nmetadata:\n  modified: 2026-11-08T22:30:00.000Z\n---\nbody\n")
+	writeFile(t, dir, "plain.md", "---\nname: p\nmodified: 2026-08-20\n---\nbody\n")
+	files, err := List(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		switch f.Slug {
+		case "late.md":
+			if f.Modified != "2026-11-09" {
+				t.Errorf("late.md Modified = %q, want local 2026-11-09", f.Modified)
+			}
+		case "plain.md":
+			if f.Modified != "2026-08-20" {
+				t.Errorf("plain.md Modified = %q, want 2026-08-20", f.Modified)
+			}
+		}
 	}
 }

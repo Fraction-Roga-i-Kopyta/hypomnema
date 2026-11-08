@@ -8,6 +8,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/closer"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 )
 
@@ -654,5 +655,48 @@ func TestRun_OnlyNewestContinuityInjects(t *testing.T) {
 		if !strings.Contains(got, "continuity.md") || strings.Contains(got, "continuity-2026-09-01.md") {
 			t.Errorf("%s: want the freshest continuity only, got %v", ev, res.Injected)
 		}
+	}
+}
+
+// Injection and decay must agree on which continuity is the freshest: if
+// they disagree, decay stales injection's pick while injection drops decay's
+// pick as "not the newest", and no continuity is pushed at all. A file with
+// no frontmatter date must not borrow a WAL date on one side only.
+func TestRun_ContinuityChoiceMatchesDecay(t *testing.T) {
+	memDir, projDir, home := setup(t)
+	os.WriteFile(filepath.Join(projDir, "continuity.md"),
+		[]byte("---\nname: continuity\ntype: continuity\n---\nnext: ship it\n"), 0o644)
+	os.WriteFile(filepath.Join(projDir, "continuity-old.md"),
+		[]byte("---\nname: continuity old\ntype: continuity\ncreated: 2025-12-01\n---\nold plan\n"), 0o644)
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte("2026-01-01|inject|-tmp-proj\x1fcontinuity.md|s0\n"), 0o644)
+	if _, err := closer.Run(closer.Input{SessionID: "s0", CWD: "/tmp/proj",
+		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir, Today: "2026-11-09"}); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Run(Input{Event: "SessionStart", SessionID: "s1", CWD: "/tmp/proj",
+		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir, Today: "2026-11-09", MaxK: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Injected) != 1 {
+		t.Errorf("exactly one continuity (the freshest by frontmatter) must inject, got %v", res.Injected)
+	}
+}
+
+// The window is MaxK however many candidates there are.
+func TestRun_CapsAtMaxK(t *testing.T) {
+	memDir, projDir, home := setup(t)
+	for _, n := range []string{"a", "b", "c", "d", "e"} {
+		os.WriteFile(filepath.Join(projDir, n+".md"),
+			[]byte("---\nname: "+n+" docker\ntype: knowledge\n---\ndocker cache\n"), 0o644)
+	}
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
+	res, err := Run(Input{Event: "UserPromptSubmit", SessionID: "s1", CWD: "/tmp/proj", Prompt: "docker cache",
+		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir, Today: "2026-05-29", MaxK: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Injected) != 3 {
+		t.Errorf("want MaxK=3 facts, got %v", res.Injected)
 	}
 }
