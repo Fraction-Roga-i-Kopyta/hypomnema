@@ -1,5 +1,51 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **Pull-only mode: `HYPOMNEMA_PROMPT_INJECT=off`.** UserPromptSubmit injects
+  nothing; memory reaches the model through the harness-loaded `MEMORY.md`
+  index and the model's own reads — Claude Code's own design. SessionStart,
+  SubagentStart, citations (a Read of a fact counts as delivery), decay and
+  the secrets guard are unchanged.
+- **Global store index.** The Stop hook and `memoryctl reindex` also write
+  `~/.claude/memory-global/MEMORY.md`, linking each global fact by absolute
+  path. The harness never loads the global store, so without push it was
+  invisible; import the index from the user CLAUDE.md
+  (`@~/.claude/memory-global/MEMORY.md`). A `MEMORY.md` already in the
+  global store that memoryctl did not generate (no `# Global Memory Index`
+  header) is left untouched; `reindex` says so on stderr.
+
+### Fixed
+
+- **UserPromptSubmit injected facts unrelated to the prompt.** The ranker is
+  zero-safe by design, so once the prompt-matching facts were placed, recency
+  and popularity alone filled the remaining top-8 slots on every prompt. A
+  fact now injects on UserPromptSubmit only if the prompt names what it is
+  about (a prompt term in its name, description, keywords or domains) or
+  shares at least two terms with it; a single body-only hit — in replayed
+  sessions mostly a filler word — does not pass, and cwd/git terms rank but
+  do not count. A prompt with no relevance terms injects nothing.
+  The overlap is counted on the fact's own file, so a same-named fact in
+  another project (`continuity.md`) cannot lend it its words.
+  SessionStart and SubagentStart are unchanged. Fixtures of budget/session
+  tests now carry `keywords: [docker]` so their facts pass the gate.
+  Measured on one install (blind judgement inside replayed sessions):
+  precision on interactive prompts 12.9 % → 27.8 % at unchanged injection volume —
+  `docs/measurements/2026-10-27-prompt-gate.md`.
+- **Home-directory basename used as a query term.** For a session launched
+  from `~` the cwd basename is the login name, which occurs in every fact that
+  quotes an absolute path — it matched an arbitrary subset of the corpus on
+  every prompt and was the only SessionStart term. It is skipped when cwd is
+  the home directory.
+- **Russian function-word case forms counted as relevance.** The stopword
+  list held base forms only; inflected forms ("этом", "тому", "тех", "ним",
+  "своих"…) and particles ("давай", "пусть") each scored a full overlap point
+  (3.0 — more than the recency maximum). They are now stopwords; no rebuild
+  is required (query terms are filtered the same way), `memoryctl sidecar
+  rebuild` drops the dead keyword rows.
+
 ## [2.16.0] — 2026-10-11
 
 ### Changed

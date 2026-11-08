@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,6 +25,22 @@ func runReindex(args []string) {
 		}
 		fmt.Fprintf(os.Stderr, "memoryctl reindex: unknown flag %q\n", a)
 		os.Exit(2)
+	}
+	// The global store's index first: it does not depend on the project.
+	globalDir := native.GlobalMemoryDir(filepath.Dir(claudeDir()))
+	if globalFiles, gerr := native.List(globalDir); gerr == nil && len(globalFiles) > 0 {
+		content := memindex.RenderGlobal(globalFiles, memindex.DefaultMaxBytes)
+		switch err := memindex.WriteGlobal(globalDir, content); {
+		case errors.Is(err, memindex.ErrForeignIndex):
+			// Someone else's index: keep it, say why, go on to the project.
+			fmt.Fprintf(os.Stderr, "memoryctl reindex: %v — move it aside to generate the global index\n", err)
+		case err != nil:
+			fmt.Fprintf(os.Stderr, "memoryctl reindex: %v\n", err)
+			os.Exit(1)
+		default:
+			fmt.Fprintf(os.Stderr, "memoryctl reindex: wrote %s (%d files, %d bytes)\n",
+				filepath.Join(globalDir, "MEMORY.md"), len(globalFiles), len(content))
+		}
 	}
 	projDir := resolveStore("").Dir
 	files, err := native.List(projDir)
