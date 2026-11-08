@@ -242,7 +242,7 @@ func checkCandidates(memoryDir, claudeHome string, st native.Store) Check {
 			Detail: "no uncorroborated candidates"}
 	}
 	return Check{Name: "candidate_corroboration", Status: WARN,
-		Detail: fmt.Sprintf("%d candidate(s) never corroborated after ≥%d silent sessions: %s — retire or rewrite keywords/evidence",
+		Detail: fmt.Sprintf("%d candidate(s) never corroborated after ≥%d silent sessions: %s — retire or rewrite keywords",
 			len(flagged), candidateSilentMin, strings.Join(flagged, ", ")),
 		Extra: map[string]interface{}{"slugs": flagged}}
 }

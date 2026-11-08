@@ -45,10 +45,6 @@ type Record struct {
 	RefCount      int
 	Status        string
 	Effectiveness float64
-	// HoldoutRemaining is the live per-fact ablation budget: sessions left
-	// in which inject withholds the fact. WAL-derived (ablate-start minus
-	// distinct holdout-skip sessions, zero after ablate-stop).
-	HoldoutRemaining int
 }
 
 // schemaVersion identifies the projection generation. v2 added project
@@ -58,10 +54,11 @@ type Record struct {
 // v4 (v2.10.0) made the memory PK composite (slug, project). v5 added
 // `holdout_remaining` for per-fact ablation. v6 (v2.12.0) added last_useful
 // (latest cite-useful date, v2.14+; formerly trigger-useful) so recency can
-// follow the model's use rather than the ranker's own injections. Open wipes
-// a sidecar written by a different generation — the sidecar is a derived
-// projection, so the wipe only costs the next Reproject.
-const schemaVersion = "6"
+// follow the model's use rather than the ranker's own injections. v7 dropped
+// holdout_remaining with the ablation machinery. Open wipes a sidecar written
+// by a different generation — the sidecar is a derived projection, so the
+// wipe only costs the next Reproject.
+const schemaVersion = "7"
 
 // Open opens (creating if needed) the sidecar DB at dbPath and applies the
 // schema. Mirrors internal/fts: modernc.org/sqlite, busy_timeout, WAL journal.
@@ -135,13 +132,12 @@ func (s *Store) Close() error { return s.db.Close() }
 // such row exists.
 func (s *Store) Get(slug string) (Record, bool, error) {
 	row := s.db.QueryRow(`SELECT slug, content_sha, type, name, description,
-		project, domains, created, last_injected, last_useful, ref_count, status, effectiveness,
-		holdout_remaining
+		project, domains, created, last_injected, last_useful, ref_count, status, effectiveness
 		FROM memory WHERE slug = ?`, slug)
 	var r Record
 	err := row.Scan(&r.Slug, &r.ContentSHA, &r.Type, &r.Name, &r.Description,
 		&r.Project, &r.Domains, &r.Created, &r.LastInjected, &r.LastUseful, &r.RefCount,
-		&r.Status, &r.Effectiveness, &r.HoldoutRemaining)
+		&r.Status, &r.Effectiveness)
 	if err == sql.ErrNoRows {
 		return Record{}, false, nil
 	}
@@ -160,20 +156,17 @@ func upsertIn(e dbtx, r Record) error {
 	}
 	_, err := e.Exec(`
 INSERT INTO memory (slug, content_sha, type, name, description, project,
-	domains, created, last_injected, last_useful, ref_count, status, effectiveness,
-	holdout_remaining)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+	domains, created, last_injected, last_useful, ref_count, status, effectiveness)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(slug, project) DO UPDATE SET
 	content_sha=excluded.content_sha, type=excluded.type, name=excluded.name,
 	description=excluded.description, project=excluded.project,
 	domains=excluded.domains, created=excluded.created,
 	last_injected=excluded.last_injected, last_useful=excluded.last_useful,
 	ref_count=excluded.ref_count,
-	status=excluded.status, effectiveness=excluded.effectiveness,
-	holdout_remaining=excluded.holdout_remaining`,
+	status=excluded.status, effectiveness=excluded.effectiveness`,
 		r.Slug, r.ContentSHA, r.Type, r.Name, r.Description, r.Project,
-		r.Domains, r.Created, r.LastInjected, r.LastUseful, r.RefCount, r.Status, r.Effectiveness,
-		r.HoldoutRemaining)
+		r.Domains, r.Created, r.LastInjected, r.LastUseful, r.RefCount, r.Status, r.Effectiveness)
 	if err != nil {
 		return fmt.Errorf("sidecar.Upsert: %w", err)
 	}
@@ -205,8 +198,7 @@ func (s *Store) WALOffset() (int64, bool, error) {
 
 func allIn(e dbtx) ([]Record, error) {
 	rows, err := e.Query(`SELECT slug, content_sha, type, name, description,
-		project, domains, created, last_injected, last_useful, ref_count, status, effectiveness,
-		holdout_remaining
+		project, domains, created, last_injected, last_useful, ref_count, status, effectiveness
 		FROM memory ORDER BY slug`)
 	if err != nil {
 		return nil, fmt.Errorf("sidecar.All: %w", err)
@@ -217,7 +209,7 @@ func allIn(e dbtx) ([]Record, error) {
 		var r Record
 		if err := rows.Scan(&r.Slug, &r.ContentSHA, &r.Type, &r.Name,
 			&r.Description, &r.Project, &r.Domains, &r.Created, &r.LastInjected, &r.LastUseful,
-			&r.RefCount, &r.Status, &r.Effectiveness, &r.HoldoutRemaining); err != nil {
+			&r.RefCount, &r.Status, &r.Effectiveness); err != nil {
 			return nil, fmt.Errorf("sidecar.All: scan: %w", err)
 		}
 		out = append(out, r)

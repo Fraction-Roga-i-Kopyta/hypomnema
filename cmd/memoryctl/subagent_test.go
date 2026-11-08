@@ -401,30 +401,6 @@ func TestSubagentStart_ConcurrentSameKeyRendersOnce(t *testing.T) {
 	}
 }
 
-func TestSubagentStart_ParentHoldoutStaysWithheld(t *testing.T) {
-	f := newStoreFixture(t)
-	f.fact(t, "/tmp/proj", "dockercache", "docker layer cache")
-	f.fact(t, "/tmp/proj", "pgmigration", "postgres migration lock")
-	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
-	rt := filepath.Join(f.mem, ".runtime")
-	os.MkdirAll(rt, 0o755)
-	holdout := filepath.Join(rt, "holdout-s1.list")
-	os.WriteFile(holdout, []byte("pgmigration.md\n"), 0o600)
-	parent := writeTranscript(t, agentCallLine("t1", "general-purpose", "Fix migration", "pgmigration postgres lock"))
-	out, _, _ := runStdin(t, f.env, subagentEnv("s1", "a1", "general-purpose", "/tmp/proj", parent, ""),
-		"inject", "--event=SubagentStart")
-	if strings.Contains(additionalContext(t, out), "postgres migration lock") {
-		t.Errorf("a fact withheld in the parent session must not reach its subagent; out=%q", out)
-	}
-	wal, _ := os.ReadFile(filepath.Join(f.mem, ".wal"))
-	if strings.Contains(string(wal), "|holdout-skip|") {
-		t.Errorf("the subagent must not record holdout observations:\n%s", wal)
-	}
-	if b, _ := os.ReadFile(holdout); string(b) != "pgmigration.md\n" {
-		t.Errorf("the parent's holdout list is read-only; got %q", b)
-	}
-}
-
 func TestSubagentStart_MissingIDsAndBadStdin(t *testing.T) {
 	f := newStoreFixture(t)
 	f.fact(t, "/tmp/proj", "dockercache", "docker layer cache")
