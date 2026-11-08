@@ -71,7 +71,7 @@ size. See [`docs/measurements/2026-05-29-v2-ranker-ab.md`](docs/measurements/202
 │                                                             │
 │  inject ──► additionalContext (ranked top-K)                │
 │  inject (SubagentStart) ──► own top-5 for its task          │
-│  close  ──► classify → WAL → effectiveness/decay → profile  │
+│  close  ──► classify → WAL → effectiveness/decay → index    │
 │  close --subagent ──► classify under its own key            │
 │  guard  ──► secrets gate (PreToolUse:Write|Edit)            │
 │  skill-inject/skill-active ──► per-skill learnings          │
@@ -92,14 +92,13 @@ size. See [`docs/measurements/2026-05-29-v2-ranker-ab.md`](docs/measurements/202
 | `PreToolUse:Write\|Edit` | `pre-tool-write.sh` | `guard`: secrets scan on memory-path writes → exit 2 on a credential pattern |
 | `PreToolUse:Skill` | `skill-active.sh` | Record which skill just activated (marker for the capture path) |
 | `PostToolUse:Skill` | `skill-learnings-inject.sh` | `skill-inject`: surface accumulated learnings for the activated skill |
-| `Stop` | `session-stop.sh` | `close`: classify the injected set (evidence/citation) → WAL → recompute effectiveness/decay → regenerate `MEMORY.md` + self-profile |
+| `Stop` | `session-stop.sh` | `close`: classify the injected set by `<cc-memory>` citation → WAL → recompute effectiveness/decay → regenerate `MEMORY.md` |
 | `SubagentStart` | `subagent-start.sh` | Rank against the subagent's own launch task (fallback: the parent's recent prompts) → inject its own top-5 |
 | `SubagentStop` | `subagent-stop.sh` | `close --subagent`: classify the subagent's own citations (including its hand-back report) under its own key |
 
-Fuzzy dedup for near-duplicate mistakes is available as the `memoryctl dedup`
-verb but is not wired as a hook in v2. The project's native `MEMORY.md` index is
-regenerated from native files on close; ranked facts arrive separately through
-`additionalContext` — we don't fight the harness for the index channel.
+The project's native `MEMORY.md` index is regenerated from native files on
+close; ranked facts arrive separately through `additionalContext` — we don't
+fight the harness for the index channel.
 
 ## How injection ranks files
 
@@ -142,14 +141,16 @@ ref_count/recency, and — if it had gone stale — comes back to life.
 | **knowledge** | Domain facts, API docs, infrastructure |
 | **decision** | Architecture & technology choices |
 | **note** | Long-form knowledge, references |
-| **project** | Project description, stack, known issues |
+| **project** | Ongoing work, goals, constraints (Claude Code's own type) |
 | **continuity** | "Where we left off" last session |
 | **skill-learning** | Usage-learned knowledge bound to a skill (`skill:` field), injected when that skill activates |
 
 The kind is the singular `type:` frontmatter value, not a subdirectory — the
 stores are flat. All types compete in one ranked top-8 — there are no per-type
-quotas; type balance emerges from relevance. `continuity` and `project` facts
-are exempt from staleness rotation.
+quotas; type balance emerges from relevance. Only a project's freshest
+`continuity` fact (by `created`/`modified`) is pushed and exempt from staleness
+rotation; older continuity files are history — still recallable, aging like
+notes.
 
 ### Example: a mistake
 
@@ -252,9 +253,7 @@ v1 store.)
 
 The shims activate on next session start.
 
-## Self-profile
-
-`memoryctl close` regenerates `self-profile.md` on every close (Stop fires per turn) from WAL events. Five sections: meta-signals (total sessions, legacy outcome-positive/negative counts, cite-useful vs cite-silent), intuition signal (silent-applied/cite-useful ratio), strengths (top strategies by success_count), weaknesses (top mistakes by recurrence), and calibration (domains by error rate). Never edit manually — it's a pure function of WAL.
+## Health check
 
 Run `memoryctl doctor` for a health snapshot: sidecar drift, WAL anomalies, stale facts due for down-rank, global store coverage, **facts larger than the 2.5 KB injection cap** (they inject as a header plus a marker; split or retire them).
 
@@ -270,7 +269,7 @@ A truncated injection ends with `…(truncated — N B total; full text: <path>)
 
 ## Lifecycle
 
-`memoryctl close` down-ranks stale facts in the sidecar (no mutation of native content). Staleness counts from the **last injection** (fallback `created`), so facts in active rotation never age out. Explicit archiving ships as `memoryctl retire <slug> [--reason ...] [--superseded-by <ref>]`: the file moves into the store's `.archive/`, and `recall` renders a tombstone redirect (`[retired <date> → successor]`) instead of silently forgetting; `memoryctl revive` undoes it. The full lifecycle is closed by three more verbs: agent-written facts start as `status: candidate` and graduate on their first useful citation; `memoryctl ablate` runs a per-fact holdout that measures whether behavior survives without the injection; `memoryctl promote` (report-only) suggests which facts have outgrown prose memory — a recurring mistake wants a hook/lint/test, an always-useful fact wants CLAUDE.md, an internalized one wants retirement.
+`memoryctl close` down-ranks stale facts in the sidecar (no mutation of native content). Staleness counts from the **last injection** (fallback `created`), so facts in active rotation never age out. Explicit archiving ships as `memoryctl retire <slug> [--reason ...] [--superseded-by <ref>]`: the file moves into the store's `.archive/`, and `recall` renders a tombstone redirect (`[retired <date> → successor]`) instead of silently forgetting; `memoryctl revive` undoes it. Agent-written facts start as `status: candidate` and graduate on their first useful citation; `doctor` flags candidates still uncited after 5 silent sessions.
 
 | Type | Stale after |
 |------|-------------|
@@ -280,43 +279,46 @@ A truncated injection ends with `…(truncated — N B total; full text: <path>)
 | decisions | 90 days |
 | feedback | 45 days |
 | notes | 30 days |
-| projects | never |
-| continuity | never |
+| project | 90 days |
+| continuity | never for a project's freshest one; 30 days for older ones |
 
-`pinned` facts never decay automatically. Retirement is never age-triggered —
-it is an explicit decision: `doctor` hints at stale facts worth retiring, and
-`memoryctl promote` names the candidates with evidence.
+`project` is Claude Code's own type for ongoing work and goals, so it ages; a
+project card that must never age should be `status: pinned`. `pinned` facts
+never decay automatically. Retirement is never age-triggered — it is an
+explicit decision: `doctor` hints at stale facts worth retiring.
+
+To shrink a WAL grown with event types no reader uses any more, run
+`memoryctl wal compact` (`--dry-run` first) while no session is mid-turn; it
+keeps the original as `.wal.pre-compact-<date>` and re-projects the sidecar.
 
 ## Frontmatter schema
 
 Native files carry minimal frontmatter (name/description/type) — that's what the harness requires. Hypomnema-specific metadata (ref_count, effectiveness, status, keywords, domains) lives in the SQLite sidecar, keyed by file slug. The sidecar is a derived projection: delete it and `memoryctl` rebuilds from WAL + native frontmatter scan.
 
-Fields you write in the native file: Claude Code's own memory instructions nest `type` (and sometimes `created`/`status`) under a `metadata:` key — hypomnema reads that shape as equivalent to the flat one below.
+Fields you write in the native file: Claude Code's own memory instructions nest `type` (and sometimes `created`/`status`) under a `metadata:` key, and the harness stamps `metadata.modified` on every write — hypomnema reads that shape as equivalent to the flat one below.
 
 ```yaml
 ---
 type: mistake            # mistake | strategy | feedback | knowledge | decision | project | continuity | note
-name: "short-slug"       # title of the injected block; citation signal for close (the sidecar key is the filename)
+name: "short-slug"       # title of the injected block (the sidecar key and the citation target are the filename)
 description: "one-liner" # shown in the MEMORY.md index
-created: YYYY-MM-DD      # recency claim for ranking (wins over WAL history)
+created: YYYY-MM-DD      # recency claim for ranking (wins over WAL history; absent → date of Claude Code's `modified` stamp)
 status: active           # active | pinned  (stale is sidecar-managed, not hand-set)
 keywords: [tag1, tag2]   # explicit relevance signal — feeds keyword overlap alongside name/description/body
 domains: [domain1]       # relevance signal today; per-session domain filtering is planned
 
-# Mistakes only
+# Mistakes only (informational — the body is what injects)
 severity: minor | major | critical
 recurrence: 0
 scope: universal | domain | narrow
 root-cause: "..."
 prevention: "..."
 
-# Strategies only
+# Strategies only (informational)
 success_count: 0
 
-# Feedback / any type
-evidence:
-  - "phrase the assistant would write when applying this rule"
-precision_class: ambient  # excludes from precision denominator (use for language rules, meta-policy)
+# Any type
+precision_class: ambient  # going uncited carries no silence penalty (use for language rules, meta-policy)
 ---
 ```
 

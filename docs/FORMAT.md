@@ -45,8 +45,8 @@ Hypomnema's own runtime state is the only thing under `~/.claude/memory/`:
 ```
 ~/.claude/memory/
 ├── .wal              # append-only write-ahead log — source of truth (§5)
+├── .wal.pre-compact-<date>  # original WAL kept by `memoryctl wal compact` (optional)
 ├── .sidecar.db       # SQLite projection: ref_count, effectiveness, status, ... (§6)
-├── self-profile.md   # generated precision/effectiveness report
 └── .runtime/         # session-scoped markers
     ├── injected-<session_id>.list   # slugs injected this session
     └── active-skill-<sid>           # skill activated this session
@@ -71,7 +71,8 @@ Every memory file is Markdown opening with a YAML frontmatter block delimited by
 | `type` | yes | enum | `mistake \| strategy \| feedback \| knowledge \| decision \| note \| project \| continuity \| skill-learning`. |
 | `name` | yes | string | Sidecar key; kebab-case slug. |
 | `description` | yes | string | One-line summary; shown in the `MEMORY.md` index and injection headers. |
-| `created` | no | `YYYY-MM-DD` | You set it — novelty signal: recency uses it only until the fact earns a useful citation (`last_useful` then takes precedence); when absent, the WAL-earliest date is substituted. |
+| `created` | no | `YYYY-MM-DD` | You set it — novelty signal: recency uses it only until the fact earns a useful citation (`last_useful` then takes precedence); when absent, the date of `modified` is substituted, else the WAL-earliest date. |
+| `modified` | no | ISO date or timestamp | Stamped by Claude Code on every Write/Edit (under `metadata:`); it never writes `created`. Only the `YYYY-MM-DD` prefix is read — as the `created` fallback and to pick a project's freshest `continuity` fact. Not hand-set. |
 | `status` | no | enum | `active \| pinned`. `pinned` protects from decay. `stale` is **sidecar-managed** — never hand-set it. |
 | `keywords` | no | list | Primary ranking signal. Inline `[a, b]` or block `- a` form. |
 | `domains` | no | list | Domain filter; kebab-case for multi-word. Same forms as `keywords`. |
@@ -93,7 +94,8 @@ round-trip but MUST accept any order.
 regardless of age, and that `pinned` outranks `active` on ranking ties. It does
 NOT reserve an injection slot — the top-8 flex pool is allocated by relevance
 score, so a pinned fact with weak keyword/effectiveness signal can still lose
-its slot. `continuity` and `project` facts also never decay, pinned or not.
+its slot. A project's freshest `continuity` fact also never decays, pinned or
+not (§4); every other type ages, `project` included.
 
 ### 3.2 Tolerated syntax (parser MUST accept)
 
@@ -107,7 +109,7 @@ Reflecting the actual parser (`internal/native.go` `splitFrontmatter`):
 - **Block-style lists** (`keywords:` on its own line, then `  - a` / `  - b`)
   collapse into the same comma-joined value as inline `[a, b]`.
 - **`metadata:` block** (`metadata:` on its own line, then indented `type:` /
-  `created:` / `status:` / `keywords:` / `domains:` …): direct children are
+  `created:` / `modified:` / `status:` / `keywords:` / `domains:` …): direct children are
   promoted to top-level keys; a column-0 key of the same name wins. This is
   the shape Claude Code's native memory instructions produce.
 
@@ -131,7 +133,7 @@ Reflecting the actual parser (`internal/native.go` `splitFrontmatter`):
 | Field | Required | Notes |
 |---|:-:|---|
 | `severity` | yes | `critical \| major \| minor`. |
-| `recurrence` | yes | Integer — observed repetitions. |
+| `recurrence` | yes | Integer — observed repetitions. Informational: no code reads it. |
 | `scope` | no | `universal \| domain \| narrow` — informational: how broadly the lesson applies. |
 | `root-cause` | yes | Single-line: what went wrong. |
 | `prevention` | yes | Single-line: how to avoid it. |
@@ -140,7 +142,7 @@ Reflecting the actual parser (`internal/native.go` `splitFrontmatter`):
 
 | Field | Required | Notes |
 |---|:-:|---|
-| `success_count` | no | Integer, starts at 0. |
+| `success_count` | no | Integer, starts at 0. Informational: no code reads it. |
 
 `trigger:` / `triggers:` are **retired** — v2 has no substring-cue matching. A
 strategy surfaces through `keywords` / `domains` relevance like any other type.
@@ -149,8 +151,10 @@ strategy surfaces through `keywords` / `domains` relevance like any other type.
 
 | Field | Required | Notes |
 |---|:-:|---|
-| `evidence` | no | List of phrases (case-insensitive) signalling the rule was applied. Keep it ≤5 phrases the assistant would actually write. Type-agnostic — the close hook reads `evidence:` from any injected file. |
-| `precision_class` | no | `ambient` excludes the file from the self-profile precision denominator (still injected/ranked normally). |
+| `precision_class` | no | `ambient` marks a rule that shapes behaviour silently (language preference, security baseline): going uncited does not lower its effectiveness — the silence penalty is dropped. Still injected/ranked normally. Read from any type. |
+
+An `evidence:` list in older files is ignored — usefulness comes only from an
+explicit `<cc-memory filenames="…">` citation.
 
 ### `type: skill-learning`
 
@@ -166,20 +170,28 @@ strategy surfaces through `keywords` / `domains` relevance like any other type.
 
 ### `type: project`
 
-Project overview. No additional required fields; body is human-readable prose.
-Never decays.
+Claude Code's own type for ongoing work, goals, and constraints. No additional
+required fields; body is human-readable prose. Ages like `knowledge` (stale
+after 90 days unused); a project card that must never age should be
+`status: pinned`.
 
 ### `type: continuity`
 
 "Where we left off." **Agent-written** at session end (three lines max: task,
 status, next step) as a regular file in the project's native store — there is no
-`continuity/` subdirectory and the Stop hook does not generate it. Never decays.
+`continuity/` subdirectory and the Stop hook does not generate it. Only the
+project's **freshest** continuity fact — the later of `created`/`modified`;
+on a tie, the lexically greater filename — is pushed by injection and exempt
+from decay. Older continuity files are history: still recallable, no longer
+injected, stale after 30 days unused like a `note`. Keep one file and rewrite
+it in place.
 
 ---
 
 ## 5. WAL grammar
 
-The WAL (`~/.claude/memory/.wal`) is an append-only plaintext log. Each row has
+The WAL (`~/.claude/memory/.wal`) is an append-only plaintext log (the one
+rewrite is the manual `memoryctl wal compact`, §5.2). Each row has
 exactly **four** pipe-delimited fields (enforced by `memoryctl wal validate`,
 `internal/wal/validate.go`):
 
@@ -215,9 +227,7 @@ Written by the v2 hooks / verbs:
 | `cite-silent` | `close` | slug (injected fact went uncited; written only in a session with ≥1 delivered citation) |
 | `cite-undelivered` | `close` | slug (citation resolved to an in-scope fact but never delivered this session; diagnostic only — feeds no reader) |
 | `cite-none` | `close` | session id (both `$3` and `$4`); one per session with injected facts and zero delivered citations |
-| `session-metrics` | `close` | `$3 = domains:<csv>,error_count:N,tool_calls:M,duration:Ss`; `$4 = session id` |
 | `session-close` | `close` (also `close --subagent`) | session id (canonical `$4`) — a subagent's row uses its compound key and is deduped (`wal.AppendSuffixUnique`); the parent's own per-turn row is not |
-| `dedup-blocked` / `dedup-candidate` / `dedup-merged` | `dedup check` (manual CLI, not hook-wired) | `new>existing` / `new~existing` |
 
 `trigger-useful` / `trigger-silent` are **legacy since v2.14** (superseded by
 `cite-useful`/`cite-silent`) — `close` no longer writes them; see
@@ -228,24 +238,26 @@ Additionally **consumed** by the sidecar projection for effectiveness/ranking
 (WAL compaction fold, `target = slug,count`), `outcome-positive`,
 `outcome-negative`, and `trigger-silent-retro` (along with `trigger-useful`/
 `trigger-silent` themselves — tolerated as history, no longer emitted or
-scored).
+scored; `wal compact` drops them, §5.2).
 
 Effectiveness is the Bayesian `(pos+1)/(pos+0.25·neg+2)` (cite-silent counts ¼ — the model under-cites, so silence is weak evidence) over one citation
 observation per `(slug, session)` — `cite-useful` wins over `cite-silent`
 within a session; legacy `outcome-*`/`trigger-*` rows are tolerated on read
 but no longer scored (see `docs/EVENTS.md`).
 
-### 5.2 `session-metrics` back-compat
+### 5.2 Legacy events and `wal compact`
 
-Readers MUST accept two shapes:
-
-- **v2** (current): `<date>|session-metrics|domains:<csv>,error_count:N,tool_calls:M,duration:Ss|<session_id>`.
-  `$3` starts with `domains:`; `$4` is the session id.
-- **v1** (legacy, read-only): `<date>|session-metrics|<domains_csv>|<error_count:N,...>`.
-  No session id. Detector: `$3` starts with `domains:` ⇒ v2, else v1.
-
-`session-metrics` is not a session-closing signal on its own; `session-close`
-(always carrying the session id in `$4`) is.
+Older WALs carry event types nothing writes any more — `trigger-*`,
+`session-metrics`, `ablate-start`/`ablate-stop`, `holdout-*`, `dedup-*` (see
+`docs/EVENTS.md`); none of them feeds a score or the ranking.
+`memoryctl wal compact [--dry-run]`
+rewrites the WAL under its lock without the four types no reader consumes —
+`trigger-useful`, `trigger-silent`, `trigger-silent-retro`, `session-metrics` —
+keeping every other row (unknown or malformed ones included) byte-for-byte and
+in order. The original stays as `.wal.pre-compact-<date>`, and the sidecar is
+re-projected so its recorded WAL offset matches the new file. Run it when no
+session is mid-turn: an append that times out on the lock writes without it
+and could land in the backup instead.
 
 ### 5.3 Extension rules
 

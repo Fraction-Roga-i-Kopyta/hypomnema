@@ -235,19 +235,24 @@ There is no separate TF-IDF or FTS index in v2 — `reindex` only rebuilds the
 
 ## The WAL (`~/.claude/memory/.wal`) grew very large
 
-This is expected. **v2 has no WAL compaction** — it is an append-only log and
-grows without bound. The file is the source of truth for effectiveness
-history, so it stays complete by design.
-
-It is plain text and cheap to read; size is rarely a real problem. If it ever
-gets genuinely unwieldy you can archive it manually, but be aware that
-truncating discards the outcome history that feeds Bayesian effectiveness:
+The WAL is append-only and grows by design — it is the source of truth for
+effectiveness history. Much of an older install's WAL is rows nothing reads
+any more (`trigger-*` from before v2.14, `session-metrics`). Drop them with:
 
 ```bash
-cp ~/.claude/memory/.wal ~/.claude/memory/.wal.archive-$(date +%Y%m%d)
-# then, only if you accept losing effectiveness history:
-# : > ~/.claude/memory/.wal && memoryctl sidecar rebuild
+memoryctl wal compact --dry-run   # counts per event type, bytes before → after
+memoryctl wal compact             # rewrite under the WAL lock
 ```
+
+Run it when no Claude Code session is mid-turn (a hook append that times out
+on the lock writes without it and could land in the backup instead). Every
+other row is kept byte-for-byte; the original stays as
+`~/.claude/memory/.wal.pre-compact-<date>` — delete it once you are
+satisfied. The sidecar is re-projected afterwards; if that step fails the
+command says so and exits 1 — run `memoryctl sidecar rebuild`.
+
+Do not truncate the WAL by hand: that discards the citation history that
+feeds effectiveness.
 
 ## A file has an empty `status:` and never injects
 
@@ -315,16 +320,27 @@ A subagent whose own transcript was unreadable (a bad or missing
 `cite-*` row at all, the same "transcript unreadable" case as a normal
 session, just keyed to the subagent.
 
-## My rule shows under "ambient" in `self-profile.md`, never as cite-useful/silent
+## My `precision_class: ambient` rule is almost never cited
 
-By design when the file has `precision_class: ambient`. Ambient rules shape
-behaviour continuously (tone, language preference, security baseline) without
-producing citation events, so they are excluded from the precision denominator
-on purpose. If the rule *should* produce visible citations, remove
-`precision_class: ambient` — citing still requires the model to actually wrap
-the sentence in `<cc-memory filenames="…">`; `evidence:` phrases no longer
-produce `cite-useful`/`cite-silent` (they only drive the `ablate` holdout
-comparison).
+By design. Ambient rules shape behaviour continuously (tone, language
+preference, security baseline) without producing citation events, so going
+uncited carries no silence penalty for them — their effectiveness stays at or
+above the neutral prior, and a useful citation still raises it. If the rule
+*should* compete like any other fact, remove `precision_class: ambient`.
+Either way usefulness comes only from the model wrapping the sentence in
+`<cc-memory filenames="…">`; an `evidence:` list is ignored.
+
+## An older continuity file, or a `type: project` fact, stopped injecting
+
+Only a project's freshest continuity fact is pushed — the later of `created`
+and Claude Code's `modified` stamp; on a tie, the lexically greater filename.
+Older continuity files are history: `memoryctl recall` still finds them, and
+they go stale after 30 days unused. Keep one `continuity.md` per project and
+rewrite it in place.
+
+`type: project` — Claude Code's own type for ongoing work and goals — goes
+stale after 90 days unused, like `knowledge`. Recalling it revives it; a
+project card that must never age should be `status: pinned`.
 
 ### An injected fact ends with `…(truncated — N B total; full text: <path>)`
 

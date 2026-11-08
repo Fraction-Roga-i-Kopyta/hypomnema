@@ -9,8 +9,11 @@ status: active
 <!--
 Required v2 frontmatter: name, description, type. There is no `project:`
 field — a continuity file lives in the project's own native store (stores
-are flat; no continuity/ subdirectory). Keep it to three lines; continuity
-facts never decay. Do NOT add ref_count or triggers.
+are flat; no continuity/ subdirectory). Keep it to three lines and keep ONE
+continuity.md per project, rewritten in place: only the freshest continuity
+fact (later of created / Claude Code's modified stamp) is injected and exempt
+from decay; older ones are history that ages like a note. Do NOT add
+ref_count or triggers.
 -->
 
 Task: what was being worked on

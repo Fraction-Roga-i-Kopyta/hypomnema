@@ -1,5 +1,8 @@
 # synthetic-mature
 
+> Written for the v1 scorer (TF-IDF and cold-start gates, `evidence:`
+> matching — all retired); no current test reads this fixture.
+
 ## Claim
 
 A corpus with sufficient `outcome-*` signal **and** TF-IDF vocabulary
@@ -21,7 +24,8 @@ Concretely:
 
 - `memory/mistakes/` — 5 hand-authored mistakes with realistic
   severity/recurrence/root-cause/prevention fields.
-- `memory/feedback/` — 5 feedback entries with `evidence:` fields.
+- `memory/feedback/` — 5 feedback entries with `evidence:` fields (no
+  longer read by anything).
 - `memory/knowledge/` — 3 knowledge files with multi-sentence bodies
   (so TF-IDF vocab crosses the threshold).
 - `memory/strategies/` — 2 strategies with `trigger:` and
@@ -48,5 +52,5 @@ This fixture does NOT verify:
   ordering and keyword hits against specific prompts, which this
   fixture doesn't probe end-to-end. Presence/absence of dormancy is
   the binary claim.
-- P1.1 behaviour — feedback has `evidence:`, but no synthetic
-  transcripts here. `synthetic-feedback-heavy/` covers evidence-match.
+- Citation-based usefulness — there are no synthetic transcripts here,
+  and the feedback files' `evidence:` lists are ignored.
