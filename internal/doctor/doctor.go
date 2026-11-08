@@ -242,7 +242,7 @@ func checkCandidates(memoryDir, claudeHome string, st native.Store) Check {
 			Detail: "no uncorroborated candidates"}
 	}
 	return Check{Name: "candidate_corroboration", Status: WARN,
-		Detail: fmt.Sprintf("%d candidate(s) never corroborated after ≥%d silent sessions: %s — retire or rewrite keywords/evidence",
+		Detail: fmt.Sprintf("%d candidate(s) never corroborated after ≥%d silent sessions: %s — retire or rewrite keywords",
 			len(flagged), candidateSilentMin, strings.Join(flagged, ", ")),
 		Extra: map[string]interface{}{"slugs": flagged}}
 }
@@ -1227,9 +1227,9 @@ func checkStoreResolution(claudeDir string, st native.Store, anchor string) Chec
 		" — move their facts (not MEMORY.md) into " + st.Dir + " (see TROUBLESHOOTING)"}
 }
 
-// resolveDoctorNow mirrors the HYPOMNEMA_TODAY / HYPOMNEMA_NOW
-// precedence used by internal/profile so doctor's WAL-window cutoffs
-// freeze with the rest of the system in tests and fixture snapshots.
+// resolveDoctorNow honours HYPOMNEMA_TODAY, then HYPOMNEMA_NOW, so
+// doctor's WAL-window cutoffs freeze with the rest of the system in tests
+// and fixture snapshots.
 // Falls back to wall-clock time when neither var is set.
 func resolveDoctorNow() time.Time {
 	if s := os.Getenv("HYPOMNEMA_TODAY"); s != "" {

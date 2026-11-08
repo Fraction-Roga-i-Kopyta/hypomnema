@@ -14,12 +14,12 @@ CREATE TABLE IF NOT EXISTS memory (
   project       TEXT,
   domains       TEXT,
   created       TEXT,
+  fresh         TEXT,
   last_injected TEXT,
   last_useful   TEXT,
   ref_count     INTEGER NOT NULL DEFAULT 0,
   status        TEXT NOT NULL DEFAULT 'active',
   effectiveness REAL NOT NULL DEFAULT 0.5,
-  holdout_remaining INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (slug, project)
 );
 CREATE TABLE IF NOT EXISTS keyword (slug TEXT, project TEXT, term TEXT, weight REAL);

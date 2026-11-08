@@ -53,8 +53,8 @@ explanation in CHANGELOG.
 pipe-delimited columns: `date|event|target|session`. The shape is
 immutable within format v2; a fifth column requires a major version.
 
-**Why.** Every reader (`internal/wal/validate`, `internal/inject`,
-`internal/profile`, `internal/closer`, `internal/doctor`,
+**Why.** Every reader (`internal/wal/validate`, `internal/wal.Compact`,
+`internal/sidecar`, `internal/inject`, `internal/closer`, `internal/doctor`,
 `internal/migrate`) keys off `strings.Split(line, "|")` with len=4. A row
 with the wrong column count silently corrupts the metric pipelines. See
 ADR [`wal-four-column-invariant`](decisions/wal-four-column-invariant.md).
@@ -114,7 +114,7 @@ idiom. Direct `os.WriteFile` / `>` redirect leaves a window where
 a concurrent reader sees a half-written file or a crash leaves a
 truncated file on disk.
 
-**Why.** Multi-line files (`self-profile.md`, `MEMORY.md`) are read by
+**Why.** Multi-line files (`MEMORY.md`, the compacted `.wal`) are read by
 other hooks and by Claude Code itself. Crash-mid-write corruption is
 recoverable but observably bad; tmp+rename costs ~zero and removes
 the window.
@@ -123,7 +123,10 @@ the window.
 emits a multi-line file. Canonical helper:
 `internal/pathutil.WriteFileAtomic` (same-dir temp + rename). Currently:
 
-- `internal/profile/profile.go::atomicWriteSelfProfile` — self-profile.md
+- `internal/memindex` — `MEMORY.md` (same-dir temp + rename)
+- `internal/wal.Compact` — the compacted `.wal` (same-dir temp + rename,
+  under the WAL lock; the original is hard-linked to
+  `.wal.pre-compact-<date>` first)
 - Any `pathutil.WriteFileAtomic` caller.
 
 The `internal/tfidf` and `internal/evidence` packages named by earlier
@@ -151,17 +154,17 @@ inside the expected root before any I/O. Failure mode: silent no-op
 for hook-style "must never break the caller" contracts; explicit
 error for CLI / explicit-call APIs.
 
-**Why.** External review 2026-05-08 finding E3: `dedup.Run` accepted
-arbitrary `targetPath`, read it, on similarity match deleted it.
-A rogue caller (or a malformed hook) could feed it a path on disk
-and dedup would silently consume it. Boundary check
-(`strings.HasPrefix(absTarget, absMem+sep)`) collapses the attack
+**Why.** External review 2026-05-08 finding E3: `dedup.Run` (since
+removed with `memoryctl dedup check`) accepted arbitrary `targetPath`, read
+it, on similarity match deleted it. A rogue caller (or a malformed hook)
+could feed it a path on disk and dedup would silently consume it. Boundary
+check (`strings.HasPrefix(absTarget, absMem+sep)`) collapses the attack
 surface.
 
 **Where to enforce.**
 
-- `internal/dedup.Run` — `targetPath` ⊂ `MemoryDir`. Done in v1.0.1.
-- Future exported functions taking path args: same pattern.
+- Any exported function taking a path arg it reads, writes, or deletes:
+  same pattern.
 - Bash hooks calling the Go binary should not need this check
   themselves; the binary enforces it. But hook-internal `case`
   statements that match path prefixes should also use a quoted
@@ -192,9 +195,8 @@ Observability shifts to WAL events + `memoryctl doctor`. See ADR
 - Every hook entry point: `set -o pipefail` (NOT `-eu`!) at the
   top, internal failures end with `exit 0`.
 - Go internal funcs called by `cmd/memoryctl` from hooks: the CLI
-  wrapper must catch errors and exit 0 (`runSelfProfile` does this:
-  the CLI prints the error to stderr but exits 1, and the calling
-  hook `2>/dev/null` swallows it).
+  wrapper must catch errors and exit 0 (`runInject` does this: an
+  error from `inject.Run` exits 0 with no output).
 
 **How to check.** Mechanized. `memoryctl audit invariants` runs
 `hookFailSafeChecker` (`internal/invariants`), which scans `hooks/**/*.sh`

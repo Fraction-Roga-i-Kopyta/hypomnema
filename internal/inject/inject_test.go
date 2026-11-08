@@ -8,6 +8,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/closer"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 )
 
@@ -504,95 +505,6 @@ func TestCandidates_CorruptSidecarSiblingsRemoved(t *testing.T) {
 	}
 }
 
-// TestRun_HoldoutSkip: a held-out fact that ranks inside the top-K is
-// dropped from delivery, reported in HoldoutSkipped, and its slot is filled
-// by the next-ranked fact. Session-sticky: Input.HoldoutSession withholds
-// even when the sidecar budget reads zero.
-func TestRun_HoldoutSkip(t *testing.T) {
-	memDir, projDir, home := setup(t)
-	os.WriteFile(filepath.Join(projDir, "docker.md"),
-		[]byte("---\nname: Docker cache\ntype: mistake\nkeywords: [docker, cache]\n---\ndocker layer cache stale\n"), 0o644)
-	// The refill facts are named after a prompt term ("cache"): UserPromptSubmit
-	// only injects prompt-matching facts, so the refill comes from those.
-	os.WriteFile(filepath.Join(projDir, "sql.md"),
-		[]byte("---\nname: SQL cache\ntype: knowledge\n---\npostgres index plan\n"), 0o644)
-	os.WriteFile(filepath.Join(projDir, "redis.md"),
-		[]byte("---\nname: Redis cache\ntype: knowledge\n---\nredis ttl\n"), 0o644)
-	q := "-tmp-proj\x1fdocker"
-	os.WriteFile(filepath.Join(memDir, ".wal"),
-		[]byte("2026-07-01|ablate-start|"+q+":2|cli\n"), 0o644)
-
-	res, err := Run(Input{
-		Event: "UserPromptSubmit", SessionID: "s1",
-		CWD: "/tmp/proj", Prompt: "fix the docker cache",
-		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir,
-		Today: "2026-07-23", MaxK: 2,
-	})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	for _, s := range res.Injected {
-		if s == "docker.md" {
-			t.Fatalf("held-out fact was delivered: %v", res.Injected)
-		}
-	}
-	if len(res.Injected) != 2 {
-		t.Fatalf("slot not refilled: Injected=%v, want 2 facts", res.Injected)
-	}
-	if len(res.HoldoutSkipped) != 1 || res.HoldoutSkipped[0] != "docker.md" {
-		t.Fatalf("HoldoutSkipped = %v, want [docker.md]", res.HoldoutSkipped)
-	}
-	if res.HoldoutRemaining["docker.md"] != 2 {
-		t.Fatalf("HoldoutRemaining = %v, want docker.md:2", res.HoldoutRemaining)
-	}
-	if res.ProjectBySlug["docker.md"] == "" {
-		t.Fatalf("skipped fact must carry its project: %v", res.ProjectBySlug)
-	}
-
-	// Session-sticky: rebuild the sidecar from an EMPTY WAL so the stored
-	// budget is genuinely zero (with rows present the self-heal reproject
-	// does not rerun, and the phase-1 budget would mask this mechanism).
-	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
-	for _, sfx := range []string{"", "-wal", "-shm"} {
-		os.Remove(filepath.Join(memDir, ".sidecar.db"+sfx))
-	}
-	// Control: without HoldoutSession the fact injects again.
-	res, err = Run(Input{
-		Event: "UserPromptSubmit", SessionID: "s1",
-		CWD: "/tmp/proj", Prompt: "fix the docker cache",
-		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir,
-		Today: "2026-07-23", MaxK: 2,
-	})
-	if err != nil {
-		t.Fatalf("Run(control): %v", err)
-	}
-	found := false
-	for _, s := range res.Injected {
-		if s == "docker.md" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("control run must deliver docker.md (budget 0): %v", res.Injected)
-	}
-	// With HoldoutSession the same ranking withholds it.
-	res, err = Run(Input{
-		Event: "UserPromptSubmit", SessionID: "s1",
-		CWD: "/tmp/proj", Prompt: "fix the docker cache",
-		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir,
-		Today: "2026-07-23", MaxK: 2,
-		HoldoutSession: []string{"docker.md"},
-	})
-	if err != nil {
-		t.Fatalf("Run(sticky): %v", err)
-	}
-	for _, s := range res.Injected {
-		if s == "docker.md" {
-			t.Fatalf("session-sticky holdout was delivered: %v", res.Injected)
-		}
-	}
-}
-
 // A subagent never writes to the user, so its delivery tells it to cite in
 // the final report; the parent line must not appear there, and vice versa.
 func TestRun_SubagentGetsReportCiteInstruction(t *testing.T) {
@@ -713,5 +625,78 @@ func TestRun_PromptGateIgnoresSameSlugInOtherProject(t *testing.T) {
 	res := run("/tmp/proj", "UserPromptSubmit", "fix the docker cache")
 	if strings.Join(res.Injected, ",") != "docker.md" {
 		t.Errorf("only docker.md matches the prompt in this project, got %v", res.Injected)
+	}
+}
+
+// Only a project's freshest continuity is pushed: older continuity files are
+// history and would otherwise crowd SessionStart (one file per session, none
+// ever aged). Freshness is the later of created and Claude Code's `modified`
+// stamp, so continuity.md rewritten in place beats an older dated sibling.
+func TestRun_OnlyNewestContinuityInjects(t *testing.T) {
+	memDir, projDir, home := setup(t)
+	os.WriteFile(filepath.Join(projDir, "continuity.md"),
+		[]byte("---\nname: continuity\ntype: continuity\ncreated: 2026-08-01\nmetadata:\n  modified: 2026-10-01T10:00:00Z\n---\nnext: ship docker cache fix\n"), 0o644)
+	os.WriteFile(filepath.Join(projDir, "continuity-2026-09-01.md"),
+		[]byte("---\nname: continuity 2026-09-01\ntype: continuity\ncreated: 2026-09-01\n---\nnext: review docker cache\n"), 0o644)
+	os.WriteFile(filepath.Join(projDir, "docker.md"),
+		[]byte("---\nname: Docker cache\ntype: mistake\n---\nlayer cache stale\n"), 0o644)
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
+
+	for _, ev := range []string{"SessionStart", "UserPromptSubmit"} {
+		res, err := Run(Input{
+			Event: ev, SessionID: "s-" + ev, CWD: "/tmp/proj", Prompt: "docker cache continuity",
+			ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir,
+			Today: "2026-10-05", MaxK: 8,
+		})
+		if err != nil {
+			t.Fatalf("Run(%s): %v", ev, err)
+		}
+		got := strings.Join(res.Injected, ",")
+		if !strings.Contains(got, "continuity.md") || strings.Contains(got, "continuity-2026-09-01.md") {
+			t.Errorf("%s: want the freshest continuity only, got %v", ev, res.Injected)
+		}
+	}
+}
+
+// Injection and decay must agree on which continuity is the freshest: if
+// they disagree, decay stales injection's pick while injection drops decay's
+// pick as "not the newest", and no continuity is pushed at all. A file with
+// no frontmatter date must not borrow a WAL date on one side only.
+func TestRun_ContinuityChoiceMatchesDecay(t *testing.T) {
+	memDir, projDir, home := setup(t)
+	os.WriteFile(filepath.Join(projDir, "continuity.md"),
+		[]byte("---\nname: continuity\ntype: continuity\n---\nnext: ship it\n"), 0o644)
+	os.WriteFile(filepath.Join(projDir, "continuity-old.md"),
+		[]byte("---\nname: continuity old\ntype: continuity\ncreated: 2025-12-01\n---\nold plan\n"), 0o644)
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte("2026-01-01|inject|-tmp-proj\x1fcontinuity.md|s0\n"), 0o644)
+	if _, err := closer.Run(closer.Input{SessionID: "s0", CWD: "/tmp/proj",
+		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir, Today: "2026-11-09"}); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Run(Input{Event: "SessionStart", SessionID: "s1", CWD: "/tmp/proj",
+		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir, Today: "2026-11-09", MaxK: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Injected) != 1 {
+		t.Errorf("exactly one continuity (the freshest by frontmatter) must inject, got %v", res.Injected)
+	}
+}
+
+// The window is MaxK however many candidates there are.
+func TestRun_CapsAtMaxK(t *testing.T) {
+	memDir, projDir, home := setup(t)
+	for _, n := range []string{"a", "b", "c", "d", "e"} {
+		os.WriteFile(filepath.Join(projDir, n+".md"),
+			[]byte("---\nname: "+n+" docker\ntype: knowledge\n---\ndocker cache\n"), 0o644)
+	}
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
+	res, err := Run(Input{Event: "UserPromptSubmit", SessionID: "s1", CWD: "/tmp/proj", Prompt: "docker cache",
+		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir, Today: "2026-05-29", MaxK: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Injected) != 3 {
+		t.Errorf("want MaxK=3 facts, got %v", res.Injected)
 	}
 }

@@ -36,12 +36,12 @@ then shows a tombstone redirect instead of silently forgetting.
 **Never hand-set** `ref_count`, `effectiveness`, `injected`, or `referenced` — the sidecar manages them. **Do not use** `triggers`, `seed`, `decay_rate`, or a `project:` field: triggers are retired, seed/decay_rate are dead, and ownership is derived from which store the file lives in.
 
 Type-specific fields:
-- **mistake** — `severity` (minor|major|critical), `recurrence` (int), `scope` (universal|domain|narrow, informational), `root-cause`, `prevention`
-- **strategy** — `success_count` (int)
-- **feedback** — `evidence:` (≤5 phrases Claude would write when applying the rule; used only for the `ablate` holdout observation on a fact withheld this session), optional `precision_class: ambient`
+- **mistake** — `severity` (minor|major|critical), `recurrence` (int), `scope` (universal|domain|narrow) — all three informational, nothing reads them — plus `root-cause`, `prevention`
+- **strategy** — `success_count` (int, informational)
+- **feedback** — optional `precision_class: ambient` (a rule that shapes behaviour silently: going uncited does not lower its effectiveness)
 - **knowledge / decision / note** — optional `related: [slug, …]`
 
-`evidence:` is type-agnostic — any injected file can carry it. Usefulness itself comes only from an explicit `<cc-memory filenames="…">` citation of a fact actually delivered this session (see "Lifecycle" below) — keep `evidence:` short regardless, since long lists rarely match verbatim for the holdout comparison.
+Usefulness comes only from an explicit `<cc-memory filenames="…">` citation of a fact actually delivered this session (see "Lifecycle" below). Do not write `evidence:` — it is ignored.
 
 ## When to write
 
@@ -52,7 +52,7 @@ Type-specific fields:
 | User corrects your approach or validates a non-obvious choice | `feedback` |
 | Domain fact / API detail not obvious from the code | `knowledge` |
 | Architecture / technology choice to defer to later | `decision` |
-| Stopped mid-task at session end (3 lines max) | `continuity` |
+| Stopped mid-task at session end (3 lines max; rewrite the project's one `continuity.md` in place) | `continuity` |
 
 A user rule that corrects a *repeated* mistake is written as `feedback` only — do not also write a `mistake` for the same rule (it duplicates signal).
 
@@ -70,7 +70,7 @@ Every parent delivery opens with one instruction line: when a fact changes what 
 
 ## Lifecycle
 
-`memoryctl close` runs after each turn (Stop hook): classifies the injected set from explicit `<cc-memory filenames="…">` citations of facts actually delivered this session — `cite-useful` for a cited, delivered fact; `cite-silent` for an injected-but-uncited one, but only in a session that had at least one delivered citation. `evidence:` phrases no longer produce usefulness; they feed only the `ablate` holdout observation. `close` then recomputes effectiveness and marks unused facts `stale` in the sidecar (age counts from last injection). `pinned` files and `continuity`/`project` facts never decay. No native content is ever mutated by hooks.
+`memoryctl close` runs after each turn (Stop hook): classifies the injected set from explicit `<cc-memory filenames="…">` citations of facts actually delivered this session — `cite-useful` for a cited, delivered fact; `cite-silent` for an injected-but-uncited one, but only in a session that had at least one delivered citation. `close` then recomputes effectiveness and marks unused facts `stale` in the sidecar (age counts from last injection, else `created`, else the date of Claude Code's `modified` stamp). `pinned` files and each project's freshest `continuity` fact never decay; only that freshest continuity is injected — older ones are recallable history that ages like a note. `project` ages like knowledge (90 days) — pin a project card that must never age. No native content is ever mutated by hooks.
 
 ## Pull retrieval
 

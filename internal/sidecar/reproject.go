@@ -30,23 +30,6 @@ type agg struct {
 	// confirmed is true once a candidate-confirmed event was seen —
 	// graduation of a soft-corroboration candidate is WAL-derived.
 	confirmed bool
-	// Per-fact ablation state, derived from the latest ablate-start run.
-	holdoutN       int             // sessions requested by the latest ablate-start
-	holdoutStopped bool            // ablate-stop seen after the latest start
-	holdoutSkips   map[string]bool // distinct sessions with holdout-skip after the latest start
-}
-
-// holdoutRemaining is the live holdout budget: sessions requested minus
-// distinct sessions already observed, zero once stopped or exhausted.
-func (a *agg) holdoutRemaining() int {
-	if a.holdoutN == 0 || a.holdoutStopped {
-		return 0
-	}
-	rem := a.holdoutN - len(a.holdoutSkips)
-	if rem < 0 {
-		return 0
-	}
-	return rem
 }
 
 // graduated reports whether a candidate fact has earned active status: an
@@ -90,16 +73,6 @@ func (a *agg) mergeFrom(src *agg) {
 	}
 	a.retired = a.retired || src.retired
 	a.confirmed = a.confirmed || src.confirmed
-	if src.holdoutN > 0 && a.holdoutN == 0 {
-		a.holdoutN = src.holdoutN
-	}
-	a.holdoutStopped = a.holdoutStopped || src.holdoutStopped
-	for s := range src.holdoutSkips {
-		if a.holdoutSkips == nil {
-			a.holdoutSkips = map[string]bool{}
-		}
-		a.holdoutSkips[s] = true
-	}
 }
 
 func (a *agg) classify(session string, useful bool) {
@@ -228,14 +201,14 @@ func reprojectIn(e dbtx, files []native.MemFile, walPath string, scope []string)
 			// NOT activate domain filtering — Query.Domains stays empty, so
 			// rank.domainOK still passes everything; wiring the filter is a
 			// behaviour change left for a design cycle.
-			Domains:          strings.Join(f.Domains, ","),
-			Created:          created,
-			LastInjected:     a.lastInject,
-			LastUseful:       a.lastUseful,
-			RefCount:         a.injects,
-			Status:           status,
-			Effectiveness:    eff,
-			HoldoutRemaining: a.holdoutRemaining(),
+			Domains:       strings.Join(f.Domains, ","),
+			Created:       created,
+			Fresh:         native.FreshnessDate(f.Created, f.Modified),
+			LastInjected:  a.lastInject,
+			LastUseful:    a.lastUseful,
+			RefCount:      a.injects,
+			Status:        status,
+			Effectiveness: eff,
 		}
 		if err := upsertIn(e, rec); err != nil {
 			return fmt.Errorf("sidecar.Reproject: upsert %s: %w", f.Slug, err)
@@ -336,7 +309,17 @@ func readWALAgg(walPath string) map[string]*agg {
 		// diagnostic-only: a resolved-but-undelivered citation must not feed
 		// effectiveness, recency, or anything else a per-fact aggregate
 		// drives — skip entry creation for both before any key is computed.
-		if event == "cite-none" || event == "cite-undelivered" {
+		// ablate-*/holdout-* rows are legacy history from the removed
+		// per-fact ablation machinery; they never feed a fact's aggregate.
+		// Nor do the rows `wal compact` drops (wal.LegacyEvents): if they fed
+		// the WAL-earliest created fallback, compaction would change the
+		// projection.
+		if wal.LegacyEvents[event] {
+			continue
+		}
+		switch event {
+		case "cite-none", "cite-undelivered",
+			"ablate-start", "ablate-stop", "holdout-skip", "holdout-hit", "holdout-miss":
 			continue
 		}
 		// Targets may be project-qualified (project\x1fslug, v2.10+) or a legacy
@@ -348,7 +331,7 @@ func readWALAgg(walPath string) map[string]*agg {
 		// Lifecycle events carry sub-delimited extras (">successor",
 		// ":reason") in the slug part — strip them before keying.
 		switch event {
-		case "retire", "revive", "ablate-start", "ablate-stop":
+		case "retire", "revive":
 			slug = trimTargetExtras(slug)
 		}
 		slug = strings.TrimSuffix(slug, ".md")
@@ -398,7 +381,7 @@ func readWALAgg(walPath string) map[string]*agg {
 			}
 		case "cite-silent":
 			a.classify(wal.ParentSession(field4), false)
-		case "trigger-useful", "trigger-silent", "trigger-silent-retro", "outcome-positive", "outcome-negative":
+		case "outcome-positive", "outcome-negative":
 			// Usefulness history restarted in v2.14 — only cite-* (explicit
 			// model citations) feed effectiveness and recency. These legacy
 			// events stay in the WAL as history but no longer classify
@@ -409,26 +392,6 @@ func readWALAgg(walPath string) map[string]*agg {
 			a.retired = false
 		case "candidate-confirmed":
 			a.confirmed = true
-		case "ablate-start":
-			// The raw target tail carries ":<sessions>".
-			n := 5
-			if i := strings.LastIndexByte(target, ':'); i >= 0 {
-				if v, err := strconv.Atoi(target[i+1:]); err == nil && v > 0 {
-					n = v
-				}
-			}
-			a.holdoutN, a.holdoutStopped, a.holdoutSkips = n, false, map[string]bool{}
-		case "ablate-stop":
-			a.holdoutStopped = true
-		case "holdout-skip":
-			if a.holdoutN > 0 && !a.holdoutStopped {
-				if a.holdoutSkips == nil {
-					a.holdoutSkips = map[string]bool{}
-				}
-				a.holdoutSkips[field4] = true
-			}
-			// holdout-hit / holdout-miss are deliberately NOT handled: they are
-			// ablate-report observations and must never feed pos/neg.
 		}
 		if a.created == "" || date < a.created {
 			a.created = date
@@ -466,9 +429,9 @@ func replayOutcomes(e dbtx, walPath string) error {
 	return nil
 }
 
-// trimTargetExtras strips sub-delimited extras (">successor", ":reason",
-// ":N") from a WAL target's slug part, leaving the bare aggregation key.
-// Used for retire/revive/ablate-start/ablate-stop targets.
+// trimTargetExtras strips sub-delimited extras (">successor", ":reason")
+// from a WAL target's slug part, leaving the bare aggregation key. Used for
+// retire/revive targets.
 func trimTargetExtras(s string) string {
 	if i := strings.IndexAny(s, ">:"); i >= 0 {
 		return s[:i]

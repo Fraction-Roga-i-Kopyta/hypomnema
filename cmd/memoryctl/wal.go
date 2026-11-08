@@ -5,21 +5,24 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/sidecar"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/wal"
 )
 
 // runWal dispatches `memoryctl wal <subcommand>` to the right handler.
-// Currently only `validate` is implemented; `migrate` lands in a
-// follow-up PR with the v1→v2 session-metrics rewrite logic.
+// Subcommands: `validate`, `compact`.
 func runWal(args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "memoryctl wal: missing subcommand (try `validate`)")
+		fmt.Fprintln(os.Stderr, "memoryctl wal: missing subcommand (try `validate` or `compact`)")
 		os.Exit(2)
 	}
 	switch args[0] {
 	case "validate":
 		runWalValidate(args[1:])
+	case "compact":
+		runWalCompact(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "memoryctl: unknown wal subcommand %q\n", args[0])
 		os.Exit(2)
@@ -86,6 +89,80 @@ Exit codes:
 			fmt.Printf("  line %d: %s\n", f.LineNum, f.Reason)
 			fmt.Printf("    %s\n", f.Line)
 		}
+		os.Exit(1)
+	}
+}
+
+// runWalCompact drops the WAL rows no reader consumes any more
+// (wal.LegacyEvents), keeps the original as .wal.pre-compact-<today>, and
+// re-projects the sidecar so its recorded WAL offset matches the new file.
+// --dry-run reports the same numbers and writes nothing.
+func runWalCompact(args []string) {
+	dryRun := false
+	for _, a := range args {
+		switch a {
+		case "--dry-run":
+			dryRun = true
+		case "-h", "--help":
+			fmt.Print(`Usage: memoryctl wal compact [--dry-run]
+
+Rewrites $CLAUDE_MEMORY_DIR/.wal without the event types no reader uses
+any more (trigger-useful, trigger-silent, trigger-silent-retro,
+session-metrics). Every other row is kept byte-for-byte and in order; the
+original stays as .wal.pre-compact-<date> (an existing backup is never
+replaced; a second one that day gets a -2 suffix). The sidecar is then
+re-projected so its WAL offset matches the new file. Run it when no session is mid-turn.
+
+Exit codes: 0 — done (or nothing to drop); 1 — failed (if only the sidecar
+re-projection failed, the WAL is already compacted — run memoryctl sidecar
+rebuild); 2 — command misuse or WAL missing.
+`)
+			return
+		default:
+			fmt.Fprintf(os.Stderr, "memoryctl wal compact: unknown flag %q\n", a)
+			os.Exit(2)
+		}
+	}
+	rep, err := wal.Compact(memoryDir(), today(), dryRun)
+	if errors.Is(err, wal.ErrWALMissing) {
+		fmt.Fprintf(os.Stderr, "memoryctl wal compact: no WAL at %s\n", filepath.Join(memoryDir(), ".wal"))
+		os.Exit(2)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "memoryctl wal compact: %v\n", err)
+		os.Exit(1)
+	}
+	dropped := 0
+	events := make([]string, 0, len(rep.Dropped))
+	for ev, n := range rep.Dropped {
+		dropped += n
+		events = append(events, ev)
+	}
+	sort.Strings(events)
+	verb := "compacted"
+	if dryRun {
+		verb = "dry run"
+	}
+	fmt.Printf("%s: kept %d, dropped %d rows; %d → %d bytes\n", verb, rep.Kept, dropped, rep.BytesBefore, rep.BytesAfter)
+	for _, ev := range events {
+		fmt.Printf("  %-22s %d\n", ev, rep.Dropped[ev])
+	}
+	if dryRun {
+		return
+	}
+	if rep.Backup == "" {
+		return // nothing dropped: the WAL and the sidecar are untouched
+	}
+	fmt.Printf("backup: %s\n", rep.Backup)
+	r := resolveStore("")
+	s, err := sidecar.Open(sidecarPath())
+	if err == nil {
+		err = sidecar.Reproject(s, collectNative(r.Store), filepath.Join(memoryDir(), ".wal"), r.Scope())
+		s.Close()
+	}
+	if err != nil {
+		// The WAL is already compacted and valid; only the projection lags.
+		fmt.Fprintf(os.Stderr, "memoryctl wal compact: sidecar re-projection failed (%v) — run `memoryctl sidecar rebuild`\n", err)
 		os.Exit(1)
 	}
 }

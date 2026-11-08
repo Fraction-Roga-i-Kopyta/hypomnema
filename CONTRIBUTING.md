@@ -67,7 +67,7 @@ Track direction in [`CHANGELOG.md`](CHANGELOG.md) and the ADRs under
      and exported functions taking a path argument keep their
      boundary check (I4).
    - Hooks exit 0 on any internal failure, except the sanctioned
-     `PreToolUse` exit 2 for dedup/secrets blocks (I5).
+     `PreToolUse` exit 2 for secrets blocks (I5).
    - `status: pinned` protects a file from rotation but does not
      reserve an injection slot (I6).
    - Behaviour still duplicated across the bash shims and Go stays in

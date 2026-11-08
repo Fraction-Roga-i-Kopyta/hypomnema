@@ -12,7 +12,8 @@ domains: [general]
 Required v2 frontmatter: name, description, type. Do NOT add ref_count,
 injected, or referenced — those are sidecar-managed. There is no `project:`
 field: which store the file lives in (a project's native store vs the global
-store) determines ownership. project facts never decay.
+store) determines ownership. project facts age like knowledge (stale after
+90 days unused); set status: pinned for a project card that must never age.
 -->
 
 Brief project description.

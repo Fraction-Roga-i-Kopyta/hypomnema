@@ -31,7 +31,7 @@ By default, ~/.claude/memory-global/ (your memory files) is preserved.
 Options:
   --dry-run       Print what would happen; make no changes.
   --purge-memory  Also delete ~/.claude/memory-global/ AND the runtime state
-                  (.wal, .sidecar.db, .runtime/, self-profile.md). Requires --yes.
+                  (.wal and its compaction backups, .sidecar.db, .runtime/). Requires --yes.
   --yes, -y       Skip confirmation prompts.
   --help          Show this message.
 
@@ -180,6 +180,10 @@ if [ "$PURGE_MEMORY" -eq 1 ]; then
     for art in .wal .wal.lockd .sidecar.db .sidecar.db-wal .sidecar.db-shm \
                self-profile.md .self-profile.lockd .runtime; do
       [ -e "$RUNTIME_DIR/$art" ] && _run rm -rf "$RUNTIME_DIR/$art"
+    done
+    # `memoryctl wal compact` backups and a temp file left by a killed run.
+    for art in "$RUNTIME_DIR"/.wal.pre-compact-* "$RUNTIME_DIR"/.wal.compact.*.tmp; do
+      [ -e "$art" ] && _run rm -f "$art"
     done
     echo "Runtime state removed."
   fi

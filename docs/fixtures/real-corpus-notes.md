@@ -16,7 +16,8 @@ users actually hit, not to publish a shadow copy of private content.
 
 **Version:** post-commit `3219cc2` (cold-start gates) + tfidf skip lift.
 
-**Thresholds under test:**
+**Thresholds under test** (all three variables have since been removed —
+TF-IDF with v2.0, the other two with the self-profile):
 - `HYPOMNEMA_BAYESIAN_MIN_SAMPLES` = 5 (default)
 - `HYPOMNEMA_OUTCOME_WINDOW_DAYS` = 14 (default)
 - `HYPOMNEMA_TFIDF_MIN_VOCAB` = 100 (default)

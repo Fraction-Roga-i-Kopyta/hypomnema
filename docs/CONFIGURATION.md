@@ -61,7 +61,7 @@ out of the box. Set them only for non-standard installs, tests, or replay.
 
 | Variable | Default | What it controls |
 |---|---|---|
-| `CLAUDE_MEMORY_DIR` | `~/.claude/memory` | Metadata root — holds `.wal`, `.sidecar.db`, `self-profile.md`. Not the content store. |
+| `CLAUDE_MEMORY_DIR` | `~/.claude/memory` | Metadata root — holds `.wal`, `.sidecar.db`, `.runtime/`. Not the content store. |
 | `CLAUDE_HOME` | `~/.claude` | Test/parallel-install override for hypomnema's own state root (hooks, bin) **and**, because it is checked first, for native store resolution too. |
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | Claude Code's own config-dir override, checked only when `CLAUDE_HOME` is unset. Moves **only** `projects/` and `settings.json` resolution (§1) — the global store stays at `~/.claude/memory-global` (`HYPOMNEMA_GLOBAL_DIR` still overrides that independently). |
 | `CLAUDE_PROJECT_DIR` | (unset) | Project anchor Claude Code sets for every hook invocation; outranks `CLAUDE_PROJECT_CWD` (§1). |
@@ -72,20 +72,8 @@ out of the box. Set them only for non-standard installs, tests, or replay.
 | `HYPOMNEMA_SESSION_ID` | (from hook envelope) | Session id stamped into WAL entries. |
 | `CLAUDE_CODE_SESSION_ID` | (exported by Claude Code) | Session id fallback — `memoryctl recall` uses it, and the store-resolution session pin is looked up by it, when `HYPOMNEMA_SESSION_ID` is unset. |
 | `HYPOMNEMA_TODAY` | wall clock | Freeze "today" as `YYYY-MM-DD` (decay windows, WAL cutoffs) for tests / replay. |
-| `HYPOMNEMA_NOW` | wall clock | Freeze the self-profile `generated:` stamp as `YYYY-MM-DD HH:MM`. |
+| `HYPOMNEMA_NOW` | wall clock | Freeze `doctor`'s "now" as `YYYY-MM-DD HH:MM` when `HYPOMNEMA_TODAY` is unset. |
 | `HYPOMNEMA_ALLOW_SECRETS` | unset | Set to `1` to bypass the secrets gate for a single invocation (see §4). |
-
-### Self-profile analytics knobs
-
-These three affect only `memoryctl self-profile` (the WAL analytics pass).
-They exist mostly for fixture tests; the defaults come from the ADRs and
-are what production runs on.
-
-| Variable | Default | What it controls |
-|---|---|---|
-| `HYPOMNEMA_OUTCOME_WINDOW_DAYS` | 14 | Rolling window (days) for the per-slug Bayesian outcome sampling. |
-| `HYPOMNEMA_BAYESIAN_MIN_SAMPLES` | 5 | Minimum samples before a slug is counted in the corpus Bayesian fraction. |
-| `HYPOMNEMA_INTUITION_WINDOW_DAYS` | 30 | Intuition-milestone window; `0` disables that filter entirely. |
 
 ## 3. Decay thresholds
 
@@ -106,15 +94,24 @@ directory** and no second archival stage). Native content is never mutated.
 | `skill-learning` | 120 |
 | `user` | 180 |
 | `reference` | 90 |
+| `project` | 90 |
+| `continuity` (all but the freshest per project) | 30 |
 | any other type | 90 (default) |
 
 Rules:
 
-- **Age counts from the last injection**, falling back to `created`. A fact
-  in active rotation never goes stale just because its file is old.
+- **Age counts from the last injection**, falling back to `created` (and,
+  when `created` is absent, to the date of Claude Code's `modified` stamp).
+  A fact in active rotation never goes stale just because its file is old.
 - `status: pinned` files never decay.
-- `type: continuity` and `type: project` facts are exempt from rotation
-  entirely — they are "where we left off" markers.
+- A project's **freshest** `continuity` fact — the later of `created` and
+  `modified`; on a tie, the lexically greater filename — is the live "where
+  we left off" marker: never decays, and it is the only continuity fact
+  injection pushes. Older continuity files are history: still recallable,
+  stale after 30 days unused.
+- `type: project` is Claude Code's own type for ongoing work and goals, so it
+  ages like `knowledge`. A project card that must never age should be
+  `status: pinned`.
 - A stale fact is simply excluded from push injection. It still surfaces
   through `memoryctl recall` (marked `[stale]`), and recalling it revives it.
 
@@ -148,7 +145,7 @@ These were tunable (or claimed to be) in v1 and are **gone** in v2:
   compiled table in §3.
 - **ADR review-triggers / `memoryctl decisions review`** — no such verb.
   Revisit-conditions live only as prose in decision files.
-- **`memoryctl evidence learn`** — no such verb. Author `evidence:` phrases
-  by hand (see the repo `CLAUDE.md`).
+- **`memoryctl evidence learn`** — no such verb, and frontmatter `evidence:`
+  is not read at all; usefulness comes only from `<cc-memory>` citations.
 
 Run `memoryctl --help` for the authoritative verb list.

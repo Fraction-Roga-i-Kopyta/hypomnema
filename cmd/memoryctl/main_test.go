@@ -200,25 +200,6 @@ func TestMain_UnknownCommand(t *testing.T) {
 	}
 }
 
-// --- dedup subcommand ---
-
-func TestDedup_NoSubcommand(t *testing.T) {
-	_, _, code := run(t, nil, "dedup")
-	if code != 2 {
-		t.Errorf("expected exit 2, got %d", code)
-	}
-}
-
-func TestDedup_UnknownSubcommand(t *testing.T) {
-	_, stderr, code := run(t, nil, "dedup", "bogus")
-	if code != 2 {
-		t.Errorf("expected exit 2, got %d", code)
-	}
-	if !strings.Contains(stderr, "unknown dedup subcommand") {
-		t.Errorf("stderr should identify unknown dedup subcommand, got %q", stderr)
-	}
-}
-
 // --- doctor subcommand ---
 
 // doctorFixtureCWD is the working directory the doctor fixture pretends the
@@ -526,5 +507,56 @@ func TestAuditInvariants_UnknownFlag(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "unknown flag") {
 		t.Errorf("stderr mismatch: %s", stderr)
+	}
+}
+
+// --- wal compact --------------------------------------------------------
+
+// `wal compact` drops the dead legacy rows, reports what it did, and leaves
+// the sidecar projected through the new (smaller) WAL so doctor does not
+// find wal_offset past the end of the file.
+func TestWalCompact_DropsLegacyRowsAndReprojects(t *testing.T) {
+	home := t.TempDir()
+	claudeHome := filepath.Join(home, ".claude")
+	mem := filepath.Join(claudeHome, "memory")
+	proj := filepath.Join(claudeHome, "projects", "-work-p", "memory")
+	for _, d := range []string{mem, proj} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	os.WriteFile(filepath.Join(proj, "a.md"), []byte("---\nname: a\ntype: knowledge\n---\nbody\n"), 0o644)
+	walRows := "2026-09-01|inject|-work-p\x1fa.md|s1\n" +
+		"2026-09-01|trigger-silent|a.md|s1\n" +
+		"2026-09-01|session-metrics|domains:unknown|s1\n"
+	os.WriteFile(filepath.Join(mem, ".wal"), []byte(walRows), 0o644)
+	env := map[string]string{
+		"CLAUDE_HOME": claudeHome, "CLAUDE_MEMORY_DIR": mem,
+		"CLAUDE_PROJECT_CWD": "/work/p", "HYPOMNEMA_TODAY": "2026-11-09",
+	}
+
+	stdout, stderr, code := run(t, env, "wal", "compact", "--dry-run")
+	if code != 0 || !strings.Contains(stdout, "dropped 2") {
+		t.Fatalf("dry run: exit %d stdout %q stderr %q", code, stdout, stderr)
+	}
+	if got, _ := os.ReadFile(filepath.Join(mem, ".wal")); string(got) != walRows {
+		t.Fatalf("dry run must not touch the WAL")
+	}
+
+	stdout, stderr, code = run(t, env, "wal", "compact")
+	if code != 0 || !strings.Contains(stdout, "dropped 2") {
+		t.Fatalf("compact: exit %d stdout %q stderr %q", code, stdout, stderr)
+	}
+	got, _ := os.ReadFile(filepath.Join(mem, ".wal"))
+	if string(got) != "2026-09-01|inject|-work-p\x1fa.md|s1\n" {
+		t.Errorf("compacted WAL = %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(mem, ".wal.pre-compact-2026-11-09")); err != nil {
+		t.Errorf("backup missing: %v", err)
+	}
+	out, _, _ := run(t, env, "doctor")
+	want := fmt.Sprintf("projected through WAL byte %d", len(got))
+	if !strings.Contains(out, want) {
+		t.Errorf("doctor must see the sidecar projected through the compacted WAL (%q):\n%s", want, out)
 	}
 }
