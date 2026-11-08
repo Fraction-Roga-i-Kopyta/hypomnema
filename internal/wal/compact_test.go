@@ -86,19 +86,75 @@ func TestCompact_MissingWAL(t *testing.T) {
 	}
 }
 
-// A second compaction the same day replaces that day's backup with the
-// WAL as it stood before the second run, never fails on the existing file.
-func TestCompact_SameDayRerunReplacesBackup(t *testing.T) {
+// The pre-compaction backup is the only way back, so it is never replaced:
+// a rerun with nothing to drop changes nothing at all, and a later run on
+// the same day keeps the first backup and writes its own beside it.
+func TestCompact_RerunNeverReplacesBackup(t *testing.T) {
 	dir := t.TempDir()
 	walPath := filepath.Join(dir, ".wal")
+	first := filepath.Join(dir, ".wal.pre-compact-2026-11-09")
 	os.WriteFile(walPath, []byte(compactFixture), 0o644)
 	if _, err := Compact(dir, "2026-11-09", false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Compact(dir, "2026-11-09", false); err != nil {
-		t.Fatalf("second Compact: %v", err)
+
+	rep, err := Compact(dir, "2026-11-09", false)
+	if err != nil {
+		t.Fatalf("rerun: %v", err)
 	}
-	if b, _ := os.ReadFile(filepath.Join(dir, ".wal.pre-compact-2026-11-09")); string(b) != compactWant {
-		t.Errorf("same-day backup must be the pre-second-run WAL, got %q", b)
+	if rep.Backup != "" || len(rep.Dropped) != 0 {
+		t.Errorf("nothing to drop must write nothing, report %+v", rep)
+	}
+	if b, _ := os.ReadFile(first); string(b) != compactFixture {
+		t.Errorf("first backup must still hold the original WAL")
+	}
+
+	f, _ := os.OpenFile(walPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	f.WriteString("2026-11-09|trigger-silent|x.md|s9\n")
+	f.Close()
+	rep, err = Compact(dir, "2026-11-09", false)
+	if err != nil {
+		t.Fatalf("third run: %v", err)
+	}
+	if rep.Backup != first+"-2" {
+		t.Errorf("same-day backup must get a suffix, got %q", rep.Backup)
+	}
+	if b, _ := os.ReadFile(first); string(b) != compactFixture {
+		t.Errorf("first backup was overwritten")
+	}
+}
+
+// Kept rows are copied as raw bytes (a CRLF row stays CRLF, a last row
+// without a newline stays without one) and the WAL keeps its file mode.
+func TestCompact_PreservesBytesAndMode(t *testing.T) {
+	dir := t.TempDir()
+	walPath := filepath.Join(dir, ".wal")
+	in := "2026-09-01|inject|a.md|s1\r\n2026-09-01|trigger-silent|a.md|s1\r\n2026-09-02|inject|b.md|s2"
+	os.WriteFile(walPath, []byte(in), 0o640)
+	os.Chmod(walPath, 0o640)
+	if _, err := Compact(dir, "2026-11-09", false); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(walPath)
+	if want := "2026-09-01|inject|a.md|s1\r\n2026-09-02|inject|b.md|s2"; string(got) != want {
+		t.Errorf("compacted = %q, want %q", got, want)
+	}
+	if fi, _ := os.Stat(walPath); fi.Mode().Perm() != 0o640 {
+		t.Errorf("mode = %v, want 0640", fi.Mode().Perm())
+	}
+}
+
+// A compaction killed mid-way leaves a WAL-sized temp file; the next run
+// removes it.
+func TestCompact_RemovesLeftoverTemp(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, ".wal"), []byte(compactFixture), 0o644)
+	stale := filepath.Join(dir, ".wal.compact.123.tmp")
+	os.WriteFile(stale, []byte("half"), 0o600)
+	if _, err := Compact(dir, "2026-11-09", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stale); err == nil {
+		t.Errorf("leftover temp file must be removed")
 	}
 }

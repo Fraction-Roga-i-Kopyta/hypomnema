@@ -817,3 +817,30 @@ func TestReproject_SubagentObservationsFoldIntoParentSession(t *testing.T) {
 		t.Errorf("n.md effectiveness = %v, want %v", r.Effectiveness, 1/2.25)
 	}
 }
+
+// `wal compact` drops trigger-*/session-metrics rows, so they must not feed
+// the projection either — otherwise compaction moves the WAL-earliest
+// `created` fallback (and with it recency and decay age) of facts that have
+// no frontmatter date.
+func TestReproject_CompactableRowsDoNotFeedProjection(t *testing.T) {
+	dir := t.TempDir()
+	walPath := filepath.Join(dir, ".wal")
+	q := native.QKey("projA", "fact.md")
+	lines := "2026-03-01|trigger-silent|" + q + "|s0\n" +
+		"2026-03-02|trigger-useful|" + q + "|s0\n" +
+		"2026-03-03|session-metrics|domains:unknown|s0\n" +
+		"2026-10-01|inject|" + q + "|s1\n"
+	os.WriteFile(walPath, []byte(lines), 0o644)
+	s, err := Open(filepath.Join(dir, ".sidecar.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	files := []native.MemFile{{Slug: "fact.md", Project: "projA", Status: "active"}}
+	if err := Reproject(s, files, walPath, []string{"projA"}); err != nil {
+		t.Fatal(err)
+	}
+	if r, _, _ := s.Get("fact.md"); r.Created != "2026-10-01" {
+		t.Errorf("created = %q, want 2026-10-01 (legacy rows ignored)", r.Created)
+	}
+}

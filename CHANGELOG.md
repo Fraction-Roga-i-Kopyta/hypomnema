@@ -23,8 +23,9 @@ About 3 900 lines removed (code and tests).
 - **`memoryctl wal compact [--dry-run]`** drops WAL rows no reader consumes
   (`trigger-useful`, `trigger-silent`, `trigger-silent-retro`,
   `session-metrics`) under the WAL lock, keeps every other row byte-for-byte,
-  keeps the original as `.wal.pre-compact-<date>`, and re-projects the
-  sidecar. Live install: 18.1 MB → 6.6 MB. Run it when no session is
+  keeps the original as `.wal.pre-compact-<date>` (never replaced), and
+  re-projects the sidecar. The dropped rows no longer feed the projection,
+  so compaction changes no score, recency or decay age. Live install: 18.1 MB → 6.6 MB. Run it when no session is
   mid-turn.
 
 ### Fixed
@@ -45,7 +46,9 @@ About 3 900 lines removed (code and tests).
 
 ### Changed
 
-- Sidecar schema v7 (drops `holdout_remaining`, adds `modified`); it rebuilds
+- Sidecar schema v7 (drops `holdout_remaining`, adds `fresh` — the later of
+  frontmatter `created` and native `modified`, which injection and decay both
+  use to pick the freshest continuity); it rebuilds
   itself once on first open.
 
 ## [2.17.0] — 2026-11-08
