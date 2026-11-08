@@ -1,5 +1,8 @@
 # synthetic-cold-start
 
+> Written for the v1 scorer (TF-IDF and cold-start gates, self-profile —
+> all retired); no current test reads this fixture.
+
 ## Claim
 
 A young corpus with **no `outcome-positive` / `outcome-negative` events**
@@ -13,8 +16,6 @@ Concretely:
   `active: 3, total: 5, dormant: [bayesian, tfidf]`.
 - Injection ranking on a trigger-matching prompt still returns the
   right slug (keyword path is live).
-- `self-profile.md` shows 0 outcomes and `measurable precision = null`
-  (no denominator yet).
 
 ## Structure
 
@@ -25,9 +26,10 @@ events across 10 synthetic sessions — no closing events, no outcomes.
 Body length per file: 1–2 lines. Intentional: keeps TF-IDF vocabulary
 below the `MIN_TFIDF_VOCAB=100` threshold from the cold-start ADR.
 
-No `evidence:` field in frontmatter — outcome-positive cannot be
-emitted from session transcripts against these files even when P1.1
-lands. This is the defining property of a cold-start corpus.
+No usefulness signal at all: the WAL's `trigger-silent` rows are legacy
+(ignored since v2.14) and there are no `cite-*` rows, so every fact sits
+at the neutral effectiveness prior. This is the defining property of a
+cold-start corpus.
 
 ## Expected behaviour
 

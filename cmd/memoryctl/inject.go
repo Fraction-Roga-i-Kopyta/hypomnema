@@ -116,7 +116,6 @@ func runInject(args []string) {
 		ClaudeHome: claudeDir(), MemoryDir: memoryDir(), Today: today(), MaxK: 8,
 		Store:           r.Store,
 		AlreadyInjected: renderDedup,
-		HoldoutSession:  readListFile(holdoutListPath(in.SessionID)),
 	})
 	if err != nil {
 		os.Exit(0)
@@ -125,7 +124,6 @@ func runInject(args []string) {
 		persistInjected(already, res.Injected, res.ProjectBySlug, in.SessionID)
 	}
 	if in.SessionID != "" {
-		persistHoldoutSkips(res, in.SessionID)
 		// compact/clear reset renderDedup to nil above, so the union below
 		// collapses to exactly res.Injected — matching "the rendered list is
 		// what this render showed, nothing carried over from before the wipe".
@@ -220,50 +218,6 @@ func writeRenderedList(current, add []string, sessionID string) {
 	_ = pathutil.WriteFileAtomic(renderedListPath(sessionID), []byte(content), 0o600)
 }
 
-func holdoutListPath(sessionID string) string {
-	return filepath.Join(memoryDir(), ".runtime",
-		"holdout-"+pathutil.SafeFileName(sessionID)+".list")
-}
-
-// persistHoldoutSkips records each held-out fact's would-have-injected
-// observation: one holdout-skip WAL event per fact per session (the runtime
-// list dedups repeat prompts), plus the session list the close hook reads to
-// classify behaviour-without-injection. The final observation session also
-// closes the experiment with ablate-stop:expired.
-func persistHoldoutSkips(res inject.Result, sessionID string) {
-	if len(res.HoldoutSkipped) == 0 {
-		return
-	}
-	if err := os.MkdirAll(filepath.Join(memoryDir(), ".runtime"), 0o755); err != nil {
-		return // fail-safe: no list means a repeat emission at worst
-	}
-	union := readListFile(holdoutListPath(sessionID))
-	already := make(map[string]bool, len(union))
-	for _, s := range union {
-		already[s] = true
-	}
-	day, sid := today(), wal.SanitizeField(sessionID)
-	for _, slug := range res.HoldoutSkipped {
-		if already[slug] {
-			continue
-		}
-		target := wal.SanitizeField(slug)
-		if p := res.ProjectBySlug[slug]; p != "" {
-			target = native.QKey(p, target)
-		}
-		wal.Append(memoryDir(), fmt.Sprintf("%s|holdout-skip|%s|%s", day, target, sid), "")
-		if res.HoldoutRemaining[slug] == 1 {
-			// This was the last budgeted observation — close the experiment.
-			wal.Append(memoryDir(), fmt.Sprintf("%s|ablate-stop|%s:expired|%s", day, target, sid), "")
-		}
-		union = append(union, slug)
-	}
-	if len(union) > 0 {
-		_ = pathutil.WriteFileAtomic(holdoutListPath(sessionID),
-			[]byte(strings.Join(union, "\n")+"\n"), 0o600)
-	}
-}
-
 func persistInjected(already, slugs []string, projectBySlug map[string]string, sessionID string) {
 	day := today()
 	sid := wal.SanitizeField(sessionID)
@@ -322,7 +276,8 @@ func writeSessionList(already, slugs []string, sessionID string) {
 // old will never see another inject or close, so its list is dead weight
 // (the live install had accumulated 170+ of them). agentcall-*.claim marks
 // (pickAgentCall) age out on the same cutoff — a launching call that old has
-// long since been superseded by a fresh transcript tail.
+// long since been superseded by a fresh transcript tail. holdout-*.list files
+// are left over from the removed ablation machinery and age out the same way.
 func pruneRuntimeLists(dir string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {

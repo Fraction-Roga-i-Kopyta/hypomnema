@@ -33,25 +33,18 @@ import (
 	"io"
 	"os"
 	"strings"
-	"time"
 )
 
 // Session pairs the session_id with the concatenated assistant text
-// from its transcript, plus the headline session metrics the Stop hook
-// writes into the WAL `session-metrics` event. Evidence mining needs
-// ID + Text; the metrics feed self-profile calibration. ReadPaths feeds the
-// "delivered by direct file read" citation-credit gate: a cited fact only
-// earns cite-useful if it was injected this session OR the model actually
-// read the file (confirmed by a successful tool_result, not just an
-// attempted Read).
+// from its transcript. ReadPaths feeds the "delivered by direct file
+// read" citation-credit gate: a cited fact only earns cite-useful if it
+// was injected this session OR the model actually read the file
+// (confirmed by a successful tool_result, not just an attempted Read).
 type Session struct {
-	ID          string   // session UUID from the `sessionId` field on record 0
-	Text        string   // all assistant `content[].text` joined by `\n\n`
-	Thinking    string   // all assistant `content[].thinking` joined by `\n\n` (citations may appear there)
-	ReadPaths   []string // file_path of every SUCCESSFULLY-COMPLETED Read tool_use — order kept, deduped, capped at maxReadPaths
-	ToolCalls   int      // assistant `tool_use` content parts
-	ToolErrors  int      // `tool_result` parts flagged is_error
-	DurationSec int      // last timestamp − first timestamp, in seconds
+	ID        string   // session UUID from the `sessionId` field on record 0
+	Text      string   // all assistant `content[].text` joined by `\n\n`
+	Thinking  string   // all assistant `content[].thinking` joined by `\n\n` (citations may appear there)
+	ReadPaths []string // file_path of every SUCCESSFULLY-COMPLETED Read tool_use — order kept, deduped, capped at maxReadPaths
 }
 
 // maxReadPaths bounds how many distinct Read paths (and unanswered Read
@@ -66,7 +59,6 @@ const maxReadPaths = 1024
 type record struct {
 	Type      string         `json:"type"`
 	SessionID string         `json:"sessionId"`
-	Timestamp string         `json:"timestamp"`
 	Message   *messageRecord `json:"message,omitempty"`
 }
 
@@ -219,12 +211,11 @@ func decodeStream(r io.Reader) (Session, error) {
 	var b strings.Builder
 	var thinking strings.Builder
 	rs := newReadState()
-	var firstTS, lastTS time.Time
 	first := true
 	for {
 		line, err := br.ReadBytes('\n')
 		if len(line) > 0 && len(line) <= maxLineBytes {
-			processLine(line, &out, &b, &thinking, rs, &firstTS, &lastTS, &first)
+			processLine(line, &out, &b, &thinking, rs, &first)
 		}
 		// A line longer than maxLineBytes is skipped (content unneeded) but the
 		// loop continues to the next line — the whole point of the E3 fix.
@@ -235,13 +226,10 @@ func decodeStream(r io.Reader) (Session, error) {
 	out.Text = b.String()
 	out.Thinking = thinking.String()
 	out.ReadPaths = rs.delivered()
-	if !firstTS.IsZero() && lastTS.After(firstTS) {
-		out.DurationSec = int(lastTS.Sub(firstTS).Seconds())
-	}
 	return out, nil
 }
 
-func processLine(line []byte, out *Session, b *strings.Builder, thinking *strings.Builder, rs *readState, firstTS, lastTS *time.Time, first *bool) {
+func processLine(line []byte, out *Session, b *strings.Builder, thinking *strings.Builder, rs *readState, first *bool) {
 	var rec record
 	if err := json.Unmarshal(line, &rec); err != nil {
 		return // malformed line — skip, don't fail the whole session
@@ -250,19 +238,12 @@ func processLine(line []byte, out *Session, b *strings.Builder, thinking *string
 		out.ID = rec.SessionID
 		*first = false
 	}
-	if ts, err := time.Parse(time.RFC3339, rec.Timestamp); err == nil {
-		if firstTS.IsZero() {
-			*firstTS = ts
-		}
-		*lastTS = ts
-	}
 	if rec.Message == nil {
 		return
 	}
 	for _, p := range rec.Message.Content {
 		switch {
 		case rec.Type == "assistant" && p.Type == "tool_use":
-			out.ToolCalls++
 			if p.Name == "Read" {
 				rs.recordCall(p.ID, readFilePath(p.Input))
 			}
@@ -278,9 +259,6 @@ func processLine(line []byte, out *Session, b *strings.Builder, thinking *string
 				}
 			}
 		case p.Type == "tool_result":
-			if p.IsError {
-				out.ToolErrors++
-			}
 			rs.recordResult(p.ToolUseID, p.IsError)
 		case rec.Type == "assistant" && p.Type == "text" && p.Text != "":
 			if b.Len() > 0 {

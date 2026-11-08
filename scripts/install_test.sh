@@ -138,9 +138,10 @@ echo '{}' > "$CD/settings.json"
 CLAUDE_DIR="$CD" "$REPO/install.sh" >/dev/null 2>&1 || _fail "install (purge case) failed"
 mkdir -p "$CD/memory/.runtime"
 : > "$CD/memory/.wal"; : > "$CD/memory/.sidecar.db"; : > "$CD/memory/self-profile.md"
+: > "$CD/memory/.wal.pre-compact-2026-11-09"; : > "$CD/memory/.wal.compact.1.tmp"
 CLAUDE_DIR="$CD" "$REPO/uninstall.sh" --purge-memory --yes >/dev/null 2>&1 || _fail "purge uninstall failed"
 leftover=""
-for a in .wal .sidecar.db self-profile.md .runtime; do
+for a in .wal .sidecar.db self-profile.md .runtime .wal.pre-compact-2026-11-09 .wal.compact.1.tmp; do
   [ -e "$CD/memory/$a" ] && leftover="$leftover $a"
 done
 [ -z "$leftover" ] && _ok "--purge-memory removed runtime state" || _fail "--purge-memory left runtime state:$leftover"

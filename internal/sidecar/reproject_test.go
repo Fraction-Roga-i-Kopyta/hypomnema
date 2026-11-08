@@ -679,45 +679,10 @@ func TestReproject_CandidateGraduation(t *testing.T) {
 	}
 }
 
-// TestReproject_Holdout: ablate-start begins a holdout budget; each distinct
-// holdout-skip session consumes one; ablate-stop (or exhaustion) ends it.
-func TestReproject_Holdout(t *testing.T) {
-	dir := t.TempDir()
-	walPath := filepath.Join(dir, ".wal")
-	q := native.QKey("projA", "fact")
-	lines := "2026-07-01|ablate-start|" + q + ":3|cli\n" +
-		"2026-07-02|holdout-skip|" + q + "|s1\n" +
-		"2026-07-03|holdout-skip|" + q + "|s2\n" +
-		"2026-07-03|holdout-skip|" + q + "|s2\n" // same session — no double count
-	if err := os.WriteFile(walPath, []byte(lines), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	s, err := Open(filepath.Join(dir, ".sidecar.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	files := []native.MemFile{{Slug: "fact.md", Project: "projA", Status: "active"}}
-	if err := Reproject(s, files, walPath, []string{"projA"}); err != nil {
-		t.Fatal(err)
-	}
-	if r, _, _ := s.Get("fact.md"); r.HoldoutRemaining != 1 {
-		t.Fatalf("HoldoutRemaining = %d, want 1", r.HoldoutRemaining)
-	}
-
-	appendLine(t, walPath, "2026-07-04|ablate-stop|"+q+":manual|cli")
-	if err := Reproject(s, files, walPath, []string{"projA"}); err != nil {
-		t.Fatal(err)
-	}
-	if r, _, _ := s.Get("fact.md"); r.HoldoutRemaining != 0 {
-		t.Fatalf("after stop: HoldoutRemaining = %d, want 0", r.HoldoutRemaining)
-	}
-}
-
-// TestReproject_HoldoutEventsDontTouchEffectiveness: holdout-hit/miss are
-// observation events for the ablate report — they must never feed the
-// Bayesian pos/neg (the fact was not injected in those sessions).
-func TestReproject_HoldoutEventsDontTouchEffectiveness(t *testing.T) {
+// TestReproject_LegacyAblationRowsIgnored: ablate-*/holdout-* rows written
+// by the removed ablation machinery stay in old WALs. They must never feed
+// the Bayesian pos/neg nor create a per-fact aggregate.
+func TestReproject_LegacyAblationRowsIgnored(t *testing.T) {
 	dir := t.TempDir()
 	walPath := filepath.Join(dir, ".wal")
 	q := native.QKey("projA", "fact")
@@ -725,7 +690,8 @@ func TestReproject_HoldoutEventsDontTouchEffectiveness(t *testing.T) {
 		"2026-07-02|holdout-skip|" + q + "|s1\n" +
 		"2026-07-02|holdout-hit|" + q + "|s1\n" +
 		"2026-07-03|holdout-skip|" + q + "|s2\n" +
-		"2026-07-03|holdout-miss|" + q + "|s2\n"
+		"2026-07-03|holdout-miss|" + q + "|s2\n" +
+		"2026-07-03|ablate-stop|" + q + ":expired|s2\n"
 	if err := os.WriteFile(walPath, []byte(lines), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -740,6 +706,9 @@ func TestReproject_HoldoutEventsDontTouchEffectiveness(t *testing.T) {
 	}
 	if r, _, _ := s.Get("fact.md"); r.Effectiveness != 0.5 {
 		t.Fatalf("effectiveness = %v, want the untouched 0.5 prior", r.Effectiveness)
+	}
+	if aggs := readWALAgg(walPath); len(aggs) != 0 {
+		t.Fatalf("legacy ablation rows must not aggregate, got %+v", aggs)
 	}
 }
 
@@ -846,5 +815,32 @@ func TestReproject_SubagentObservationsFoldIntoParentSession(t *testing.T) {
 	// n: one silent observation for parent s2 -> 1/(0.25+2)
 	if r, _, _ := s.Get("n.md"); math.Abs(r.Effectiveness-1/2.25) > 1e-9 {
 		t.Errorf("n.md effectiveness = %v, want %v", r.Effectiveness, 1/2.25)
+	}
+}
+
+// `wal compact` drops trigger-*/session-metrics rows, so they must not feed
+// the projection either — otherwise compaction moves the WAL-earliest
+// `created` fallback (and with it recency and decay age) of facts that have
+// no frontmatter date.
+func TestReproject_CompactableRowsDoNotFeedProjection(t *testing.T) {
+	dir := t.TempDir()
+	walPath := filepath.Join(dir, ".wal")
+	q := native.QKey("projA", "fact.md")
+	lines := "2026-03-01|trigger-silent|" + q + "|s0\n" +
+		"2026-03-02|trigger-useful|" + q + "|s0\n" +
+		"2026-03-03|session-metrics|domains:unknown|s0\n" +
+		"2026-10-01|inject|" + q + "|s1\n"
+	os.WriteFile(walPath, []byte(lines), 0o644)
+	s, err := Open(filepath.Join(dir, ".sidecar.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	files := []native.MemFile{{Slug: "fact.md", Project: "projA", Status: "active"}}
+	if err := Reproject(s, files, walPath, []string{"projA"}); err != nil {
+		t.Fatal(err)
+	}
+	if r, _, _ := s.Get("fact.md"); r.Created != "2026-10-01" {
+		t.Errorf("created = %q, want 2026-10-01 (legacy rows ignored)", r.Created)
 	}
 }

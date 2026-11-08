@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func writeFile(t *testing.T, dir, name, content string) {
@@ -168,24 +169,70 @@ func TestParseFileReadsSkillField(t *testing.T) {
 	}
 }
 
-func TestParse_EvidenceList(t *testing.T) {
+// Claude Code stamps `modified` (an ISO timestamp, under metadata:) on every
+// Write/Edit but never `created`. Its date is the file's recency when the
+// author gave none, and Modified is kept separately so a rewritten file
+// (continuity.md updated in place) reads as fresh.
+func TestParse_ModifiedStamp(t *testing.T) {
 	dir := t.TempDir()
-	content := "---\n" +
-		"type: feedback\n" +
-		"name: real-db\n" +
-		"evidence:\n" +
-		"  - \"do not mock the database\"\n" +
-		"  - \"real database in tests\"\n" +
-		"---\nrule body\n"
-	if err := os.WriteFile(filepath.Join(dir, "real-db.md"), []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeFile(t, dir, "native.md", "---\nname: n\nmetadata:\n  type: project\n  modified: 2026-08-20T12:49:01.986Z\n---\nbody\n")
+	writeFile(t, dir, "dated.md", "---\nname: d\ncreated: 2026-07-01\nmetadata:\n  modified: 2026-10-11T08:00:00Z\n---\nbody\n")
 	files, err := List(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(files) != 1 || len(files[0].Evidence) != 2 ||
-		files[0].Evidence[0] != "do not mock the database" {
-		t.Fatalf("Evidence not parsed: %+v", files)
+	by := map[string]MemFile{}
+	for _, f := range files {
+		by[f.Slug] = f
+	}
+	if f := by["native.md"]; f.Created != "2026-08-20" || f.Modified != "2026-08-20" {
+		t.Errorf("native.md: created=%q modified=%q, want both 2026-08-20", f.Created, f.Modified)
+	}
+	if f := by["dated.md"]; f.Created != "2026-07-01" || f.Modified != "2026-10-11" {
+		t.Errorf("dated.md: created=%q modified=%q", f.Created, f.Modified)
+	}
+}
+
+// The newest continuity per project is the one with the latest of created
+// and modified; ties go to the lexically greater slug (dated names sort).
+func TestNewestContinuity(t *testing.T) {
+	files := []MemFile{
+		{Slug: "continuity.md", Type: "continuity", Project: "p", Created: "2026-08-01", Modified: "2026-10-01"},
+		{Slug: "continuity-2026-09-01.md", Type: "continuity", Project: "p", Created: "2026-09-01"},
+		{Slug: "continuity-2026-09-02.md", Type: "continuity", Project: "q", Created: "2026-09-02"},
+		{Slug: "continuity-2026-09-03.md", Type: "continuity", Project: "q", Created: "2026-09-02"},
+		{Slug: "notes.md", Type: "note", Project: "q", Created: "2026-12-01"},
+	}
+	got := NewestContinuity(files)
+	if got["p"] != "continuity.md" || got["q"] != "continuity-2026-09-03.md" || len(got) != 2 {
+		t.Errorf("NewestContinuity = %v", got)
+	}
+}
+
+// `modified` is a UTC stamp; its date is taken in the local zone so it
+// compares with local created/today — an edit at 01:30 local (22:30Z the
+// day before) belongs to the local day.
+func TestParse_ModifiedStampIsLocalDate(t *testing.T) {
+	saved := time.Local
+	time.Local = time.FixedZone("UTC+3", 3*3600)
+	defer func() { time.Local = saved }()
+	dir := t.TempDir()
+	writeFile(t, dir, "late.md", "---\nname: l\nmetadata:\n  modified: 2026-11-08T22:30:00.000Z\n---\nbody\n")
+	writeFile(t, dir, "plain.md", "---\nname: p\nmodified: 2026-08-20\n---\nbody\n")
+	files, err := List(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		switch f.Slug {
+		case "late.md":
+			if f.Modified != "2026-11-09" {
+				t.Errorf("late.md Modified = %q, want local 2026-11-09", f.Modified)
+			}
+		case "plain.md":
+			if f.Modified != "2026-08-20" {
+				t.Errorf("plain.md Modified = %q, want 2026-08-20", f.Modified)
+			}
+		}
 	}
 }

@@ -11,24 +11,12 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/dedup"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/doctor"
-	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/profile"
-	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/wal"
 )
 
 const usage = `memoryctl — hypomnema memory CLI
 
 Usage:
-  memoryctl dedup check <file-path>
-      Fuzzy dedup for mistake files. Pretool (file absent) reads content
-      from stdin; posttool (file present) reads it from disk. Exits 2 on
-      ≥80% similarity in pretool mode, 1 on merge in posttool mode, 0
-      otherwise. Drop-in replacement for bin/memory-dedup.py.
-  memoryctl self-profile
-      Regenerate ~/.claude/memory/self-profile.md from WAL + mistakes +
-      strategies. Single-pass WAL aggregation; drop-in replacement for
-      bin/memory-self-profile.sh.
   memoryctl doctor [--json]
       On-demand health check of the install: claude_dir, hook registrations
       in settings.json, broken symlinks in hooks/ and bin/, memoryctl
@@ -40,6 +28,9 @@ Usage:
       format, event name, slug sanitisation, non-empty session.
       Exit 0 = clean, 1 = at least one row failed, 2 = WAL missing or
       command misuse.
+  memoryctl wal compact [--dry-run]
+      Drop WAL rows no reader uses any more (trigger-*, session-metrics),
+      keep the original as .wal.pre-compact-<date>, re-project the sidecar.
   memoryctl audit invariants [--repo PATH]
       Run every automated invariant check from internal/invariants
       against the repo at PATH (default: current working directory).
@@ -68,12 +59,6 @@ Usage:
       "recall" WAL event for the delivered fact and unions it into the
       session's injected list. Includes stale facts (marked [stale]) —
       recalling one revives it.
-  memoryctl promote
-      Report-only promotion ladder: mistakes that recurred despite memory
-      (-> hook/lint/test), facts useful in every recent session (-> CLAUDE.md),
-      internalized ablation survivors and never-corroborated candidates
-      (-> retire). Prints evidence + the closing retire command; mutates
-      nothing. Exit 0 always (cron-safe).
   memoryctl retire <slug> [--reason "..."] [--superseded-by <ref>]
       Retire a fact: move its file to the store's .archive/, stamp tombstone
       frontmatter (retired/retire-reason/superseded-by), emit a "retire" WAL
@@ -104,12 +89,6 @@ Usage:
   memoryctl ab
       Diagnostic: replay the WAL to compare ranked vs baseline retrieval
       (A/B evidence). Read-only; see docs/measurements/.
-  memoryctl ablate <slug> [--sessions N] | stop <slug> | report [<slug>]
-      Per-fact ablation: withhold the fact from injection for N would-have-
-      injected sessions (default 5) while the close hook records whether the
-      behavior held without it (holdout-hit/miss). "report" prints observed
-      sessions, hit-rate, and a verdict hint. Requires a live sidecar; in
-      degraded (no-sidecar) mode the holdout quietly suspends.
 
 Hook verbs (invoked by the v2 shims, not run by hand): inject, close, guard,
 skill-inject, skill-active. Each reads a hook envelope on stdin and is
@@ -133,7 +112,8 @@ Environment:
                           Highest-precedence absolute path used verbatim as
                           the resolved memory dir (see docs/CONFIGURATION.md).
   HYPOMNEMA_TODAY         Freeze "today" in YYYY-MM-DD (for tests/replay).
-  HYPOMNEMA_NOW           Freeze self-profile "generated:" stamp (YYYY-MM-DD HH:MM).
+  HYPOMNEMA_NOW           Freeze doctor's "now" (YYYY-MM-DD HH:MM) when
+                          HYPOMNEMA_TODAY is unset.
   HYPOMNEMA_SESSION_ID    Session id stamped into WAL entries.
   HYPOMNEMA_PROMPT_INJECT "off" = pull-only mode: UserPromptSubmit injects
                           nothing; memory reaches the model through the
@@ -155,20 +135,6 @@ func main() {
 	case "-h", "--help":
 		fmt.Print(usage)
 		return
-	case "dedup":
-		if len(os.Args) < 3 {
-			fmt.Fprint(os.Stderr, usage)
-			os.Exit(2)
-		}
-		switch os.Args[2] {
-		case "check":
-			runDedupCheck(os.Args[3:])
-		default:
-			fmt.Fprintf(os.Stderr, "memoryctl: unknown dedup subcommand %q\n", os.Args[2])
-			os.Exit(2)
-		}
-	case "self-profile":
-		runSelfProfile(os.Args[2:])
 	case "doctor":
 		runDoctor(os.Args[2:])
 	case "wal":
@@ -209,10 +175,6 @@ func main() {
 		runSkillActive(os.Args[2:])
 	case "ab":
 		runAB(os.Args[2:])
-	case "ablate":
-		runAblate(os.Args[2:])
-	case "promote":
-		runPromote(os.Args[2:])
 	case "guard":
 		runGuard(os.Args[2:])
 	case "reindex":
@@ -220,34 +182,6 @@ func main() {
 	default:
 		fmt.Fprintf(os.Stderr, "memoryctl: unknown command %q\n", os.Args[1])
 		os.Exit(2)
-	}
-}
-
-// runSelfProfile regenerates memoryDir/self-profile.md. Fail-safe: any
-// error is silent so session-stop's backgrounded invocation can't leak
-// noise into the user's terminal — matches the bash script's `|| true`
-// posture.
-//
-// Generate is serialised under a dedicated lock (P2.12) so concurrent
-// session-stops cannot clobber each other's writes. The lock file is
-// separate from the WAL lock so profile regen cannot block WAL appends.
-func runSelfProfile(_ []string) {
-	lockPath := filepath.Join(memoryDir(), ".self-profile.lockd")
-	lock, _ := wal.AcquirePath(lockPath, wal.DefaultLockConfig)
-	// Follow the bash script's policy: if the lock cannot be acquired,
-	// run anyway — losing a race is strictly better than skipping the
-	// regen entirely. Release is a no-op on a nil handle.
-	defer lock.Release()
-
-	// v2: content (mistakes/strategies/ambient) comes from native memory, not
-	// memoryDir subdirs. Resolve the merged per-project + global corpus and
-	// pass it to Generate; the WAL + output file still live in memoryDir.
-	files := collectNative(resolveStore("").Store)
-	if err := profile.Generate(memoryDir(), files); err != nil {
-		// Non-zero exit would get swallowed by session-stop's `2>/dev/null &`
-		// anyway; still, propagate for tests that call the binary directly.
-		fmt.Fprintf(os.Stderr, "memoryctl self-profile: %v\n", err)
-		os.Exit(1)
 	}
 }
 
@@ -317,51 +251,4 @@ func runDoctor(args []string) {
 		report.Print(os.Stdout)
 	}
 	os.Exit(report.ExitCode())
-}
-
-// runDedupCheck implements `memoryctl dedup check <file-path>`. The exit
-// code protocol matches bin/memory-dedup.py and the contract hooks/
-// memory-dedup.sh expects:
-//
-//	0 — allow (default), also used for medium-similarity warning
-//	1 — posttool merge happened (legacy Python behaviour; shell wrapper
-//	    treats non-zero non-2 exits as "not blocking")
-//	2 — pretool block; wrapper propagates stderr message to Claude
-func runDedupCheck(args []string) {
-	if len(args) < 1 {
-		os.Exit(0) // graceful no-op; matches Python policy
-	}
-
-	// All human-readable messages go to stderr: block messages need to
-	// surface through the shell wrapper (which captures 2>&1 and re-emits
-	// on stderr for exit 2), and candidate warnings are informational —
-	// stderr keeps stdout clean for any future scripted consumer of this
-	// subcommand.
-	// v2: the dedup comparison corpus is the native mistake store, not a
-	// MemoryDir/mistakes/ subdir. Resolve the merged per-project + global
-	// native corpus; on failure pass nil (dedup degrades to Allow).
-	files := collectNative(resolveStore("").Store)
-	opts := dedup.Options{
-		MemoryDir: memoryDir(),
-		Files:     files,
-		SessionID: os.Getenv("HYPOMNEMA_SESSION_ID"),
-		Today:     os.Getenv("HYPOMNEMA_TODAY"),
-		Stdin:     os.Stdin,
-		Out:       os.Stderr,
-	}
-
-	decision, err := dedup.Run(args[0], opts)
-	if err != nil {
-		// Any internal error is a no-op per hook fail-safe contract.
-		os.Exit(0)
-	}
-
-	switch decision {
-	case dedup.Blocked:
-		os.Exit(2)
-	case dedup.Merged:
-		os.Exit(1)
-	default:
-		os.Exit(0)
-	}
 }

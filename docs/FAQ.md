@@ -20,7 +20,7 @@ git clone git@github.com:you/private-memory.git ~/.claude/memory-global
 ```
 
 Do **not** version the runtime metadata under `~/.claude/memory/` (`.wal`,
-`.sidecar.db`, `.runtime/`, `self-profile.md`) — it is per-machine and the
+`.sidecar.db`, `.runtime/`) — it is per-machine and the
 sidecar is rebuildable with `memoryctl sidecar rebuild`. Per-project facts
 live under `~/.claude/projects/<slug>/memory/` and can be versioned the same
 way if you want them portable.
@@ -80,10 +80,11 @@ directory. In practice:
 
 No. Both recency and decay are tracked by the **sidecar**, not in
 frontmatter, but from different columns. The ranker's recency term uses
-`last_useful` — the date of the latest `trigger-useful` event for that fact
+`last_useful` — the date of the latest `cite-useful` event for that fact
 (a `recall` delivery does not set it by itself; the fact still has to be
-cited as useful at close), falling back to frontmatter `created` if the fact
-has never been useful yet. Decay (staleness) still uses `last_injected`
+cited as useful at close), falling back to frontmatter `created` (or, absent
+that, the date of Claude Code's `modified` stamp) if the fact has never been
+useful yet. Decay (staleness) still uses `last_injected`
 (from WAL `inject` events) — a fact the ranker stops injecting ages out on
 its own. You never hand-edit either column — they are sidecar-managed like
 `ref_count` and `effectiveness`.
@@ -114,7 +115,7 @@ every `active`/`pinned` fact in scope is a ranking candidate regardless of its
 
 It is Go-primary by design. The `memoryctl` binary is the mandatory engine —
 it does all the real work: ranking and injection, WAL accounting, Bayesian
-effectiveness, decay, the secrets gate, dedup, self-profile, `doctor`. The eight
+effectiveness, decay, the secrets gate, `doctor`. The eight
 files in `~/.claude/hooks/v2/` are ~5-line bash shims that read the hook
 envelope on stdin and pipe it to `memoryctl`; they contain no logic. This is
 the reverse of v1, where bash carried the hot paths and Go was an optional
@@ -129,9 +130,10 @@ rank normally with no special handling.
 ## How do I measure what hypomnema actually saved me?
 
 ```bash
-memoryctl self-profile
+memoryctl doctor         # citation_signal: sessions that cited injected facts
+memoryctl sidecar show   # per-fact ref_count and effectiveness
+memoryctl ab             # WAL replay: ranked top-K vs a baseline
 ```
 
-Generates `~/.claude/memory/self-profile.md` with effectiveness scores,
-calibration metrics, and weak spots from the WAL. The Stop hook also
-regenerates it automatically each session.
+Usefulness comes only from `<cc-memory>` citations, so effectiveness and
+`doctor`'s `citation_signal` are the measure of what memory actually changed.

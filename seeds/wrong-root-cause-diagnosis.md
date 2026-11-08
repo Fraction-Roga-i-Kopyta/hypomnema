@@ -11,22 +11,6 @@ keywords: [debugging, hypothesis, root, cause, diagnosis, fix, cascade]
 domains: [general]
 root-cause: "Claude jumps to the first hypothesis without enumerating possible causes, leading to cascading failed fixes"
 prevention: "List 2-3 possible root causes before attempting the first fix; when a fix fails, return to the list instead of generating a new hypothesis on the fly"
-evidence:
-  - "root cause"
-  - "not just the first hypothesis"
-  - "possible causes"
-  - "three possibilities"
-  - "two possibilities"
-  - "let me enumerate"
-  - "my candidates"
-  - "i'll rank"
-  - "my take"
-  - "my vote"
-  - "the list of"
-  - "before fixing"
-  - "shortlist"
-  - "option a"
-  - "option b"
 ---
 
 # wrong-root-cause-diagnosis
@@ -63,16 +47,11 @@ real cause harder to spot.
 Usefulness comes from an explicit `<cc-memory filenames="…">` citation of
 this fact in a session where it was actually delivered — wrap the sentence
 that used it and the session-stop hook emits `cite-useful`; deliver it and
-stay silent and it emits `cite-silent` instead. The `evidence:` phrases in
-this frontmatter no longer drive that signal; they feed only the `ablate`
-holdout observation for a session where this rule was withheld. A recurring
-`cite-silent` for this rule, paired with a repeat of the same mistake, is
-the observable failure counter.
+stay silent and it emits `cite-silent` instead. A recurring `cite-silent`
+for this rule, paired with a repeat of the same mistake, is the observable
+failure counter.
 
 ## Customising for your language
-The evidence phrases above are English-biased — they match the way a
-native English speaker enumerates alternatives ("let me enumerate",
-"possible causes", "my candidates"). If you work with Claude in another
-language, add phrases matching your natural enumeration style. Claude
-will propose them after the first session where this rule silently
-fails. See `docs/CONFIGURATION.md` for more on evidence authoring.
+The keywords above are English. If you work with Claude in another
+language, add keywords in it too — keyword overlap is the main ranking
+signal, and the tokenizer is Unicode-aware.

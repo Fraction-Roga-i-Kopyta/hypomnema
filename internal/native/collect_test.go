@@ -7,8 +7,8 @@ import (
 )
 
 // Collect is the single place the rest of v2 reads "all native memory for this
-// project": the per-project store plus the global store. doctor, self-profile,
-// dedup, inject, and close all depend on it rather than re-deriving the layout.
+// project": the per-project store plus the global store. doctor, inject,
+// and close all depend on it rather than re-deriving the layout.
 func TestCollect_MergesProjectAndGlobal(t *testing.T) {
 	home := t.TempDir()
 	claudeHome := filepath.Join(home, ".claude")

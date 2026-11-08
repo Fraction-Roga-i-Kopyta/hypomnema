@@ -32,7 +32,7 @@ v0.8 is backward compatible. Existing memory files continue to work without edit
 
 ### Optional cleanup
 
-- Delete legacy explicit `evidence:` blocks added as Cyrillic workaround (now redundant — but harmless if kept).
+- Delete legacy explicit `evidence:` blocks added as Cyrillic workaround (now redundant — but harmless if kept; current releases ignore `evidence:` entirely).
 - If you customized any hook, re-apply your patch on top of the new lib/ structure (see `git log -p` for the v0.8 refactor commits).
 
 ### Rollback
@@ -91,6 +91,11 @@ git checkout v0.8.2
 Memory files and WAL are unaffected.
 
 ## v0.9 → v0.10
+
+> **History.** Everything below about fuzzy dedup is gone now: v2.0 stopped
+> wiring dedup to any hook, and the `memoryctl dedup check` verb and the
+> `internal/fuzzy` matcher were removed after v2.17. There is no dedup path
+> to restore.
 
 ### Required actions: **yes** if you had fuzzy dedup working
 
@@ -326,12 +331,11 @@ signals, not pattern-match gates.
 **Frontmatter compatibility:** `triggers:` / `trigger:` fields in
 existing memory files are ignored by the ranker (not an error) — it scores
 on keyword overlap against name/description/body, so those two fields
-provide no lift and do not need to be removed. `evidence:` is **not**
-ignored, but as of v2.14 it no longer drives usefulness: the close hook
-(`internal/closer`) classifies each injected-and-delivered fact as
-`cite-useful` vs `cite-silent` from an explicit `<cc-memory
-filenames="…">` citation in the assistant's own text, and that
-classification feeds effectiveness scoring. `evidence:` now feeds only the
-`ablate` holdout observation for a fact withheld this session. Keep
-`evidence:` short regardless — long lists rarely match verbatim for that
-comparison.
+provide no lift and do not need to be removed. `evidence:` is ignored as
+well: the close hook (`internal/closer`) classifies each
+injected-and-delivered fact as `cite-useful` vs `cite-silent` only from an
+explicit `<cc-memory filenames="…">` citation in the assistant's own text,
+and that classification feeds effectiveness scoring. (From v2.14 through
+v2.17 `evidence:` still fed the `memoryctl ablate` holdout observation;
+ablation has since been removed.) Existing `evidence:` lists are harmless
+and need not be removed.
