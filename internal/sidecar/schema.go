@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS memory (
   project       TEXT,
   domains       TEXT,
   created       TEXT,
-  modified      TEXT,
+  fresh         TEXT,
   last_injected TEXT,
   last_useful   TEXT,
   ref_count     INTEGER NOT NULL DEFAULT 0,

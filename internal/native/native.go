@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // MemFile is one native memory file: minimal frontmatter + body + identity.
@@ -209,20 +210,22 @@ func splitFrontmatter(s string) (map[string]string, string) {
 	return fm, strings.TrimSpace(strings.Join(lines[end+1:], "\n"))
 }
 
-// stampDate returns the YYYY-MM-DD prefix of an ISO date or timestamp, or ""
-// when v does not start with one.
+// stampDate returns the local-zone date (YYYY-MM-DD) of an RFC 3339
+// timestamp — Claude Code writes `modified` in UTC, and dates are compared
+// with local created/today — or the YYYY-MM-DD prefix of anything else that
+// starts with a date; "" otherwise.
 func stampDate(v string) string {
 	v = strings.TrimSpace(v)
+	if ts, err := time.Parse(time.RFC3339Nano, v); err == nil {
+		return ts.In(time.Local).Format("2006-01-02")
+	}
 	if len(v) < 10 {
 		return ""
 	}
-	d := v[:10]
-	for i, c := range d {
-		if (i == 4 || i == 7) != (c == '-') || (c != '-' && (c < '0' || c > '9')) {
-			return ""
-		}
+	if _, err := time.Parse("2006-01-02", v[:10]); err != nil {
+		return ""
 	}
-	return d
+	return v[:10]
 }
 
 // FreshnessDate is a fact's latest known date: the later of its created and
