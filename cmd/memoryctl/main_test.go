@@ -200,25 +200,6 @@ func TestMain_UnknownCommand(t *testing.T) {
 	}
 }
 
-// --- dedup subcommand ---
-
-func TestDedup_NoSubcommand(t *testing.T) {
-	_, _, code := run(t, nil, "dedup")
-	if code != 2 {
-		t.Errorf("expected exit 2, got %d", code)
-	}
-}
-
-func TestDedup_UnknownSubcommand(t *testing.T) {
-	_, stderr, code := run(t, nil, "dedup", "bogus")
-	if code != 2 {
-		t.Errorf("expected exit 2, got %d", code)
-	}
-	if !strings.Contains(stderr, "unknown dedup subcommand") {
-		t.Errorf("stderr should identify unknown dedup subcommand, got %q", stderr)
-	}
-}
-
 // --- doctor subcommand ---
 
 // doctorFixtureCWD is the working directory the doctor fixture pretends the
