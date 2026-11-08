@@ -1,6 +1,12 @@
 # Changelog
 
-## [Unreleased]
+## [3.0.0] — 2026-11-09
+
+**Breaking:** the `ablate`, `promote`, `self-profile` and `dedup check`
+commands are gone. Upgrading: `make install` (no new hooks), then
+`memoryctl wal compact --dry-run` and `memoryctl wal compact`; the sidecar
+rebuilds itself on first open (schema v7). Pin a project card that must
+never age (`status: pinned`), and keep one `continuity.md` per project.
 
 ### Removed
 
