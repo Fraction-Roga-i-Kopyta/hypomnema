@@ -11,18 +11,12 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/dedup"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/doctor"
 )
 
 const usage = `memoryctl — hypomnema memory CLI
 
 Usage:
-  memoryctl dedup check <file-path>
-      Fuzzy dedup for mistake files. Pretool (file absent) reads content
-      from stdin; posttool (file present) reads it from disk. Exits 2 on
-      ≥80% similarity in pretool mode, 1 on merge in posttool mode, 0
-      otherwise. Drop-in replacement for bin/memory-dedup.py.
   memoryctl doctor [--json]
       On-demand health check of the install: claude_dir, hook registrations
       in settings.json, broken symlinks in hooks/ and bin/, memoryctl
@@ -138,18 +132,6 @@ func main() {
 	case "-h", "--help":
 		fmt.Print(usage)
 		return
-	case "dedup":
-		if len(os.Args) < 3 {
-			fmt.Fprint(os.Stderr, usage)
-			os.Exit(2)
-		}
-		switch os.Args[2] {
-		case "check":
-			runDedupCheck(os.Args[3:])
-		default:
-			fmt.Fprintf(os.Stderr, "memoryctl: unknown dedup subcommand %q\n", os.Args[2])
-			os.Exit(2)
-		}
 	case "doctor":
 		runDoctor(os.Args[2:])
 	case "wal":
@@ -266,51 +248,4 @@ func runDoctor(args []string) {
 		report.Print(os.Stdout)
 	}
 	os.Exit(report.ExitCode())
-}
-
-// runDedupCheck implements `memoryctl dedup check <file-path>`. The exit
-// code protocol matches bin/memory-dedup.py and the contract hooks/
-// memory-dedup.sh expects:
-//
-//	0 — allow (default), also used for medium-similarity warning
-//	1 — posttool merge happened (legacy Python behaviour; shell wrapper
-//	    treats non-zero non-2 exits as "not blocking")
-//	2 — pretool block; wrapper propagates stderr message to Claude
-func runDedupCheck(args []string) {
-	if len(args) < 1 {
-		os.Exit(0) // graceful no-op; matches Python policy
-	}
-
-	// All human-readable messages go to stderr: block messages need to
-	// surface through the shell wrapper (which captures 2>&1 and re-emits
-	// on stderr for exit 2), and candidate warnings are informational —
-	// stderr keeps stdout clean for any future scripted consumer of this
-	// subcommand.
-	// v2: the dedup comparison corpus is the native mistake store, not a
-	// MemoryDir/mistakes/ subdir. Resolve the merged per-project + global
-	// native corpus; on failure pass nil (dedup degrades to Allow).
-	files := collectNative(resolveStore("").Store)
-	opts := dedup.Options{
-		MemoryDir: memoryDir(),
-		Files:     files,
-		SessionID: os.Getenv("HYPOMNEMA_SESSION_ID"),
-		Today:     os.Getenv("HYPOMNEMA_TODAY"),
-		Stdin:     os.Stdin,
-		Out:       os.Stderr,
-	}
-
-	decision, err := dedup.Run(args[0], opts)
-	if err != nil {
-		// Any internal error is a no-op per hook fail-safe contract.
-		os.Exit(0)
-	}
-
-	switch decision {
-	case dedup.Blocked:
-		os.Exit(2)
-	case dedup.Merged:
-		os.Exit(1)
-	default:
-		os.Exit(0)
-	}
 }
