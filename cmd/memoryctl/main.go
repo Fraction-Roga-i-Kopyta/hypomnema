@@ -68,12 +68,6 @@ Usage:
       "recall" WAL event for the delivered fact and unions it into the
       session's injected list. Includes stale facts (marked [stale]) —
       recalling one revives it.
-  memoryctl promote
-      Report-only promotion ladder: mistakes that recurred despite memory
-      (-> hook/lint/test), facts useful in every recent session (-> CLAUDE.md),
-      internalized ablation survivors and never-corroborated candidates
-      (-> retire). Prints evidence + the closing retire command; mutates
-      nothing. Exit 0 always (cron-safe).
   memoryctl retire <slug> [--reason "..."] [--superseded-by <ref>]
       Retire a fact: move its file to the store's .archive/, stamp tombstone
       frontmatter (retired/retire-reason/superseded-by), emit a "retire" WAL
@@ -203,8 +197,6 @@ func main() {
 		runSkillActive(os.Args[2:])
 	case "ab":
 		runAB(os.Args[2:])
-	case "promote":
-		runPromote(os.Args[2:])
 	case "guard":
 		runGuard(os.Args[2:])
 	case "reindex":
