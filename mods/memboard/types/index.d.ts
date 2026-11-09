@@ -107,6 +107,9 @@ export type TabCache = { report: StatsReport; fetchedAt: number }
 /** The drill-down's report belongs to one project tag. */
 export type DrillCache = TabCache & { tag: string }
 
+/** The fact card's data for `key`; `fact` is null while loading or when it failed. */
+export type CardState = { key: FactKey; fact: FactCount | null; error: string | null }
+
 declare module 'claude-code' {
   interface PluginState {
     memboard: {
@@ -137,6 +140,12 @@ declare module 'claude-code' {
       limits: Shaped<Record<string, number>>
       /** The fact a row press chose (the card opens from it). */
       selected: Shaped<FactKey | null>
+      /** The selected fact's `stats --scope fact` answer (or why it has none). */
+      card: Shaped<CardState | null>
+      /** `'archive'` while the archive waits for y / n. */
+      confirm: Shaped<'archive' | null>
+      /** The fact just archived: its card is a stub with Undo. */
+      lastArchived: Shaped<FactKey | null>
     }
   }
 }

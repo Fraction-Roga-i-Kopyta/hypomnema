@@ -1,5 +1,5 @@
 import type { FactKey, FactRef, ProjectStats } from '../../types'
-import { bar, count, fit, joinFit, padEnd, padStart } from '../format'
+import { bar, count, fit, joinFit, padEnd, padStart, rowKey } from '../format'
 import { DEFAULT_LIMIT, FactRow, taskOf, TriageBlock } from './rows'
 import type { Els } from './session'
 
@@ -12,14 +12,17 @@ type Props = {
   limits: Record<string, number>
   onOpen: (fact: FactKey) => void
   onMore: (list: string) => void
+  /** Queue rows: mark the fact's open task done. */
+  onDone?: (fact: FactKey) => void
 }
 
 const PROBLEMS = 3
+const DONE_WIDTH = 4
 const DAY_PREFIX = 5 + 1 + 4 + 1 + 3 + 1 + 6 + 1
 
 /** One project: size, the last 7 days, composition, health, triage, queue. */
-export function ProjectView({ ui, width, stats, scope, limits, onOpen, onMore }: Props) {
-  const { Box, Text } = ui
+export function ProjectView({ ui, width, stats, scope, limits, onOpen, onMore, onDone }: Props) {
+  const { Box, Text, Button } = ui
   const limit = (list: string) => limits[list] ?? DEFAULT_LIMIT
   const peak = Math.max(1, ...stats.days.map(d => d.injected))
   const barWidth = Math.min(12, width - DAY_PREFIX)
@@ -102,7 +105,14 @@ export function ProjectView({ ui, width, stats, scope, limits, onOpen, onMore }:
           return (
             <Box flexDirection="column">
               <FactRow ui={ui} fact={fact} width={width} list={queueList} onOpen={onOpen} />
-              {task !== undefined && <Text dimColor>{fit(`  ↳ ${task}`, width)}</Text>}
+              {task !== undefined && (
+                <Box flexDirection="row" gap={1}>
+                  <Text dimColor>{fit(`  ↳ ${task}`, Math.max(1, width - DONE_WIDTH - 1))}</Text>
+                  <Button key={`done:${rowKey(queueList, fact)}`} plain onPress={() => onDone?.(fact)}>
+                    Done
+                  </Button>
+                </Box>
+              )}
             </Box>
           )
         })}

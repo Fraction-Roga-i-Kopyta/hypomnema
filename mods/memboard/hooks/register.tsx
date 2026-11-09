@@ -2,10 +2,13 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type { FactKey, Tab } from '../types'
+import { act } from './actions'
+import type { Action } from './actions'
 import { fit, statusLine } from './format'
 import { locate, stats } from './memoryctl'
 import { parseInjected } from './turn'
 import { AllView } from './views/all'
+import { ArchivedStub, FactCard } from './views/card'
 import { ProjectView } from './views/project'
 import { DEFAULT_LIMIT, MORE_STEP } from './views/rows'
 import { SessionView } from './views/session'
@@ -44,6 +47,71 @@ const drillCache = atom({ plugin: 'memboard', key: 'drillCache' } as const, null
 const tabError = atom({ plugin: 'memboard', key: 'tabError' } as const, null, { shape: 'tabError-2' })
 const limits = atom({ plugin: 'memboard', key: 'limits' } as const, {}, { shape: 'limits-1' })
 const selected = atom({ plugin: 'memboard', key: 'selected' } as const, null, { shape: 'selected-1' })
+const card = atom({ plugin: 'memboard', key: 'card' } as const, null, { shape: 'card-1' })
+const confirm = atom({ plugin: 'memboard', key: 'confirm' } as const, null, { shape: 'confirm-1' })
+const lastArchived = atom({ plugin: 'memboard', key: 'lastArchived' } as const, null, { shape: 'archived-1' })
+
+const sameKey = (a: FactKey | null, b: FactKey | null) =>
+  a !== null && b !== null && a.project === b.project && a.slug === b.slug
+
+/** `stats --scope fact` for `key` into the card; a failure is the card's own line. */
+async function loadCard($: EngineInterface, key: FactKey): Promise<void> {
+  const path = await read($, bin)
+  const sid = await read($, sessionId)
+  if (path === null || sid === null) return
+  const r = await stats($, path, ['--scope', 'fact', '--project', key.project, key.slug], sid)
+  // The person went back, or opened another fact, while this ran.
+  if (!sameKey(await read($, selected), key)) return
+  const fact = r.ok ? r.report.fact : undefined
+  if (!r.ok || fact === undefined) {
+    const error = r.ok ? 'memoryctl stats sent no fact' : r.error
+    await update($, card, () => ({ key, fact: null, error }))
+    return
+  }
+  await update($, card, () => ({ key, fact, error: null }))
+}
+
+async function selectFact($: EngineInterface, key: FactKey): Promise<void> {
+  await update($, lastArchived, () => null)
+  await update($, confirm, () => null)
+  await update($, card, () => null)
+  await update($, selected, () => key)
+  await loadCard($, key)
+}
+
+async function leaveCard($: EngineInterface): Promise<void> {
+  await update($, selected, () => null)
+  await update($, card, () => null)
+  await update($, confirm, () => null)
+  await update($, lastArchived, () => null)
+}
+
+/**
+ * One action on a fact: the toast says what happened, then what the person
+ * sees is fetched again (a fact an archive removed is not fetched: the stub
+ * stands for it). A failure refetches too, so nothing stale stays on screen.
+ */
+async function runAction($: EngineInterface, action: Action, key: FactKey): Promise<void> {
+  const path = await read($, bin)
+  const sid = await read($, sessionId)
+  if (path === null || sid === null) return
+  await update($, confirm, () => null)
+  const r = await act($, path, sid, action, key)
+  $.ui.toast(r.message)
+  const archived = r.ok && action === 'archive'
+  const restored = r.ok && action === 'revive'
+  if (archived) await update($, lastArchived, () => key)
+  if (restored) await update($, lastArchived, () => null)
+  try {
+    if (!archived && sameKey(await read($, selected), key) && !sameKey(await read($, lastArchived), key)) {
+      await loadCard($, key)
+    }
+    await loadTab($, true)
+    await refresh($)
+  } catch {
+    // The toast said what happened; the next tick refreshes.
+  }
+}
 
 /** `stats --scope session` into state and the status line; any failure clears the line. */
 async function refresh($: EngineInterface): Promise<void> {
@@ -285,7 +353,61 @@ export const register: Register = on => {
     }
     const els = { Box, Text, Button }
     const lim = await read($, limits)
-    const onOpen = (fact: FactKey) => void update($, selected, () => fact)
+    const onOpen = (fact: FactKey) => {
+      selectFact($, fact).catch(() => undefined)
+    }
+    const onDone = (fact: FactKey) => {
+      runAction($, 'done', fact).catch(() => undefined)
+    }
+    const picked = await read($, selected)
+    if (picked !== null) {
+      const cardState = await read($, card)
+      const archivedKey = await read($, lastArchived)
+      const back = () => {
+        leaveCard($).catch(() => undefined)
+      }
+      const shown = cardState !== null && sameKey(cardState.key, picked) ? cardState : null
+      if (sameKey(archivedKey, picked)) {
+        return (
+          <ArchivedStub
+            ui={els}
+            width={width}
+            name={shown?.fact?.name || picked.slug}
+            onUndo={() => {
+              runAction($, 'revive', picked).catch(() => undefined)
+            }}
+            onBack={back}
+          />
+        )
+      }
+      if (shown?.fact == null) {
+        return (
+          <Box flexDirection="column">
+            <Button key="back" label="b Back" hotkey="b" onPress={back} />
+            {shown?.error != null ? (
+              <Text color="warning">{fit(shown.error, width)}</Text>
+            ) : (
+              <Text dimColor>{fit('Loading…', width)}</Text>
+            )}
+          </Box>
+        )
+      }
+      return (
+        <FactCard
+          ui={els}
+          width={width}
+          fact={shown.fact}
+          sessionProject={(await read($, sessionProject)) ?? ''}
+          confirm={await read($, confirm)}
+          onAct={action => {
+            runAction($, action, picked).catch(() => undefined)
+          }}
+          onAsk={() => void update($, confirm, () => 'archive')}
+          onCancel={() => void update($, confirm, () => null)}
+          onBack={back}
+        />
+      )
+    }
     const onMore = (list: string) => void update($, limits, l => ({ ...l, [list]: (l[list] ?? DEFAULT_LIMIT) + MORE_STEP }))
     const tag = await read($, drill)
     const failure = await read($, tabError)
@@ -315,6 +437,7 @@ export const register: Register = on => {
             scope="project"
             limits={lim}
             onOpen={onOpen}
+            onDone={onDone}
             onMore={onMore}
           />
         )
@@ -331,6 +454,7 @@ export const register: Register = on => {
               scope="drill"
               limits={lim}
               onOpen={onOpen}
+              onDone={onDone}
               onMore={onMore}
             />
           )}
@@ -356,8 +480,7 @@ export const register: Register = on => {
           session={await read($, session)}
           turn={await read($, turn)}
           sessionProject={await read($, sessionProject)}
-          // Rows hold the focus and keys already; the fact card opens from here.
-          onOpen={() => undefined}
+          onOpen={onOpen}
         />
       ) : (
         <Text dimColor>{fit(`${name}: not available yet.`, width)}</Text>
