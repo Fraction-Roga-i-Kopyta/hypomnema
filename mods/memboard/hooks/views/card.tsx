@@ -50,7 +50,7 @@ export function FactCard({
   const { Box, Text, Button } = ui
   const name = fact.name === '' ? fact.slug : fact.name
   const field = (label: string, value: string) => (
-    <Text>{fit(`${label.padEnd(LABEL)}${value === '' ? '-' : value}`, width)}</Text>
+    <Text color="text">{fit(`${label.padEnd(LABEL)}${value === '' ? '-' : value}`, width)}</Text>
   )
   const hasTask = fact.marks.some(m => m.startsWith('task:'))
   const canHide = fact.project === 'global' || fact.project === sessionProject
@@ -64,7 +64,7 @@ export function FactCard({
 
   return (
     <Box flexDirection="column">
-      <Text bold>{fit(name, width)}</Text>
+      <Text bold color="text">{fit(name, width)}</Text>
       {field('type', fact.type)}
       {field('status', fact.status)}
       {field('store', fact.display)}
@@ -80,7 +80,7 @@ export function FactCard({
       {markLines.length === 0
         ? field('marks', '')
         : markLines.map((line, i) => (
-            <Text>{fit(`${i === 0 ? 'marks'.padEnd(LABEL) : ' '.repeat(LABEL)}${line}`, width)}</Text>
+            <Text color="text">{fit(`${i === 0 ? 'marks'.padEnd(LABEL) : ' '.repeat(LABEL)}${line}`, width)}</Text>
           ))}
       <Box flexDirection="column" marginTop={1}>
         {confirm === 'archive' ? (
@@ -134,7 +134,7 @@ export function ArchivedStub({ ui, width, name, onUndo, onBack }: StubProps) {
   const { Box, Text, Button } = ui
   return (
     <Box flexDirection="column">
-      <Text>{fit(`archived: ${name}`, width)}</Text>
+      <Text color="text">{fit(`archived: ${name}`, width)}</Text>
       <Box flexDirection="row" gap={1}>
         <Button key="undo" label="u Undo" hotkey="u" onPress={onUndo} />
         <Button key="back" label="b Back" hotkey="b" onPress={onBack} />

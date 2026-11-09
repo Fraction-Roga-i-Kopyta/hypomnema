@@ -24,7 +24,7 @@ export function AllView({ ui, width, stats, limits, onOpen, onMore, onDrill }: P
   const stage = (label: string, n: number) => {
     const share = funnel.stored > 0 ? n / funnel.stored : 0
     return (
-      <Text>
+      <Text color={label === 'Useful 7d' ? 'success' : 'text'}>
         {fit(`${padEnd(label, 11)} ${padStart(String(n), 7)}${barWidth > 0 ? ` ${bar(share, barWidth)}` : ''}`, width)}
       </Text>
     )
@@ -57,7 +57,7 @@ export function AllView({ ui, width, stats, limits, onOpen, onMore, onDrill }: P
 
   return (
     <Box flexDirection="column">
-      <Text bold>{fit(`All stores (${stats.stores}) · ${stats.facts} facts · 7 days`, width)}</Text>
+      <Text bold color="text">{fit(`All stores (${stats.stores}) · ${stats.facts} facts · 7 days`, width)}</Text>
       <Box flexDirection="column" marginTop={1}>
         {stage('Stored', funnel.stored)}
         {stage('Injected 7d', funnel.injected_7d)}
@@ -65,24 +65,26 @@ export function AllView({ ui, width, stats, limits, onOpen, onMore, onDrill }: P
         <Text dimColor>{fit(`not injected 30d: ${funnel.not_injected_30d}`, width)}</Text>
       </Box>
       <Box flexDirection="column" marginTop={1}>
-        <Text bold>{fit(`${padEnd('Projects', nameWidth)} ${padStart('facts', 6)} ${padStart('✓7d', 5)}`, width)}</Text>
+        <Text bold color="text">{fit(`${padEnd('Projects', nameWidth)} ${padStart('facts', 6)} ${padStart('✓7d', 5)}`, width)}</Text>
         {stats.projects.slice(0, shown).map(p => (
           <Button key={rowKey('proj', { project: p.project, slug: '' })} plain onPress={() => onDrill(p.project)}>
-            {fit(
-              `${padEnd(p.display, nameWidth)} ${padStart(String(p.facts), 6)} ${padStart(String(p.useful_7d), 5)}`,
-              width,
-            )}
+            <Text color="text">
+              {fit(
+                `${padEnd(p.display, nameWidth)} ${padStart(String(p.facts), 6)} ${padStart(String(p.useful_7d), 5)}`,
+                width,
+              )}
+            </Text>
           </Button>
         ))}
         {hidden > 0 && (
           <Button key="more:projects" plain onPress={() => onMore('projects')}>
-            {fit(`… ${hidden} more`, width)}
+            <Text color="text">{fit(`… ${hidden} more`, width)}</Text>
           </Button>
         )}
       </Box>
       <Box flexDirection="column" marginTop={1}>
         {typeLines.map((line, i) => (
-          <Text>{fit(`${i === 0 ? 'Types ' : '      '}${line}`, width)}</Text>
+          <Text color="text">{fit(`${i === 0 ? 'Types ' : '      '}${line}`, width)}</Text>
         ))}
       </Box>
       {block('Noisy', 'noisy', stats.triage.noisy)}

@@ -38,7 +38,7 @@ export function FactRow({ ui, fact, width, list, qualify, onOpen }: RowProps) {
       dimColor={fact.path === ''}
       onPress={() => onOpen({ project: fact.project, slug: fact.slug })}
     >
-      {`${padEnd(label, nameWidth)} `}
+      <Text color="text">{`${padEnd(label, nameWidth)} `}</Text>
       <Text dimColor>{tail}</Text>
     </Button>
   )
@@ -63,14 +63,14 @@ export function TriageBlock({ ui, title, facts, limit, width, list, qualify, onO
   const hidden = facts.length - limit
   return (
     <Box flexDirection="column" marginTop={1}>
-      <Text bold>{fit(`${title} (${facts.length})`, width)}</Text>
+      <Text bold color="text">{fit(`${title} (${facts.length})`, width)}</Text>
       {facts.length === 0 && <Text dimColor>none</Text>}
       {facts.slice(0, limit).map(fact => (
         <FactRow ui={ui} fact={fact} width={width} list={list} qualify={qualify} onOpen={onOpen} />
       ))}
       {hidden > 0 && (
         <Button key={`more:${list}`} plain onPress={() => onMore(list)}>
-          {fit(`… ${hidden} more`, width)}
+          <Text color="text">{fit(`… ${hidden} more`, width)}</Text>
         </Button>
       )}
     </Box>

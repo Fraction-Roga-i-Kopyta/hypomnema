@@ -380,7 +380,7 @@ export const register: Register = on => {
       return (
         <Box flexDirection="column">
           {wrapWords(HINT, width).map(line => (
-            <Text>{line}</Text>
+            <Text color="text">{line}</Text>
           ))}
         </Box>
       )
@@ -547,7 +547,9 @@ export const register: Register = on => {
             />
           ))}
         </Box>
-        <Text dimColor>{rule(name, width)}</Text>
+        <Text bold color="claude">
+          {rule(name, width)}
+        </Text>
         {why !== null && <Text color="warning">{fit(why, width)}</Text>}
         {body}
       </Box>

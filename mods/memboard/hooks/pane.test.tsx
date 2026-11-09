@@ -389,6 +389,20 @@ test('hotkey 2 switches tab', async ($, on) => {
   }
 })
 
+test('active tab name and useful count carry theme color and bold', async ($, on) => {
+  const w = world(on)
+  await start($, w)
+
+  const ui = await $.ui.mount({ ...pane(52), surface: 'terminal' })
+  const rule = await ui.find({ type: 'Text', text: /^─ Session ─/ })
+  expect(rule?.props.color).toBe('claude')
+  expect(rule?.props.bold).toBe(true)
+  const useful = await ui.find({ type: 'Text', text: /^✓ useful/ })
+  expect(useful?.props.color).toBe('success')
+  expect(useful?.props.bold).toBe(true)
+  await ui.unmount()
+})
+
 test('session rows fit 40 columns', async ($, on) => {
   const long = 'an-extremely-long-fact-name-that-will-never-fit-into-a-narrow-pane'
   const w = world(on, {

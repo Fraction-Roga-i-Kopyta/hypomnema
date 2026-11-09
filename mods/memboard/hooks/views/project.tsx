@@ -58,7 +58,7 @@ export function ProjectView({ ui, width, stats, scope, limits, onOpen, onMore, o
   const queueList = `${scope}-queue`
   return (
     <Box flexDirection="column">
-      <Text bold>{fit(`${stats.display}  ${stats.visible} visible`, width)}</Text>
+      <Text bold color="text">{fit(`${stats.display}  ${stats.visible} visible`, width)}</Text>
       <Text dimColor>{fit(`${stats.local} own + ${stats.global} global`, width)}</Text>
       {stats.project === GLOBAL ? (
         // Sessions belong to projects: the global store's days would only ever read zero.
@@ -67,11 +67,11 @@ export function ProjectView({ ui, width, stats, scope, limits, onOpen, onMore, o
         </Box>
       ) : (
         <Box flexDirection="column" marginTop={1}>
-          <Text dimColor>
+          <Text bold color="text">
             {fit(`${padEnd('Days', 5)} ${padStart('inj', 4)} ${padStart('✓', 3)} ${padStart('silent', 6)}`, width)}
           </Text>
           {stats.days.map(d => (
-            <Text>
+            <Text color="text">
               {fit(
                 `${d.date.slice(5)} ${padStart(String(d.injected), 4)} ${padStart(String(d.useful), 3)} ${padStart(
                   String(d.silent),
@@ -85,13 +85,17 @@ export function ProjectView({ ui, width, stats, scope, limits, onOpen, onMore, o
       )}
       <Box flexDirection="column" marginTop={1}>
         {mix.map((line, i) => (
-          <Text>{fit(`${i === 0 ? 'Mix  ' : '     '}${line}`, width)}</Text>
+          <Text color="text">{fit(`${i === 0 ? 'Mix  ' : '     '}${line}`, width)}</Text>
         ))}
-        <Text>{fit(`candidates ${stats.candidates} · stale ${stats.stale} · pinned ${stats.pinned}`, width)}</Text>
+        <Text color="text">{fit(`candidates ${stats.candidates} · stale ${stats.stale} · pinned ${stats.pinned}`, width)}</Text>
       </Box>
       <Box flexDirection="column" marginTop={1}>
         <Box flexDirection="row" gap={1}>
-          {showLabel && <Text bold>Health</Text>}
+          {showLabel && (
+            <Text bold color="text">
+              Health
+            </Text>
+          )}
           <Text color="success">{fit(parts[0] ?? '', cell)}</Text>
           <Text color="warning">{fit(parts[1] ?? '', cell)}</Text>
           <Text color="error">{fit(parts[2] ?? '', cell)}</Text>
@@ -107,7 +111,7 @@ export function ProjectView({ ui, width, stats, scope, limits, onOpen, onMore, o
       {block('Candidates', 'cand', stats.triage.candidates)}
       {block('Stale', 'stale', stats.triage.stale)}
       <Box flexDirection="column" marginTop={1}>
-        <Text bold>{fit(`Queue (${count(stats.queue.length, 'fact')})`, width)}</Text>
+        <Text bold color="text">{fit(`Queue (${count(stats.queue.length, 'fact')})`, width)}</Text>
         {stats.queue.length === 0 && <Text dimColor>nothing queued</Text>}
         {stats.queue.slice(0, limit(queueList)).map(fact => {
           const task = taskOf(fact)
@@ -118,7 +122,7 @@ export function ProjectView({ ui, width, stats, scope, limits, onOpen, onMore, o
                 <Box flexDirection="row" gap={1}>
                   <Text dimColor>{fit(`  ↳ ${task}`, Math.max(1, width - DONE_WIDTH - 1))}</Text>
                   <Button key={`done:${rowKey(queueList, fact)}`} plain onPress={() => onDone?.(fact)}>
-                    Done
+                    <Text color="text">Done</Text>
                   </Button>
                 </Box>
               )}

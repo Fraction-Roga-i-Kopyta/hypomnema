@@ -25,6 +25,23 @@ const PULL_ONLY = 'pull-only mode: prompts inject nothing; facts read with Read 
 
 const isKey = (a: FactKey) => (b: FactKey) => a.project === b.project && a.slug === b.slug
 
+/** One run of a styled line. */
+type Seg = [text: string, props: TextProps]
+
+/** A line of styled runs; one plain run when the whole line must be cut to `width`. */
+function Line({ ui, width, segs }: { ui: Els; width: number; segs: Seg[] }) {
+  const { Text } = ui
+  const full = segs.map(s => s[0]).join('')
+  if (Array.from(full).length > width) return <Text color="text">{fit(full, width)}</Text>
+  return (
+    <Text color="text">
+      {segs.map(([text, props]) => (
+        <Text {...props}>{text}</Text>
+      ))}
+    </Text>
+  )
+}
+
 /** The Session tab: counters, useful share, this turn's facts, the most injected. */
 export function SessionView({ ui, width, session, turn, sessionProject, onOpen }: Props) {
   const { Box, Text, Button } = ui
@@ -48,7 +65,7 @@ export function SessionView({ ui, width, session, turn, sessionProject, onOpen }
     }
     return (
       <Button key={rowKey('turn', key)} plain onPress={() => onOpen(key)}>
-        {fit(left, width - 4)}
+        <Text color={isUseful ? 'success' : 'text'}>{fit(left, width - 4)}</Text>
         <Text dimColor>{type}</Text>
       </Button>
     )
@@ -63,30 +80,43 @@ export function SessionView({ ui, width, session, turn, sessionProject, onOpen }
       dimColor={fact.path === ''}
       onPress={() => onOpen({ project: fact.project, slug: fact.slug })}
     >
-      {fit(
-        `${padEnd(fact.name || fact.slug, topWidth)} ${padStart(String(fact.injected), 4)} ${padStart(
-          fact.useful === 0 ? '–' : String(fact.useful),
-          3,
-        )}`,
-        width,
-      )}
+      <Text color="text">
+        {fit(
+          `${padEnd(fact.name || fact.slug, topWidth)} ${padStart(String(fact.injected), 4)} ${padStart(
+            fact.useful === 0 ? '–' : String(fact.useful),
+            3,
+          )}`,
+          width,
+        )}
+      </Text>
     </Button>
   ))
 
   return (
     <Box flexDirection="column">
-      <Text>{fit(`Injected ${session.injected}  ✓ useful ${session.useful}  · silent ${session.silent}`, width)}</Text>
-      <Text>{fit(share, width)}</Text>
+      <Line
+        ui={ui}
+        width={width}
+        segs={[
+          ['Injected ', {}],
+          [String(session.injected), { bold: true }],
+          ['  ', {}],
+          [`✓ useful ${session.useful}`, { color: 'success', bold: true }],
+          ['  · silent ', {}],
+          [String(session.silent), { bold: true }],
+        ]}
+      />
+      <Text color="text">{fit(share, width)}</Text>
       {session.undelivered > 0 && (
         <Text color="warning">{fit(`⚠ ${session.undelivered} citation(s) for facts not delivered`, width)}</Text>
       )}
       {!session.prompt_inject && wrapWords(PULL_ONLY, width).map(line => <Text dimColor>{line}</Text>)}
       <Box flexDirection="column" marginTop={1}>
-        <Text bold>{fit(`This turn (${count(turn.length, 'fact')})`, width)}</Text>
+        <Text bold color="text">{fit(`This turn (${count(turn.length, 'fact')})`, width)}</Text>
         {turnRows.length === 0 ? <Text dimColor>{fit('nothing injected this turn', width)}</Text> : turnRows}
       </Box>
       <Box flexDirection="column" marginTop={1}>
-        <Text bold>{fit(`${padEnd('Most injected', topWidth)}  inj   ✓`, width)}</Text>
+        <Text bold color="text">{fit(`${padEnd('Most injected', topWidth)}  inj   ✓`, width)}</Text>
         {topRows.length === 0 ? <Text dimColor>{fit('nothing injected yet', width)}</Text> : topRows}
       </Box>
     </Box>
