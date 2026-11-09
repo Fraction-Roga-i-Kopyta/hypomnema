@@ -3,10 +3,11 @@ import type { On, ProcessRunResult } from 'claude-code'
 import type { Engine, FoundElement, MockClock, Plugin } from 'claude-code/testing'
 
 import { STATS_SESSION } from './fixtures.gen'
+import { LOCATE } from './memoryctl'
 import type { StatsReport } from './memoryctl'
 
 const BIN = '/home/u/.claude/bin/memoryctl'
-const HINT = 'memoryctl not found or too old — run ./install.sh in the hypomnema repo'
+const HINT = 'memoryctl not found or too old — run "make build && ./install.sh" in the hypomnema repo'
 const PROJECT = STATS_SESSION.project
 const SURFACES = ['terminal', 'desktop'] as const
 
@@ -63,6 +64,8 @@ type World = {
   opened: string[]
   closed: string[]
   toasts: string[]
+  /** What each `$.command.register` call asked for. */
+  registered: unknown[]
   script: Script
 }
 
@@ -75,10 +78,14 @@ function world(on: On, script: Script = {}): World {
     opened: [],
     closed: [],
     toasts: [],
+    registered: [],
     script,
   }
   on('session.start', (_, e) => ({ cwd: e.cwd }))
-  on('command.register', () => ({ value: { command: 'memboard' } }))
+  on('command.register', (_, e) => {
+    w.registered.push(e)
+    return { value: { command: 'memboard' } }
+  })
   on('ui.status', (_, e) => {
     w.statuses.push(e.text)
     return { value: undefined }
@@ -136,13 +143,27 @@ const statsRuns = (w: World) => w.runs.filter(argv => argv[1] === 'stats').lengt
 
 const width = (el: FoundElement) => [...el.text].length + (el.type === 'Button' && !el.props.plain ? 4 : 0)
 
+type Mounted = { findAll: (query: { type: 'Text' }) => Promise<FoundElement[]> }
+
+/** Every Text line of the pane, in order. */
+async function lines(ui: Mounted): Promise<string[]> {
+  return (await ui.findAll({ type: 'Text' })).map(t => t.text)
+}
+
+/** The pane shows the install hint, wrapped to `columns`. */
+async function expectHint(ui: Mounted, columns: number) {
+  const shown = await lines(ui)
+  expect(shown.join(' ')).toBe(HINT)
+  for (const line of shown) expect([...line].length <= columns, line).toBe(true)
+}
+
 test('missing memoryctl renders hint', async ($, on) => {
   const w = world(on, { located: false })
   await start($, w)
 
   for (const surface of SURFACES) {
     const ui = await $.ui.mount({ ...pane(52), surface })
-    expect((await ui.find({ type: 'Text', text: HINT }))?.text).toBe(HINT)
+    await expectHint(ui, 52)
     expect(await ui.findAll({ type: 'Button' })).toHaveLength(0)
     await ui.unmount()
   }
@@ -156,13 +177,86 @@ test('old memoryctl renders hint', async ($, on) => {
   await start($, w)
 
   for (const surface of SURFACES) {
-    const ui = await $.ui.mount({ ...pane(52), surface })
-    expect((await ui.find({ type: 'Text', text: HINT }))?.text).toBe(HINT)
+    const ui = await $.ui.mount({ ...pane(40), surface })
+    await expectHint(ui, 40)
     expect(await ui.find({ key: 'tab-session' })).toBeUndefined()
     await ui.unmount()
   }
   expect(statsRuns(w)).toBeGreaterThan(0)
   expect(w.statuses.at(-1)).toBeUndefined()
+})
+
+test('any other stats failure shows its own message, not the hint', async ($, on) => {
+  const WAL = 'memoryctl stats: stats.LoadUsage: open: /home/u/.claude/memory/.wal: permission denied'
+  const w = world(on, { stats: () => ran('', 1, `${WAL}\n`) })
+  await start($, w)
+
+  const ui = await $.ui.mount({ ...pane(40), surface: 'terminal' })
+  const shown = await lines(ui)
+  expect(shown.join(' ')).not.toContain('install.sh')
+  expect(shown.join(' ')).toContain('stats.LoadUsage: open:')
+  expect(shown.join(' ')).toContain('permission denied')
+  for (const line of shown) expect([...line].length <= 40, line).toBe(true)
+  expect(w.statuses.at(-1)).toBeUndefined()
+  await ui.unmount()
+
+  // A good refresh brings the tabs back.
+  w.script.stats = () => report()
+  await turn($, w)
+  const again = await $.ui.mount({ ...pane(40), surface: 'terminal' })
+  expect(await again.find({ key: 'tab-session' })).toBeDefined()
+  await again.unmount()
+})
+
+test('a run that rejects (a timeout) is its message too, not the hint', async ($, on) => {
+  const w = world(on, {
+    stats: () => {
+      throw new Error('process timed out after 15000ms')
+    },
+  })
+  await start($, w)
+  const ui = await $.ui.mount({ ...pane(52), surface: 'terminal' })
+  const shown = await lines(ui)
+  expect(shown.join(' ')).not.toContain('install.sh')
+  expect(shown.at(-1)).toBe('memboard tries again when the turn ends.')
+  expect(shown.length).toBeGreaterThan(1)
+  await ui.unmount()
+})
+
+test('a binary gone after a failure shows the hint again', async ($, on) => {
+  const w = world(on, { stats: () => ran('', 1, 'memoryctl stats: stats.LoadUsage: read: bad\n') })
+  await start($, w)
+  w.script.located = false
+  await turn($, w)
+
+  const ui = await $.ui.mount({ ...pane(52), surface: 'terminal' })
+  await expectHint(ui, 52)
+  await ui.unmount()
+})
+
+test('/memboard registers to run mid-turn', async ($, on) => {
+  const w = world(on)
+  await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+  expect(w.registered).toEqual([expect.objectContaining({ name: 'memboard', immediate: true })])
+})
+
+test('HYPOMNEMA_MEMORYCTL is offered to locate first', async ($, on) => {
+  const w = world(on)
+  mock.env(on, { HYPOMNEMA_MEMORYCTL: '/opt/dev/memoryctl' })
+  await start($, w)
+  const sh = w.runs.find(argv => argv[0] === '/bin/sh')
+  expect(sh).toEqual(['/bin/sh', '-c', LOCATE, 'memboard-locate', '/opt/dev/memoryctl'])
+  // The script tries $1, then the install link, then PATH.
+  const order = ['"$1"', '"$HOME/.claude/bin/memoryctl"', 'command -v memoryctl'].map(s => LOCATE.indexOf(s))
+  expect(order.every(i => i >= 0)).toBe(true)
+  expect([...order].sort((a, b) => a - b)).toEqual(order)
+})
+
+test('without HYPOMNEMA_MEMORYCTL locate gets an empty first place', async ($, on) => {
+  const w = world(on)
+  mock.env(on, {})
+  await start($, w)
+  expect(w.runs.find(argv => argv[0] === '/bin/sh')?.at(-1)).toBe('')
 })
 
 test('schema mismatch clears status', async ($, on) => {
@@ -175,7 +269,7 @@ test('schema mismatch clears status', async ($, on) => {
 
   expect(w.statuses.at(-1)).toBeUndefined()
   const ui = await $.ui.mount({ ...pane(52), surface: 'terminal' })
-  expect((await ui.find({ type: 'Text', text: HINT }))?.text).toBe(HINT)
+  await expectHint(ui, 52)
   await ui.unmount()
 
   w.script.stats = () => report()

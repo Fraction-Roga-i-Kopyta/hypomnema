@@ -87,7 +87,8 @@ func runStats(args []string) {
 	r := resolveStore("")
 	home, _ := os.UserHomeDir()
 	day := today()
-	rep := stats.Report{SchemaVersion: stats.SchemaVersion, Scope: a.scope, Today: day, Project: r.Project}
+	rep := stats.Report{SchemaVersion: stats.SchemaVersion, Scope: a.scope, Today: day, Project: r.Project,
+		Display: stats.Display(r.Project, home)}
 
 	if a.scope == "project" {
 		st, anchor := r.Store, r.Anchor

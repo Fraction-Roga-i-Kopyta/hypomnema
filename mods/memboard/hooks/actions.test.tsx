@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On, ProcessRunResult } from 'claude-code'
 import type { Engine, FoundElement, MockClock } from 'claude-code/testing'
 
-import { STATS_FACT, STATS_PROJECT, STATS_SESSION } from './fixtures.gen'
+import { STATS_ALL, STATS_FACT, STATS_PROJECT, STATS_SESSION } from './fixtures.gen'
 import type { StatsReport } from './memoryctl'
 
 const BIN = '/home/u/.claude/bin/memoryctl'
@@ -39,6 +39,7 @@ type World = {
   envs: (string | undefined)[]
   toasts: string[]
   fact: () => StatsReport
+  session: () => StatsReport
   /** stderr of a failing mutation, if set. */
   failure: string | undefined
 }
@@ -52,6 +53,7 @@ function world(on: On): World {
     envs: [],
     toasts: [],
     fact: () => copy(STATS_FACT),
+    session: () => copy(STATS_SESSION),
     failure: undefined,
   }
   on('session.start', (_, e) => ({ cwd: e.cwd }))
@@ -72,7 +74,14 @@ function world(on: On): World {
       return { value: w.failure === undefined ? ran('') : ran('', 1, `${w.failure}\nusage...\n`) }
     }
     const scope = e.argv[e.argv.indexOf('--scope') + 1]
-    const r = scope === 'fact' ? w.fact() : scope === 'project' ? copy(STATS_PROJECT) : copy(STATS_SESSION)
+    const r =
+      scope === 'fact'
+        ? w.fact()
+        : scope === 'project'
+          ? copy(STATS_PROJECT)
+          : scope === 'all'
+            ? copy(STATS_ALL)
+            : w.session()
     return { value: ran(JSON.stringify(r)) }
   })
   on('classic.SessionStart', () => ({}))
@@ -318,5 +327,121 @@ test('card fits 40 columns', async ($, on) => {
     expect(elements.length).toBeGreaterThan(10)
     for (const el of elements) expect(width(el) <= 40, `${width(el)} > 40: ${el.text}`).toBe(true)
   }
+  await ui.unmount()
+})
+
+const allRuns = (w: World) =>
+  w.runs.filter(argv => argv[1] === 'stats' && argv[argv.indexOf('--scope') + 1] === 'all')
+const ownProjectRuns = (w: World) => projectRuns(w).filter(argv => !argv.includes('--project'))
+
+test('an action expires every cached tab, not just the visible one', async ($, on) => {
+  const w = world(on)
+  await start($, w)
+  const ui = await $.ui.mount(pane(52))
+  await ui.press({ key: 'tab-project' })
+  await w.clock.settle()
+  await ui.press({ key: 'tab-all' })
+  await w.clock.settle()
+  // All → drill into the project → its queued fact → archive it.
+  await ui.press({ key: `proj:${P}/` })
+  await w.clock.settle()
+  await ui.press({ key: `drill-queue:${P}/alpha.md` })
+  await w.clock.settle()
+  await ui.press({ key: 'ask-archive' })
+  await ui.press({ key: 'confirm-yes' })
+  await w.clock.settle()
+  expect(mutations(w)).toEqual([[BIN, 'retire', 'alpha.md', '--project', P]])
+
+  // b (the stub) → the drill-down; b → All: fetched again, not the cached list.
+  await ui.press({ key: 'back' })
+  await w.clock.settle()
+  const alls = allRuns(w).length
+  await ui.press({ key: 'back' })
+  await w.clock.settle()
+  expect(allRuns(w).length).toBe(alls + 1)
+
+  // The Project tab, cached before the action, is fetched again too.
+  const projects = ownProjectRuns(w).length
+  await ui.press({ key: 'tab-project' })
+  await w.clock.settle()
+  expect(ownProjectRuns(w).length).toBe(projects + 1)
+
+  // Nothing changed since: within 120 s the caches stand again.
+  await ui.press({ key: 'tab-all' })
+  await w.clock.settle()
+  expect(allRuns(w).length).toBe(alls + 1)
+  await ui.unmount()
+})
+
+test('an action from the Session tab expires the Project cache', async ($, on) => {
+  const w = world(on)
+  await start($, w)
+  const ui = await $.ui.mount(pane(52))
+  await ui.press({ key: 'tab-project' })
+  await w.clock.settle()
+  await ui.press({ key: 'tab-session' })
+  await w.clock.settle()
+  await ui.press({ key: `top:${P}/alpha.md` })
+  await w.clock.settle()
+  await ui.press({ key: 'act-pin' })
+  await w.clock.settle()
+  await ui.press({ key: 'back' })
+  await w.clock.settle()
+  const projects = ownProjectRuns(w).length
+  await ui.press({ key: 'tab-project' })
+  await w.clock.settle()
+  expect(ownProjectRuns(w).length).toBe(projects + 1)
+  await ui.unmount()
+})
+
+test('the card path keeps its file name', async ($, on) => {
+  const w = world(on)
+  withFact(w, f => {
+    f.path = '/Users/someone/.claude/projects/-Users-someone-Development-a-very-long-project/memory/alpha.md'
+  })
+  for (const columns of [40, 52]) {
+    const ui = await openCard($, w, columns)
+    const line = await ui.find({ type: 'Text', text: /alpha\.md$/ })
+    expect(line?.text.startsWith('…')).toBe(true)
+    expect(line?.text.endsWith('/memory/alpha.md')).toBe(true)
+    expect([...(line?.text ?? '')].length).toBe(columns)
+    await ui.press({ key: 'back' })
+    await w.clock.settle()
+    await ui.unmount()
+  }
+})
+
+test('hide names the session project, and marks show it in display form', async ($, on) => {
+  const w = world(on)
+  const ui = await openCard($, w)
+  expect((await ui.find({ key: 'act-hide' }))?.props.label).toBe('h Hide in work-proj')
+  const marks = await ui.find({ type: 'Text', text: /^marks/ })
+  expect(marks?.text).toContain('hide:work-proj')
+  expect(marks?.text).not.toContain('-HOME-')
+  await ui.unmount()
+})
+
+test('a global fact in a foreign drill hides in the session project', async ($, on) => {
+  const w = world(on)
+  withFact(w, f => {
+    f.project = 'global'
+    f.display = 'global'
+    f.marks = ['hide:-HOME-elsewhere', 'hide:-HOME-work-proj']
+  })
+  const ui = await openCard($, w)
+  expect((await ui.find({ key: 'act-hide' }))?.props.label).toBe('h Hide in work-proj')
+  expect((await ui.find({ type: 'Text', text: /^marks/ }))?.text).toContain('hide:elsewhere · hide:work-proj')
+  await ui.unmount()
+})
+
+test('a long session project is cut from the left in the hide label', async ($, on) => {
+  const w = world(on)
+  const LONG = 'Development-clients-acme-internal-tools-memory-dashboard'
+  w.session = () => ({ ...copy(STATS_SESSION), display: LONG })
+  const ui = await openCard($, w, 40)
+  const hide = await ui.find({ key: 'act-hide' })
+  expect(hide?.props.label).toMatch(/^h Hide in …/)
+  expect(hide?.props.label).toMatch(/dashboard$/)
+  expect(hide !== undefined && width(hide)).toBe(40)
   await ui.unmount()
 })

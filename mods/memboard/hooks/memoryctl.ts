@@ -7,18 +7,43 @@ export type { StatsReport }
 export type StatsResult = { ok: true; report: StatsReport } | { ok: false; error: string }
 
 const SCHEMA_VERSION = 1
+const SCHEMA_ERROR = 'memoryctl stats schema_version'
 
-const LOCATE = 'p="$HOME/.claude/bin/memoryctl"; [ -x "$p" ] && echo "$p" || command -v memoryctl'
+/** `$1` (HYPOMNEMA_MEMORYCTL) when executable, else the one install.sh links, else the first on PATH. */
+export const LOCATE =
+  'for p in "$1" "$HOME/.claude/bin/memoryctl"; do' +
+  ' if [ -n "$p" ] && [ -x "$p" ]; then echo "$p"; exit 0; fi;' +
+  ' done; command -v memoryctl'
 
-/** The memoryctl binary: the one install.sh links, else the first on PATH. */
+/**
+ * The memoryctl binary, in the shims' order: HYPOMNEMA_MEMORYCTL, then
+ * ~/.claude/bin/memoryctl (install.sh links it), then PATH.
+ */
 export async function locate($: EngineInterface): Promise<string | undefined> {
+  let override = ''
   try {
-    const { exitCode, stdout } = await $.process.run(['/bin/sh', '-c', LOCATE], { timeoutMs: 5_000 })
+    override = (await $.env.get('HYPOMNEMA_MEMORYCTL')) ?? ''
+  } catch {
+    // No environment to read: the other two places still count.
+  }
+  try {
+    const { exitCode, stdout } = await $.process.run(['/bin/sh', '-c', LOCATE, 'memboard-locate', override], {
+      timeoutMs: 5_000,
+    })
     const path = stdout.trim().split('\n')[0]?.trim() ?? ''
     return exitCode === 0 && path !== '' ? path : undefined
   } catch {
     return undefined
   }
+}
+
+/**
+ * A stats failure only a newer memoryctl fixes: a binary without `stats`
+ * (`unknown command`) or one that speaks another schema_version. Any other
+ * failure (an unreadable WAL, a timeout) is its own message, not an install hint.
+ */
+export function needsInstall(error: string): boolean {
+  return error.includes('unknown command') || error.startsWith(SCHEMA_ERROR)
 }
 
 /**
@@ -52,7 +77,7 @@ export async function stats(
   }
   const version = isObject(report) ? report.schema_version : undefined
   if (version !== SCHEMA_VERSION) {
-    return { ok: false, error: `memoryctl stats schema_version ${String(version)}, want ${SCHEMA_VERSION}` }
+    return { ok: false, error: `${SCHEMA_ERROR} ${String(version)}, want ${SCHEMA_VERSION}` }
   }
   return { ok: true, report: report as StatsReport }
 }

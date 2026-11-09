@@ -152,6 +152,37 @@ test('drill into project and back', async ($, on) => {
   await ui.unmount()
 })
 
+test('the global drill-down says it has no days instead of zero rows', async ($, on) => {
+  const w = world(on)
+  w.project = () => {
+    const r = copy(STATS_PROJECT)
+    if (r.project_stats !== undefined) {
+      r.project_stats.project = 'global'
+      r.project_stats.display = 'global'
+    }
+    return r
+  }
+  await start($, w)
+
+  const ui = await $.ui.mount({ ...pane(40), surface: 'terminal' })
+  await ui.press({ key: 'tab-all' })
+  await w.clock.settle()
+  await ui.press({ key: 'proj:global/' })
+  await w.clock.settle()
+  expect(scoped(w, 'project').at(-1)).toEqual([BIN, 'stats', '--json', '--scope', 'project', '--project', 'global'])
+  expect((await ui.findAll({ type: 'Text', text: /^\d\d-\d\d / })).length).toBe(0)
+  expect(await ui.find({ type: 'Text', text: /^Days +inj/ })).toBeUndefined()
+  expect((await ui.find({ type: 'Text', text: /^Days: none/ }))?.text).toBe('Days: none (global has no sessions)')
+  // A project's own drill-down keeps its days.
+  await ui.press({ key: 'back' })
+  await w.clock.settle()
+  w.project = () => copy(STATS_PROJECT)
+  await ui.press({ key: `proj:${P}/` })
+  await w.clock.settle()
+  expect((await ui.findAll({ type: 'Text', text: /^\d\d-\d\d / })).length).toBe(7)
+  await ui.unmount()
+})
+
 test('rows fit 40 columns', async ($, on) => {
   const w = world(on)
   const longFact = (r: StatsReport): StatsReport => {

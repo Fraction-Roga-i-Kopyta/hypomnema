@@ -13,6 +13,35 @@ export function fit(text: string, width: number): string {
   return `${chars.slice(0, width - 1).join('')}…`
 }
 
+/** `text` cut to `width` columns from the left, the cut marked with `…`: a path keeps its file name. */
+export function fitLeft(text: string, width: number): string {
+  const chars = Array.from(text)
+  if (chars.length <= width) return text
+  if (width <= 0) return ''
+  return `…${chars.slice(chars.length - (width - 1)).join('')}`
+}
+
+/**
+ * The home prefix memoryctl strips from a project tag for its display form,
+ * read off one tag and its display (`-Users-me-` from `-Users-me-work` and
+ * `work`); undefined when the pair shows none.
+ */
+export function homePrefix(tag: string, display: string): string | undefined {
+  if (display === '' || display === tag || !tag.endsWith(display)) return undefined
+  const prefix = tag.slice(0, tag.length - display.length)
+  return prefix.endsWith('-') ? prefix : undefined
+}
+
+/** A project tag in display form, as memoryctl's: the home prefix stripped. */
+export function displayTag(tag: string, prefix: string | undefined): string {
+  return prefix !== undefined && tag.startsWith(prefix) && tag.length > prefix.length ? tag.slice(prefix.length) : tag
+}
+
+/** Marks as the card shows them: `hide:<tag>` with the tag in display form. */
+export function displayMarks(marks: string[], prefix: string | undefined): string[] {
+  return marks.map(m => (m.startsWith('hide:') ? `hide:${displayTag(m.slice('hide:'.length), prefix)}` : m))
+}
+
 /** `text` fitted to `width` and padded on the right to exactly `width`. */
 export function padEnd(text: string, width: number): string {
   const cut = fit(text, width)

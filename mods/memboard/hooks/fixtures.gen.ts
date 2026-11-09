@@ -7,6 +7,7 @@ export const STATS_SESSION: StatsReport = {
   "scope": "session",
   "today": "2026-11-09",
   "project": "-HOME-work-proj",
+  "display": "work-proj",
   "session": {
     "session_id": "s1",
     "injected": 5,
@@ -139,6 +140,7 @@ export const STATS_FACT: StatsReport = {
   "scope": "fact",
   "today": "2026-11-09",
   "project": "-HOME-work-proj",
+  "display": "work-proj",
   "fact": {
     "project": "-HOME-work-proj",
     "display": "work-proj",
@@ -170,6 +172,7 @@ export const STATS_PROJECT: StatsReport = {
   "scope": "project",
   "today": "2026-11-09",
   "project": "-HOME-work-proj",
+  "display": "work-proj",
   "project_stats": {
     "project": "-HOME-work-proj",
     "display": "work-proj",
@@ -297,6 +300,7 @@ export const STATS_ALL: StatsReport = {
   "scope": "all",
   "today": "2026-11-09",
   "project": "-HOME-work-proj",
+  "display": "work-proj",
   "all": {
     "stores": 2,
     "facts": 4,

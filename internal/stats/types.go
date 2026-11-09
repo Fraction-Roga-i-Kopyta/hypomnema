@@ -134,6 +134,7 @@ type Report struct {
 	Scope         string        `json:"scope"`
 	Today         string        `json:"today"`
 	Project       string        `json:"project"`
+	Display       string        `json:"display"` // Project in display form (Display)
 	Session       *SessionStats `json:"session,omitempty"`
 	ProjectStats  *ProjectStats `json:"project_stats,omitempty"`
 	All           *AllStats     `json:"all,omitempty"`

@@ -18,6 +18,8 @@ type Props = {
 
 const PROBLEMS = 3
 const DONE_WIDTH = 4
+const GLOBAL = 'global'
+const NO_DAYS = 'Days: none (global has no sessions)'
 const DAY_PREFIX = 5 + 1 + 4 + 1 + 3 + 1 + 6 + 1
 
 /** One project: size, the last 7 days, composition, health, triage, queue. */
@@ -58,22 +60,29 @@ export function ProjectView({ ui, width, stats, scope, limits, onOpen, onMore, o
     <Box flexDirection="column">
       <Text bold>{fit(`${stats.display}  ${stats.visible} visible`, width)}</Text>
       <Text dimColor>{fit(`${stats.local} own + ${stats.global} global`, width)}</Text>
-      <Box flexDirection="column" marginTop={1}>
-        <Text dimColor>
-          {fit(`${padEnd('Days', 5)} ${padStart('inj', 4)} ${padStart('✓', 3)} ${padStart('silent', 6)}`, width)}
-        </Text>
-        {stats.days.map(d => (
-          <Text>
-            {fit(
-              `${d.date.slice(5)} ${padStart(String(d.injected), 4)} ${padStart(String(d.useful), 3)} ${padStart(
-                String(d.silent),
-                6,
-              )}${barWidth > 0 ? ` ${bar(d.injected / peak, barWidth)}` : ''}`,
-              width,
-            )}
+      {stats.project === GLOBAL ? (
+        // Sessions belong to projects: the global store's days would only ever read zero.
+        <Box flexDirection="column" marginTop={1}>
+          <Text dimColor>{fit(NO_DAYS, width)}</Text>
+        </Box>
+      ) : (
+        <Box flexDirection="column" marginTop={1}>
+          <Text dimColor>
+            {fit(`${padEnd('Days', 5)} ${padStart('inj', 4)} ${padStart('✓', 3)} ${padStart('silent', 6)}`, width)}
           </Text>
-        ))}
-      </Box>
+          {stats.days.map(d => (
+            <Text>
+              {fit(
+                `${d.date.slice(5)} ${padStart(String(d.injected), 4)} ${padStart(String(d.useful), 3)} ${padStart(
+                  String(d.silent),
+                  6,
+                )}${barWidth > 0 ? ` ${bar(d.injected / peak, barWidth)}` : ''}`,
+                width,
+              )}
+            </Text>
+          ))}
+        </Box>
+      )}
       <Box flexDirection="column" marginTop={1}>
         {mix.map((line, i) => (
           <Text>{fit(`${i === 0 ? 'Mix  ' : '     '}${line}`, width)}</Text>

@@ -4,8 +4,8 @@ import type { EngineInterface, Register, Timer } from 'claude-code'
 import type { FactKey, Tab } from '../types'
 import { act } from './actions'
 import type { Action } from './actions'
-import { fit, statusLine } from './format'
-import { locate, stats } from './memoryctl'
+import { fit, statusLine, wrapWords } from './format'
+import { locate, needsInstall, stats } from './memoryctl'
 import { parseInjected } from './turn'
 import { AllView } from './views/all'
 import { ArchivedStub, FactCard } from './views/card'
@@ -14,7 +14,8 @@ import { DEFAULT_LIMIT, MORE_STEP } from './views/rows'
 import { SessionView } from './views/session'
 
 const PANE = 'memboard'
-const HINT = 'memoryctl not found or too old — run ./install.sh in the hypomnema repo'
+const HINT = 'memoryctl not found or too old — run "make build && ./install.sh" in the hypomnema repo'
+const RETRY = 'memboard tries again when the turn ends.'
 // While the pane is open it refreshes on its own too (a subagent's turn ends
 // with SubagentStop, which raises no refresh).
 const PANE_REFRESH_MS = 180_000
@@ -39,6 +40,9 @@ const error = atom({ plugin: 'memboard', key: 'error' } as const, null, { shape:
 const sessionId = atom({ plugin: 'memboard', key: 'sessionId' } as const, null, { shape: 'sid-1' })
 const sessionProject = atom({ plugin: 'memboard', key: 'sessionProject' } as const, null, {
   shape: 'project-1',
+})
+const sessionDisplay = atom({ plugin: 'memboard', key: 'sessionDisplay' } as const, null, {
+  shape: 'display-1',
 })
 const project = atom({ plugin: 'memboard', key: 'project' } as const, null, { shape: 'cache-1' })
 const all = atom({ plugin: 'memboard', key: 'all' } as const, null, { shape: 'cache-1' })
@@ -87,9 +91,21 @@ async function leaveCard($: EngineInterface): Promise<void> {
 }
 
 /**
- * One action on a fact: the toast says what happened, then what the person
- * sees is fetched again (a fact an archive removed is not fetched: the stub
- * stands for it). A failure refetches too, so nothing stale stays on screen.
+ * Every cached view (`project`, `all`, the drill-down) expires now: the next
+ * open of any of them refetches instead of showing what an action changed.
+ */
+async function expireCaches($: EngineInterface): Promise<void> {
+  const expired = (await $.clock.now()) - CACHE_MS
+  await update($, project, c => c && { ...c, fetchedAt: expired })
+  await update($, all, c => c && { ...c, fetchedAt: expired })
+  await update($, drillCache, c => c && { ...c, fetchedAt: expired })
+}
+
+/**
+ * One action on a fact: the toast says what happened, every cached tab
+ * expires, then what the person sees is fetched again (a fact an archive
+ * removed is not fetched: the stub stands for it). A failure does the same,
+ * so nothing stale stays on screen or waits in another tab.
  */
 async function runAction($: EngineInterface, action: Action, key: FactKey): Promise<void> {
   const path = await read($, bin)
@@ -103,6 +119,7 @@ async function runAction($: EngineInterface, action: Action, key: FactKey): Prom
   if (archived) await update($, lastArchived, () => key)
   if (restored) await update($, lastArchived, () => null)
   try {
+    await expireCaches($)
     if (!archived && sameKey(await read($, selected), key) && !sameKey(await read($, lastArchived), key)) {
       await loadCard($, key)
     }
@@ -113,12 +130,17 @@ async function runAction($: EngineInterface, action: Action, key: FactKey): Prom
   }
 }
 
-/** `stats --scope session` into state and the status line; any failure clears the line. */
+/**
+ * `stats --scope session` into state and the status line; any failure clears
+ * the line and keeps its message for the pane.
+ */
 async function refresh($: EngineInterface): Promise<void> {
   let path = await read($, bin)
   if (path === null) {
     path = (await locate($)) ?? null
     if (path === null) {
+      // No binary at all: the pane's install hint, not an older failure's message.
+      await update($, error, () => null)
       $.ui.status(undefined)
       return
     }
@@ -143,6 +165,7 @@ async function refresh($: EngineInterface): Promise<void> {
   }
   await update($, session, () => s)
   await update($, sessionProject, () => r.report.project)
+  await update($, sessionDisplay, () => r.report.display)
   await update($, error, () => null)
   $.ui.status(statusLine(s))
 }
@@ -237,7 +260,12 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const r = await next(e)
     try {
-      await $.command.register({ name: 'memboard', description: 'Toggle the hypomnema memory dashboard' })
+      // immediate: the pane toggles mid-turn too, not after the turn ends.
+      await $.command.register({
+        name: 'memboard',
+        description: 'Toggle the hypomnema memory dashboard',
+        immediate: true,
+      })
     } catch {
       // No /memboard this session; the status line still works.
     }
@@ -336,8 +364,26 @@ export const register: Register = on => {
     const width = e.props.bodyColumns > 0 ? e.props.bodyColumns : 52
     const path = await read($, bin)
     const failed = await read($, error)
+    // A failure a reinstall fixes (no binary, no `stats`, another schema) is
+    // the hint; any other is its own message (an unreadable WAL, a timeout).
+    if (failed !== null && !needsInstall(failed)) {
+      return (
+        <Box flexDirection="column">
+          {wrapWords(failed, width).map(line => (
+            <Text color="warning">{line}</Text>
+          ))}
+          <Text dimColor>{fit(RETRY, width)}</Text>
+        </Box>
+      )
+    }
     if (path === null || failed !== null) {
-      return <Text>{HINT}</Text>
+      return (
+        <Box flexDirection="column">
+          {wrapWords(HINT, width).map(line => (
+            <Text>{line}</Text>
+          ))}
+        </Box>
+      )
     }
 
     const active = await read($, tab)
@@ -392,12 +438,14 @@ export const register: Register = on => {
           </Box>
         )
       }
+      const here = (await read($, sessionProject)) ?? ''
       return (
         <FactCard
           ui={els}
           width={width}
           fact={shown.fact}
-          sessionProject={(await read($, sessionProject)) ?? ''}
+          sessionProject={here}
+          sessionDisplay={(await read($, sessionDisplay)) ?? here}
           confirm={await read($, confirm)}
           onAct={action => {
             runAction($, action, picked).catch(() => undefined)

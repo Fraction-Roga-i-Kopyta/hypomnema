@@ -1,17 +1,22 @@
 import type { FactCount } from '../../types'
 import type { Action } from '../actions'
-import { fit, joinFit, wrapWords } from '../format'
+import { displayMarks, fit, fitLeft, homePrefix, joinFit, wrapWords } from '../format'
 import type { Els } from './session'
 
 const DESCRIPTION_LINES = 3
 const LABEL = 10
+const HIDE = 'h Hide in '
+// A Button draws 4 columns around its label.
+const BUTTON_FRAME = 4
 
 type Props = {
   ui: Els
   width: number
   fact: FactCount
-  /** The session's project tag: Hide here is offered for it and for `global`. */
+  /** The session's project tag: Hide is offered for its facts and for `global`'s, and hides there. */
   sessionProject: string
+  /** That tag in display form: the Hide button names it. */
+  sessionDisplay: string
   /** `'archive'` while the archive waits for y / n. */
   confirm: 'archive' | null
   onAct: (action: Action) => void
@@ -30,7 +35,18 @@ function describe(text: string, width: number): string[] {
 }
 
 /** One fact: its numbers, marks and the actions on it. */
-export function FactCard({ ui, width, fact, sessionProject, confirm, onAct, onAsk, onCancel, onBack }: Props) {
+export function FactCard({
+  ui,
+  width,
+  fact,
+  sessionProject,
+  sessionDisplay,
+  confirm,
+  onAct,
+  onAsk,
+  onCancel,
+  onBack,
+}: Props) {
   const { Box, Text, Button } = ui
   const name = fact.name === '' ? fact.slug : fact.name
   const field = (label: string, value: string) => (
@@ -38,10 +54,13 @@ export function FactCard({ ui, width, fact, sessionProject, confirm, onAct, onAs
   )
   const hasTask = fact.marks.some(m => m.startsWith('task:'))
   const canHide = fact.project === 'global' || fact.project === sessionProject
+  // The hide lands in the session's project, which a drill-down's fact may not be in: the label says where.
+  const hideLabel = HIDE + fitLeft(sessionDisplay, Math.max(1, width - BUTTON_FRAME - HIDE.length))
   const act = (key: string, label: string, hotkey: string, action: Action) => (
     <Button key={key} label={label} hotkey={hotkey} onPress={() => onAct(action)} />
   )
-  const markLines = joinFit(fact.marks, Math.max(1, width - LABEL))
+  const prefix = homePrefix(fact.project, fact.display) ?? homePrefix(sessionProject, sessionDisplay)
+  const markLines = joinFit(displayMarks(fact.marks, prefix), Math.max(1, width - LABEL))
 
   return (
     <Box flexDirection="column">
@@ -53,7 +72,7 @@ export function FactCard({ ui, width, fact, sessionProject, confirm, onAct, onAs
       {describe(fact.description, width).map(line => (
         <Text dimColor>{line}</Text>
       ))}
-      <Text dimColor>{fit(fact.path === '' ? 'file is gone' : fact.path, width)}</Text>
+      <Text dimColor>{fact.path === '' ? fit('file is gone', width) : fitLeft(fact.path, width)}</Text>
       {field('ref_count', String(fact.ref_count))}
       {field('effective', fact.effectiveness.toFixed(2))}
       {field('last inj.', fact.last_injected)}
@@ -80,20 +99,18 @@ export function FactCard({ ui, width, fact, sessionProject, confirm, onAct, onAs
                 ? act('act-unpin', 'p Unpin', 'p', 'unpin')
                 : act('act-pin', 'p Pin', 'p', 'pin')}
             </Box>
+            {canHide && <Box flexDirection="row">{act('act-hide', hideLabel, 'h', 'hide')}</Box>}
             <Box flexDirection="row" gap={1}>
-              {canHide && act('act-hide', 'h Hide here', 'h', 'hide')}
               {act('act-less', 'l Show less', 'l', 'less')}
-            </Box>
-            <Box flexDirection="row" gap={1}>
               {act('act-clear', 'c Clear marks', 'c', 'clear')}
-              {act('act-rewrite', 'r Rewrite', 'r', 'rewrite')}
             </Box>
             <Box flexDirection="row" gap={1}>
+              {act('act-rewrite', 'r Rewrite', 'r', 'rewrite')}
               {act('act-split', 's Split', 's', 'split')}
               {act('act-merge', 'm Merge', 'm', 'merge')}
-              {act('act-review', 'v Review', 'v', 'review')}
             </Box>
             <Box flexDirection="row" gap={1}>
+              {act('act-review', 'v Review', 'v', 'review')}
               {hasTask && act('act-done', 'd Done', 'd', 'done')}
               <Button key="back" label="b Back" hotkey="b" onPress={onBack} />
             </Box>

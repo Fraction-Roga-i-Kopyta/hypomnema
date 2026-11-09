@@ -351,6 +351,43 @@ func TestStats_ProjectScopeCLI(t *testing.T) {
 	}
 }
 
+// TestStats_ProjectScopeGlobalDrill: the All tab's drill into the `global`
+// row lists each global fact once (the store is not added to itself).
+func TestStats_ProjectScopeGlobalDrill(t *testing.T) {
+	root := statsRoot(t)
+	env, _ := statsWorld(t, root)
+	writeStatsFact(t, env["HYPOMNEMA_GLOBAL_DIR"], "gtwo.md", "type: mistake\nname: gtwo\ndescription: Gtwo\ncreated: 2026-10-01\nstatus: candidate")
+	rep, _ := runStatsJSON(t, env, "--scope", "project", "--project", native.GlobalProject)
+	p := rep.ProjectStats
+	if p == nil || p.Project != native.GlobalProject || p.Visible != 2 || p.Global != 2 || p.Local != 0 {
+		t.Fatalf("global drill counts: %+v", p)
+	}
+	if want := map[string]int{"strategy": 1, "mistake": 1}; !reflect.DeepEqual(p.ByType, want) {
+		t.Fatalf("by_type = %v, want %v", p.ByType, want)
+	}
+	if len(p.Triage.Candidates) != 1 || p.Triage.Candidates[0].Slug != "gtwo.md" {
+		t.Fatalf("candidates: %+v", p.Triage.Candidates)
+	}
+}
+
+// TestStats_ReportDisplay: every report names the session's project in
+// display form beside its tag (the card's "Hide in <project>").
+func TestStats_ReportDisplay(t *testing.T) {
+	root := statsRoot(t)
+	env, tag := statsWorld(t, root)
+	for _, args := range [][]string{
+		{"--scope", "session", "--session", "s1"},
+		{"--scope", "fact", "alpha"},
+		{"--scope", "project", "--project", native.GlobalProject},
+		{"--scope", "all"},
+	} {
+		rep, _ := runStatsJSON(t, env, args...)
+		if rep.Project != tag || rep.Display != "work-proj" {
+			t.Errorf("%v: project=%q display=%q, want %q / work-proj", args, rep.Project, rep.Display, tag)
+		}
+	}
+}
+
 func TestScrubPaths_RootIndependent(t *testing.T) {
 	var got []string
 	for _, root := range []string{"/tmp/x", "/private/var/folders/zz/abcdefghijklmnop/T/TestLong123/001"} {

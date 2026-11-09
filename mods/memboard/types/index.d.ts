@@ -23,7 +23,7 @@ export type FactRef = {
   last_useful: string
   injected_30d: number
   useful_30d: number
-  /** Display form: `hide:<project>`, `less`, `task:<directive>`. */
+  /** `hide:<project tag>`, `less`, `task:<directive>` (the card shows the tag in display form). */
   marks: string[]
 }
 
@@ -90,6 +90,8 @@ export type StatsReport = {
   today: string
   /** Store tag of the calling session's project. */
   project: string
+  /** `project` in display form (the home prefix stripped). */
+  display: string
   session?: SessionStats
   project_stats?: ProjectStats
   all?: AllStats
@@ -126,6 +128,8 @@ declare module 'claude-code' {
       sessionId: Shaped<string | null>
       /** The report's top-level `project` (the session's store tag). */
       sessionProject: Shaped<string | null>
+      /** The report's top-level `display` (that tag in display form). */
+      sessionDisplay: Shaped<string | null>
       /** The last `stats --scope project`; null until the tab was opened. */
       project: Shaped<TabCache | null>
       /** The last `stats --scope all`. */
