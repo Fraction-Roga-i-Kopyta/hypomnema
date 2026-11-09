@@ -49,6 +49,9 @@ async function refresh($: EngineInterface): Promise<void> {
   if (sid === null) return
 
   const r = await stats($, path, ['--scope', 'session'], sid)
+  // A /clear while stats ran: this answer is the old session's; the new id's
+  // own refresh writes.
+  if ((await read($, sessionId)) !== sid) return
   const s = r.ok ? r.report.session : undefined
   if (!r.ok || s === undefined) {
     const why = r.ok ? 'memoryctl stats sent no session' : r.error
@@ -159,18 +162,24 @@ export const register: Register = on => {
     return r
   }).catch(($, e, next) => next(e))
 
+  // The pane is the answer: a plugin command's text would ride in the model's
+  // requests, so the toggle returns none, and a failure is a toast.
   on('command.run', { command: 'memboard' }, async $ => {
     if (await read($, isOpen)) {
       stopPaneTimer()
       await update($, isOpen, () => false)
       await $.ui.close({ id: PANE })
-      return { text: 'Memory dashboard closed.' }
+      return {}
     }
-    const opened = await $.ui.open({ id: PANE, title: 'Memory' })
+    // The person's own command: the pane is placed at any width.
+    await $.ui.open({ id: PANE, title: 'Memory' })
     await update($, isOpen, () => true)
     startPaneTimer($)
-    return { text: opened.isPlaced ? 'Memory dashboard opened.' : `Memory dashboard waits: ${opened.reason}` }
-  }).catch(() => ({ text: 'Memory dashboard could not toggle.' }))
+    return {}
+  }).catch($ => {
+    $.ui.toast('memboard: the dashboard could not toggle')
+    return {}
+  })
 
   // Any close (the person's close key or mark, our own toggle) ends the pane's
   // refreshes; answering without next would keep the pane open.

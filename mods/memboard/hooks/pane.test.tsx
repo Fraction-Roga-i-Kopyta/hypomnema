@@ -47,16 +47,22 @@ function report(change: (r: StatsReport) => StatsReport = r => r): ProcessRunRes
 
 type Script = {
   located?: boolean
-  stats?: () => ProcessRunResult
+  /** The stats answer; a promise answers late (on the mocked clock). */
+  stats?: () => ProcessRunResult | Promise<ProcessRunResult>
   context?: string
+  /** `$.ui.open` throws instead of answering. */
+  openFails?: boolean
 }
 
 type World = {
   clock: MockClock
   statuses: (string | undefined)[]
   runs: (readonly string[])[]
+  /** HYPOMNEMA_SESSION_ID of each stats run, in order. */
+  sessions: (string | undefined)[]
   opened: string[]
   closed: string[]
+  toasts: string[]
   script: Script
 }
 
@@ -65,8 +71,10 @@ function world(on: On, script: Script = {}): World {
     clock: mock.clock(on),
     statuses: [],
     runs: [],
+    sessions: [],
     opened: [],
     closed: [],
+    toasts: [],
     script,
   }
   on('session.start', (_, e) => ({ cwd: e.cwd }))
@@ -75,7 +83,12 @@ function world(on: On, script: Script = {}): World {
     w.statuses.push(e.text)
     return { value: undefined }
   })
+  on('ui.toast', (_, e) => {
+    w.toasts.push(e.text)
+    return { value: undefined }
+  })
   on('ui.open', (_, e) => {
+    if (w.script.openFails) throw new Error('no surface')
     w.opened.push(e.id)
     return { value: { isPlaced: true } }
   })
@@ -83,12 +96,13 @@ function world(on: On, script: Script = {}): World {
     w.closed.push(e.id)
     return { value: undefined }
   })
-  on('process.run', (_, e) => {
+  on('process.run', async (_, e) => {
     w.runs.push(e.argv)
     if (e.argv[0] === '/bin/sh') {
       return { value: w.script.located === false ? ran('', 1) : ran(`${BIN}\n`) }
     }
-    return { value: (w.script.stats ?? (() => report()))() }
+    w.sessions.push(e.init?.env?.HYPOMNEMA_SESSION_ID)
+    return { value: await (w.script.stats ?? (() => report()))() }
   })
   on('classic.SessionStart', () => ({}))
   on('classic.UserPromptSubmit', () => ({ additionalContext: [w.script.context ?? CONTEXT] }))
@@ -356,10 +370,61 @@ test('memboard toggles the pane', async ($, on) => {
   const w = world(on)
   await start($, w)
 
-  await toggle($)
-  await toggle($)
+  // A plugin's command text would ride in the model's requests: none here.
+  expect((await toggle($)).text).toBeUndefined()
+  expect((await toggle($)).text).toBeUndefined()
   expect(w.opened).toEqual(['memboard'])
   expect(w.closed).toEqual(['memboard'])
   await toggle($)
   expect(w.opened).toEqual(['memboard', 'memboard'])
+  expect(w.toasts).toEqual([])
+})
+
+test('a failed toggle toasts instead of answering text', async ($, on) => {
+  const w = world(on, { openFails: true })
+  await start($, w)
+
+  expect((await toggle($)).text).toBeUndefined()
+  expect(w.toasts).toEqual(['memboard: the dashboard could not toggle'])
+})
+
+test('stats runs for the session id of the hooks', async ($, on) => {
+  const w = world(on)
+  await start($, w)
+  expect(w.sessions.length).toBeGreaterThan(0)
+  expect(w.sessions.every(sid => sid === 's1')).toBe(true)
+
+  // /clear: a new session id with no new session.start.
+  const before = w.sessions.length
+  await $.classic.SessionStart({ source: 'clear', session_id: 's2' })
+  await w.clock.settle()
+
+  expect(w.sessions.length).toBe(before + 1)
+  expect(w.sessions.at(-1)).toBe('s2')
+})
+
+test('a late answer for the old session is dropped', async ($, on) => {
+  const w = world(on)
+  await start($, w)
+  const withInjected = (n: number) =>
+    report(r => (r.session === undefined ? r : { ...r, session: { ...r.session, injected: n } }))
+
+  // s1's refresh answers only after a second; /clear to s2 lands meanwhile.
+  w.script.stats = async () => {
+    await w.clock.sleep(1000)
+    return withInjected(99)
+  }
+  await $.classic.Stop({ stop_hook_active: false, session_id: 's1' })
+  await w.clock.settle()
+  w.script.stats = () => withInjected(7)
+  await $.classic.SessionStart({ source: 'clear', session_id: 's2' })
+  await w.clock.settle()
+  expect(w.statuses.at(-1)).toBe('mem 7↓ ✓1 · 33%')
+
+  await w.clock.advance(1000)
+  expect(w.sessions).toContain('s1')
+  expect(w.statuses.at(-1)).toBe('mem 7↓ ✓1 · 33%')
+  const ui = await $.ui.mount({ ...pane(52), surface: 'terminal' })
+  expect((await ui.find({ type: 'Text', text: /^Injected/ }))?.text).toBe('Injected 7  ✓ useful 1  · silent 2')
+  await ui.unmount()
 })
