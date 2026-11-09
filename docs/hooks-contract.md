@@ -338,8 +338,13 @@ Detection, in order:
    of a redirection like `2>&1`) and newline; quotes are not tracked, so a
    separator inside a quoted string only exposes more text to the check.
 3. **Text segments are skipped** — one whose first word (after `VAR=value`)
-   is `grep`, `rg`, `echo`, `printf` or `git`, unless it holds `$(`, a
-   backtick, `<(` or `>(` (a substitution inside it runs).
+   is `grep`, `rg`, `echo`, `printf`, `git` or `gh` (so a commit message or a
+   PR title/body that mentions `memoryctl pin` passes), with two exceptions
+   where the text runs after all: the segment holds `$(`, a backtick, `<(`
+   or `>(` (a substitution inside it runs — `gh pr create --title
+   "$(memoryctl pin x)"` blocks), or it pipes into a shell — a later segment
+   of its `|` pipeline runs `sh`, `bash`, `zsh`, `dash` or `ksh`, judged as
+   in step 1 (`echo 'memoryctl pin x' | sh` blocks).
 4. **Match** — in every other segment, `memoryctl` (bare or any path ending
    in `/memoryctl`, optionally closed by `)`, `'`, `"` or a backtick) followed
    by whitespace and `pin`, `unpin` or `mark` blocks, anywhere in the segment:

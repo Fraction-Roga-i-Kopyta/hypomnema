@@ -56,16 +56,29 @@ func runGuardBash(args []string) {
 // Heredoc bodies are cut first (commit messages, PR bodies and file contents
 // are not commands) unless the body is a script fed to a shell. The rest is
 // split into segments on ; && || | & and newline; a segment led by grep, rg,
-// echo, printf or git is text unless it holds a substitution. Every other
-// segment is searched for the verb anywhere — after env/command/xargs, inside
-// sh -c '…', after $(command -v memoryctl).
+// echo, printf, git or gh is text unless it holds a substitution or pipes
+// into a shell (echo '…' | sh runs the text). Every other segment is searched
+// for the verb anywhere — after env/command/xargs, inside sh -c '…', after
+// $(command -v memoryctl).
 func bashRunsPanelVerb(cmd string) bool {
 	cmd = strings.ReplaceAll(cmd, "\\\n", " ") // line continuation
-	for _, s := range splitBashSegments(cutHeredocs(cmd)) {
-		if textOnlySegment(s.text) {
+	segs := splitBashSegments(cutHeredocs(cmd))
+	for k, s := range segs {
+		if textOnlySegment(s.text) && !pipesIntoShell(segs, k) {
 			continue
 		}
 		if segmentRunsPanelVerb(s.text) {
+			return true
+		}
+	}
+	return false
+}
+
+// pipesIntoShell reports whether a segment after segs[k] in its pipeline
+// (joined by single |) runs a shell, which would execute segs[k]'s output.
+func pipesIntoShell(segs []bashSegment, k int) bool {
+	for m := k + 1; m < len(segs) && segs[m].pipedFrom; m++ {
+		if runsInterpreter(segs[m].text) {
 			return true
 		}
 	}
@@ -242,7 +255,7 @@ var (
 		"exec":    {"-a": true},
 		"sudo":    {"-u": true, "-g": true, "-U": true, "-C": true, "-D": true, "-h": true, "-p": true, "-r": true, "-t": true, "-T": true, "--user": true, "--group": true, "--chdir": true},
 	}
-	textCommands = map[string]bool{"grep": true, "rg": true, "echo": true, "printf": true, "git": true}
+	textCommands = map[string]bool{"grep": true, "rg": true, "echo": true, "printf": true, "git": true, "gh": true}
 	reAssignment = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
 	reRedirect   = regexp.MustCompile(`^[0-9]*[<>]`)
 )
@@ -272,8 +285,9 @@ func runsInterpreter(seg string) bool {
 }
 
 // textOnlySegment reports a segment that only prints or searches text: its
-// first word (after VAR=value) is grep, rg, echo, printf or git, and it holds
-// no command or process substitution, whose contents would run.
+// first word (after VAR=value) is grep, rg, echo, printf, git or gh, and it
+// holds no command or process substitution, whose contents would run. A text
+// segment that pipes into a shell is still checked (see pipesIntoShell).
 func textOnlySegment(seg string) bool {
 	for _, sub := range []string{"$(", "`", "<(", ">("} {
 		if strings.Contains(seg, sub) {

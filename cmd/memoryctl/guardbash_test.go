@@ -79,6 +79,15 @@ func TestGuardBash(t *testing.T) {
 		{"tab-stripped heredoc", "cat > notes.md <<-EOF\n\tmemoryctl pin x\n\tEOF", false},
 		{"redirect 2>&1 after text", `grep "memoryctl pin" docs 2>&1`, false},
 		{"not a panel verb", "memoryctl pinboard", false},
+
+		// R8: text piped into a shell runs; gh is a text command like git.
+		{"echo piped into sh", "echo 'memoryctl pin x' | sh", true},
+		{"printf piped into bash", "printf 'memoryctl pin x\\n' | bash", true},
+		{"echo piped into env bash", `echo "memoryctl mark x hide" | env bash`, true},
+		{"gh title mentions mark", `gh pr create --title "feat: memoryctl mark verb" --body x`, false},
+		{"gh body mentions pin", `gh pr create --title t --body "adds memoryctl pin and unpin"`, false},
+		{"gh body heredoc", "gh pr create --title \"x\" --body \"$(cat <<'EOF'\nmemoryctl pin x\nEOF\n)\"", false},
+		{"gh title substitution", `gh pr create --title "$(memoryctl pin x)"`, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
