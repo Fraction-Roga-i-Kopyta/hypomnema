@@ -35,6 +35,7 @@ type goldenCase struct {
 var goldenCases = []goldenCase{
 	{"STATS_SESSION", goldenSession},
 	{"STATS_FACT", goldenFact},
+	{"STATS_PROJECT", goldenProject},
 }
 
 // goldenWorld is statsWorld plus marks of every display form on alpha
@@ -59,6 +60,12 @@ func goldenSession(t *testing.T, root string) string {
 func goldenFact(t *testing.T, root string) string {
 	env := goldenWorld(t, root)
 	_, out := runStatsJSON(t, withEnv(env, "HYPOMNEMA_SESSION_ID", "s1"), "--scope", "fact", "alpha")
+	return out
+}
+
+func goldenProject(t *testing.T, root string) string {
+	env := goldenWorld(t, root)
+	_, out := runStatsJSON(t, env, "--scope", "project")
 	return out
 }
 
@@ -169,6 +176,8 @@ func checkGolden(t *testing.T, name string) {
 func TestGolden_Session(t *testing.T) { checkGolden(t, "STATS_SESSION") }
 
 func TestGolden_Fact(t *testing.T) { checkGolden(t, "STATS_FACT") }
+
+func TestGolden_Project(t *testing.T) { checkGolden(t, "STATS_PROJECT") }
 
 // TestGolden_StableAcrossRuns: two runs in different temp roots give
 // byte-identical normalized JSON, and no temp path survives normalization.

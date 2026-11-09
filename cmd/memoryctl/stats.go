@@ -7,12 +7,13 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/doctor"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/sidecar"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/stats"
 )
 
-const statsUsage = "Usage: memoryctl stats --json --scope session|fact [--session ID] [--project TAG] [<slug>]"
+const statsUsage = "Usage: memoryctl stats --json --scope session|fact|project [--session ID] [--project TAG] [<slug>]"
 
 // statsArgs is the parsed command line of `memoryctl stats`.
 type statsArgs struct {
@@ -22,7 +23,7 @@ type statsArgs struct {
 	sessionSet, projectSet bool
 }
 
-// runStats: memoryctl stats --json --scope session|fact [--session ID]
+// runStats: memoryctl stats --json --scope session|fact|project [--session ID]
 // [--project TAG] [<slug>]. Read-only JSON for the /memboard mod (the
 // stats.Report contract, schema_version 1). Exit 0 ok, 1 runtime failure or
 // no such fact, 2 misuse.
@@ -62,14 +63,39 @@ func runStats(args []string) {
 		if a.slug == "" {
 			misuse("--scope fact needs a <slug>")
 		}
+	case "project":
+		if a.slug != "" {
+			misuse("unexpected argument %q", a.slug)
+		}
+		if a.sessionSet {
+			misuse("--session applies to --scope session|fact")
+		}
 	default:
-		misuse("unknown scope %q (session|fact)", a.scope)
+		misuse("unknown scope %q (session|fact|project)", a.scope)
 	}
 
 	r := resolveStore("")
 	home, _ := os.UserHomeDir()
 	day := today()
 	rep := stats.Report{SchemaVersion: stats.SchemaVersion, Scope: a.scope, Today: day, Project: r.Project}
+
+	if a.scope == "project" {
+		st, anchor := r.Store, r.Anchor
+		if a.projectSet && a.project != r.Project {
+			st = storeByTag(a.project)
+			anchor = st.Root
+		}
+		u, err := stats.LoadUsage(filepath.Join(memoryDir(), ".wal"), day)
+		if err != nil {
+			fatalf("stats: %v", err)
+		}
+		recs, marks := sidecarView()
+		ps := stats.BuildProject(st, native.Collect(claudeDir(), st), recs, u, marks,
+			projectSessions(st.Project), doctorHealth(st, anchor), home)
+		rep.ProjectStats = &ps
+		writeStats(rep)
+		return
+	}
 
 	// A missing fact exits before any WAL or sidecar work.
 	var fact native.MemFile
@@ -101,12 +127,42 @@ func runStats(args []string) {
 		rep.Fact = &fc
 	}
 
+	writeStats(rep)
+}
+
+func writeStats(rep stats.Report) {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(rep); err != nil {
 		fatalf("stats: write: %v", err)
 	}
+}
+
+// projectSessions is the set of parent session ids of project tag: the
+// basenames of <configDir>/projects/<tag>/*.jsonl. A missing directory is
+// the empty set (never nil: nil would mean "no restriction").
+func projectSessions(tag string) map[string]bool {
+	out := map[string]bool{}
+	paths, _ := filepath.Glob(filepath.Join(configDir(), "projects", tag, "*.jsonl"))
+	for _, p := range paths {
+		out[strings.TrimSuffix(filepath.Base(p), ".jsonl")] = true
+	}
+	return out
+}
+
+// doctorHealth runs doctor in-process with the arguments `memoryctl doctor`
+// uses and folds the checks into the panel's summary.
+func doctorHealth(st native.Store, anchor string) stats.Health {
+	h := stats.Health{Problems: []string{}}
+	rep := doctor.Run(claudeDir(), memoryDir(), st, anchor)
+	h.OK, h.Warn, h.Fail = rep.Counts()
+	for _, c := range rep.Checks {
+		if c.Status == doctor.WARN || c.Status == doctor.FAIL {
+			h.Problems = append(h.Problems, stats.Problem(c.Detail))
+		}
+	}
+	return h
 }
 
 // parseStatsArgs parses by hand (no flag package, like the other verbs).

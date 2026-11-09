@@ -296,3 +296,70 @@ func TestStats_CorruptSidecar(t *testing.T) {
 		t.Fatalf("corrupt sidecar: %+v", rep.Fact)
 	}
 }
+
+func TestStats_ProjectScopeCLI(t *testing.T) {
+	root := statsRoot(t)
+	env, tag := statsWorld(t, root)
+	// Transcripts of s1 only: days count s1 (and its subagent), not s2.
+	projDir := filepath.Join(env["CLAUDE_HOME"], "projects", tag)
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projDir, "s1.jsonl"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, errOut, code := run(t, env, "mark", "alpha", "rewrite"); code != 0 {
+		t.Fatalf("mark: %s", errOut)
+	}
+	rep, _ := runStatsJSON(t, env, "--scope", "project")
+	p := rep.ProjectStats
+	if p == nil || rep.Scope != "project" || p.Project != tag || p.Visible != 4 || p.Local != 3 || p.Global != 1 ||
+		p.Candidates != 1 || p.Pinned != 1 {
+		t.Fatalf("project_stats: %+v", p)
+	}
+	if len(p.Days) != 7 || p.Days[6].Date != "2026-11-09" || p.Days[6].Injected != 2 || p.Days[6].Silent != 2 || p.Days[6].Useful != 1 {
+		t.Fatalf("days: %+v", p.Days)
+	}
+	if len(p.Queue) != 1 || p.Queue[0].Slug != "alpha.md" {
+		t.Fatalf("queue: %+v", p.Queue)
+	}
+	if p.Health.OK+p.Health.Warn+p.Health.Fail == 0 {
+		t.Fatalf("health empty: %+v", p.Health)
+	}
+
+	for _, args := range [][]string{
+		{"--scope", "project", "extra"},
+		{"--scope", "project", "--session", "s1"},
+	} {
+		_, errOut, code := run(t, env, append([]string{"stats", "--json"}, args...)...)
+		if code != 2 {
+			t.Errorf("%v: exit=%d stderr=%s", args, code, errOut)
+		}
+	}
+	_, _, code := run(t, env, "stats", "--json", "--scope", "project", "--project", "nope")
+	if code != 1 {
+		t.Errorf("unknown project: exit=%d", code)
+	}
+	rep2, _ := runStatsJSON(t, env, "--scope", "project", "--project", tag)
+	if rep2.ProjectStats.Project != tag {
+		t.Fatalf("--project tag: %+v", rep2.ProjectStats)
+	}
+}
+
+func TestStats_ProjectEmptyWorld(t *testing.T) {
+	env := statsEnv(statsRoot(t))
+	rep, _ := runStatsJSON(t, env, "--scope", "project")
+	p := rep.ProjectStats
+	if p == nil || p.Visible != 0 || p.Local != 0 || p.Global != 0 || len(p.Days) != 7 || len(p.Queue) != 0 ||
+		len(p.Triage.Noisy) != 0 || p.Health.OK+p.Health.Warn+p.Health.Fail == 0 {
+		t.Fatalf("empty world: %+v", p)
+	}
+	for _, d := range p.Days {
+		if d.Injected != 0 || d.Useful != 0 || d.Silent != 0 {
+			t.Fatalf("days: %+v", p.Days)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(env["CLAUDE_MEMORY_DIR"], ".sidecar.db")); !os.IsNotExist(err) {
+		t.Fatalf("stats created a sidecar: %v", err)
+	}
+}

@@ -79,7 +79,7 @@ Usage:
       rewrite | split | merge | review, and done (closes the fact's tasks).
       A task also closes when the file's content changes or the fact is
       retired; a status-only change (pin/unpin) keeps it open.
-  memoryctl stats --json --scope session|fact [--session ID] [--project TAG] [<slug>]
+  memoryctl stats --json --scope session|fact|project [--session ID] [--project TAG] [<slug>]
       Read-only JSON for the /memboard mod (schema_version 1; --json is
       required). session: WAL counts of one session and its subagents
       (--session, else HYPOMNEMA_SESSION_ID, else CLAUDE_CODE_SESSION_ID;
@@ -89,7 +89,11 @@ Usage:
       (--project TAG picks the store; same lookup as retire); its
       injected/useful are this session's when a session id is known. A
       missing sidecar is not created (projection defaults are reported).
-      Exit 1 = no such fact or unreadable WAL.
+      project: the store's counts (local/global/by type), the last 7 days
+      of its sessions, doctor health, triage lists (noisy, candidates,
+      stale; max 50 each) and the open-task queue (--project TAG picks
+      another store).
+      Exit 1 = no such fact, unknown store or unreadable WAL.
   memoryctl skill-inject
       PostToolUse hook verb. Reads a hook envelope from stdin, extracts
       tool_input.skill, retrieves skill-learning facts bound to that skill,

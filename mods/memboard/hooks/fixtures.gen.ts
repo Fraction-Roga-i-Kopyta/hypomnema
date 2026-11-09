@@ -164,3 +164,130 @@ export const STATS_FACT: StatsReport = {
     "useful": 1
   }
 }
+
+export const STATS_PROJECT: StatsReport = {
+  "schema_version": 1,
+  "scope": "project",
+  "today": "2026-11-09",
+  "project": "-HOME-work-proj",
+  "project_stats": {
+    "project": "-HOME-work-proj",
+    "display": "work-proj",
+    "visible": 4,
+    "local": 3,
+    "global": 1,
+    "by_type": {
+      "feedback": 1,
+      "knowledge": 1,
+      "mistake": 1,
+      "strategy": 1
+    },
+    "candidates": 1,
+    "stale": 0,
+    "pinned": 1,
+    "days": [
+      {
+        "date": "2026-11-03",
+        "injected": 0,
+        "useful": 0,
+        "silent": 0
+      },
+      {
+        "date": "2026-11-04",
+        "injected": 0,
+        "useful": 0,
+        "silent": 0
+      },
+      {
+        "date": "2026-11-05",
+        "injected": 0,
+        "useful": 0,
+        "silent": 0
+      },
+      {
+        "date": "2026-11-06",
+        "injected": 0,
+        "useful": 0,
+        "silent": 0
+      },
+      {
+        "date": "2026-11-07",
+        "injected": 0,
+        "useful": 0,
+        "silent": 0
+      },
+      {
+        "date": "2026-11-08",
+        "injected": 0,
+        "useful": 0,
+        "silent": 0
+      },
+      {
+        "date": "2026-11-09",
+        "injected": 0,
+        "useful": 0,
+        "silent": 0
+      }
+    ],
+    "health": {
+      "ok": 12,
+      "warn": 3,
+      "fail": 2,
+      "problems": [
+        "/HOME/.claude/settings.json unreadab",
+        "missing: session-start.sh,user-prompt-submit.sh,pre-tool-write.sh,pre-tool-bash.sh,skill-learnings-inject.sh,skill-activ",
+        "/HOME/.claude/hooks absent",
+        "/HOME/.claude/bin absent",
+        "memoryctl binary not built — run `make build` then ./install.sh"
+      ]
+    },
+    "triage": {
+      "noisy": [],
+      "candidates": [
+        {
+          "project": "-HOME-work-proj",
+          "display": "work-proj",
+          "slug": "beta.md",
+          "name": "beta-bug",
+          "type": "mistake",
+          "status": "candidate",
+          "description": "Beta bug",
+          "path": "/HOME/.claude/projects/-HOME-work-proj/memory/beta.md",
+          "created": "2026-10-20",
+          "ref_count": 1,
+          "effectiveness": 0.4444444444444444,
+          "last_injected": "2026-11-08",
+          "last_useful": "",
+          "injected_30d": 1,
+          "useful_30d": 0,
+          "marks": []
+        }
+      ],
+      "stale": []
+    },
+    "queue": [
+      {
+        "project": "-HOME-work-proj",
+        "display": "work-proj",
+        "slug": "alpha.md",
+        "name": "alpha-rule",
+        "type": "feedback",
+        "status": "active",
+        "description": "Alpha rule for stats",
+        "path": "/HOME/.claude/projects/-HOME-work-proj/memory/alpha.md",
+        "created": "2026-11-01",
+        "ref_count": 3,
+        "effectiveness": 0.6666666666666666,
+        "last_injected": "2026-11-09",
+        "last_useful": "2026-11-09",
+        "injected_30d": 3,
+        "useful_30d": 1,
+        "marks": [
+          "hide:-HOME-work-proj",
+          "less",
+          "task:rewrite"
+        ]
+      }
+    ]
+  }
+}
