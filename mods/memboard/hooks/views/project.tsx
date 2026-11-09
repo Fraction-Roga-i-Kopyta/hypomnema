@@ -28,6 +28,11 @@ export function ProjectView({ ui, width, stats, scope, limits, onOpen, onMore }:
     .map(([type, n]) => `${type} ${n}`)
   const mix = joinFit(types, Math.max(1, width - 5))
   const { health } = stats
+  // `Health ● ok 1 ▲ warn 2 ✕ fail 3` when it fits; else the label goes, then each part is cut.
+  const parts = [`● ok ${health.ok}`, `▲ warn ${health.warn}`, `✕ fail ${health.fail}`]
+  const joined = parts.reduce((n, p) => n + Array.from(p).length, 0) + 2
+  const showLabel = joined + 7 <= width
+  const cell = joined <= width ? width : Math.max(1, Math.floor((width - 2) / 3))
 
   const block = (title: string, key: string, facts: FactRef[]) => {
     const list = `${scope}-${key}`
@@ -74,10 +79,10 @@ export function ProjectView({ ui, width, stats, scope, limits, onOpen, onMore }:
       </Box>
       <Box flexDirection="column" marginTop={1}>
         <Box flexDirection="row" gap={1}>
-          <Text bold>Health</Text>
-          <Text color="success">{`● ok ${health.ok}`}</Text>
-          <Text color="warning">{`▲ warn ${health.warn}`}</Text>
-          <Text color="error">{`✕ fail ${health.fail}`}</Text>
+          {showLabel && <Text bold>Health</Text>}
+          <Text color="success">{fit(parts[0] ?? '', cell)}</Text>
+          <Text color="warning">{fit(parts[1] ?? '', cell)}</Text>
+          <Text color="error">{fit(parts[2] ?? '', cell)}</Text>
         </Box>
         {health.problems.slice(0, PROBLEMS).map(p => (
           <Text dimColor>{fit(`· ${p}`, width)}</Text>

@@ -37,6 +37,8 @@ type World = {
   runs: (readonly string[])[]
   project: () => StatsReport
   all: () => StatsReport
+  /** Scopes whose stats run exits non-zero. */
+  failing: Set<string>
 }
 
 function world(on: On): World {
@@ -45,6 +47,7 @@ function world(on: On): World {
     runs: [],
     project: () => copy(STATS_PROJECT),
     all: () => copy(STATS_ALL),
+    failing: new Set(),
   }
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('command.register', () => ({ value: { command: 'memboard' } }))
@@ -55,6 +58,9 @@ function world(on: On): World {
     w.runs.push(e.argv)
     if (e.argv[0] === '/bin/sh') return { value: ran(`${BIN}\n`) }
     const scope = e.argv[e.argv.indexOf('--scope') + 1]
+    if (scope !== undefined && w.failing.has(scope)) {
+      return { value: { ...ran(''), exitCode: 1, stderr: `boom ${scope}\n` } }
+    }
     const r = scope === 'project' ? w.project() : scope === 'all' ? w.all() : copy(STATS_SESSION)
     return { value: ran(JSON.stringify(r)) }
   })
@@ -163,7 +169,7 @@ test('rows fit 40 columns', async ($, on) => {
       ps.queue = ps.queue.map(dead)
       ps.triage.noisy = ps.queue.map(dead)
       ps.triage.candidates = ps.triage.candidates.map(dead)
-      ps.health.problems = [LONG]
+      ps.health = { ok: 123456, warn: 45, fail: 6, problems: [LONG, LONG, LONG, LONG] }
     }
     const a = r.all
     if (a !== undefined) {
@@ -186,6 +192,13 @@ test('rows fit 40 columns', async ($, on) => {
       expect(elements.length).toBeGreaterThan(8)
       for (const el of elements) {
         expect(width(el) <= 40, `${key}: ${el.type} ${width(el)} > 40: ${el.text}`).toBe(true)
+      }
+      if (key === 'tab-project') {
+        // The Health row is one line of three Texts and gaps.
+        const cells = await ui.findAll({ type: 'Text', text: /^[●▲✕]/ })
+        expect(cells).toHaveLength(3)
+        const row = cells.reduce((n, c) => n + width(c), 0) + cells.length - 1
+        expect(row <= 40, `health row ${row} > 40`).toBe(true)
       }
     }
     await ui.unmount()
@@ -262,5 +275,76 @@ test('the pane timer refreshes only the visible tab', async ($, on) => {
   await w.clock.advance(180_000)
   expect(scoped(w, 'all')).toHaveLength(2)
   expect(scoped(w, 'project')).toHaveLength(0)
+  await ui.unmount()
+})
+
+const goTo = async (ui: { press: (t: { key: string }) => Promise<unknown> }, w: World, key: string) => {
+  await ui.press({ key })
+  await w.clock.settle()
+}
+
+test('a failed fetch shows its error above the cached rows, a good one clears it', async ($, on) => {
+  const w = world(on)
+  await start($, w)
+  const ui = await $.ui.mount({ ...pane(52), surface: 'terminal' })
+  await goTo(ui, w, 'tab-project')
+  expect(await ui.find({ type: 'Text', text: /boom/ })).toBeUndefined()
+
+  w.failing.add('project')
+  await w.clock.advance(121_000)
+  await goTo(ui, w, 'tab-session')
+  await goTo(ui, w, 'tab-project')
+  expect((await ui.find({ type: 'Text', text: /boom project/ }))?.text).toBe('boom project')
+  expect(await ui.find({ key: `project-cand:${P}/beta.md` })).toBeDefined()
+
+  w.failing.delete('project')
+  await w.clock.advance(121_000)
+  await goTo(ui, w, 'tab-session')
+  await goTo(ui, w, 'tab-project')
+  expect(await ui.find({ type: 'Text', text: /boom/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('an error stays with the view that raised it', async ($, on) => {
+  const w = world(on)
+  await start($, w)
+  const ui = await $.ui.mount({ ...pane(52), surface: 'terminal' })
+  await goTo(ui, w, 'tab-all')
+  await goTo(ui, w, 'tab-session')
+
+  w.failing.add('project')
+  await goTo(ui, w, 'tab-project')
+  expect(await ui.find({ type: 'Text', text: /boom project/ })).toBeDefined()
+
+  // All is cached and fresh; the project error is not its own.
+  await goTo(ui, w, 'tab-all')
+  expect(await ui.find({ type: 'Text', text: /boom/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /^Stored/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a drill-down does not show the All error', async ($, on) => {
+  const w = world(on)
+  await start($, w)
+  const ui = await $.ui.mount({ ...pane(52), surface: 'terminal' })
+  await goTo(ui, w, 'tab-all')
+  w.failing.add('all')
+  await w.clock.advance(121_000)
+  await goTo(ui, w, 'tab-session')
+  await goTo(ui, w, 'tab-all')
+  expect(await ui.find({ type: 'Text', text: /boom all/ })).toBeDefined()
+
+  // The drill fetch stalls: its own view has no error, only Loading.
+  w.failing.delete('all')
+  w.failing.add('project')
+  await ui.press({ key: `proj:${P}/` })
+  await w.clock.settle()
+  expect(await ui.find({ type: 'Text', text: /boom all/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /boom project/ })).toBeDefined()
+  w.failing.delete('project')
+  await ui.press({ key: 'back' })
+  await ui.press({ key: `proj:${P}/` })
+  await w.clock.settle()
+  expect(await ui.find({ type: 'Text', text: /boom/ })).toBeUndefined()
   await ui.unmount()
 })

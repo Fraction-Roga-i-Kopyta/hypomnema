@@ -131,8 +131,8 @@ declare module 'claude-code' {
       drill: Shaped<string | null>
       /** The last `stats --scope project --project <drill>`. */
       drillCache: Shaped<DrillCache | null>
-      /** Why the visible Project / All tab has nothing new; null after a good fetch. */
-      tabError: Shaped<string | null>
+      /** Why a view (`project`, `all`, `drill:<tag>`) could not refresh; cleared by that view's good fetch. */
+      tabError: Shaped<{ view: string; message: string } | null>
       /** Rows shown per triage list, by list name; absent means the default. */
       limits: Shaped<Record<string, number>>
       /** The fact a row press chose (the card opens from it). */

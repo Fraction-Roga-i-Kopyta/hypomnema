@@ -41,7 +41,7 @@ const project = atom({ plugin: 'memboard', key: 'project' } as const, null, { sh
 const all = atom({ plugin: 'memboard', key: 'all' } as const, null, { shape: 'cache-1' })
 const drill = atom({ plugin: 'memboard', key: 'drill' } as const, null, { shape: 'drill-1' })
 const drillCache = atom({ plugin: 'memboard', key: 'drillCache' } as const, null, { shape: 'dcache-1' })
-const tabError = atom({ plugin: 'memboard', key: 'tabError' } as const, null, { shape: 'tabError-1' })
+const tabError = atom({ plugin: 'memboard', key: 'tabError' } as const, null, { shape: 'tabError-2' })
 const limits = atom({ plugin: 'memboard', key: 'limits' } as const, {}, { shape: 'limits-1' })
 const selected = atom({ plugin: 'memboard', key: 'selected' } as const, null, { shape: 'selected-1' })
 
@@ -84,6 +84,11 @@ async function refresh($: EngineInterface): Promise<void> {
  * Without `force` a cache younger than CACHE_MS stands. Nothing runs for the
  * Session tab: its numbers are `refresh`'s.
  */
+/** The view a fetch serves: `project`, `all`, or `drill:<tag>`. */
+function viewOf(active: Tab, tag: string | null): string {
+  return active === 'all' && tag !== null ? `drill:${tag}` : active
+}
+
 async function loadTab($: EngineInterface, force: boolean): Promise<void> {
   const active = await read($, tab)
   if (active === 'session') return
@@ -98,6 +103,8 @@ async function loadTab($: EngineInterface, force: boolean): Promise<void> {
   const path = await read($, bin)
   const sid = await read($, sessionId)
   if (path === null || sid === null) return
+  // The error belongs to the view that asked, not to whichever is showing later.
+  const view = viewOf(active, tag)
   const args =
     active === 'project'
       ? ['--scope', 'project']
@@ -109,7 +116,8 @@ async function loadTab($: EngineInterface, force: boolean): Promise<void> {
   const body = r.ok ? (active === 'all' && tag === null ? r.report.all : r.report.project_stats) : undefined
   if (!r.ok || body === undefined) {
     // The tabs stay: only this view says why it has nothing new.
-    await update($, tabError, () => (r.ok ? `memoryctl stats sent no ${args[1]} report` : r.error))
+    const message = r.ok ? `memoryctl stats sent no ${args[1]} report` : r.error
+    await update($, tabError, () => ({ view, message }))
     return
   }
   const fetchedAt = await $.clock.now()
@@ -117,7 +125,7 @@ async function loadTab($: EngineInterface, force: boolean): Promise<void> {
   if (active === 'project') await update($, project, () => ({ report, fetchedAt }))
   else if (tag === null) await update($, all, () => ({ report, fetchedAt }))
   else await update($, drillCache, () => ({ report, fetchedAt, tag }))
-  await update($, tabError, () => null)
+  await update($, tabError, e => (e?.view === view ? null : e))
 }
 
 /** The open pane's timer tick: the visible tab only. */
@@ -234,11 +242,8 @@ export const register: Register = on => {
     await $.ui.open({ id: PANE, title: 'Memory' })
     await update($, isOpen, () => true)
     startPaneTimer($)
-    try {
-      await loadTab($, false)
-    } catch {
-      // The tab shows what it has; the next press or tick fetches.
-    }
+    // The command returns at once; the tab fills when the fetch lands.
+    loadTab($, false).catch(() => undefined)
     return {}
   }).catch($ => {
     $.ui.toast('memboard: the dashboard could not toggle')
@@ -272,7 +277,6 @@ export const register: Register = on => {
     const open = async (t: Tab) => {
       await update($, tab, () => t)
       await update($, drill, () => null)
-      await update($, tabError, () => null)
       try {
         await loadTab($, false)
       } catch {
@@ -283,9 +287,11 @@ export const register: Register = on => {
     const lim = await read($, limits)
     const onOpen = (fact: FactKey) => void update($, selected, () => fact)
     const onMore = (list: string) => void update($, limits, l => ({ ...l, [list]: (l[list] ?? DEFAULT_LIMIT) + MORE_STEP }))
-    const why = await read($, tabError)
-    const loading = why === null ? <Text dimColor>{fit('Loading…', width)}</Text> : <Text color="warning">{fit(why, width)}</Text>
     const tag = await read($, drill)
+    const failure = await read($, tabError)
+    const why = failure !== null && failure.view === viewOf(active, tag) ? failure.message : null
+    // With an error and nothing cached, the error line alone says why.
+    const loading = why === null ? <Text dimColor>{fit('Loading…', width)}</Text> : null
     const projectCache = await read($, project)
     const allCache = await read($, all)
     const dCache = await read($, drillCache)
@@ -371,6 +377,7 @@ export const register: Register = on => {
           ))}
         </Box>
         <Text dimColor>{rule(name, width)}</Text>
+        {why !== null && <Text color="warning">{fit(why, width)}</Text>}
         {body}
       </Box>
     )
