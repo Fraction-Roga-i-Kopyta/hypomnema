@@ -34,15 +34,15 @@ fi
 echo "$out" | grep -qi "not valid JSON" || _fail "corrupt settings: no clear error message"
 [ -d "$CD/hooks/v2" ] && _fail "corrupt settings: shims were installed before the abort"
 
-# --- 2. Fresh install: 8 shims, 8 registrations, Next steps → doctor ---
+# --- 2. Fresh install: 9 shims, 9 registrations, Next steps → doctor ---
 CD="$(_sandbox fresh)"
 echo '{}' > "$CD/settings.json"
 out=$(CLAUDE_DIR="$CD" "$REPO/install.sh" 2>&1) || _fail "fresh install exited non-zero: $out"
 n=$(find "$CD/hooks/v2" -name '*.sh' 2>/dev/null | wc -l | tr -d ' ')
-[ "$n" -eq 8 ] || _fail "fresh install: expected 8 shims, got $n"
+[ "$n" -eq 9 ] || _fail "fresh install: expected 9 shims, got $n"
 reg=$(jq '[.hooks // {} | to_entries[] | .value[]?.hooks[]?
            | select((.command // "") | test("hooks/v2/.*\\.sh"))] | length' "$CD/settings.json")
-[ "$reg" -eq 8 ] || _fail "fresh install: expected 8 registered hooks, got $reg"
+[ "$reg" -eq 9 ] || _fail "fresh install: expected 9 registered hooks, got $reg"
 echo "$out" | grep -q "memoryctl doctor" || _fail "next steps must recommend 'memoryctl doctor'"
 echo "$out" | grep -q "memoryctl status" && _fail "next steps still recommends nonexistent 'memoryctl status'"
 _ok "fresh install"
@@ -64,7 +64,7 @@ else
   _ok "dry-run with stale symlink"
 fi
 
-# --- 4. Uninstall removes ALL 8 shims and every settings entry ---
+# --- 4. Uninstall removes ALL 9 shims and every settings entry ---
 CD="$(_sandbox uninstall)"
 echo '{}' > "$CD/settings.json"
 CLAUDE_DIR="$CD" "$REPO/install.sh" >/dev/null 2>&1 || _fail "install (for uninstall case) failed"

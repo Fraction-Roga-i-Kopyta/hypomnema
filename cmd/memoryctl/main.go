@@ -59,14 +59,48 @@ Usage:
       "recall" WAL event for the delivered fact and unions it into the
       session's injected list. Includes stale facts (marked [stale]) —
       recalling one revives it.
-  memoryctl retire <slug> [--reason "..."] [--superseded-by <ref>]
+  memoryctl retire <slug> [--reason "..."] [--superseded-by <ref>] [--project TAG]
       Retire a fact: move its file to the store's .archive/, stamp tombstone
-      frontmatter (retired/retire-reason/superseded-by), emit a "retire" WAL
-      event. The sidecar projects the row as status=retired; recall shows a
-      tombstone pointing at the successor. Undo with "memoryctl revive".
-  memoryctl revive <slug>
+      frontmatter (retired/retire-reason/superseded-by/archived-from), emit a "retire" WAL
+      event and refresh the sidecar, which projects the row as
+      status=retired and closes the fact's tasks; recall shows a tombstone
+      pointing at the successor. Undo with "memoryctl revive".
+  memoryctl revive <slug> [--project TAG]
       Move a retired fact back into its live store, strip the tombstone
-      keys, and emit a "revive" WAL event.
+      keys, emit a "revive" WAL event and refresh the sidecar.
+  memoryctl pin <slug> [--project TAG]
+  memoryctl unpin <slug> [--project TAG]
+      Set the fact's frontmatter status to pinned (never decays) or back to
+      active, emit a "pin"/"unpin" WAL audit event, refresh the sidecar.
+  memoryctl mark <slug> <directive> [--project TAG]
+      Record a /memboard directive as a "mark" WAL event and refresh the
+      sidecar's mark table; the fact's file is not touched. Directives:
+      hide (this project only; global facts and facts of this project),
+      less, clear (drops every mark and open task of the fact), the tasks
+      rewrite | split | merge | review, and done (closes the fact's tasks).
+      A task also closes when the file's content changes or the fact is
+      retired; a status-only change (pin/unpin) keeps it open.
+  memoryctl stats --json --scope session|fact|project|all [--session ID] [--project TAG] [<slug>]
+      Read-only JSON for the /memboard mod (schema_version 1; --json is
+      required). session: WAL counts of one session and its subagents
+      (--session, else HYPOMNEMA_SESSION_ID, else CLAUDE_CODE_SESSION_ID;
+      no id = exit 2) — injected, useful/silent/undelivered citations,
+      recalls, delivered facts, the 10 most-injected facts with their card
+      fields. fact: the card of <slug> in the project or global store
+      (--project TAG picks the store; same lookup as retire); its
+      injected/useful are this session's when a session id is known. A
+      missing sidecar is not created (projection defaults are reported).
+      project: the store's counts (local/global/by type), the last 7 days
+      of its sessions, doctor health, triage lists (noisy, candidates,
+      stale; max 50 each) and the open-task queue (--project TAG picks
+      another store; --project global lists the global store alone).
+      all: every store at once (no --session, no --project) — the funnel
+      (stored, injected 7d, useful 7d, not injected 30d; files that exist
+      now only), one row per store (facts, useful 7d), counts by type and
+      the triage lists across stores.
+      Every report carries the session's store tag ("project") and its
+      display form ("display"). A WAL line over 1 MiB is skipped.
+      Exit 1 = no such fact, unknown store or unreadable WAL.
   memoryctl skill-inject
       PostToolUse hook verb. Reads a hook envelope from stdin, extracts
       tool_input.skill, retrieves skill-learning facts bound to that skill,
@@ -91,10 +125,13 @@ Usage:
       (A/B evidence). Read-only; see docs/measurements/.
 
 Hook verbs (invoked by the v2 shims, not run by hand): inject, close, guard,
-skill-inject, skill-active. Each reads a hook envelope on stdin and is
-fail-safe (exit 0 on bad input); guard is the exception — it exits 2 to block
-a secret-bearing write. The subagent hooks call inject --subagent
-(SubagentStart) and close --subagent (SubagentStop).
+guard-bash, skill-inject, skill-active. Each reads a hook envelope on stdin and
+is fail-safe (exit 0 on bad input); guard and guard-bash are the exceptions —
+guard exits 2 to block a secret-bearing write, guard-bash (PreToolUse:Bash)
+exits 2 to block the model's own Bash call to the /memboard verbs pin, unpin
+and mark (only "mark <slug> done" passes). guard-bash stops accidental or
+injected CLI calls; it is not a security boundary. The subagent hooks call
+inject --subagent (SubagentStart) and close --subagent (SubagentStop).
 
 Environment:
   CLAUDE_MEMORY_DIR       Memory root (default: ~/.claude/memory).
@@ -169,6 +206,14 @@ func main() {
 		runRetire(os.Args[2:])
 	case "revive":
 		runRevive(os.Args[2:])
+	case "pin":
+		runPin(os.Args[2:], "pinned")
+	case "unpin":
+		runPin(os.Args[2:], "active")
+	case "mark":
+		runMark(os.Args[2:])
+	case "stats":
+		runStats(os.Args[2:])
 	case "skill-inject":
 		runSkillInject(os.Args[2:])
 	case "skill-active":
@@ -177,6 +222,8 @@ func main() {
 		runAB(os.Args[2:])
 	case "guard":
 		runGuard(os.Args[2:])
+	case "guard-bash":
+		runGuardBash(os.Args[2:])
 	case "reindex":
 		runReindex(os.Args[2:])
 	default:

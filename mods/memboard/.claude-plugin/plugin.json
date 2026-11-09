@@ -1,0 +1,6 @@
+{
+  "name": "memboard",
+  "version": "0.1.0",
+  "description": "Memory dashboard for hypomnema",
+  "types": "./types/index.d.ts"
+}

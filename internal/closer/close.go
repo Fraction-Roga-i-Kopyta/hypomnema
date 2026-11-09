@@ -24,8 +24,12 @@ type Input struct {
 	CWD            string
 	TranscriptPath string
 	ClaudeHome     string
-	MemoryDir      string
-	Today          string
+	// ConfigDir is Claude Code's config dir (projects/ lives there; differs
+	// from ClaudeHome under CLAUDE_CONFIG_DIR). "" → ClaudeHome. It locates
+	// every project's store for the mark table's file checks.
+	ConfigDir string
+	MemoryDir string
+	Today     string
 	// Store is the resolved native store. Zero value → resolved from CWD
 	// (tests and legacy callers); the memoryctl verb always sets it.
 	Store native.Store
@@ -42,6 +46,16 @@ func (in Input) store() native.Store {
 		return in.Store
 	}
 	return native.StoreFor(in.ClaudeHome, in.CWD)
+}
+
+// storeDirs maps every reachable store tag to its directory for
+// sidecar.ReprojectAll's mark checks.
+func (in Input) storeDirs(st native.Store) map[string]string {
+	cfg := in.ConfigDir
+	if cfg == "" {
+		cfg = in.ClaudeHome
+	}
+	return native.StoreDirs(cfg, in.ClaudeHome, st)
 }
 
 // Result reports what close did (for diagnostics).
@@ -154,7 +168,7 @@ func Run(in Input) (Result, error) {
 
 	nativeFiles := collectNative(in.ClaudeHome, st)
 	if s, err := sidecar.Open(filepath.Join(in.MemoryDir, ".sidecar.db")); err == nil {
-		_ = sidecar.Reproject(s, nativeFiles, filepath.Join(in.MemoryDir, ".wal"), st.Scope())
+		_ = sidecar.ReprojectAll(s, nativeFiles, filepath.Join(in.MemoryDir, ".wal"), st.Scope(), in.storeDirs(st))
 		if n, derr := s.MarkStale(in.Today); derr == nil {
 			res.Staled = n
 		}

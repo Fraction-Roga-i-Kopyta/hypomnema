@@ -40,6 +40,61 @@ func TestInject_SystemPromptSkipped(t *testing.T) {
 	}
 }
 
+// R20: the /memboard toggle (with or without args, any surrounding
+// whitespace) is not a prompt: no output, no inject row, the session lists
+// untouched, so opening the panel spends no once-per-context slot. Other
+// slash prompts — and a prompt that merely starts with the word — still
+// inject.
+func TestInject_MemboardToggleSkipped(t *testing.T) {
+	f := newStoreFixture(t)
+	f.fact(t, "/tmp/proj", "memboard", "memboard dashboard pane")
+	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
+	rt := filepath.Join(f.mem, ".runtime")
+	os.MkdirAll(rt, 0o755)
+	before := []byte("earlier.md\n")
+	for _, name := range []string{"injected-s1.list", "rendered-s1.list"} {
+		os.WriteFile(filepath.Join(rt, name), before, 0o600)
+	}
+	for _, prompt := range []string{"/memboard", "  /memboard  ", `/memboard memboard`, `\t/memboard\n`} {
+		out, _, code := runStdin(t, f.env,
+			`{"session_id":"s1","cwd":"/tmp/proj","prompt":"`+prompt+`"}`,
+			"inject", "--event=UserPromptSubmit")
+		if code != 0 || strings.TrimSpace(out) != "" {
+			t.Errorf("prompt %q must emit nothing; code=%d out=%q", prompt, code, out)
+		}
+	}
+	wal, _ := os.ReadFile(filepath.Join(f.mem, ".wal"))
+	if strings.Contains(string(wal), "|inject|") {
+		t.Errorf("the toggle must not write inject rows:\n%s", wal)
+	}
+	for _, name := range []string{"injected-s1.list", "rendered-s1.list"} {
+		if after, _ := os.ReadFile(filepath.Join(rt, name)); !bytes.Equal(after, before) {
+			t.Errorf("%s changed: %q → %q", name, before, after)
+		}
+	}
+	for _, prompt := range []string{"/memboardx memboard", "/review memboard", "memboard /memboard"} {
+		out, _, _ := runStdin(t, f.env,
+			`{"session_id":"s2","cwd":"/tmp/proj","prompt":"`+prompt+`"}`,
+			"inject", "--event=UserPromptSubmit")
+		if !strings.Contains(additionalContext(t, out), "memboard dashboard pane") {
+			t.Errorf("prompt %q is not the toggle and must inject; got %q", prompt, out)
+		}
+		os.Remove(filepath.Join(rt, "injected-s2.list"))
+		os.Remove(filepath.Join(rt, "rendered-s2.list"))
+	}
+}
+
+func TestIsMemboardToggle(t *testing.T) {
+	for prompt, want := range map[string]bool{
+		"/memboard": true, " /memboard ": true, "/memboard\tx": true, "/memboard\n": true,
+		"/memboards": false, "memboard": false, "/review": false, "": false, "x /memboard": false,
+	} {
+		if got := isMemboardToggle(prompt); got != want {
+			t.Errorf("isMemboardToggle(%q) = %v, want %v", prompt, got, want)
+		}
+	}
+}
+
 func writeSummaryTranscript(t *testing.T, summary string) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "s1.jsonl")

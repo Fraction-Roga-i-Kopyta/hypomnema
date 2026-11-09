@@ -46,7 +46,7 @@ func runClose(args []string) {
 	}
 	_, _ = closer.Run(closer.Input{
 		SessionID: in.SessionID, CWD: in.CWD, TranscriptPath: in.TranscriptPath,
-		ClaudeHome: claudeDir(), MemoryDir: memoryDir(), Today: today(),
+		ClaudeHome: claudeDir(), ConfigDir: configDir(), MemoryDir: memoryDir(), Today: today(),
 		Store: resolveStore(in.CWD).Store,
 	})
 

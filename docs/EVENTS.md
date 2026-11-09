@@ -69,6 +69,9 @@ Exactly these events are written by v2 code. Producers verified by grep of
 | `retire` | `<qslug>[><successor>][:<reason>]` | `memoryctl retire` (`cmd/memoryctl/retire.go`) | `internal/sidecar` reproject (status=retired) | `<qslug>` = project-qualified slug; successor/reason use the `>`/`:` sub-delims, whitespace collapsed to `_` |
 | `revive` | `<qslug>` | `memoryctl revive` (`cmd/memoryctl/retire.go`) | `internal/sidecar` reproject (cancels retirement) | |
 | `candidate-confirmed` | `<qslug>` | `memoryctl close` — `internal/closer` | `internal/sidecar` reproject (candidate→active); `internal/doctor` | emitted once per fact (WAL dedup); graduation of a soft-corroboration candidate |
+| `pin` | `<qslug>` | `memoryctl pin` (`cmd/memoryctl/pin.go`) | none — audit record only; the pinned status is projected from frontmatter | skipped by reproject, so it never feeds the WAL-earliest `created` fallback |
+| `unpin` | `<qslug>` | `memoryctl unpin` (`cmd/memoryctl/pin.go`) | none — audit record only; the active status is projected from frontmatter | skipped by reproject like `pin` |
+| `mark` | `<qslug>:<directive>[:<arg>]` | `memoryctl mark` (`cmd/memoryctl/mark.go`) | `internal/sidecar` `ReprojectAll` → sidecar `mark` table (replayed with `retire` rows in WAL order, independent of the reprojecting project); inject | directives `hide` (arg = the marking session's project tag; only global facts and facts of that project) · `less` · `clear` (drops every mark and task of the fact) · tasks `rewrite`/`split`/`merge`/`review` (arg = sha12 `native.BodySHA` of the file — status lines excluded, so `pin`/`unpin` keep the task; a content edit auto-closes it) · `done` (closes the fact's tasks); a `retire` drops every mark recorded before it, a later `revive` does not restore them; never feeds a per-fact aggregate (no `created`/ref_count effect) |
 
 ---
 
@@ -130,7 +133,7 @@ sparingly to keep the WAL greppable.
 | sub-delim | meaning | active example events |
 |---|---|---|
 | `,` | rows of equal weight (CSV-like) | `session-metrics` (inner, legacy) |
-| `:` | `key:value` (single pair or namespace prefix) | `retire` (`:<reason>`); `session-metrics` (inner, legacy) |
+| `:` | `key:value` (single pair or namespace prefix) | `retire` (`:<reason>`); `mark` (`:<directive>[:<arg>]`); `session-metrics` (inner, legacy) |
 | `>` | directed pair (`from > to`, asymmetric) | `retire` (`><successor>`); `dedup-blocked`, `dedup-merged` (retired) |
 | `~` | soft / similarity pair (symmetric) | `dedup-candidate` (retired) |
 

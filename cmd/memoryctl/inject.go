@@ -8,8 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
 	"time"
+	"unicode"
 
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/inject"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/jsonl"
@@ -31,6 +31,15 @@ type hookStdin struct {
 // injects noise and spends facts' once-per-session slot. A payload without
 // source (field still rolling out) is treated as a user prompt.
 func skipPromptSource(src string) bool { return src == "system" || src == "poll_event" }
+
+// isMemboardToggle reports the /memboard panel toggle (optionally with
+// arguments): it opens or closes a pane and never reaches the model, so
+// ranking it would spend facts' once-per-context slot and inflate the
+// injected/silent counts. Other slash prompts are ordinary prompts.
+func isMemboardToggle(prompt string) bool {
+	rest, ok := strings.CutPrefix(strings.TrimSpace(prompt), "/memboard")
+	return ok && (rest == "" || unicode.IsSpace(rune(rest[0])))
+}
 
 // promptInjectOff reports the pull-only mode (HYPOMNEMA_PROMPT_INJECT=off):
 // UserPromptSubmit injects nothing, and memory reaches the model through the
@@ -86,7 +95,7 @@ func runInject(args []string) {
 	if err := json.Unmarshal(raw, &in); err != nil {
 		os.Exit(0) // fail-safe
 	}
-	if event == "UserPromptSubmit" && (skipPromptSource(in.Source) || promptInjectOff()) {
+	if event == "UserPromptSubmit" && (skipPromptSource(in.Source) || promptInjectOff() || isMemboardToggle(in.Prompt)) {
 		os.Exit(0) // no output, no WAL, session list untouched
 	}
 	r := resolveStore(in.CWD)
@@ -113,7 +122,7 @@ func runInject(args []string) {
 	}
 	res, err := inject.Run(inject.Input{
 		Event: event, SessionID: in.SessionID, CWD: in.CWD, Prompt: prompt,
-		ClaudeHome: claudeDir(), MemoryDir: memoryDir(), Today: today(), MaxK: 8,
+		ClaudeHome: claudeDir(), ConfigDir: configDir(), MemoryDir: memoryDir(), Today: today(), MaxK: 8,
 		Store:           r.Store,
 		AlreadyInjected: renderDedup,
 	})

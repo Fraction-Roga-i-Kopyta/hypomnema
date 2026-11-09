@@ -231,12 +231,12 @@ func newDoctorFixture(t *testing.T) string {
 	// (doctor's checkSettings parses the structure, not just substrings).
 	hooks := []string{
 		"session-start.sh", "user-prompt-submit.sh",
-		"pre-tool-write.sh", "skill-learnings-inject.sh", "skill-active.sh", "session-stop.sh",
-		"subagent-start.sh", "subagent-stop.sh",
+		"pre-tool-write.sh", "pre-tool-bash.sh", "skill-learnings-inject.sh", "skill-active.sh",
+		"session-stop.sh", "subagent-start.sh", "subagent-stop.sh",
 	}
 	shimEvent := map[string]string{
 		"session-start.sh": "SessionStart", "user-prompt-submit.sh": "UserPromptSubmit",
-		"pre-tool-write.sh": "PreToolUse", "skill-active.sh": "PreToolUse",
+		"pre-tool-write.sh": "PreToolUse", "pre-tool-bash.sh": "PreToolUse", "skill-active.sh": "PreToolUse",
 		"skill-learnings-inject.sh": "PostToolUse", "session-stop.sh": "Stop",
 		"subagent-start.sh": "SubagentStart", "subagent-stop.sh": "SubagentStop",
 	}

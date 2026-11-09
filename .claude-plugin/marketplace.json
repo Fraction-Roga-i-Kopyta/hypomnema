@@ -1,0 +1,12 @@
+{
+  "name": "hypomnema",
+  "owner": { "name": "Fraction-Roga-i-Kopyta" },
+  "description": "Claude Code mods that ship with hypomnema",
+  "plugins": [
+    {
+      "name": "memboard",
+      "source": "./mods/memboard",
+      "description": "Memory dashboard for hypomnema"
+    }
+  ]
+}

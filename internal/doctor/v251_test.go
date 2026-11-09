@@ -40,6 +40,7 @@ func TestCheckSettings_CorrectWiringOK(t *testing.T) { // review O4 (positive)
 		`"SessionStart":[{"hooks":[{"type":"command","command":"~/.claude/hooks/v2/session-start.sh"}]}],` +
 		`"UserPromptSubmit":[{"hooks":[{"type":"command","command":"~/.claude/hooks/v2/user-prompt-submit.sh"}]}],` +
 		`"PreToolUse":[{"matcher":"Write|Edit","hooks":[{"type":"command","command":"~/.claude/hooks/v2/pre-tool-write.sh"}]},` +
+		`{"matcher":"Bash","hooks":[{"type":"command","command":"~/.claude/hooks/v2/pre-tool-bash.sh"}]},` +
 		`{"matcher":"Skill","hooks":[{"type":"command","command":"~/.claude/hooks/v2/skill-active.sh"}]}],` +
 		`"PostToolUse":[{"matcher":"Skill","hooks":[{"type":"command","command":"~/.claude/hooks/v2/skill-learnings-inject.sh"}]}],` +
 		`"SubagentStart":[{"hooks":[{"type":"command","command":"~/.claude/hooks/v2/subagent-start.sh"}]}],` +

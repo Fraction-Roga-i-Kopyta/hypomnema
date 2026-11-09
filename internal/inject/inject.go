@@ -149,6 +149,7 @@ type Input struct {
 	CWD             string
 	Prompt          string
 	ClaudeHome      string // <home>/.claude
+	ConfigDir       string // Claude Code config dir (projects/); "" → ClaudeHome
 	MemoryDir       string
 	Today           string
 	MaxK            int
@@ -169,6 +170,17 @@ func (in Input) store() native.Store {
 		return in.Store
 	}
 	return native.StoreFor(in.ClaudeHome, in.CWD)
+}
+
+// storeDirs maps every reachable store tag to its directory for
+// sidecar.ReprojectAll's mark checks; nil (mark table untouched) when the
+// caller resolved no install root, like the exported Candidates.
+func (in Input) storeDirs(st native.Store) map[string]string {
+	cfg := in.ConfigDir
+	if cfg == "" {
+		cfg = in.ClaudeHome
+	}
+	return native.StoreDirs(cfg, in.ClaudeHome, st)
 }
 
 // Result is the rendered context plus the slugs injected.
@@ -246,6 +258,16 @@ func Run(in Input) (Result, error) {
 		maxTotal = maxTotalBytes
 	}
 	md, injected := render(ranked, bySlug, instructionFor(in.Event), maxBodyBytes, maxTotal)
+	if in.Event == "SessionStart" {
+		if q := renderQueue(openTasks(in, st)); q != "" {
+			switch {
+			case md == "":
+				md = "# Memory Context\n" + q + "\n"
+			case len(md)+1+len(q)+1 <= maxTotal:
+				md += "\n" + q + "\n"
+			}
+		}
+	}
 	projectSlug := st.Project
 	localSlug := map[string]bool{}
 	for _, f := range files {
@@ -294,7 +316,7 @@ func candidates(in Input, st native.Store, files []native.MemFile, terms []strin
 		// this project (or is empty) — reproject from the files we just
 		// listed and retry. Self-heals a sidecar seeded by other projects.
 		if lerr == nil && len(scoped) == 0 && len(files) > 0 {
-			if rerr := sidecar.Reproject(s, files, walPath, st.Scope()); rerr == nil {
+			if rerr := sidecar.ReprojectAll(s, files, walPath, st.Scope(), in.storeDirs(st)); rerr == nil {
 				if recs, lerr = s.All(); lerr == nil {
 					scoped = scopeRecords(recs, projectSlug)
 				}
@@ -312,9 +334,12 @@ func candidates(in Input, st native.Store, files []native.MemFile, terms []strin
 			if oerr != nil {
 				overlap = map[string]int{}
 			}
+			hidden, less := pushMarks(s, in.Event, projectSlug)
 			out := make([]rank.Candidate, 0, len(scoped))
 			for _, r := range scoped {
+				k := r.Project + "\x1f" + r.Slug
 				out = append(out, rank.Candidate{
+					Hidden: hidden[k], Less: less[k],
 					Slug: r.Slug, Type: r.Type, Project: r.Project,
 					Domains: splitCSV(r.Domains), RefCount: r.RefCount,
 					Effectiveness: r.Effectiveness, Status: r.Status,
@@ -327,6 +352,70 @@ func candidates(in Input, st native.Store, files []native.MemFile, terms []strin
 		}
 	}
 	return degradedCandidates(files, terms)
+}
+
+// pushMarks returns the /memboard hide (for this project only) and less
+// sets keyed "<fact project>\x1f<slug.md>". Only the push events honour
+// marks; recall, skill-inject, the rank verb and ab pass another Event and
+// get empty sets. A read failure degrades to no marks.
+func pushMarks(s *sidecar.Store, event, project string) (hidden, less map[string]bool) {
+	switch event {
+	case "SessionStart", "UserPromptSubmit", "SubagentStart":
+	default:
+		return nil, nil
+	}
+	ms, err := s.Marks()
+	if err != nil {
+		return nil, nil
+	}
+	hidden, less = map[string]bool{}, map[string]bool{}
+	for _, m := range ms {
+		k := m.Project + "\x1f" + m.Slug
+		switch m.Directive {
+		case "hide":
+			if m.Arg == project {
+				hidden[k] = true
+			}
+		case "less":
+			less[k] = true
+		}
+	}
+	return hidden, less
+}
+
+// openTasks returns the open /memboard tasks of the current store and the
+// global store. Any sidecar problem degrades to no tasks.
+func openTasks(in Input, st native.Store) []sidecar.Mark {
+	s, err := sidecar.Open(filepath.Join(in.MemoryDir, ".sidecar.db"))
+	if err != nil {
+		return nil
+	}
+	defer s.Close()
+	ms, err := s.Marks()
+	if err != nil {
+		return nil
+	}
+	var out []sidecar.Mark
+	for _, m := range ms {
+		if sidecar.IsTask(m.Directive) && (m.Project == st.Project || m.Project == native.GlobalProject) {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// renderQueue is the SessionStart paragraph announcing open /memboard tasks;
+// "" when there are none.
+func renderQueue(tasks []sidecar.Mark) string {
+	if len(tasks) == 0 {
+		return ""
+	}
+	items := make([]string, len(tasks))
+	for i, m := range tasks {
+		items[i] = fmt.Sprintf("%s: %s (%s)", m.Directive, strings.TrimSuffix(m.Slug, ".md"), m.Project)
+	}
+	return fmt.Sprintf("Memory queue: %d open task(s) from /memboard — %s. Mention them to the user once and offer to work through them; change nothing until the user agrees. After finishing one, run: memoryctl mark <slug> done --project <project>",
+		len(tasks), strings.Join(items, "; "))
 }
 
 // shouldWipeSidecar reports whether a sidecar.Open error indicates genuine

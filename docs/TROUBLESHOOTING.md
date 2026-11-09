@@ -15,7 +15,7 @@ It checks:
 - `claude_dir` / `memory_dir` exist
 - every hypomnema hook is registered in `settings.json` **under the correct
   event** (not just present somewhere)
-- all eight v2 shims exist and are executable in `~/.claude/hooks/v2/`
+- all nine v2 shims exist and are executable in `~/.claude/hooks/v2/`
 - no broken symlinks in `~/.claude/hooks/` or `~/.claude/bin/`
 - `memoryctl` is installed and on `$PATH`
 - native corpus counts by type (empty corpus is flagged)

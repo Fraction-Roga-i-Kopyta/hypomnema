@@ -61,3 +61,33 @@ func TestCollect_MissingProjectDirIsSafe(t *testing.T) {
 		t.Errorf("want only the global file, got %+v", got)
 	}
 }
+
+// The global store asked for itself (a drill-down into "global", a sidecar
+// refresh after an action on a global fact) lists each global file once.
+func TestCollect_GlobalStoreListedOnce(t *testing.T) {
+	t.Setenv("HYPOMNEMA_GLOBAL_DIR", "")
+	home := t.TempDir()
+	claudeHome := filepath.Join(home, ".claude")
+	globDir := GlobalMemoryDir(home)
+	if err := os.MkdirAll(globDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, slug := range []string{"gone", "gtwo"} {
+		if err := os.WriteFile(filepath.Join(globDir, slug+".md"),
+			[]byte("---\nname: "+slug+"\ntype: note\n---\nb\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, dir := range []string{globDir, globDir + string(filepath.Separator)} {
+		got := Collect(claudeHome, Store{Dir: dir, Project: GlobalProject})
+		if len(got) != 2 {
+			t.Fatalf("Collect(global %q): want 2 files, got %d: %+v", dir, len(got), got)
+		}
+		for _, f := range got {
+			if f.Project != GlobalProject {
+				t.Errorf("%s tagged %q, want %q", f.Slug, f.Project, GlobalProject)
+			}
+		}
+	}
+}

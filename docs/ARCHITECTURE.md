@@ -17,16 +17,20 @@ or the per-release CHANGELOG.
 
 ## The hooks
 
-`install.sh` copies eight shims into `~/.claude/hooks/v2/` and registers them in
+`install.sh` copies nine shims into `~/.claude/hooks/v2/` and registers them in
 `settings.json`. Each shim resolves `memoryctl` (fail-open: `exit 0` if the
 binary is absent) and `exec`s one verb, forwarding stdin (the hook envelope)
-and preserving the exit code.
+and preserving the exit code. The exceptions do not `exec`, so an older
+binary that lacks their verb stays a no-op: the two subagent shims always
+exit 0, and `pre-tool-bash.sh` blocks (exit 2) only when `guard-bash`'s
+stderr starts with `BLOCKED (hypomnema)`.
 
 | Event | Matcher | Shim | Verb | Purpose |
 |---|---|---|---|---|
 | `SessionStart` | — | `session-start.sh` | `inject --event=SessionStart` | Rank native facts, inject top-K into `additionalContext`; on `compact` re-ranks against the compaction summary, on `clear` against the empty prompt — either way without render-dedup |
 | `UserPromptSubmit` | — | `user-prompt-submit.sh` | `inject --event=UserPromptSubmit` | Reactive re-rank with prompt tokens; inject newly-relevant facts |
 | `PreToolUse` | `Write\|Edit` | `pre-tool-write.sh` | `guard` | Secrets gate on memory-path writes (`exit 2` blocks) |
+| `PreToolUse` | `Bash` | `pre-tool-bash.sh` | `guard-bash` | Block the model's own `memoryctl pin`/`unpin`/`mark` (`mark … done` passes) — `/memboard` panel actions; stops accidental or injected CLI calls, not a security boundary |
 | `PreToolUse` | `Skill` | `skill-active.sh` | `skill-active` | Record the activated skill for this session |
 | `PostToolUse` | `Skill` | `skill-learnings-inject.sh` | `skill-inject` | Inject accumulated skill-learning facts for that skill |
 | `Stop` | — | `session-stop.sh` | `close` | Classify citations → WAL → effectiveness/decay → `MEMORY.md` |
@@ -73,7 +77,7 @@ UserPromptSubmit ──► inject --event=UserPromptSubmit ───────
    source ∈ {system, poll_event}: exit 0, no output, no WAL,    │
      session list untouched (machine-injected turn, not a       │
      user prompt — ranking it would waste a fact's once-per-    │
-     session slot)                                              │
+     session slot); the same for the /memboard toggle           │
    else: same ranker; keywords += prompt tokens (reactive)      │
    inject only facts newly entering the top-8 this session      │
    WAL: inject|<slug>|<session>                                 │
@@ -319,7 +323,7 @@ single invocation.
 A reader coming from v1 docs will look for these — all removed in v2, verify by
 `ls`/grep rather than assuming they exist:
 
-- **Five 700-line bash hooks + `hooks/lib/` libraries** → eight ~5-line shims + Go.
+- **Five 700-line bash hooks + `hooks/lib/` libraries** → nine shims of a few lines + Go.
 - **Two scoring pipelines** (composite-score + priority-key) → one `rank`.
 - **Substring triggers + ±40-char negation windows** → tokens are relevance signal.
 - **FTS5 shadow retrieval** (`internal/fts`, `bin/memory-fts-*.sh`, `shadow-miss`) → gone.

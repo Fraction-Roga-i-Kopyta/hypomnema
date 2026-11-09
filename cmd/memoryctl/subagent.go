@@ -169,7 +169,7 @@ func runSubagentStart(raw []byte) {
 	res, err := inject.Run(inject.Input{
 		Event: "SubagentStart", SessionID: key, CWD: in.CWD,
 		Prompt: query, NoGitSignal: fromTask,
-		ClaudeHome: claudeDir(), MemoryDir: memoryDir(), Today: today(),
+		ClaudeHome: claudeDir(), ConfigDir: configDir(), MemoryDir: memoryDir(), Today: today(),
 		MaxK: subagentMaxK, MaxBytes: subagentMaxBytes,
 		Store: resolveStore(in.CWD).Store,
 	})
@@ -200,7 +200,7 @@ func runSubagentStop(raw []byte) {
 	_, _ = closer.Run(closer.Input{
 		SessionID: subagentKey(in.SessionID, in.AgentID), CWD: in.CWD,
 		TranscriptPath: in.AgentTranscriptPath,
-		ClaudeHome:     claudeDir(), MemoryDir: memoryDir(), Today: today(),
+		ClaudeHome:     claudeDir(), ConfigDir: configDir(), MemoryDir: memoryDir(), Today: today(),
 		Store: resolveStore(in.CWD).Store, Subagent: true,
 	})
 }

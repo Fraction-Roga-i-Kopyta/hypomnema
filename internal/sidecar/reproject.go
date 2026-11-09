@@ -121,14 +121,27 @@ func (a *agg) outcomes() (pos, neg int) {
 // Stop hook, so concurrent injects must never observe a half-rebuilt
 // sidecar, a crash mid-rebuild must not leave outcome empty, and one commit
 // replaces thousands of per-statement fsyncs per turn.
+//
+// Reproject leaves the mark table untouched; ReprojectAll also rebuilds it.
 func Reproject(s *Store, files []native.MemFile, walPath string, scope []string) error {
+	return ReprojectAll(s, files, walPath, scope, nil)
+}
+
+// ReprojectAll is Reproject plus the mark table, in the same WAL pass and the
+// same transaction. The mark part is independent of scope: it replaces the
+// whole table from a replay of every project's mark/retire rows, so a close
+// in one project never loses another project's marks and `sidecar rebuild`
+// yields the same table from any project. dirs maps store tags to their
+// directories (native.StoreDirs); a nil dirs leaves the mark table untouched,
+// and a tag missing from dirs keeps its rows unchecked (see replaceMarks).
+func ReprojectAll(s *Store, files []native.MemFile, walPath string, scope []string, dirs map[string]string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("sidecar.Reproject: begin: %w", err)
 	}
 	// No-op after Commit; on any early return it discards the partial rebuild.
 	defer func() { _ = tx.Rollback() }()
-	if err := reprojectIn(tx, files, walPath, scope); err != nil {
+	if err := reprojectIn(tx, files, walPath, scope, dirs); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -137,7 +150,7 @@ func Reproject(s *Store, files []native.MemFile, walPath string, scope []string)
 	return nil
 }
 
-func reprojectIn(e dbtx, files []native.MemFile, walPath string, scope []string) error {
+func reprojectIn(e dbtx, files []native.MemFile, walPath string, scope []string, dirs map[string]string) error {
 	// Size BEFORE reading, so the offset never runs ahead of what this
 	// projection read. The key is global while projections are per-project:
 	// a failed projection in one project can be masked by a later one in
@@ -147,7 +160,7 @@ func reprojectIn(e dbtx, files []native.MemFile, walPath string, scope []string)
 	if fi, err := os.Stat(walPath); err == nil {
 		walOff = fi.Size()
 	}
-	aggs := readWALAgg(walPath)
+	aggs, lifecycle := readWALAgg(walPath)
 
 	if _, err := e.Exec(`DELETE FROM outcome`); err != nil {
 		return fmt.Errorf("sidecar.Reproject: clear outcome: %w", err)
@@ -282,6 +295,11 @@ func reprojectIn(e dbtx, files []native.MemFile, walPath string, scope []string)
 	if err := populateKeywordsIn(e, files); err != nil {
 		return fmt.Errorf("sidecar.Reproject: keywords: %w", err)
 	}
+	if dirs != nil {
+		if err := replaceMarks(e, lifecycle, dirs); err != nil {
+			return err
+		}
+	}
 	// Best-effort: a failed write leaves the previous (smaller) offset, which
 	// can only make doctor warn.
 	_, _ = e.Exec(`INSERT OR REPLACE INTO meta (k, v) VALUES ('wal_offset', ?)`,
@@ -289,11 +307,18 @@ func reprojectIn(e dbtx, files []native.MemFile, walPath string, scope []string)
 	return nil
 }
 
-func readWALAgg(walPath string) map[string]*agg {
+// walRow is one lifecycle row (mark/retire/revive) kept in WAL order for
+// the mark replay.
+type walRow struct{ date, event, target string }
+
+// readWALAgg folds the WAL into per-fact aggregates and, in the same pass,
+// collects the mark/retire/revive rows (in WAL order) for replaceMarks.
+func readWALAgg(walPath string) (map[string]*agg, []walRow) {
 	out := map[string]*agg{}
+	var lifecycle []walRow
 	f, err := os.Open(walPath)
 	if err != nil {
-		return out // missing WAL -> no history, not fatal
+		return out, nil // missing WAL -> no history, not fatal
 	}
 	defer f.Close()
 	sc := bufio.NewScanner(f)
@@ -318,7 +343,13 @@ func readWALAgg(walPath string) map[string]*agg {
 			continue
 		}
 		switch event {
-		case "cite-none", "cite-undelivered",
+		case "mark", "retire", "revive":
+			lifecycle = append(lifecycle, walRow{date: date, event: event, target: target})
+		}
+		// mark rows feed only the mark table (replaceMarks) — never an
+		// aggregate, so marking a fact cannot move its WAL-earliest created.
+		switch event {
+		case "cite-none", "cite-undelivered", "pin", "unpin", "mark",
 			"ablate-start", "ablate-stop", "holdout-skip", "holdout-hit", "holdout-miss":
 			continue
 		}
@@ -400,7 +431,7 @@ func readWALAgg(walPath string) map[string]*agg {
 	// sc.Err() is intentionally ignored: a partial/truncated WAL read yields
 	// partial history, which is acceptable (the WAL is the audit source of
 	// truth; the sidecar is a rebuildable projection).
-	return out
+	return out, lifecycle
 }
 
 func replayOutcomes(e dbtx, walPath string) error {

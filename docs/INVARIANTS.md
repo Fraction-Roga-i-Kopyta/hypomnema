@@ -181,10 +181,13 @@ calling `filepath.Abs` + prefix check is a candidate.
 ## I5 — Fail-safe on hook errors
 
 **What.** Every hook (any `hooks/**/*.sh` shim or `internal/` function
-called by a hook) MUST exit 0 on internal failure. The single exception is
-the PreToolUse write guard (`hooks/v2/pre-tool-write.sh` →
-`memoryctl guard`), which is explicitly allowed to return 2 to block the
-offending tool call.
+called by a hook) MUST exit 0 on internal failure. The two exceptions are
+the PreToolUse gates, explicitly allowed to return 2 to block the offending
+tool call: the write guard (`hooks/v2/pre-tool-write.sh` →
+`memoryctl guard`) and the Bash guard (`hooks/v2/pre-tool-bash.sh` →
+`memoryctl guard-bash`). The Bash shim blocks only on guard-bash's
+`BLOCKED (hypomnema)` stderr marker, so an internal failure — an older
+binary, a panic — still exits 0.
 
 **Why.** Hook-broken should never break a Claude Code session.
 Observability shifts to WAL events + `memoryctl doctor`. See ADR

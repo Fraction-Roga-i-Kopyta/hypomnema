@@ -7,12 +7,61 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/inject"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/sidecar"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/wal"
 )
+
+// queueStaleDays is how long a /memboard task may stay open before doctor
+// warns; the clock counts from the latest mark (a re-mark refreshes it).
+const queueStaleDays = 14
+
+// checkMemoryQueue warns about /memboard tasks open longer than
+// queueStaleDays. Read-only: a missing or unreadable sidecar is simply an
+// empty queue.
+func checkMemoryQueue(memoryDir string, now time.Time) Check {
+	c := Check{Name: "memory_queue", Status: OK, Detail: "no open tasks"}
+	dbPath := filepath.Join(memoryDir, ".sidecar.db")
+	if _, err := os.Stat(dbPath); err != nil {
+		return c
+	}
+	s, err := sidecar.Open(dbPath)
+	if err != nil {
+		return c
+	}
+	defer s.Close()
+	marks, err := s.Marks()
+	if err != nil {
+		return c
+	}
+	open := 0
+	var stale []string
+	for _, m := range marks {
+		if !sidecar.IsTask(m.Directive) {
+			continue
+		}
+		open++
+		d, perr := time.Parse("2006-01-02", m.Day)
+		if perr != nil {
+			continue
+		}
+		if now.Sub(d) > queueStaleDays*24*time.Hour {
+			stale = append(stale, strings.TrimSuffix(m.Slug, ".md"))
+		}
+	}
+	if len(stale) > 0 {
+		c.Status = WARN
+		c.Detail = fmt.Sprintf("%d open task(s) older than %d days: %s", len(stale), queueStaleDays, strings.Join(stale, ", "))
+		return c
+	}
+	if open > 0 {
+		c.Detail = fmt.Sprintf("%d open task(s)", open)
+	}
+	return c
+}
 
 // candidateSilentMin is how many silent sessions (with zero useful ones) a
 // candidate accrues before doctor flags it as never-corroborated.
