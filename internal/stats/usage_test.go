@@ -147,6 +147,25 @@ func TestUsage_Fact30dWindow(t *testing.T) {
 	if inj != 2 || use != 1 {
 		t.Fatalf("%d %d", inj, use)
 	}
+	// several keys: useful-wins per session, unknown key, legacy unqualified
+	u = load(t,
+		"2026-06-29|inject|"+q("b.md")+"|s1",
+		"2026-06-29|inject|"+q("b.md")+"|s1",
+		"2026-06-29|cite-silent|"+q("b.md")+"|s1",
+		"2026-06-30|cite-useful|"+q("b.md")+"|s1",
+		"2026-06-30|cite-useful|"+q("b.md")+"|s2",
+		"2026-06-30|cite-silent|"+q("c.md")+"|s1",
+		"2026-06-30|inject|d.md|s1",
+		"2026-05-01|cite-useful|"+q("e.md")+"|s1",
+	)
+	for k, want := range map[Key][2]int{
+		{"p", "b.md"}: {2, 2}, {"p", "c.md"}: {0, 0}, {"", "d.md"}: {1, 0},
+		{"p", "e.md"}: {0, 0}, {"p", "zzz.md"}: {0, 0},
+	} {
+		if i, us := u.Fact(k); i != want[0] || us != want[1] {
+			t.Fatalf("%v: got %d %d want %v", k, i, us, want)
+		}
+	}
 }
 
 func TestUsage_DistinctCounts(t *testing.T) {

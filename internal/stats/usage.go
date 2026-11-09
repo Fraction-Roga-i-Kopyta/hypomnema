@@ -38,6 +38,8 @@ type Usage struct {
 	today time.Time
 	rows  []row // inject / recall / cite-* rows in WAL order
 	cites map[citeID]cite
+	inj30 map[Key]int
+	use30 map[Key]int
 }
 
 // LoadUsage reads the WAL once. A missing WAL yields an empty Usage.
@@ -46,7 +48,7 @@ func LoadUsage(walPath, today string) (*Usage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("stats.LoadUsage: bad today %q: %w", today, err)
 	}
-	u := &Usage{today: t, cites: map[citeID]cite{}}
+	u := &Usage{today: t, cites: map[citeID]cite{}, inj30: map[Key]int{}, use30: map[Key]int{}}
 	f, err := os.Open(walPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -91,6 +93,7 @@ func LoadUsage(walPath, today string) (*Usage, error) {
 	if err := sc.Err(); err != nil {
 		return nil, fmt.Errorf("stats.LoadUsage: scan: %w", err)
 	}
+	u.precompute30()
 	return u, nil
 }
 
@@ -109,19 +112,22 @@ func (u *Usage) inWindow(date string, days int) bool {
 }
 
 // Fact returns the injection-row count and the count of sessions with a
-// useful citation over the last 30 days.
+// useful citation over the last 30 days. O(1): precomputed by LoadUsage.
 func (u *Usage) Fact(k Key) (injected30d, useful30d int) {
+	return u.inj30[k], u.use30[k]
+}
+
+func (u *Usage) precompute30() {
 	for _, r := range u.rows {
-		if r.key == k && r.event == "inject" && u.inWindow(r.date, 30) {
-			injected30d++
+		if r.event == "inject" && u.inWindow(r.date, 30) {
+			u.inj30[r.key]++
 		}
 	}
 	for id, c := range u.cites {
-		if id.key == k && c.useful && u.inWindow(c.date, 30) {
-			useful30d++
+		if c.useful && u.inWindow(c.date, 30) {
+			u.use30[id.key]++
 		}
 	}
-	return
 }
 
 // Session aggregates rows of session sid and its subagents.
