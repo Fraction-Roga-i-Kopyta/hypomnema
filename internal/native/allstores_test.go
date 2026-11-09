@@ -68,3 +68,28 @@ func TestAllStores_IncludesOverrideStore(t *testing.T) {
 		t.Fatalf("dup store: %d", n)
 	}
 }
+
+func TestStoreDirs(t *testing.T) {
+	home := t.TempDir()
+	cfg := filepath.Join(home, ".claude")
+	t.Setenv("HYPOMNEMA_GLOBAL_DIR", filepath.Join(home, "g"))
+	mkdirs(t, filepath.Join(cfg, "projects", "-a", "memory"))
+	over := Store{Dir: filepath.Join(home, "elsewhere"), Project: "ovr"}
+	got := StoreDirs(cfg, cfg, over)
+	want := map[string]string{
+		"-a":          filepath.Join(cfg, "projects", "-a", "memory"),
+		"ovr":         over.Dir,
+		GlobalProject: filepath.Join(home, "g"),
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Fatalf("dirs[%q] = %q, want %q", k, got[k], v)
+		}
+	}
+	if StoreDirs("", cfg, over) != nil || StoreDirs(cfg, "", over) != nil {
+		t.Fatal("an unknown root must yield nil dirs")
+	}
+}

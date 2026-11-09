@@ -113,7 +113,7 @@ func runInject(args []string) {
 	}
 	res, err := inject.Run(inject.Input{
 		Event: event, SessionID: in.SessionID, CWD: in.CWD, Prompt: prompt,
-		ClaudeHome: claudeDir(), MemoryDir: memoryDir(), Today: today(), MaxK: 8,
+		ClaudeHome: claudeDir(), ConfigDir: configDir(), MemoryDir: memoryDir(), Today: today(), MaxK: 8,
 		Store:           r.Store,
 		AlreadyInjected: renderDedup,
 	})

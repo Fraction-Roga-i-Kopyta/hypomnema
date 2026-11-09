@@ -17,6 +17,12 @@ func collectNative(st native.Store) []native.MemFile {
 	return native.Collect(claudeDir(), st)
 }
 
+// storeDirs maps every reachable store tag to its directory (the dirs of
+// sidecar.ReprojectAll), current included when it lives outside projects/.
+func storeDirs(current native.Store) map[string]string {
+	return native.StoreDirs(configDir(), claudeDir(), current)
+}
+
 func runSidecarRebuild(args []string) {
 	for _, a := range args {
 		if a == "-h" || a == "--help" {
@@ -34,7 +40,7 @@ func runSidecarRebuild(args []string) {
 		os.Exit(1)
 	}
 	defer s.Close()
-	if err := sidecar.Reproject(s, files, filepath.Join(memoryDir(), ".wal"), r.Scope()); err != nil {
+	if err := sidecar.ReprojectAll(s, files, filepath.Join(memoryDir(), ".wal"), r.Scope(), storeDirs(r.Store)); err != nil {
 		fmt.Fprintf(os.Stderr, "sidecar rebuild: %v\n", err)
 		os.Exit(1)
 	}

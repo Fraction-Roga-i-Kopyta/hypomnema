@@ -58,10 +58,12 @@ type Record struct {
 // follow the model's use rather than the ranker's own injections. v7 dropped
 // holdout_remaining with the ablation machinery and added `fresh` (the
 // later of frontmatter created / native modified, without the WAL fallback)
-// so decay picks the same freshest continuity per project as injection. Open wipes a sidecar written
+// so decay picks the same freshest continuity per project as injection. v8
+// added the `mark` table (memoryctl mark: hide/less and open tasks, replayed
+// from the WAL by ReprojectAll across every project). Open wipes a sidecar written
 // by a different generation — the sidecar is a derived projection, so the
 // wipe only costs the next Reproject.
-const schemaVersion = "7"
+const schemaVersion = "8"
 
 // Open opens (creating if needed) the sidecar DB at dbPath and applies the
 // schema. Mirrors internal/fts: modernc.org/sqlite, busy_timeout, WAL journal.

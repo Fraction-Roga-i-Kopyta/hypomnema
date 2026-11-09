@@ -33,3 +33,21 @@ func AllStores(configDir, claudeDir string, current Store) []Store {
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Project < out[j].Project })
 	return append(out, Store{Dir: global, Project: GlobalProject})
 }
+
+// StoreDirs maps each tag of AllStores(configDir, claudeDir, current) to its
+// directory — the dirs argument of sidecar.ReprojectAll. On a repeated tag
+// the first store wins, the one a by-tag lookup over AllStores finds. nil
+// when configDir or claudeDir is unknown: nil dirs leaves the mark table as
+// it is rather than judging marks against the wrong stores.
+func StoreDirs(configDir, claudeDir string, current Store) map[string]string {
+	if configDir == "" || claudeDir == "" {
+		return nil
+	}
+	dirs := map[string]string{}
+	for _, s := range AllStores(configDir, claudeDir, current) {
+		if _, dup := dirs[s.Project]; !dup {
+			dirs[s.Project] = s.Dir
+		}
+	}
+	return dirs
+}

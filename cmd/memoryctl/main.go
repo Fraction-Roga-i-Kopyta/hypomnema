@@ -71,6 +71,14 @@ Usage:
   memoryctl unpin <slug> [--project TAG]
       Set the fact's frontmatter status to pinned (never decays) or back to
       active, emit a "pin"/"unpin" WAL audit event, refresh the sidecar.
+  memoryctl mark <slug> <directive> [--project TAG]
+      Record a /memboard directive as a "mark" WAL event and refresh the
+      sidecar's mark table; the fact's file is not touched. Directives:
+      hide (this project only; global facts and facts of this project),
+      less, clear (drops every mark and open task of the fact), the tasks
+      rewrite | split | merge | review, and done (closes the fact's tasks).
+      A task also closes when the file's content changes or the fact is
+      retired; a status-only change (pin/unpin) keeps it open.
   memoryctl skill-inject
       PostToolUse hook verb. Reads a hook envelope from stdin, extracts
       tool_input.skill, retrieves skill-learning facts bound to that skill,
@@ -177,6 +185,8 @@ func main() {
 		runPin(os.Args[2:], "pinned")
 	case "unpin":
 		runPin(os.Args[2:], "active")
+	case "mark":
+		runMark(os.Args[2:])
 	case "skill-inject":
 		runSkillInject(os.Args[2:])
 	case "skill-active":

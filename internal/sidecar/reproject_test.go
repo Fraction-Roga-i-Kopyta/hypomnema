@@ -707,7 +707,7 @@ func TestReproject_LegacyAblationRowsIgnored(t *testing.T) {
 	if r, _, _ := s.Get("fact.md"); r.Effectiveness != 0.5 {
 		t.Fatalf("effectiveness = %v, want the untouched 0.5 prior", r.Effectiveness)
 	}
-	if aggs := readWALAgg(walPath); len(aggs) != 0 {
+	if aggs, _ := readWALAgg(walPath); len(aggs) != 0 {
 		t.Fatalf("legacy ablation rows must not aggregate, got %+v", aggs)
 	}
 }
@@ -729,7 +729,7 @@ func TestReadWALAgg_CiteNoneAndUndeliveredNoPhantomEntries(t *testing.T) {
 	if err := os.WriteFile(walPath, []byte(wal), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	aggs := readWALAgg(walPath)
+	aggs, _ := readWALAgg(walPath)
 	if _, ok := aggs["s1"]; ok {
 		t.Errorf("cite-none must not create a phantom aggregate keyed by the session id, got %+v", aggs["s1"])
 	}

@@ -149,6 +149,7 @@ type Input struct {
 	CWD             string
 	Prompt          string
 	ClaudeHome      string // <home>/.claude
+	ConfigDir       string // Claude Code config dir (projects/); "" → ClaudeHome
 	MemoryDir       string
 	Today           string
 	MaxK            int
@@ -169,6 +170,17 @@ func (in Input) store() native.Store {
 		return in.Store
 	}
 	return native.StoreFor(in.ClaudeHome, in.CWD)
+}
+
+// storeDirs maps every reachable store tag to its directory for
+// sidecar.ReprojectAll's mark checks; nil (mark table untouched) when the
+// caller resolved no install root, like the exported Candidates.
+func (in Input) storeDirs(st native.Store) map[string]string {
+	cfg := in.ConfigDir
+	if cfg == "" {
+		cfg = in.ClaudeHome
+	}
+	return native.StoreDirs(cfg, in.ClaudeHome, st)
 }
 
 // Result is the rendered context plus the slugs injected.
@@ -294,7 +306,7 @@ func candidates(in Input, st native.Store, files []native.MemFile, terms []strin
 		// this project (or is empty) — reproject from the files we just
 		// listed and retry. Self-heals a sidecar seeded by other projects.
 		if lerr == nil && len(scoped) == 0 && len(files) > 0 {
-			if rerr := sidecar.Reproject(s, files, walPath, st.Scope()); rerr == nil {
+			if rerr := sidecar.ReprojectAll(s, files, walPath, st.Scope(), in.storeDirs(st)); rerr == nil {
 				if recs, lerr = s.All(); lerr == nil {
 					scoped = scopeRecords(recs, projectSlug)
 				}

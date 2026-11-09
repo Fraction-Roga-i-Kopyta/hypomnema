@@ -70,10 +70,11 @@ func doPin(verb, slug, status, project string) {
 }
 
 // refreshSidecar re-projects the sidecar after a successful write so cards and
-// lists show the new state at once. Best effort: the WAL is the source of
-// truth, so failures only warn. MarkStale follows Reproject exactly as
-// closer.Close does, because Reproject alone resets 'stale' to the
-// frontmatter status.
+// lists show the new state at once, the mark table included (ReprojectAll
+// over every store, the session's own among them). Best effort: the WAL is
+// the source of truth, so failures only warn. MarkStale follows the
+// projection exactly as closer.Close does, because Reproject alone resets
+// 'stale' to the frontmatter status.
 func refreshSidecar(st native.Store) {
 	warn := func(err error) {
 		fmt.Fprintf(os.Stderr, "memoryctl: warning: sidecar not refreshed: %v\n", err)
@@ -85,7 +86,8 @@ func refreshSidecar(st native.Store) {
 	}
 	defer s.Close()
 	files := native.Collect(claudeDir(), st)
-	if err := sidecar.Reproject(s, files, filepath.Join(memoryDir(), ".wal"), st.Scope()); err != nil {
+	dirs := storeDirs(resolveStore("").Store)
+	if err := sidecar.ReprojectAll(s, files, filepath.Join(memoryDir(), ".wal"), st.Scope(), dirs); err != nil {
 		warn(err)
 		return
 	}
