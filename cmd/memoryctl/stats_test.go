@@ -392,8 +392,8 @@ func TestStats_AllScopeCLI(t *testing.T) {
 	if a == nil || rep.Scope != "all" || a.Stores != 3 || a.Facts != 5 || a.Funnel.Stored != 5 {
 		t.Fatalf("all: %+v", a)
 	}
-	// alpha, beta, gamma injected within 7d (file-less gone.md not counted); alpha and gamma useful; delta, omega never injected.
-	if a.Funnel.Injected7d != 3 || a.Funnel.Useful7d != 2 || a.Funnel.NotInjected30d != 2 {
+	// alpha, beta, gamma injected and delta recalled within 7d (file-less gone.md not counted); alpha and gamma useful; omega never delivered.
+	if a.Funnel.Injected7d != 4 || a.Funnel.Useful7d != 2 || a.Funnel.NotInjected30d != 2 {
 		t.Fatalf("funnel: %+v", a.Funnel)
 	}
 	if a.Projects[0].Project != tag || a.Projects[0].Facts != 3 {

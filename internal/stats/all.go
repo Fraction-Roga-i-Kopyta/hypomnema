@@ -9,11 +9,12 @@ import (
 
 const allDays = 7
 
-// InjectedKeys is the set of facts injected within the last days days.
+// InjectedKeys is the set of facts delivered (inject or recall rows) within
+// the last days days.
 func (u *Usage) InjectedKeys(days int) map[Key]bool {
 	out := map[Key]bool{}
 	for _, r := range u.rows {
-		if r.event == "inject" && u.inWindow(r.date, days) {
+		if (r.event == "inject" || r.event == "recall") && u.inWindow(r.date, days) {
 			out[r.key] = true
 		}
 	}
@@ -62,7 +63,7 @@ func BuildAll(stores []native.Store, files map[string][]native.MemFile, recs map
 			if injKeys[k] {
 				a.Funnel.Injected7d++
 			}
-			if useKeys[k] {
+			if injKeys[k] && useKeys[k] {
 				a.Funnel.Useful7d++
 				row.Useful7d++
 			}

@@ -302,7 +302,7 @@ export const STATS_ALL: StatsReport = {
     "facts": 4,
     "funnel": {
       "stored": 4,
-      "injected_7d": 3,
+      "injected_7d": 4,
       "useful_7d": 2,
       "not_injected_30d": 1
     },

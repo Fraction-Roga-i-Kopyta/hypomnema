@@ -45,7 +45,9 @@ func TestBuildAll_Funnel(t *testing.T) {
 }
 
 func TestBuildAll_ProjectsOrder(t *testing.T) {
-	u := load(t, "2026-06-30|cite-useful|"+native.QKey(projB, "x.md")+"|s1")
+	u := load(t,
+		"2026-06-30|inject|"+native.QKey(projB, "x.md")+"|s1",
+		"2026-06-30|cite-useful|"+native.QKey(projB, "x.md")+"|s1")
 	files := map[string][]native.MemFile{
 		"/a": {pfile(proj, "a.md", "note", "active")},
 		"/b": {pfile(projB, "x.md", "note", "active"), pfile(projB, "y.md", "note", "active")},
@@ -116,6 +118,31 @@ func TestBuildAll_FunnelIgnoresFileless(t *testing.T) {
 	all := BuildAll(allStores(), files, nil, u, nil, home)
 	if want := (Funnel{Stored: 2, Injected7d: 1, Useful7d: 1, NotInjected30d: 1}); all.Funnel != want {
 		t.Fatalf("funnel %+v want %+v", all.Funnel, want)
+	}
+	sum := 0
+	for _, p := range all.Projects {
+		sum += p.Useful7d
+	}
+	if sum != all.Funnel.Useful7d {
+		t.Fatalf("rows sum %d != funnel useful %d", sum, all.Funnel.Useful7d)
+	}
+}
+
+// TestBuildAll_UsefulWithinDelivered: stage 2 counts inject or recall
+// deliveries, stage 3 only useful facts inside that set.
+func TestBuildAll_UsefulWithinDelivered(t *testing.T) {
+	u := load(t,
+		"2026-06-30|recall|"+native.QKey(proj, "rec.md")+"|s1",
+		"2026-06-30|cite-useful|"+native.QKey(proj, "rec.md")+"|s1",
+		"2026-06-30|cite-useful|"+native.QKey(proj, "undelivered.md")+"|s1",
+		"2026-06-30|inject|"+native.QKey(proj, "inj.md")+"|s1",
+	)
+	files := map[string][]native.MemFile{
+		"/a": {pfile(proj, "rec.md", "note", "active"), pfile(proj, "undelivered.md", "note", "active"), pfile(proj, "inj.md", "note", "active")},
+	}
+	all := BuildAll(allStores(), files, nil, u, nil, home)
+	if all.Funnel.Stored != 3 || all.Funnel.Injected7d != 2 || all.Funnel.Useful7d != 1 {
+		t.Fatalf("funnel %+v", all.Funnel)
 	}
 	sum := 0
 	for _, p := range all.Projects {
