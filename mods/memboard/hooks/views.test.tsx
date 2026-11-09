@@ -106,7 +106,7 @@ test('project tab shows noisy facts', async ($, on) => {
     expect(await ui.find({ type: 'Text', text: /candidates 1 · stale 0 · pinned 1/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /ok 12/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /fail 2/ })).toBeDefined()
-    expect((await ui.findAll({ type: 'Text', text: /^\d\d-\d\d / })).length).toBe(7)
+    expect((await ui.findAll({ type: 'Text', text: /^\d\d-\d\d.*\S$/ })).length).toBe(7)
     // The queue row carries its task directive.
     expect(await ui.find({ key: `project-queue:${P}/alpha.md` })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /rewrite/ })).toBeDefined()
@@ -127,6 +127,10 @@ test('all tab funnel numbers', async ($, on) => {
   expect((await ui.find({ type: 'Text', text: /^Useful 7d/ }))?.text).toMatch(/^Useful 7d +2 /)
   expect((await ui.find({ type: 'Text', text: /^not injected 30d/ }))?.text).toBe('not injected 30d: 1')
   expect((await ui.find({ key: `proj:${P}/` }))?.text).toMatch(/^work-proj +3 +1$/)
+  // Emphasis: a funnel number is bold; a useful count is success.
+  expect((await ui.find({ type: 'Text', text: /^ {6}4$/ }))?.props.bold).toBe(true)
+  expect((await ui.find({ type: 'Text', text: /^ {6}2$/ }))?.props.color).toBe('success')
+  expect((await ui.find({ type: 'Text', text: /^ {4}1$/ }))?.props.color).toBe('success')
   expect((await ui.find({ key: `all-cand:${P}/beta.md` }))?.text).toMatch(/^work-proj\/beta-bug/)
   await ui.unmount()
 })
@@ -170,7 +174,7 @@ test('the global drill-down says it has no days instead of zero rows', async ($,
   await ui.press({ key: 'proj:global/' })
   await w.clock.settle()
   expect(scoped(w, 'project').at(-1)).toEqual([BIN, 'stats', '--json', '--scope', 'project', '--project', 'global'])
-  expect((await ui.findAll({ type: 'Text', text: /^\d\d-\d\d / })).length).toBe(0)
+  expect((await ui.findAll({ type: 'Text', text: /^\d\d-\d\d.*\S$/ })).length).toBe(0)
   expect(await ui.find({ type: 'Text', text: /^Days +inj/ })).toBeUndefined()
   expect((await ui.find({ type: 'Text', text: /^Days: none/ }))?.text).toBe('Days: none (global has no sessions)')
   // A project's own drill-down keeps its days.
@@ -179,7 +183,7 @@ test('the global drill-down says it has no days instead of zero rows', async ($,
   w.project = () => copy(STATS_PROJECT)
   await ui.press({ key: `proj:${P}/` })
   await w.clock.settle()
-  expect((await ui.findAll({ type: 'Text', text: /^\d\d-\d\d / })).length).toBe(7)
+  expect((await ui.findAll({ type: 'Text', text: /^\d\d-\d\d.*\S$/ })).length).toBe(7)
   await ui.unmount()
 })
 

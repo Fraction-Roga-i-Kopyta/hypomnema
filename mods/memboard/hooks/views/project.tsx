@@ -1,6 +1,7 @@
 import type { FactKey, FactRef, ProjectStats } from '../../types'
 import { bar, count, fit, joinFit, padEnd, padStart, rowKey } from '../format'
 import { DEFAULT_LIMIT, FactRow, taskOf, TriageBlock } from './rows'
+import { runs } from './session'
 import type { Els } from './session'
 
 type Props = {
@@ -71,14 +72,12 @@ export function ProjectView({ ui, width, stats, scope, limits, onOpen, onMore, o
             {fit(`${padEnd('Days', 5)} ${padStart('inj', 4)} ${padStart('✓', 3)} ${padStart('silent', 6)}`, width)}
           </Text>
           {stats.days.map(d => (
-            <Text color="text">
-              {fit(
-                `${d.date.slice(5)} ${padStart(String(d.injected), 4)} ${padStart(String(d.useful), 3)} ${padStart(
-                  String(d.silent),
-                  6,
-                )}${barWidth > 0 ? ` ${bar(d.injected / peak, barWidth)}` : ''}`,
-                width,
-              )}
+            <Text key={`day-${d.date}`} color="text">
+              {runs(Text, width, [
+                [`${d.date.slice(5)} ${padStart(String(d.injected), 4)} `, {}],
+                [padStart(String(d.useful), 3), d.useful > 0 ? { color: 'success' } : {}],
+                [` ${padStart(String(d.silent), 6)}${barWidth > 0 ? ` ${bar(d.injected / peak, barWidth)}` : ''}`, {}],
+              ])}
             </Text>
           ))}
         </Box>

@@ -1,6 +1,7 @@
 import type { AllStats, FactKey, FactRef } from '../../types'
 import { bar, fit, joinFit, padEnd, padStart, rowKey } from '../format'
 import { DEFAULT_LIMIT, TriageBlock } from './rows'
+import { runs } from './session'
 import type { Els } from './session'
 
 type Props = {
@@ -24,8 +25,12 @@ export function AllView({ ui, width, stats, limits, onOpen, onMore, onDrill }: P
   const stage = (label: string, n: number) => {
     const share = funnel.stored > 0 ? n / funnel.stored : 0
     return (
-      <Text color={label === 'Useful 7d' ? 'success' : 'text'}>
-        {fit(`${padEnd(label, 11)} ${padStart(String(n), 7)}${barWidth > 0 ? ` ${bar(share, barWidth)}` : ''}`, width)}
+      <Text color="text">
+        {runs(Text, width, [
+          [`${padEnd(label, 11)} `, {}],
+          [padStart(String(n), 7), label === 'Useful 7d' ? { bold: true, color: 'success' } : { bold: true }],
+          [barWidth > 0 ? ` ${bar(share, barWidth)}` : '', {}],
+        ])}
       </Text>
     )
   }
@@ -68,12 +73,10 @@ export function AllView({ ui, width, stats, limits, onOpen, onMore, onDrill }: P
         <Text bold color="text">{fit(`${padEnd('Projects', nameWidth)} ${padStart('facts', 6)} ${padStart('✓7d', 5)}`, width)}</Text>
         {stats.projects.slice(0, shown).map(p => (
           <Button key={rowKey('proj', { project: p.project, slug: '' })} plain onPress={() => onDrill(p.project)}>
-            <Text color="text">
-              {fit(
-                `${padEnd(p.display, nameWidth)} ${padStart(String(p.facts), 6)} ${padStart(String(p.useful_7d), 5)}`,
-                width,
-              )}
-            </Text>
+            {runs(Text, width, [
+              [`${padEnd(p.display, nameWidth)} ${padStart(String(p.facts), 6)} `, {}],
+              [padStart(String(p.useful_7d), 5), p.useful_7d > 0 ? { color: 'success' } : {}],
+            ])}
           </Button>
         ))}
         {hidden > 0 && (

@@ -26,7 +26,24 @@ const PULL_ONLY = 'pull-only mode: prompts inject nothing; facts read with Read 
 const isKey = (a: FactKey) => (b: FactKey) => a.project === b.project && a.slug === b.slug
 
 /** One run of a styled line. */
-type Seg = [text: string, props: TextProps]
+export type Seg = [text: string, props: TextProps]
+
+/** The runs of a styled line; one plain run when the whole line must be cut to `width`. */
+export function runs(Text: Els['Text'], width: number, segs: Seg[]) {
+  const full = segs.map(s => s[0]).join('')
+  if (Array.from(full).length > width) {
+    return [
+      <Text key="cut" color="text">
+        {fit(full, width)}
+      </Text>,
+    ]
+  }
+  return segs.map(([text, props], i) => (
+    <Text key={`run-${i}`} color="text" {...props}>
+      {text}
+    </Text>
+  ))
+}
 
 /** A line of styled runs; one plain run when the whole line must be cut to `width`. */
 function Line({ ui, width, segs }: { ui: Els; width: number; segs: Seg[] }) {
@@ -35,8 +52,10 @@ function Line({ ui, width, segs }: { ui: Els; width: number; segs: Seg[] }) {
   if (Array.from(full).length > width) return <Text color="text">{fit(full, width)}</Text>
   return (
     <Text color="text">
-      {segs.map(([text, props]) => (
-        <Text {...props}>{text}</Text>
+      {segs.map(([text, props], i) => (
+        <Text key={`seg-${i}`} {...props}>
+          {text}
+        </Text>
       ))}
     </Text>
   )
@@ -61,7 +80,12 @@ export function SessionView({ ui, width, session, turn, sessionProject, onOpen }
     const left = `${isUseful ? '✓' : '·'} ${padEnd(fact.name, nameWidth)} `
     const type = shortType(fact.type)
     if (key === undefined) {
-      return <Text dimColor>{fit(left + type, width)}</Text>
+      return (
+        <Text key={`turn:${fact.name}`} color="text">
+          {fit(left, width - 4)}
+          <Text dimColor>{type}</Text>
+        </Text>
+      )
     }
     return (
       <Button key={rowKey('turn', key)} plain onPress={() => onOpen(key)}>
@@ -80,15 +104,12 @@ export function SessionView({ ui, width, session, turn, sessionProject, onOpen }
       dimColor={fact.path === ''}
       onPress={() => onOpen({ project: fact.project, slug: fact.slug })}
     >
-      <Text color="text">
-        {fit(
-          `${padEnd(fact.name || fact.slug, topWidth)} ${padStart(String(fact.injected), 4)} ${padStart(
-            fact.useful === 0 ? '–' : String(fact.useful),
-            3,
-          )}`,
-          width,
-        )}
-      </Text>
+      {runs(Text, width, [
+        [`${padEnd(fact.name || fact.slug, topWidth)} `, {}],
+        [padStart(String(fact.injected), 4), { bold: true }],
+        [' ', {}],
+        [padStart(fact.useful === 0 ? '–' : String(fact.useful), 3), fact.useful === 0 ? {} : { color: 'success' }],
+      ])}
     </Button>
   ))
 
@@ -110,7 +131,12 @@ export function SessionView({ ui, width, session, turn, sessionProject, onOpen }
       {session.undelivered > 0 && (
         <Text color="warning">{fit(`⚠ ${session.undelivered} citation(s) for facts not delivered`, width)}</Text>
       )}
-      {!session.prompt_inject && wrapWords(PULL_ONLY, width).map(line => <Text dimColor>{line}</Text>)}
+      {!session.prompt_inject &&
+        wrapWords(PULL_ONLY, width).map((line, i) => (
+          <Text key={`pull-${i}`} dimColor>
+            {line}
+          </Text>
+        ))}
       <Box flexDirection="column" marginTop={1}>
         <Text bold color="text">{fit(`This turn (${count(turn.length, 'fact')})`, width)}</Text>
         {turnRows.length === 0 ? <Text dimColor>{fit('nothing injected this turn', width)}</Text> : turnRows}

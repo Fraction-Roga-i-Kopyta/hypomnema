@@ -69,8 +69,10 @@ export function FactCard({
       {field('status', fact.status)}
       {field('store', fact.display)}
       {field('created', fact.created)}
-      {describe(fact.description, width).map(line => (
-        <Text dimColor>{line}</Text>
+      {describe(fact.description, width).map((line, i) => (
+        <Text key={`desc-${i}`} color="text">
+          {line}
+        </Text>
       ))}
       <Text dimColor>{fact.path === '' ? fit('file is gone', width) : fitLeft(fact.path, width)}</Text>
       {field('ref_count', String(fact.ref_count))}

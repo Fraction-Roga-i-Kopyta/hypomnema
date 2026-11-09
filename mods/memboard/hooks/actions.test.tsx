@@ -119,6 +119,10 @@ test('opening a row shows the fact card', async ($, on) => {
   expect(factRuns(w).at(-1)).toEqual([BIN, 'stats', '--json', '--scope', 'fact', '--project', P, 'alpha.md'])
   expect((await ui.find({ type: 'Text', text: /^alpha-rule/ }))?.text).toBe('alpha-rule')
   expect((await ui.find({ type: 'Text', text: /^effective/ }))?.text).toMatch(/0\.67$/)
+  // The description is primary content, not dim.
+  const description = await ui.find({ type: 'Text', text: /^Alpha rule for stats/ })
+  expect(description?.props.dimColor).toBeUndefined()
+  expect(description?.props.color).toBe('text')
   expect((await ui.find({ type: 'Text', text: /^marks/ }))?.text).toContain('task:rewrite')
   await ui.unmount()
 })

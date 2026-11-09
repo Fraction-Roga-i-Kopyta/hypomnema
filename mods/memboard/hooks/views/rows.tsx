@@ -29,8 +29,9 @@ export function FactRow({ ui, fact, width, list, qualify, onOpen }: RowProps) {
   const { Text, Button } = ui
   const name = fact.name === '' ? fact.slug : fact.name
   const label = qualify === true ? `${fact.display}/${name}` : name
-  const tail = `${shortType(fact.type)} ${fact.injected_30d}/${fact.useful_30d}`
-  const nameWidth = Math.max(1, width - Array.from(tail).length - 1)
+  const tailHead = `${shortType(fact.type)} ${fact.injected_30d}/`
+  const tailUseful = String(fact.useful_30d)
+  const nameWidth = Math.max(1, width - Array.from(tailHead + tailUseful).length - 1)
   return (
     <Button
       key={rowKey(list, fact)}
@@ -39,7 +40,8 @@ export function FactRow({ ui, fact, width, list, qualify, onOpen }: RowProps) {
       onPress={() => onOpen({ project: fact.project, slug: fact.slug })}
     >
       <Text color="text">{`${padEnd(label, nameWidth)} `}</Text>
-      <Text dimColor>{tail}</Text>
+      <Text dimColor>{tailHead}</Text>
+      <Text color={fact.useful_30d > 0 ? 'success' : 'text'}>{tailUseful}</Text>
     </Button>
   )
 }
