@@ -113,6 +113,24 @@ func TestValidate_MissingFile(t *testing.T) {
 	}
 }
 
+// mark rows carry a project-qualified target (\x1f) with ':'-delimited
+// directive and anchor — both must pass the grammar.
+func TestValidate_AcceptsMarkRows(t *testing.T) {
+	p := writeWAL(t, strings.Join([]string{
+		"2026-11-09|mark|-Users-x-proj\x1fold-rule:hide:-Users-x-proj|cli",
+		"2026-11-09|mark|global\x1frule:rewrite:0123456789ab|sess1",
+		"2026-11-09|mark|global\x1frule:less|sess1",
+		"2026-11-09|mark|global\x1frule:done|sess1",
+	}, "\n")+"\n")
+	r, err := Validate(p)
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if !r.Clean() || r.Passing != 4 {
+		t.Fatalf("mark rows rejected: passing=%d failures=%+v", r.Passing, r.Failures)
+	}
+}
+
 func TestValidate_EmptyFile(t *testing.T) {
 	p := writeWAL(t, "")
 	r, err := Validate(p)

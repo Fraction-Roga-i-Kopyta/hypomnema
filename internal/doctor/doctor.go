@@ -136,6 +136,7 @@ func Run(claudeDir, memoryDir string, st native.Store, anchor string) Report {
 		checkBrokenSymlinks(filepath.Join(claudeDir, "bin"), "bin"),
 		checkMemoryctl(claudeDir),
 		checkCorpus(claudeDir, memoryDir, st),
+		checkMemoryQueue(memoryDir, now),
 		checkWALErrors(filepath.Join(memoryDir, ".wal"), now),
 		checkOpenQuanta(filepath.Join(memoryDir, ".wal"), now),
 		checkCitationSignal(filepath.Join(memoryDir, ".wal"), now),

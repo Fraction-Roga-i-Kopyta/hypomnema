@@ -25,6 +25,11 @@ type Candidate struct {
 	LastInjected  string // YYYY-MM-DD, may be ""
 	LastUseful    string // YYYY-MM-DD, may be "" — latest cite-useful citation (v2.12; formerly trigger-useful)
 	Overlap       int
+	// Hidden drops the candidate (a /memboard hide for this project); Less
+	// halves its score. Set by push injection only — pull paths leave both
+	// false.
+	Hidden bool
+	Less   bool
 }
 
 // Query carries the relevance signal for one ranking call.
@@ -52,6 +57,8 @@ const (
 	wRecency     = 2.0
 	wEffective   = 2.0
 	projectBoost = 1.0
+	// lessFactor scales the final score of a fact marked "less".
+	lessFactor = 0.5
 )
 
 // Rank scores every eligible candidate and returns the top k (k<=0 = all),
@@ -69,7 +76,7 @@ func Rank(q Query, cands []Candidate, k int) []Scored {
 		// retired, unknown) is excluded.
 		allowed := c.Status == "active" || c.Status == "pinned" || c.Status == "candidate" ||
 			(q.IncludeStale && c.Status == "stale")
-		if !allowed {
+		if !allowed || c.Hidden {
 			continue
 		}
 		if !domainOK(q.Domains, c.Domains) {
@@ -97,6 +104,9 @@ func score(q Query, c Candidate, today time.Time) float64 {
 		wEffective*c.Effectiveness
 	if q.Project != "" && c.Project == q.Project {
 		s += projectBoost
+	}
+	if c.Less {
+		s *= lessFactor
 	}
 	return s
 }

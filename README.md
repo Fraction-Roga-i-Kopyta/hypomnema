@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/Fraction-Roga-i-Kopyta/hypomnema?include_prereleases&sort=semver)](https://github.com/Fraction-Roga-i-Kopyta/hypomnema/releases)
 
-**Governance and ranking layer for Claude Code's native file memory — a Go engine (`memoryctl`) + 8 thin shims. No cloud, no embeddings.** Claude Code now ships native file memory; hypomnema adds ranked auto-injection (session AND subagents), effectiveness measurement, decay, and a global store that native lacks.
+**Governance and ranking layer for Claude Code's native file memory — a Go engine (`memoryctl`) + 9 thin shims. No cloud, no embeddings.** Claude Code now ships native file memory; hypomnema adds ranked auto-injection (session AND subagents), effectiveness measurement, decay, and a global store that native lacks.
 
 > **Status:** v3.0.0; native-primary. Requires Claude Code ≥ v2.1.59 (native file memory). v1.x stays on its tag for older Claude Code installs — see [MIGRATION.md](docs/MIGRATION.md) for the v1.x → v2.x upgrade path.
 >
@@ -67,7 +67,7 @@ size. See [`docs/measurements/2026-05-29-v2-ranker-ab.md`](docs/measurements/202
 └───────────────▲───────────────────────────▲─────────────────┘
        read-only │ (content)       write-intercept │ (guard)
 ┌────────────────┴───────────────────────────┴────────────────┐
-│  hypomnema v2 — memoryctl (Go) + 8 thin sh shims            │
+│  hypomnema v2 — memoryctl (Go) + 9 thin sh shims            │
 │                                                             │
 │  inject ──► additionalContext (ranked top-K)                │
 │  inject (SubagentStart) ──► own top-5 for its task          │
@@ -83,18 +83,26 @@ size. See [`docs/measurements/2026-05-29-v2-ranker-ab.md`](docs/measurements/202
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**Eight hook events, eight shims** — each ~5 lines, zero logic, pure marshalling:
+**Nine hooks, nine shims** — each a few lines of marshalling, with the logic in `memoryctl`:
 
 | Event (matcher) | Shim | What memoryctl does |
 |---|---|---|
 | `SessionStart` | `session-start.sh` | Detect project + git context + keywords → rank native facts → inject top-K via `additionalContext` |
 | `UserPromptSubmit` | `user-prompt-submit.sh` | Re-rank with prompt tokens added → inject anything not yet in session |
 | `PreToolUse:Write\|Edit` | `pre-tool-write.sh` | `guard`: secrets scan on memory-path writes → exit 2 on a credential pattern |
+| `PreToolUse:Bash` | `pre-tool-bash.sh` | `guard-bash`: block the model's own `memoryctl pin` / `unpin` / `mark` (only `mark <slug> done` passes) — those are `/memboard` panel actions |
 | `PreToolUse:Skill` | `skill-active.sh` | Record which skill just activated (marker for the capture path) |
 | `PostToolUse:Skill` | `skill-learnings-inject.sh` | `skill-inject`: surface accumulated learnings for the activated skill |
 | `Stop` | `session-stop.sh` | `close`: classify the injected set by `<cc-memory>` citation → WAL → recompute effectiveness/decay → regenerate `MEMORY.md` |
 | `SubagentStart` | `subagent-start.sh` | Rank against the subagent's own launch task (fallback: the parent's recent prompts) → inject its own top-5 |
 | `SubagentStop` | `subagent-stop.sh` | `close --subagent`: classify the subagent's own citations (including its hand-back report) under its own key |
+
+`guard-bash` stops accidental or injected *CLI* calls — say, a prompt
+injection telling the model to `hide` a user rule or `pin` a poisoned fact.
+It is **not a security boundary**: a model can still append to the WAL or
+edit a memory file directly. Its shim blocks only on the binary's
+`BLOCKED (hypomnema)` marker, so an older `memoryctl` without the verb is a
+no-op, never a blocked Bash call.
 
 The project's native `MEMORY.md` index is regenerated from native files on
 close; ranked facts arrive separately through `additionalContext` — we don't
@@ -202,7 +210,7 @@ memoryctl doctor # verify: all checks OK
 `./install.sh`:
 - Verifies Claude Code ≥ v2.1.59 and that `settings.json` is valid JSON — before touching anything.
 - Symlinks the pre-built `memoryctl` into `~/.claude/bin/`.
-- Copies the 8 hook shims into `~/.claude/hooks/v2/` and registers them in `~/.claude/settings.json` (timestamped backup first — the stable `settings.json.backup-hypomnema` name always points at this run's pre-change snapshot).
+- Copies the 9 hook shims into `~/.claude/hooks/v2/` and registers them in `~/.claude/settings.json` (timestamped backup first — the stable `settings.json.backup-hypomnema` name always points at this run's pre-change snapshot).
 - Creates `~/.claude/memory-global/` for global facts.
 - Refuses to proceed if `bin/memoryctl` predates subagent support (run `make build` first).
 
@@ -255,7 +263,7 @@ The shims activate on next session start.
 
 ## Health check
 
-Run `memoryctl doctor` for a health snapshot: sidecar drift, WAL anomalies, stale facts due for down-rank, global store coverage, **facts larger than the 2.5 KB injection cap** (they inject as a header plus a marker; split or retire them).
+Run `memoryctl doctor` for a health snapshot (`--json` for scripts). Checks: `claude_dir_exists`, `memory_dir_exists`, `settings_hooks_registered`, `shim_files_present`, `no_broken_symlinks_*`, `memoryctl_available`, `corpus_counts`, `memory_queue` (open `/memboard` tasks older than 14 days), `wal_errors_last_7d`, `open_quanta_last_30d`, `citation_signal`, `sidecar`, `corpus_frontmatter_quality`, `oversized_facts` (facts larger than the 2.5 KB injection cap inject as a header plus a marker; split or retire them), `candidate_corroboration` and `store_resolution`. The full verb list is in `memoryctl --help`.
 
 ## Pull retrieval
 
@@ -267,9 +275,43 @@ Pull-side retrieval: rank current project + global memory against an ad-hoc quer
 
 A truncated injection ends with `…(truncated — N B total; full text: <path>)` — read that file for the rest; `memoryctl recall` serves a ranked, equally capped excerpt.
 
+## Memory board (`/memboard`)
+
+A Claude Code mod: a pane beside the chat that shows what memory did and lets you act on it. Install:
+
+```
+/plugin install memboard --marketplace Fraction-Roga-i-Kopyta/hypomnema
+```
+
+It needs a `memoryctl` with `stats` and `mark` (run `make build && ./install.sh` from the repo). The mod runs `$HYPOMNEMA_MEMORYCTL` when set, else `~/.claude/bin/memoryctl`, else the first `memoryctl` on `PATH`. `/memboard` toggles the pane, also mid-turn; the toggle itself injects no memory. The status line shows `mem N↓ ✓N · N%` (facts injected, cited useful, share of useful).
+
+| Tab | Shows |
+|---|---|
+| `1` Session | This session and its subagents: injected, useful/silent/undelivered citations, recalls, the 5 most-injected facts |
+| `2` Project | The project store: counts by type, the last 7 days, health, triage lists (noisy, candidates, stale) and the task queue |
+| `3` All | Every store: the funnel (stored, injected 7d, useful 7d, not injected 30d), projects, types. The funnel counts only facts that currently have a file; injected = delivered by `inject` or `recall`; useful is a subset of injected |
+
+Open a fact for its card. Actions (hotkeys on the card):
+
+| Action | Effect |
+|---|---|
+| `a` Archive | `memoryctl retire` (asks first; `u` undoes it with `revive`) |
+| `p` Pin / Unpin | `status: pinned` (never decays) or back to `active` |
+| `h` Hide in *project* | `mark hide`: stops push injection of the fact in this session's project only (the button names it); the board still lists it |
+| `l` Show less | `mark less`: halves the fact's rank score |
+| `c` Clear marks | Drops the fact's marks and open tasks |
+| `r` `s` `m` `v` | Queue a task for Claude: rewrite, split, merge, review |
+| `d` Done | Closes the fact's tasks |
+
+`recall` and `skill-inject` ignore marks. Pin, unpin and marks other than `done` are panel actions: `guard-bash` (the `PreToolUse:Bash` shim) blocks the model from running `memoryctl pin`, `unpin` or `mark` itself. That is a barrier against accidental or injected CLI calls, not a security boundary.
+
+**Task queue.** Open tasks reach Claude as one line at SessionStart. Claude only offers them; it acts after you agree, then runs `memoryctl mark <slug> done`. A task also closes when the fact's body changes (the `status:` line is ignored, so pin/unpin keeps it open; reverting the file reopens it), and `retire` drops the fact's earlier marks. Known limitation: marks on facts in a project-level override store (`autoMemoryDirectory`) are verified only from that project's sessions.
+
+The same data is available as JSON: `memoryctl stats --json --scope session|project|all|fact`. Directives from the shell: `memoryctl mark <slug> <hide|less|clear|rewrite|split|merge|review|done> [--project TAG]`, `memoryctl pin|unpin <slug> [--project TAG]`.
+
 ## Lifecycle
 
-`memoryctl close` down-ranks stale facts in the sidecar (no mutation of native content). Staleness counts from the **last injection** (fallback `created`), so facts in active rotation never age out. Explicit archiving ships as `memoryctl retire <slug> [--reason ...] [--superseded-by <ref>]`: the file moves into the store's `.archive/`, and `recall` renders a tombstone redirect (`[retired <date> → successor]`) instead of silently forgetting; `memoryctl revive` undoes it. Agent-written facts start as `status: candidate` and graduate on their first useful citation; `doctor` flags candidates still uncited after 5 silent sessions.
+`memoryctl close` down-ranks stale facts in the sidecar (no mutation of native content). Staleness counts from the **last injection** (fallback `created`), so facts in active rotation never age out. Explicit archiving ships as `memoryctl retire <slug> [--reason ...] [--superseded-by <ref>] [--project TAG]` (`--project` addresses a fact in any store, e.g. `global`): the file moves into the store's `.archive/` with tombstone keys `retired`, `retire-reason`, `superseded-by`, `archived-from`, and `recall` renders a tombstone redirect (`[retired <date> → successor]`) instead of silently forgetting; `memoryctl revive` undoes it. Agent-written facts start as `status: candidate` and graduate on their first useful citation; `doctor` flags candidates still uncited after 5 silent sessions.
 
 | Type | Stale after |
 |------|-------------|
@@ -332,7 +374,7 @@ Subagents get their own ranked memory at `SubagentStart`: `memoryctl` builds a q
 
 **Why native files as the store, not a custom directory?** Claude Code's harness already injects `MEMORY.md` for the model — the file format is stable, the harness reads it for free. Owning a separate store meant a schema fork and two systems of record. Native is the substrate; sidecar is the metadata layer.
 
-**Why a Go binary, not bash?** The hot path (inject) needs to parse hundreds of files, run ranking, and return before the hook timeout. Go eliminates the bash 3.2/awk/sed portability tax, is testable with table-driven unit tests, and is benchmarkable. The eight shims that remain in bash are ~5 lines each — marshalling only.
+**Why a Go binary, not bash?** The hot path (inject) needs to parse hundreds of files, run ranking, and return before the hook timeout. Go eliminates the bash 3.2/awk/sed portability tax, is testable with table-driven unit tests, and is benchmarkable. The nine shims that remain in bash are a few lines each — marshalling only.
 
 **Why a sidecar, not frontmatter?** Native frontmatter is the content contract (harness reads it). Embedding hypomnema metadata there would pollute the harness format and require careful merge logic on every `git pull`. SQLite sidecar is a derivative — the WAL is the truth, the sidecar is a fast query projection that can be rebuilt anytime.
 

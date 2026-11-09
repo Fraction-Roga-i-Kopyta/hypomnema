@@ -157,7 +157,7 @@ rebuild); 2 — command misuse or WAL missing.
 	r := resolveStore("")
 	s, err := sidecar.Open(sidecarPath())
 	if err == nil {
-		err = sidecar.Reproject(s, collectNative(r.Store), filepath.Join(memoryDir(), ".wal"), r.Scope())
+		err = sidecar.ReprojectAll(s, collectNative(r.Store), filepath.Join(memoryDir(), ".wal"), r.Scope(), storeDirs(r.Store))
 		s.Close()
 	}
 	if err != nil {

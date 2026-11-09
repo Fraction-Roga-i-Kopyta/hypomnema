@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS memory (
 CREATE TABLE IF NOT EXISTS keyword (slug TEXT, project TEXT, term TEXT, weight REAL);
 CREATE TABLE IF NOT EXISTS outcome (slug TEXT, ts TEXT, kind TEXT);
 CREATE TABLE IF NOT EXISTS meta    (k TEXT PRIMARY KEY, v TEXT);
+CREATE TABLE IF NOT EXISTS mark (project TEXT, slug TEXT, directive TEXT, arg TEXT, day TEXT, PRIMARY KEY (project, slug, directive, arg));
 CREATE INDEX IF NOT EXISTS idx_keyword_term ON keyword(term);
 CREATE INDEX IF NOT EXISTS idx_outcome_slug ON outcome(slug);
 `

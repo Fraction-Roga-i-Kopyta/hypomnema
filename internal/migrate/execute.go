@@ -14,6 +14,11 @@ type ExecOpts struct {
 	V1Dir     string
 	BackupDir string
 	MemoryDir string // where the WAL + sidecar live (== V1Dir in the normal case)
+	// ConfigDir (Claude Code's projects/ root) and ClaudeDir (beside which
+	// the global store lives) locate every store for the sidecar's mark
+	// table; either empty leaves the mark table untouched.
+	ConfigDir string
+	ClaudeDir string
 }
 
 // Execute applies a plan: write kept native files, rebuild the sidecar from
@@ -52,7 +57,8 @@ func Execute(p Plan, o ExecOpts) (sidecarRebuilt bool, err error) {
 	defer s.Close()
 	// nil scope: the reconciliation scope derives from the migrated files'
 	// own project tags — a one-shot migration owns everything it wrote.
-	if rerr := sidecar.Reproject(s, files, filepath.Join(o.MemoryDir, ".wal"), nil); rerr != nil {
+	dirs := native.StoreDirs(o.ConfigDir, o.ClaudeDir, native.Store{})
+	if rerr := sidecar.ReprojectAll(s, files, filepath.Join(o.MemoryDir, ".wal"), nil, dirs); rerr != nil {
 		return false, nil
 	}
 	return true, nil

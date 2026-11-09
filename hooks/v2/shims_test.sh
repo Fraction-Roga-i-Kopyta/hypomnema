@@ -129,4 +129,62 @@ rc=$?
 [ "$rc" -eq 0 ] || { echo "FAIL: subagent-stop.sh with a pre-subagent binary must exit 0, got $rc"; exit 1; }
 [ -z "$out" ] || { echo "FAIL: subagent-stop.sh with a pre-subagent binary must print nothing, got: $out"; exit 1; }
 
+# pre-tool-bash (guard-bash): a panel-only verb blocks (exit 2, marker
+# re-emitted on stderr); anything else passes; a missing binary passes.
+err=$(printf '%s' '{"tool_name":"Bash","tool_input":{"command":"memoryctl pin x.md"}}' \
+  | HYPOMNEMA_MEMORYCTL="$MCTL" bash "$DIR/pre-tool-bash.sh" 2>&1 >/dev/null)
+rc=$?
+[ "$rc" -eq 2 ] || { echo "FAIL: pre-tool-bash.sh must exit 2 on memoryctl pin, got $rc"; exit 1; }
+case "$err" in
+  "BLOCKED (hypomnema)"*) ;;
+  *) echo "FAIL: pre-tool-bash.sh must re-emit the BLOCKED marker, got: $err"; exit 1 ;;
+esac
+
+printf '%s' '{"tool_name":"Bash","tool_input":{"command":"memoryctl mark x.md done"}}' \
+  | HYPOMNEMA_MEMORYCTL="$MCTL" bash "$DIR/pre-tool-bash.sh"
+[ $? -eq 0 ] || { echo "FAIL: pre-tool-bash.sh must exit 0 on memoryctl mark … done"; exit 1; }
+
+printf '%s' '{"tool_name":"Bash","tool_input":{"command":"memoryctl pin x.md"}}' \
+  | HYPOMNEMA_MEMORYCTL=/nonexistent/memoryctl bash "$DIR/pre-tool-bash.sh"
+[ $? -eq 0 ] || { echo "FAIL: pre-tool-bash.sh missing binary must exit 0"; exit 1; }
+
+# pre-tool-bash is fail-safe to the binary: only the BLOCKED (hypomnema)
+# marker blocks. A memoryctl without guard-bash (exit 2, unknown command) or
+# one that panics (Go exits 2) must pass silently.
+UNKBIN="$TMP/unknown-memoryctl.sh"
+cat > "$UNKBIN" <<'EOF'
+#!/bin/sh
+echo 'memoryctl: unknown command "guard-bash"' >&2
+exit 2
+EOF
+PANICBIN="$TMP/panic-memoryctl.sh"
+cat > "$PANICBIN" <<'EOF'
+#!/bin/sh
+echo 'panic: runtime error: index out of range [1] with length 1' >&2
+echo 'goroutine 1 [running]:' >&2
+exit 2
+EOF
+BLOCKBIN="$TMP/block-memoryctl.sh"
+cat > "$BLOCKBIN" <<'EOF'
+#!/bin/sh
+echo 'BLOCKED (hypomnema): stub says no' >&2
+exit 2
+EOF
+chmod +x "$UNKBIN" "$PANICBIN" "$BLOCKBIN"
+
+for stub in "$UNKBIN" "$PANICBIN"; do
+  err=$(printf '%s' '{"tool_name":"Bash","tool_input":{"command":"memoryctl pin x.md"}}' \
+    | HYPOMNEMA_MEMORYCTL="$stub" bash "$DIR/pre-tool-bash.sh" 2>&1 >/dev/null)
+  rc=$?
+  [ "$rc" -eq 0 ] || { echo "FAIL: pre-tool-bash.sh with $(basename "$stub") must exit 0, got $rc"; exit 1; }
+  [ -z "$err" ] || { echo "FAIL: pre-tool-bash.sh with $(basename "$stub") must stay silent, got: $err"; exit 1; }
+done
+
+err=$(printf '%s' '{"tool_name":"Bash","tool_input":{"command":"ls"}}' \
+  | HYPOMNEMA_MEMORYCTL="$BLOCKBIN" bash "$DIR/pre-tool-bash.sh" 2>&1 >/dev/null)
+rc=$?
+[ "$rc" -eq 2 ] || { echo "FAIL: pre-tool-bash.sh must exit 2 on the BLOCKED marker, got $rc"; exit 1; }
+[ "$err" = "BLOCKED (hypomnema): stub says no" ] \
+  || { echo "FAIL: pre-tool-bash.sh must re-emit the stub's stderr, got: $err"; exit 1; }
+
 echo "PASS"

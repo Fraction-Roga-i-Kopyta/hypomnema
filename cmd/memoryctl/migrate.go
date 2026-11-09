@@ -51,7 +51,7 @@ func runMigrate(args []string) {
 		return
 	}
 
-	exec := migrate.ExecOpts{V1Dir: v1, BackupDir: backup, MemoryDir: v1}
+	exec := migrate.ExecOpts{V1Dir: v1, BackupDir: backup, MemoryDir: v1, ConfigDir: configDir(), ClaudeDir: claudeDir()}
 
 	p, err := migrate.BuildPlan(migrate.Opts{
 		V1Dir: v1, GlobalDir: filepath.Join(osHome, ".claude", "memory-global"),
