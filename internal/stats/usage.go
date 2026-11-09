@@ -208,6 +208,21 @@ func (u *Usage) Session(sid string) SessionStats {
 	return s
 }
 
+// SessionFact returns fact k's inject-row count in session sid (subagents
+// included) and 1 when the session cited it useful, else 0 — the
+// Injected/Useful pair of a Session Top entry, for any fact.
+func (u *Usage) SessionFact(sid string, k Key) (injected, useful int) {
+	for _, r := range u.rows {
+		if r.parent == sid && r.event == "inject" && r.key == k {
+			injected++
+		}
+	}
+	if c, ok := u.cites[citeID{k, sid}]; ok && c.useful {
+		useful = 1
+	}
+	return injected, useful
+}
+
 func sortedKeys(m map[Key]bool) []Key {
 	ks := make([]Key, 0, len(m))
 	for k := range m {
