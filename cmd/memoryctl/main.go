@@ -79,7 +79,7 @@ Usage:
       rewrite | split | merge | review, and done (closes the fact's tasks).
       A task also closes when the file's content changes or the fact is
       retired; a status-only change (pin/unpin) keeps it open.
-  memoryctl stats --json --scope session|fact|project [--session ID] [--project TAG] [<slug>]
+  memoryctl stats --json --scope session|fact|project|all [--session ID] [--project TAG] [<slug>]
       Read-only JSON for the /memboard mod (schema_version 1; --json is
       required). session: WAL counts of one session and its subagents
       (--session, else HYPOMNEMA_SESSION_ID, else CLAUDE_CODE_SESSION_ID;

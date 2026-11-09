@@ -13,7 +13,7 @@ import (
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/stats"
 )
 
-const statsUsage = "Usage: memoryctl stats --json --scope session|fact|project [--session ID] [--project TAG] [<slug>]"
+const statsUsage = "Usage: memoryctl stats --json --scope session|fact|project|all [--session ID] [--project TAG] [<slug>]"
 
 // statsArgs is the parsed command line of `memoryctl stats`.
 type statsArgs struct {
@@ -23,7 +23,7 @@ type statsArgs struct {
 	sessionSet, projectSet bool
 }
 
-// runStats: memoryctl stats --json --scope session|fact|project [--session ID]
+// runStats: memoryctl stats --json --scope session|fact|project|all [--session ID]
 // [--project TAG] [<slug>]. Read-only JSON for the /memboard mod (the
 // stats.Report contract, schema_version 1). Exit 0 ok, 1 runtime failure or
 // no such fact, 2 misuse.
@@ -48,7 +48,7 @@ func runStats(args []string) {
 	}
 	switch a.scope {
 	case "":
-		misuse("--scope session|fact is required")
+		misuse("--scope session|fact|project|all is required")
 	case "session":
 		if a.slug != "" {
 			misuse("unexpected argument %q", a.slug)
@@ -70,8 +70,18 @@ func runStats(args []string) {
 		if a.sessionSet {
 			misuse("--session applies to --scope session|fact")
 		}
+	case "all":
+		if a.slug != "" {
+			misuse("unexpected argument %q", a.slug)
+		}
+		if a.sessionSet {
+			misuse("--session applies to --scope session|fact")
+		}
+		if a.projectSet {
+			misuse("--project applies to --scope project|fact")
+		}
 	default:
-		misuse("unknown scope %q (session|fact|project)", a.scope)
+		misuse("unknown scope %q (session|fact|project|all)", a.scope)
 	}
 
 	r := resolveStore("")
@@ -93,6 +103,27 @@ func runStats(args []string) {
 		ps := stats.BuildProject(st, native.Collect(claudeDir(), st), recs, u, marks,
 			projectSessions(st.Project), doctorHealth(st, anchor), home)
 		rep.ProjectStats = &ps
+		writeStats(rep)
+		return
+	}
+
+	if a.scope == "all" {
+		u, err := stats.LoadUsage(filepath.Join(memoryDir(), ".wal"), day)
+		if err != nil {
+			fatalf("stats: %v", err)
+		}
+		recs, marks := sidecarView()
+		stores := native.AllStores(configDir(), claudeDir(), r.Store)
+		files := make(map[string][]native.MemFile, len(stores))
+		for _, st := range stores {
+			l, _ := native.List(st.Dir)
+			for i := range l {
+				l[i].Project = st.Project
+			}
+			files[st.Dir] = l
+		}
+		all := stats.BuildAll(stores, files, recs, u, marks, home)
+		rep.All = &all
 		writeStats(rep)
 		return
 	}

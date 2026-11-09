@@ -291,3 +291,64 @@ export const STATS_PROJECT: StatsReport = {
     ]
   }
 }
+
+export const STATS_ALL: StatsReport = {
+  "schema_version": 1,
+  "scope": "all",
+  "today": "2026-11-09",
+  "project": "-HOME-work-proj",
+  "all": {
+    "stores": 2,
+    "facts": 4,
+    "funnel": {
+      "stored": 4,
+      "injected_7d": 4,
+      "useful_7d": 2,
+      "not_injected_30d": 1
+    },
+    "projects": [
+      {
+        "project": "-HOME-work-proj",
+        "display": "work-proj",
+        "facts": 3,
+        "useful_7d": 1
+      },
+      {
+        "project": "global",
+        "display": "global",
+        "facts": 1,
+        "useful_7d": 1
+      }
+    ],
+    "by_type": {
+      "feedback": 1,
+      "knowledge": 1,
+      "mistake": 1,
+      "strategy": 1
+    },
+    "triage": {
+      "noisy": [],
+      "candidates": [
+        {
+          "project": "-HOME-work-proj",
+          "display": "work-proj",
+          "slug": "beta.md",
+          "name": "beta-bug",
+          "type": "mistake",
+          "status": "candidate",
+          "description": "Beta bug",
+          "path": "/HOME/.claude/projects/-HOME-work-proj/memory/beta.md",
+          "created": "2026-10-20",
+          "ref_count": 1,
+          "effectiveness": 0.4444444444444444,
+          "last_injected": "2026-11-08",
+          "last_useful": "",
+          "injected_30d": 1,
+          "useful_30d": 0,
+          "marks": []
+        }
+      ],
+      "stale": []
+    }
+  }
+}

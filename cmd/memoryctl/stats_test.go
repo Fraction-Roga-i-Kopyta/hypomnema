@@ -380,3 +380,46 @@ func TestStats_ProjectEmptyWorld(t *testing.T) {
 		t.Fatalf("stats created a sidecar: %v", err)
 	}
 }
+
+func TestStats_AllScopeCLI(t *testing.T) {
+	root := statsRoot(t)
+	env, tag := statsWorld(t, root)
+	// A second project store the live sidecar knows nothing about.
+	other := filepath.Join(env["CLAUDE_HOME"], "projects", "-other-proj", "memory")
+	writeStatsFact(t, other, "omega.md", "type: knowledge\nname: omega\ndescription: Omega\ncreated: 2026-10-01")
+	rep, _ := runStatsJSON(t, env, "--scope", "all")
+	a := rep.All
+	if a == nil || rep.Scope != "all" || a.Stores != 3 || a.Facts != 5 || a.Funnel.Stored != 5 {
+		t.Fatalf("all: %+v", a)
+	}
+	// alpha, beta, gamma and the file-less gone.md injected within 7d (WAL-distinct); alpha and gamma useful; delta, omega never injected.
+	if a.Funnel.Injected7d != 4 || a.Funnel.Useful7d != 2 || a.Funnel.NotInjected30d != 2 {
+		t.Fatalf("funnel: %+v", a.Funnel)
+	}
+	if a.Projects[0].Project != tag || a.Projects[0].Facts != 3 {
+		t.Fatalf("projects: %+v", a.Projects)
+	}
+	for _, args := range [][]string{
+		{"--scope", "all", "extra"},
+		{"--scope", "all", "--session", "s1"},
+		{"--scope", "all", "--project", tag},
+	} {
+		_, errOut, code := run(t, env, append([]string{"stats", "--json"}, args...)...)
+		if code != 2 {
+			t.Errorf("%v: exit=%d stderr=%s", args, code, errOut)
+		}
+	}
+}
+
+// TestStatsAll_NoStores: no stores at all is exit 0 with zeros.
+func TestStatsAll_NoStores(t *testing.T) {
+	root := statsRoot(t)
+	rep, _ := runStatsJSON(t, statsEnv(root), "--scope", "all")
+	a := rep.All
+	if a == nil || a.Facts != 0 || a.Funnel != (stats.Funnel{}) || a.Projects == nil || a.ByType == nil {
+		t.Fatalf("empty: %+v", a)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".claude", "memory", ".sidecar.db")); !os.IsNotExist(err) {
+		t.Fatalf("stats created a sidecar: %v", err)
+	}
+}
