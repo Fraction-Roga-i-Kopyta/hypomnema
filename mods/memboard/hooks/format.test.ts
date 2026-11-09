@@ -1,0 +1,31 @@
+import { expect, test } from 'claude-code/testing'
+
+import { bar, fit, statusLine, wrapWords } from './format'
+
+test('status line format', () => {
+  expect(statusLine({ injected: 37, useful: 2, useful_share: 0.0625 })).toBe('mem 37↓ ✓2 · 6%')
+  expect(statusLine({ injected: 0, useful: 0, useful_share: 0 })).toBe('mem 0↓ ✓0 · 0%')
+})
+
+test('fit cuts with ellipsis', () => {
+  expect(fit('abcdef', 4)).toBe('abc…')
+  expect(fit('abcd', 4)).toBe('abcd')
+  expect(fit('ab', 4)).toBe('ab')
+  expect(fit('abc', 1)).toBe('…')
+  expect(fit('abc', 0)).toBe('')
+  expect(fit('Память', 4)).toBe('Пам…')
+})
+
+test('share bar fills by share', () => {
+  expect(bar(0.25, 8)).toBe('██░░░░░░')
+  expect(bar(0, 4)).toBe('░░░░')
+  expect(bar(1, 4)).toBe('████')
+  expect(bar(0.5, 0)).toBe('')
+})
+
+test('wrapWords keeps every line within width', () => {
+  const lines = wrapWords('pull-only mode: prompts inject nothing; facts read with Read are not counted', 20)
+
+  expect(lines).toEqual(['pull-only mode:', 'prompts inject', 'nothing; facts read', 'with Read are not', 'counted'])
+  expect(wrapWords('a-very-long-unbroken-word', 10)).toEqual(['a-very-lo…'])
+})
