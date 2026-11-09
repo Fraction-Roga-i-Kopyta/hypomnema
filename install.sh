@@ -163,10 +163,10 @@ echo "[3/4] Installing v2 hook shims..."
 V2_HOOKS_DIR="$HOOKS_DIR/v2"
 if [ "$DRY_RUN" -eq 1 ]; then
   echo "[dry-run] would create $V2_HOOKS_DIR"
-  echo "[dry-run] would copy 8 shims from $SCRIPT_DIR/hooks/v2/ to $V2_HOOKS_DIR"
+  echo "[dry-run] would copy 9 shims from $SCRIPT_DIR/hooks/v2/ to $V2_HOOKS_DIR"
 else
   mkdir -p "$V2_HOOKS_DIR"
-  for shim in session-start.sh user-prompt-submit.sh pre-tool-write.sh skill-learnings-inject.sh skill-active.sh session-stop.sh subagent-start.sh subagent-stop.sh; do
+  for shim in session-start.sh user-prompt-submit.sh pre-tool-write.sh pre-tool-bash.sh skill-learnings-inject.sh skill-active.sh session-stop.sh subagent-start.sh subagent-stop.sh; do
     src="$SCRIPT_DIR/hooks/v2/$shim"
     if [ -f "$src" ]; then
       # rm -f first: a leftover DANGLING symlink at the dest makes `cp` follow
@@ -180,7 +180,7 @@ else
       echo "WARNING: shim not found: $src" >&2
     fi
   done
-  echo "  Installed 8 shims into $V2_HOOKS_DIR"
+  echo "  Installed 9 shims into $V2_HOOKS_DIR"
 fi
 
 # --- Sweep stale symlinks left by earlier versions ---
@@ -274,6 +274,7 @@ register_hook() {
 register_hook SessionStart     ""      "$CLAUDE_DIR/hooks/v2/session-start.sh"           15 "SessionStart (hypomnema v2)"
 register_hook UserPromptSubmit ""      "$CLAUDE_DIR/hooks/v2/user-prompt-submit.sh"      10 "UserPromptSubmit (hypomnema v2)"
 register_hook PreToolUse       "Write|Edit" "$CLAUDE_DIR/hooks/v2/pre-tool-write.sh"      10 "PreToolUse secrets gate (hypomnema v2)"
+register_hook PreToolUse       "Bash"  "$CLAUDE_DIR/hooks/v2/pre-tool-bash.sh"            10 "PreToolUse memoryctl guard (hypomnema v2)"
 register_hook PostToolUse      "Skill" "$CLAUDE_DIR/hooks/v2/skill-learnings-inject.sh"  10 "PostToolUse(Skill) skill learnings (hypomnema v2)"
 register_hook PreToolUse       "Skill" "$CLAUDE_DIR/hooks/v2/skill-active.sh"             10 "PreToolUse(Skill) active-skill marker (hypomnema v2)"
 register_hook Stop             ""      "$CLAUDE_DIR/hooks/v2/session-stop.sh"            10 "Stop (hypomnema v2)"

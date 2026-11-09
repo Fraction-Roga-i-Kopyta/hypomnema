@@ -83,18 +83,26 @@ size. See [`docs/measurements/2026-05-29-v2-ranker-ab.md`](docs/measurements/202
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**Eight hook events, eight shims** — each ~5 lines, zero logic, pure marshalling:
+**Nine hooks, nine shims** — each a few lines, zero logic, pure marshalling:
 
 | Event (matcher) | Shim | What memoryctl does |
 |---|---|---|
 | `SessionStart` | `session-start.sh` | Detect project + git context + keywords → rank native facts → inject top-K via `additionalContext` |
 | `UserPromptSubmit` | `user-prompt-submit.sh` | Re-rank with prompt tokens added → inject anything not yet in session |
 | `PreToolUse:Write\|Edit` | `pre-tool-write.sh` | `guard`: secrets scan on memory-path writes → exit 2 on a credential pattern |
+| `PreToolUse:Bash` | `pre-tool-bash.sh` | `guard-bash`: block the model's own `memoryctl pin` / `unpin` / `mark` (only `mark <slug> done` passes) — those are `/memboard` panel actions |
 | `PreToolUse:Skill` | `skill-active.sh` | Record which skill just activated (marker for the capture path) |
 | `PostToolUse:Skill` | `skill-learnings-inject.sh` | `skill-inject`: surface accumulated learnings for the activated skill |
 | `Stop` | `session-stop.sh` | `close`: classify the injected set by `<cc-memory>` citation → WAL → recompute effectiveness/decay → regenerate `MEMORY.md` |
 | `SubagentStart` | `subagent-start.sh` | Rank against the subagent's own launch task (fallback: the parent's recent prompts) → inject its own top-5 |
 | `SubagentStop` | `subagent-stop.sh` | `close --subagent`: classify the subagent's own citations (including its hand-back report) under its own key |
+
+`guard-bash` stops accidental or injected *CLI* calls — say, a prompt
+injection telling the model to `hide` a user rule or `pin` a poisoned fact.
+It is **not a security boundary**: a model can still append to the WAL or
+edit a memory file directly. Its shim blocks only on the binary's
+`BLOCKED (hypomnema)` marker, so an older `memoryctl` without the verb is a
+no-op, never a blocked Bash call.
 
 The project's native `MEMORY.md` index is regenerated from native files on
 close; ranked facts arrive separately through `additionalContext` — we don't
@@ -202,7 +210,7 @@ memoryctl doctor # verify: all checks OK
 `./install.sh`:
 - Verifies Claude Code ≥ v2.1.59 and that `settings.json` is valid JSON — before touching anything.
 - Symlinks the pre-built `memoryctl` into `~/.claude/bin/`.
-- Copies the 8 hook shims into `~/.claude/hooks/v2/` and registers them in `~/.claude/settings.json` (timestamped backup first — the stable `settings.json.backup-hypomnema` name always points at this run's pre-change snapshot).
+- Copies the 9 hook shims into `~/.claude/hooks/v2/` and registers them in `~/.claude/settings.json` (timestamped backup first — the stable `settings.json.backup-hypomnema` name always points at this run's pre-change snapshot).
 - Creates `~/.claude/memory-global/` for global facts.
 - Refuses to proceed if `bin/memoryctl` predates subagent support (run `make build` first).
 
@@ -332,7 +340,7 @@ Subagents get their own ranked memory at `SubagentStart`: `memoryctl` builds a q
 
 **Why native files as the store, not a custom directory?** Claude Code's harness already injects `MEMORY.md` for the model — the file format is stable, the harness reads it for free. Owning a separate store meant a schema fork and two systems of record. Native is the substrate; sidecar is the metadata layer.
 
-**Why a Go binary, not bash?** The hot path (inject) needs to parse hundreds of files, run ranking, and return before the hook timeout. Go eliminates the bash 3.2/awk/sed portability tax, is testable with table-driven unit tests, and is benchmarkable. The eight shims that remain in bash are ~5 lines each — marshalling only.
+**Why a Go binary, not bash?** The hot path (inject) needs to parse hundreds of files, run ranking, and return before the hook timeout. Go eliminates the bash 3.2/awk/sed portability tax, is testable with table-driven unit tests, and is benchmarkable. The nine shims that remain in bash are a few lines each — marshalling only.
 
 **Why a sidecar, not frontmatter?** Native frontmatter is the content contract (harness reads it). Embedding hypomnema metadata there would pollute the harness format and require careful merge logic on every `git pull`. SQLite sidecar is a derivative — the WAL is the truth, the sidecar is a fast query projection that can be rebuilt anytime.
 

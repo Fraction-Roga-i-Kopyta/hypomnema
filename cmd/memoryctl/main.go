@@ -103,10 +103,13 @@ Usage:
       (A/B evidence). Read-only; see docs/measurements/.
 
 Hook verbs (invoked by the v2 shims, not run by hand): inject, close, guard,
-skill-inject, skill-active. Each reads a hook envelope on stdin and is
-fail-safe (exit 0 on bad input); guard is the exception — it exits 2 to block
-a secret-bearing write. The subagent hooks call inject --subagent
-(SubagentStart) and close --subagent (SubagentStop).
+guard-bash, skill-inject, skill-active. Each reads a hook envelope on stdin and
+is fail-safe (exit 0 on bad input); guard and guard-bash are the exceptions —
+guard exits 2 to block a secret-bearing write, guard-bash (PreToolUse:Bash)
+exits 2 to block the model's own Bash call to the /memboard verbs pin, unpin
+and mark (only "mark <slug> done" passes). guard-bash stops accidental or
+injected CLI calls; it is not a security boundary. The subagent hooks call
+inject --subagent (SubagentStart) and close --subagent (SubagentStop).
 
 Environment:
   CLAUDE_MEMORY_DIR       Memory root (default: ~/.claude/memory).
@@ -195,6 +198,8 @@ func main() {
 		runAB(os.Args[2:])
 	case "guard":
 		runGuard(os.Args[2:])
+	case "guard-bash":
+		runGuardBash(os.Args[2:])
 	case "reindex":
 		runReindex(os.Args[2:])
 	default:

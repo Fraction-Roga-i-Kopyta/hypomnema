@@ -115,8 +115,8 @@ every `active`/`pinned` fact in scope is a ranking candidate regardless of its
 
 It is Go-primary by design. The `memoryctl` binary is the mandatory engine —
 it does all the real work: ranking and injection, WAL accounting, Bayesian
-effectiveness, decay, the secrets gate, `doctor`. The eight
-files in `~/.claude/hooks/v2/` are ~5-line bash shims that read the hook
+effectiveness, decay, the secrets gate, `doctor`. The nine
+files in `~/.claude/hooks/v2/` are bash shims of a few lines that read the hook
 envelope on stdin and pipe it to `memoryctl`; they contain no logic. This is
 the reverse of v1, where bash carried the hot paths and Go was an optional
 add-on. `install.sh` refuses to proceed without a built binary, so `make build`

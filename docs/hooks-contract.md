@@ -3,7 +3,7 @@
 **Status:** STABLE. Companion to `docs/FORMAT.md`.
 
 This document describes the wire shape between Claude Code and the hypomnema
-hooks. It covers the eight hooks the installer wires, the stdin/stdout JSON
+hooks. It covers the nine hooks the installer wires, the stdin/stdout JSON
 shapes, exit codes, environment variables, and the fail-safe rules.
 
 In v2 every hook is a **thin shim** (`hooks/v2/*.sh`, a few lines of `sh`) that
@@ -23,6 +23,12 @@ memoryctl older than subagent support gives on `--subagent` (§8, §9) — a
 hook for a feature the resolved binary lacks must be a no-op to the harness,
 never a loud or silently-corrupting error.
 
+`pre-tool-bash.sh` does not `exec` either, for the same reason: a memoryctl
+older than `guard-bash` refuses the unknown verb with exit 2, and a Go panic
+exits 2 too — either would block every Bash call. The shim captures
+`guard-bash`'s stderr and exits 2 only when it starts with
+`BLOCKED (hypomnema)`, re-emitting it; any other outcome is exit 0 (§4a).
+
 The invariants here are what `install.sh` wires into `~/.claude/settings.json`.
 This document describes **hypomnema's own commitments**, not the upstream Claude
 Code envelope (new event types / tool-input fields are tracked separately).
@@ -31,7 +37,7 @@ Code envelope (new event types / tool-input fields are tracked separately).
 
 ## 1. Shared contract
 
-### 1.1 The eight hooks
+### 1.1 The nine hooks
 
 `install.sh` (`register_hook` calls) wires exactly these, and nothing else:
 
@@ -40,6 +46,7 @@ Code envelope (new event types / tool-input fields are tracked separately).
 | `SessionStart` | — | `session-start.sh` | `inject --event=SessionStart` | 15 s | Rank + inject memory at session open |
 | `UserPromptSubmit` | — | `user-prompt-submit.sh` | `inject --event=UserPromptSubmit` | 10 s | Re-rank + inject for the just-typed prompt |
 | `PreToolUse` | `Write\|Edit` | `pre-tool-write.sh` | `guard` | 10 s | Secrets gate — block credential writes |
+| `PreToolUse` | `Bash` | `pre-tool-bash.sh` | `guard-bash` | 10 s | Block the model's own `memoryctl pin`/`unpin`/`mark` (`mark … done` passes) |
 | `PreToolUse` | `Skill` | `skill-active.sh` | `skill-active` | 10 s | Record the activated skill for this session |
 | `PostToolUse` | `Skill` | `skill-learnings-inject.sh` | `skill-inject` | 10 s | Inject skill-learning facts for the skill |
 | `Stop` | — | `session-stop.sh` | `close` | 10 s | Close the session: classify, reproject, decay, `MEMORY.md` |
@@ -61,6 +68,7 @@ each verb actually reads:
 |---|---|
 | `inject` | `session_id`, `cwd`, `prompt`, `source` (routes SessionStart's compact/clear re-render and UserPromptSubmit's system/poll_event skip), `transcript_path` (SessionStart only, to find the latest compaction summary when `source=compact`) |
 | `guard` | `cwd` (resolves the store this invocation guards), `tool_input.file_path`, `tool_input.content` (Write), `tool_input.new_string` (Edit), `tool_input.new_source` (NotebookEdit), `tool_input.edits[].new_string` (MultiEdit) |
+| `guard-bash` | `tool_input.command` |
 | `skill-active` | `session_id`, `tool_input.skill` |
 | `skill-inject` | `session_id`, `cwd` (resolves the store the learnings are read from), `tool_input.skill` |
 | `close` | `session_id`, `cwd`, `transcript_path` |
@@ -88,8 +96,8 @@ that Claude Code prepends to the model's context:
 same ≤2.5 KB per-fact body cap, just a smaller total and a smaller K — see
 §8 below). Empty context is valid and means nothing matched.
 
-`guard`, `skill-active`, and `close` produce **no** stdout envelope. `guard`
-communicates via exit code + stderr; `skill-active` and `close` are
+`guard`, `guard-bash`, `skill-active`, and `close` produce **no** stdout
+envelope. `guard` and `guard-bash` communicate via exit code + stderr; `skill-active` and `close` are
 side-effect-only (WAL writes, sidecar updates, `.runtime/` markers).
 
 ### 1.4 Exit codes
@@ -97,13 +105,14 @@ side-effect-only (WAL writes, sidecar updates, `.runtime/` markers).
 | Code | Meaning |
 |---|---|
 | `0` | Success or graceful no-op. Claude Code continues normally. |
-| `2` | **`guard` only** — block the tool call. stderr is surfaced to Claude. |
+| `2` | **`guard` and `guard-bash` only** — block the tool call. stderr is surfaced to Claude. |
 | other | Undefined by hypomnema. |
 
 **Fail-safe rule:** every verb exits `0` on bad or absent input — malformed
 envelope JSON, unreadable memory, missing session id. A broken memory file is
 never a reason to break the user's session. The **only** intentional non-zero
-exit is `2` from `guard` when it finds a secret.
+exits are `2` from `guard` when it finds a secret and `2` from `guard-bash`
+when the command runs a panel verb.
 
 ### 1.5 Environment variables
 
@@ -264,7 +273,7 @@ text.
 
 ## 4. PreToolUse `Write|Edit` — `guard` (secrets gate)
 
-**Timeout:** 10 s. **The only hook that can block.**
+**Timeout:** 10 s. One of the two hooks that can block (with §4a).
 
 Reads the mutating tool's payload from stdin and blocks (exit 2) a write into a
 guarded memory store whose content carries a plaintext credential.
@@ -300,6 +309,54 @@ Patterns (see CLAUDE.md "Secrets detection"): key-based (`api_key` / `secret` /
 GitHub `ghp_…`/`github_pat_…`, Anthropic `sk-ant-…`, Slack `xox*-…`, PEM
 blocks, JWTs, `scheme://user:pass@` URLs). An unclosed code fence does not
 exempt the rest of the file.
+
+## 4a. PreToolUse `Bash` — `guard-bash` (panel-verb gate)
+
+**Timeout:** 10 s.
+
+`/memboard` runs `memoryctl pin`, `unpin` and `mark` through its own process
+API, never through the model's Bash tool. `guard-bash` reads
+`tool_input.command` and blocks (exit 2) a Bash call that runs one of them —
+except `mark <slug> done`, which the model may run to close a memory task.
+`retire`/`revive` and every read-only verb pass.
+
+**What it is and is not.** It stops accidental or injected *CLI* calls — a
+prompt injection telling the model to `hide` a user rule or `pin` a poisoned
+fact. It is **not a security boundary**: a model can still append to the WAL
+or edit a memory file directly.
+
+Detection, in order:
+
+1. **Heredoc bodies are cut** — from the line after `<<WORD` / `<<-WORD` /
+   `<<'WORD'` / `<<"WORD"` (not a here-string `<<<`) to the line equal to
+   `WORD`: commit messages, PR bodies and file contents are not commands. A
+   body is **kept** when it is a script: the segment holding the `<<`, or a
+   segment piped from it with `|`, runs `sh`, `bash`, `zsh`, `dash` or `ksh`
+   (by basename, past `VAR=value`, `env`, `command`, `exec`, `sudo` and
+   their flags). A heredoc whose delimiter line never comes is not cut.
+2. **Segments** — the rest splits on `;`, `&&`, `||`, `|`, `&` (not the `&`
+   of a redirection like `2>&1`) and newline; quotes are not tracked, so a
+   separator inside a quoted string only exposes more text to the check.
+3. **Text segments are skipped** — one whose first word (after `VAR=value`)
+   is `grep`, `rg`, `echo`, `printf` or `git`, unless it holds `$(`, a
+   backtick, `<(` or `>(` (a substitution inside it runs).
+4. **Match** — in every other segment, `memoryctl` (bare or any path ending
+   in `/memoryctl`, optionally closed by `)`, `'`, `"` or a backtick) followed
+   by whitespace and `pin`, `unpin` or `mark` blocks, anywhere in the segment:
+   inside `sh -c '…'`, after `env`, `command`, `xargs`, `X=1`, or
+   `$(command -v memoryctl)`. For `mark` the arguments are read the way the
+   verb reads them (`--project` takes a value); the second positional `done`
+   passes, anything else — including no directive — blocks.
+
+Exit **0** (pass) when the envelope does not parse, the command is empty, or
+nothing matches. Exit **2** (block) with stderr starting exactly:
+
+```
+BLOCKED (hypomnema): memoryctl pin/unpin/mark are /memboard actions; the model may only run "memoryctl mark <slug> done".
+```
+
+The shim keys on the `BLOCKED (hypomnema)` prefix, not the exit code (see the
+note at the top of this document).
 
 ## 5. PreToolUse `Skill` — `skill-active`
 
@@ -495,6 +552,10 @@ echo '{"session_id":"test","cwd":"/tmp","prompt":"help me with X"}' \
 # guard (secrets gate)
 echo '{"tool_input":{"file_path":"'"$HOME"'/.claude/memory-global/x.md","content":"api_key = \"abcd12345678\""}}' \
   | "$MCTL" guard ; echo "exit=$?"   # 0 = allow, 2 = block
+
+# guard-bash (panel-verb gate)
+echo '{"tool_input":{"command":"memoryctl pin x.md"}}' \
+  | "$MCTL" guard-bash ; echo "exit=$?"   # 0 = allow, 2 = block
 
 # Stop
 echo '{"session_id":"test","cwd":"/tmp","transcript_path":"/tmp/t.jsonl"}' \
