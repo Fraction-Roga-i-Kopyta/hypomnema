@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/Fraction-Roga-i-Kopyta/hypomnema?include_prereleases&sort=semver)](https://github.com/Fraction-Roga-i-Kopyta/hypomnema/releases)
 
-**Governance and ranking layer for Claude Code's native file memory — a Go engine (`memoryctl`) + 8 thin shims. No cloud, no embeddings.** Claude Code now ships native file memory; hypomnema adds ranked auto-injection (session AND subagents), effectiveness measurement, decay, and a global store that native lacks.
+**Governance and ranking layer for Claude Code's native file memory — a Go engine (`memoryctl`) + 9 thin shims. No cloud, no embeddings.** Claude Code now ships native file memory; hypomnema adds ranked auto-injection (session AND subagents), effectiveness measurement, decay, and a global store that native lacks.
 
 > **Status:** v3.0.0; native-primary. Requires Claude Code ≥ v2.1.59 (native file memory). v1.x stays on its tag for older Claude Code installs — see [MIGRATION.md](docs/MIGRATION.md) for the v1.x → v2.x upgrade path.
 >
@@ -67,7 +67,7 @@ size. See [`docs/measurements/2026-05-29-v2-ranker-ab.md`](docs/measurements/202
 └───────────────▲───────────────────────────▲─────────────────┘
        read-only │ (content)       write-intercept │ (guard)
 ┌────────────────┴───────────────────────────┴────────────────┐
-│  hypomnema v2 — memoryctl (Go) + 8 thin sh shims            │
+│  hypomnema v2 — memoryctl (Go) + 9 thin sh shims            │
 │                                                             │
 │  inject ──► additionalContext (ranked top-K)                │
 │  inject (SubagentStart) ──► own top-5 for its task          │
@@ -83,7 +83,7 @@ size. See [`docs/measurements/2026-05-29-v2-ranker-ab.md`](docs/measurements/202
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**Nine hooks, nine shims** — each a few lines, zero logic, pure marshalling:
+**Nine hooks, nine shims** — each a few lines of marshalling, with the logic in `memoryctl`:
 
 | Event (matcher) | Shim | What memoryctl does |
 |---|---|---|
@@ -263,7 +263,7 @@ The shims activate on next session start.
 
 ## Health check
 
-Run `memoryctl doctor` for a health snapshot: sidecar drift, WAL anomalies, stale facts due for down-rank, global store coverage, **facts larger than the 2.5 KB injection cap** (they inject as a header plus a marker; split or retire them).
+Run `memoryctl doctor` for a health snapshot (`--json` for scripts). Checks: `claude_dir_exists`, `memory_dir_exists`, `settings_hooks_registered`, `shim_files_present`, `no_broken_symlinks_*`, `memoryctl_available`, `corpus_counts`, `memory_queue` (open `/memboard` tasks older than 14 days), `wal_errors_last_7d`, `open_quanta_last_30d`, `citation_signal`, `sidecar`, `corpus_frontmatter_quality`, `oversized_facts` (facts larger than the 2.5 KB injection cap inject as a header plus a marker; split or retire them), `candidate_corroboration` and `store_resolution`. The full verb list is in `memoryctl --help`.
 
 ## Pull retrieval
 
@@ -274,6 +274,40 @@ memoryctl recall <query words...> [--k N]
 Pull-side retrieval: rank current project + global memory against an ad-hoc query; print the best fact's body (2.5KB cap) plus an index of runner-ups with file paths (default 6 results total). Writes a `recall` WAL event for the delivered fact and unions it into the session's injected list. Includes stale facts (marked `[stale]`) — recalling one revives it.
 
 A truncated injection ends with `…(truncated — N B total; full text: <path>)` — read that file for the rest; `memoryctl recall` serves a ranked, equally capped excerpt.
+
+## Memory board (`/memboard`)
+
+A Claude Code mod: a pane beside the chat that shows what memory did and lets you act on it. Install:
+
+```
+/plugin install memboard --marketplace Fraction-Roga-i-Kopyta/hypomnema
+```
+
+It needs a `memoryctl` with `stats` and `mark` (run `./install.sh` from the repo). `/memboard` toggles the pane; the status line shows `mem N↓ ✓N · N%` (facts injected, cited useful, share of useful).
+
+| Tab | Shows |
+|---|---|
+| `1` Session | This session and its subagents: injected, useful/silent/undelivered citations, recalls, the 10 most-injected facts |
+| `2` Project | The project store: counts by type, the last 7 days, health, triage lists (noisy, candidates, stale) and the task queue |
+| `3` All | Every store: the funnel (stored, injected 7d, useful 7d, not injected 30d), projects, types. The funnel counts only facts that currently have a file; injected = delivered by `inject` or `recall`; useful is a subset of injected |
+
+Open a fact for its card. Actions (hotkeys on the card):
+
+| Action | Effect |
+|---|---|
+| `a` Archive | `memoryctl retire` (asks first; `u` undoes it with `revive`) |
+| `p` Pin / Unpin | `status: pinned` (never decays) or back to `active` |
+| `h` Hide here | `mark hide`: stops push injection of the fact in this project only; the board still lists it |
+| `l` Show less | `mark less`: halves the fact's rank score |
+| `c` Clear marks | Drops the fact's marks and open tasks |
+| `r` `s` `m` `v` | Queue a task for Claude: rewrite, split, merge, review |
+| `d` Done | Closes the fact's tasks |
+
+`recall` and `skill-inject` ignore marks. Pin, unpin and marks other than `done` are panel actions: `guard-bash` (the `PreToolUse:Bash` shim) blocks the model from running `memoryctl pin`, `unpin` or `mark` itself. That is a barrier against accidental or injected CLI calls, not a security boundary.
+
+**Task queue.** Open tasks reach Claude as one line at SessionStart. Claude only offers them; it acts after you agree, then runs `memoryctl mark <slug> done`. A task also closes when the fact's body changes (the `status:` line is ignored, so pin/unpin keeps it open; reverting the file reopens it), and `retire` drops the fact's earlier marks. Known limitation: marks on facts in a project-level override store (`autoMemoryDirectory`) are verified only from that project's sessions.
+
+The same data is available as JSON: `memoryctl stats --json --scope session|project|all|fact`. Directives from the shell: `memoryctl mark <slug> <hide|less|clear|rewrite|split|merge|review|done> [--project TAG]`, `memoryctl pin|unpin <slug> [--project TAG]`.
 
 ## Lifecycle
 

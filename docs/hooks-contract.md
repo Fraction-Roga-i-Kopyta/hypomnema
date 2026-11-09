@@ -353,6 +353,12 @@ Detection, in order:
    verb reads them (`--project` takes a value); the second positional `done`
    passes, anything else — including no directive — blocks.
 
+**Known pass-throughs.** The match is textual, so these run unseen: `memoryctl`
+held in a variable (`M=memoryctl; $M pin x`), `xargs sh -c`, `time` and
+`timeout` wrappers, non-shell interpreters (`python3 <<EOF`), `source
+/dev/stdin`, and `git rebase --exec`. They fall under the same non-boundary
+caveat.
+
 Exit **0** (pass) when the envelope does not parse, the command is empty, or
 nothing matches. Exit **2** (block) with stderr starting exactly:
 

@@ -1,5 +1,30 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **`/memboard` mod** (`mods/memboard`, install with `/plugin install memboard
+  --marketplace Fraction-Roga-i-Kopyta/hypomnema`): a pane with Session,
+  Project and All tabs, a fact card and a status line.
+- **`memoryctl stats --json --scope session|project|all|fact`**: read-only
+  JSON feed for the board.
+- **`memoryctl mark <slug> <hide|less|clear|rewrite|split|merge|review|done>`**:
+  per-project hide, half-rank, and tasks for Claude. Open tasks appear as
+  one line at SessionStart; a task closes on `done`, on a body change, or on
+  `retire`. `recall` and `skill-inject` ignore marks.
+- **`memoryctl pin` / `unpin`**: toggle `status: pinned`.
+- **`memoryctl guard-bash`** and a ninth shim (`pre-tool-bash.sh`,
+  `PreToolUse:Bash`): blocks the model's own `pin`/`unpin`/`mark` calls
+  (only `mark ... done` passes). Not a security boundary.
+- `--project TAG` on `retire` and `revive`; `archived-from` tombstone key.
+- `doctor` check `memory_queue` (tasks open over 14 days).
+
+### Changed
+
+- Sidecar schema v8 (`mark` table); it rebuilds itself on first open. Run
+  `./install.sh` to register the new shim.
+
 ## [3.0.0] — 2026-11-09
 
 **Breaking:** the `ablate`, `promote`, `self-profile` and `dedup check`

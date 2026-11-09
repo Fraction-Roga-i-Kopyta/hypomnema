@@ -9,7 +9,7 @@ Claude Code v2.1.59+ ships native file memory: the harness stores markdown files
 - **Ranked auto-injection** — `memoryctl inject` (SessionStart + UserPromptSubmit shims) ranks native facts by relevance and injects the top-K via `additionalContext`, not just a table of contents, and `SubagentStart` (each eligible subagent gets its own ranked top-5 for the task it was launched with).
 - **Effectiveness measurement** — WAL tracks `<cc-memory>` citations (`cite-useful`/`cite-silent`) per session; Bayesian effectiveness feeds back into ranking.
 - **Decay + lifecycle** — `memoryctl close` (Stop shim) down-ranks stale facts in the sidecar; content is never mutated by hooks.
-- **Secrets gate** — `memoryctl guard` (PreToolUse:Write shim) blocks credential patterns before they land in a memory file.
+- **Secrets gate** — `memoryctl guard` (PreToolUse:Write shim) blocks credential patterns before they land in a memory file; `memoryctl guard-bash` (PreToolUse:Bash shim) blocks the model's own `memoryctl pin`/`unpin`/`mark` calls.
 - **Global store** — `~/.claude/memory-global/` for facts that apply across every project (native memory is per-project only).
 
 The point: you remember things across sessions, and the things most likely to matter surface first.
@@ -315,6 +315,10 @@ SubagentStart deliveries carry a different line — `When a fact below shapes yo
 `FILE` is the fact's file name, shown in its header (`## <name> — <file.md> (<type>, <created>)`). This citation — not a keyword or name match — is the only thing `close` reads to mark a fact `cite-useful`; an injected fact with no citation in a session that had at least one delivered citation is `cite-silent` instead. Only a fact actually delivered in the session earns credit for a citation — injected/recalled/skill-injected, or read directly with the Read tool from its file — so citing a filename you never saw content from lands as `cite-undelivered`, not `cite-useful`. Cite only the facts that actually changed what you said, did, or decided; the tag is hidden from the user, so there is no cost to citing honestly and no benefit to citing everything.
 
 "Hidden from the user" holds for the interactive CLI; headless invocation (`claude -p`) or raw SDK output may surface the tag literally, since there is no interactive renderer to strip it.
+
+## Panel-only verbs
+
+`memoryctl pin`, `unpin` and `mark` (every directive except `done`) are `/memboard` panel actions. `guard-bash` blocks them when you run them through Bash, and that is intended: do not work around it. The one verb you run is `memoryctl mark <slug> done [--project TAG]`, after the user agreed to a task from the SessionStart "Memory queue" line and you finished it. `guard-bash` is a barrier against accidental or injected calls, not a security boundary.
 
 ## Pull retrieval
 
