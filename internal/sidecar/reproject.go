@@ -318,7 +318,7 @@ func readWALAgg(walPath string) map[string]*agg {
 			continue
 		}
 		switch event {
-		case "cite-none", "cite-undelivered",
+		case "cite-none", "cite-undelivered", "pin", "unpin",
 			"ablate-start", "ablate-stop", "holdout-skip", "holdout-hit", "holdout-miss":
 			continue
 		}

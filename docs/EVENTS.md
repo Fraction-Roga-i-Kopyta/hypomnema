@@ -69,6 +69,8 @@ Exactly these events are written by v2 code. Producers verified by grep of
 | `retire` | `<qslug>[><successor>][:<reason>]` | `memoryctl retire` (`cmd/memoryctl/retire.go`) | `internal/sidecar` reproject (status=retired) | `<qslug>` = project-qualified slug; successor/reason use the `>`/`:` sub-delims, whitespace collapsed to `_` |
 | `revive` | `<qslug>` | `memoryctl revive` (`cmd/memoryctl/retire.go`) | `internal/sidecar` reproject (cancels retirement) | |
 | `candidate-confirmed` | `<qslug>` | `memoryctl close` — `internal/closer` | `internal/sidecar` reproject (candidate→active); `internal/doctor` | emitted once per fact (WAL dedup); graduation of a soft-corroboration candidate |
+| `pin` | `<qslug>` | `memoryctl pin` (`cmd/memoryctl/pin.go`) | none — audit record only; the pinned status is projected from frontmatter | skipped by reproject, so it never feeds the WAL-earliest `created` fallback |
+| `unpin` | `<qslug>` | `memoryctl unpin` (`cmd/memoryctl/pin.go`) | none — audit record only; the active status is projected from frontmatter | skipped by reproject like `pin` |
 
 ---
 

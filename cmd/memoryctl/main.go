@@ -67,6 +67,10 @@ Usage:
   memoryctl revive <slug> [--project TAG]
       Move a retired fact back into its live store, strip the tombstone
       keys, and emit a "revive" WAL event.
+  memoryctl pin <slug> [--project TAG]
+  memoryctl unpin <slug> [--project TAG]
+      Set the fact's frontmatter status to pinned (never decays) or back to
+      active, emit a "pin"/"unpin" WAL audit event, refresh the sidecar.
   memoryctl skill-inject
       PostToolUse hook verb. Reads a hook envelope from stdin, extracts
       tool_input.skill, retrieves skill-learning facts bound to that skill,
@@ -169,6 +173,10 @@ func main() {
 		runRetire(os.Args[2:])
 	case "revive":
 		runRevive(os.Args[2:])
+	case "pin":
+		runPin(os.Args[2:], "pinned")
+	case "unpin":
+		runPin(os.Args[2:], "active")
 	case "skill-inject":
 		runSkillInject(os.Args[2:])
 	case "skill-active":
