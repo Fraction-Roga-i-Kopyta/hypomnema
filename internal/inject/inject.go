@@ -258,6 +258,16 @@ func Run(in Input) (Result, error) {
 		maxTotal = maxTotalBytes
 	}
 	md, injected := render(ranked, bySlug, instructionFor(in.Event), maxBodyBytes, maxTotal)
+	if in.Event == "SessionStart" {
+		if q := renderQueue(openTasks(in, st)); q != "" {
+			switch {
+			case md == "":
+				md = "# Memory Context\n" + q + "\n"
+			case len(md)+1+len(q)+1 <= maxTotal:
+				md += "\n" + q + "\n"
+			}
+		}
+	}
 	projectSlug := st.Project
 	localSlug := map[string]bool{}
 	for _, f := range files {
@@ -371,6 +381,41 @@ func pushMarks(s *sidecar.Store, event, project string) (hidden, less map[string
 		}
 	}
 	return hidden, less
+}
+
+// openTasks returns the open /memboard tasks of the current store and the
+// global store. Any sidecar problem degrades to no tasks.
+func openTasks(in Input, st native.Store) []sidecar.Mark {
+	s, err := sidecar.Open(filepath.Join(in.MemoryDir, ".sidecar.db"))
+	if err != nil {
+		return nil
+	}
+	defer s.Close()
+	ms, err := s.Marks()
+	if err != nil {
+		return nil
+	}
+	var out []sidecar.Mark
+	for _, m := range ms {
+		if sidecar.IsTask(m.Directive) && (m.Project == st.Project || m.Project == native.GlobalProject) {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// renderQueue is the SessionStart paragraph announcing open /memboard tasks;
+// "" when there are none.
+func renderQueue(tasks []sidecar.Mark) string {
+	if len(tasks) == 0 {
+		return ""
+	}
+	items := make([]string, len(tasks))
+	for i, m := range tasks {
+		items[i] = fmt.Sprintf("%s: %s (%s)", m.Directive, strings.TrimSuffix(m.Slug, ".md"), m.Project)
+	}
+	return fmt.Sprintf("Memory queue: %d open task(s) from /memboard — %s. Mention them to the user once and offer to work through them; change nothing until the user agrees. After finishing one, run: memoryctl mark <slug> done --project <project>",
+		len(tasks), strings.Join(items, "; "))
 }
 
 // shouldWipeSidecar reports whether a sidecar.Open error indicates genuine
