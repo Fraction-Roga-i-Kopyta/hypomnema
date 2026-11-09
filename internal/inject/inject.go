@@ -324,9 +324,12 @@ func candidates(in Input, st native.Store, files []native.MemFile, terms []strin
 			if oerr != nil {
 				overlap = map[string]int{}
 			}
+			hidden, less := pushMarks(s, in.Event, projectSlug)
 			out := make([]rank.Candidate, 0, len(scoped))
 			for _, r := range scoped {
+				k := r.Project + "\x1f" + r.Slug
 				out = append(out, rank.Candidate{
+					Hidden: hidden[k], Less: less[k],
 					Slug: r.Slug, Type: r.Type, Project: r.Project,
 					Domains: splitCSV(r.Domains), RefCount: r.RefCount,
 					Effectiveness: r.Effectiveness, Status: r.Status,
@@ -339,6 +342,35 @@ func candidates(in Input, st native.Store, files []native.MemFile, terms []strin
 		}
 	}
 	return degradedCandidates(files, terms)
+}
+
+// pushMarks returns the /memboard hide (for this project only) and less
+// sets keyed "<fact project>\x1f<slug.md>". Only the push events honour
+// marks; recall, skill-inject, the rank verb and ab pass another Event and
+// get empty sets. A read failure degrades to no marks.
+func pushMarks(s *sidecar.Store, event, project string) (hidden, less map[string]bool) {
+	switch event {
+	case "SessionStart", "UserPromptSubmit", "SubagentStart":
+	default:
+		return nil, nil
+	}
+	ms, err := s.Marks()
+	if err != nil {
+		return nil, nil
+	}
+	hidden, less = map[string]bool{}, map[string]bool{}
+	for _, m := range ms {
+		k := m.Project + "\x1f" + m.Slug
+		switch m.Directive {
+		case "hide":
+			if m.Arg == project {
+				hidden[k] = true
+			}
+		case "less":
+			less[k] = true
+		}
+	}
+	return hidden, less
 }
 
 // shouldWipeSidecar reports whether a sidecar.Open error indicates genuine
