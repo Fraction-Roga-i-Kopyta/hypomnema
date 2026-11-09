@@ -283,11 +283,11 @@ A Claude Code mod: a pane beside the chat that shows what memory did and lets yo
 /plugin install memboard --marketplace Fraction-Roga-i-Kopyta/hypomnema
 ```
 
-It needs a `memoryctl` with `stats` and `mark` (run `./install.sh` from the repo). `/memboard` toggles the pane; the status line shows `mem N↓ ✓N · N%` (facts injected, cited useful, share of useful).
+It needs a `memoryctl` with `stats` and `mark` (run `make build && ./install.sh` from the repo). The mod runs `$HYPOMNEMA_MEMORYCTL` when set, else `~/.claude/bin/memoryctl`, else the first `memoryctl` on `PATH`. `/memboard` toggles the pane, also mid-turn; the toggle itself injects no memory. The status line shows `mem N↓ ✓N · N%` (facts injected, cited useful, share of useful).
 
 | Tab | Shows |
 |---|---|
-| `1` Session | This session and its subagents: injected, useful/silent/undelivered citations, recalls, the 10 most-injected facts |
+| `1` Session | This session and its subagents: injected, useful/silent/undelivered citations, recalls, the 5 most-injected facts |
 | `2` Project | The project store: counts by type, the last 7 days, health, triage lists (noisy, candidates, stale) and the task queue |
 | `3` All | Every store: the funnel (stored, injected 7d, useful 7d, not injected 30d), projects, types. The funnel counts only facts that currently have a file; injected = delivered by `inject` or `recall`; useful is a subset of injected |
 
@@ -297,7 +297,7 @@ Open a fact for its card. Actions (hotkeys on the card):
 |---|---|
 | `a` Archive | `memoryctl retire` (asks first; `u` undoes it with `revive`) |
 | `p` Pin / Unpin | `status: pinned` (never decays) or back to `active` |
-| `h` Hide here | `mark hide`: stops push injection of the fact in this project only; the board still lists it |
+| `h` Hide in *project* | `mark hide`: stops push injection of the fact in this session's project only (the button names it); the board still lists it |
 | `l` Show less | `mark less`: halves the fact's rank score |
 | `c` Clear marks | Drops the fact's marks and open tasks |
 | `r` `s` `m` `v` | Queue a task for Claude: rewrite, split, merge, review |

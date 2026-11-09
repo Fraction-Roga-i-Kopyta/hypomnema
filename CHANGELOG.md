@@ -24,6 +24,15 @@
 
 - Sidecar schema v8 (`mark` table); it rebuilds itself on first open. Run
   `./install.sh` to register the new shim.
+- `inject` on UserPromptSubmit skips the `/memboard` toggle (with or without
+  arguments): opening the pane spends no once-per-context slot.
+- `retire` and `revive` refresh the sidecar at once, as `pin` and `mark` do.
+
+### Fixed
+
+- The global store listed itself twice when it was the store asked for
+  (`stats --scope project --project global`, the sidecar refresh after an
+  action on a global fact).
 
 ## [3.0.0] — 2026-11-09
 

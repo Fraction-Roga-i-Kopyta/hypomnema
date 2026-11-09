@@ -226,6 +226,10 @@ not something the user typed. `inject` exits 0 immediately: no ranking, no
 `additionalContext`, no WAL write, the injected-set list untouched. Ranking
 that text would spend a fact's once-per-context slot on noise. A payload
 without `source` (older Claude Code versions) is treated as a real prompt.
+The `/memboard` toggle — the trimmed prompt is `/memboard`, alone or
+followed by whitespace and arguments — is skipped the same way: it opens or
+closes a pane and never reaches the model. Every other slash prompt is
+ranked like any prompt.
 
 Otherwise, re-ranks against the just-typed `prompt` (folded into
 `session_keywords`) and emits **only** facts that newly enter the top-8 —
@@ -354,10 +358,12 @@ Detection, in order:
    passes, anything else — including no directive — blocks.
 
 **Known pass-throughs.** The match is textual, so these run unseen: `memoryctl`
-held in a variable (`M=memoryctl; $M pin x`), `xargs sh -c`, `time` and
-`timeout` wrappers, non-shell interpreters (`python3 <<EOF`), `source
-/dev/stdin`, and `git rebase --exec`. They fall under the same non-boundary
-caveat.
+held in a variable (`M=memoryctl; $M pin x`), `xargs sh -c`, a heredoc fed
+to a shell behind `time` or `timeout` (`time sh <<EOF` — step 1 does not
+look past them, so the body is cut; `time memoryctl pin x` and `timeout 5
+memoryctl pin x` themselves block in step 4), non-shell interpreters
+(`python3 <<EOF`), `source /dev/stdin`, and `git rebase --exec`. They fall
+under the same non-boundary caveat.
 
 Exit **0** (pass) when the envelope does not parse, the command is empty, or
 nothing matches. Exit **2** (block) with stderr starting exactly:

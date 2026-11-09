@@ -77,7 +77,7 @@ UserPromptSubmit ──► inject --event=UserPromptSubmit ───────
    source ∈ {system, poll_event}: exit 0, no output, no WAL,    │
      session list untouched (machine-injected turn, not a       │
      user prompt — ranking it would waste a fact's once-per-    │
-     session slot)                                              │
+     session slot); the same for the /memboard toggle           │
    else: same ranker; keywords += prompt tokens (reactive)      │
    inject only facts newly entering the top-8 this session      │
    WAL: inject|<slug>|<session>                                 │

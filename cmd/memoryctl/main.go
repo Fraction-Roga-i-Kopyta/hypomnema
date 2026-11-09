@@ -62,11 +62,12 @@ Usage:
   memoryctl retire <slug> [--reason "..."] [--superseded-by <ref>] [--project TAG]
       Retire a fact: move its file to the store's .archive/, stamp tombstone
       frontmatter (retired/retire-reason/superseded-by/archived-from), emit a "retire" WAL
-      event. The sidecar projects the row as status=retired; recall shows a
-      tombstone pointing at the successor. Undo with "memoryctl revive".
+      event and refresh the sidecar, which projects the row as
+      status=retired and closes the fact's tasks; recall shows a tombstone
+      pointing at the successor. Undo with "memoryctl revive".
   memoryctl revive <slug> [--project TAG]
       Move a retired fact back into its live store, strip the tombstone
-      keys, and emit a "revive" WAL event.
+      keys, emit a "revive" WAL event and refresh the sidecar.
   memoryctl pin <slug> [--project TAG]
   memoryctl unpin <slug> [--project TAG]
       Set the fact's frontmatter status to pinned (never decays) or back to
@@ -92,7 +93,13 @@ Usage:
       project: the store's counts (local/global/by type), the last 7 days
       of its sessions, doctor health, triage lists (noisy, candidates,
       stale; max 50 each) and the open-task queue (--project TAG picks
-      another store).
+      another store; --project global lists the global store alone).
+      all: every store at once (no --session, no --project) — the funnel
+      (stored, injected 7d, useful 7d, not injected 30d; files that exist
+      now only), one row per store (facts, useful 7d), counts by type and
+      the triage lists across stores.
+      Every report carries the session's store tag ("project") and its
+      display form ("display"). A WAL line over 1 MiB is skipped.
       Exit 1 = no such fact, unknown store or unreadable WAL.
   memoryctl skill-inject
       PostToolUse hook verb. Reads a hook envelope from stdin, extracts
