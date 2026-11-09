@@ -49,6 +49,23 @@ export function wrapWords(text: string, width: number): string[] {
   return lines
 }
 
+/** `items` joined with ` · ` into lines of at most `width` columns; a longer item is cut. */
+export function joinFit(items: string[], width: number): string[] {
+  const lines: string[] = []
+  let line = ''
+  for (const item of items) {
+    const next = line === '' ? item : `${line} · ${item}`
+    if (Array.from(next).length <= width) {
+      line = next
+      continue
+    }
+    if (line !== '') lines.push(line)
+    line = fit(item, width)
+  }
+  if (line !== '') lines.push(line)
+  return lines
+}
+
 /** A fact type in four columns (`feed`, `mist`), `-` when the file is gone. */
 export function shortType(type: string): string {
   return padEnd(type === '' ? '-' : type.slice(0, 4), 4)

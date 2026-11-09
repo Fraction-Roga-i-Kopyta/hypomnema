@@ -101,6 +101,12 @@ export type TurnFact = { name: string; file: string; type: string }
 
 export type Tab = 'session' | 'project' | 'all'
 
+/** A tab's last report and when it arrived (ms since the epoch). */
+export type TabCache = { report: StatsReport; fetchedAt: number }
+
+/** The drill-down's report belongs to one project tag. */
+export type DrillCache = TabCache & { tag: string }
+
 declare module 'claude-code' {
   interface PluginState {
     memboard: {
@@ -117,6 +123,20 @@ declare module 'claude-code' {
       sessionId: Shaped<string | null>
       /** The report's top-level `project` (the session's store tag). */
       sessionProject: Shaped<string | null>
+      /** The last `stats --scope project`; null until the tab was opened. */
+      project: Shaped<TabCache | null>
+      /** The last `stats --scope all`. */
+      all: Shaped<TabCache | null>
+      /** Project tag drilled into from the All tab; null on the list. */
+      drill: Shaped<string | null>
+      /** The last `stats --scope project --project <drill>`. */
+      drillCache: Shaped<DrillCache | null>
+      /** Why the visible Project / All tab has nothing new; null after a good fetch. */
+      tabError: Shaped<string | null>
+      /** Rows shown per triage list, by list name; absent means the default. */
+      limits: Shaped<Record<string, number>>
+      /** The fact a row press chose (the card opens from it). */
+      selected: Shaped<FactKey | null>
     }
   }
 }

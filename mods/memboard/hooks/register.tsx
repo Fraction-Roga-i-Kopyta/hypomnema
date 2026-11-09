@@ -1,10 +1,13 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import type { Tab } from '../types'
+import type { FactKey, Tab } from '../types'
 import { fit, statusLine } from './format'
 import { locate, stats } from './memoryctl'
 import { parseInjected } from './turn'
+import { AllView } from './views/all'
+import { ProjectView } from './views/project'
+import { DEFAULT_LIMIT, MORE_STEP } from './views/rows'
 import { SessionView } from './views/session'
 
 const PANE = 'memboard'
@@ -12,6 +15,8 @@ const HINT = 'memoryctl not found or too old — run ./install.sh in the hypomne
 // While the pane is open it refreshes on its own too (a subagent's turn ends
 // with SubagentStop, which raises no refresh).
 const PANE_REFRESH_MS = 180_000
+// A tab opened within this long of its last fetch shows what it has.
+const CACHE_MS = 120_000
 const TOGGLE = /^\s*\/memboard(\s|$)/
 
 const TABS: readonly (readonly [Tab, string, string])[] = [
@@ -32,6 +37,13 @@ const sessionId = atom({ plugin: 'memboard', key: 'sessionId' } as const, null, 
 const sessionProject = atom({ plugin: 'memboard', key: 'sessionProject' } as const, null, {
   shape: 'project-1',
 })
+const project = atom({ plugin: 'memboard', key: 'project' } as const, null, { shape: 'cache-1' })
+const all = atom({ plugin: 'memboard', key: 'all' } as const, null, { shape: 'cache-1' })
+const drill = atom({ plugin: 'memboard', key: 'drill' } as const, null, { shape: 'drill-1' })
+const drillCache = atom({ plugin: 'memboard', key: 'drillCache' } as const, null, { shape: 'dcache-1' })
+const tabError = atom({ plugin: 'memboard', key: 'tabError' } as const, null, { shape: 'tabError-1' })
+const limits = atom({ plugin: 'memboard', key: 'limits' } as const, {}, { shape: 'limits-1' })
+const selected = atom({ plugin: 'memboard', key: 'selected' } as const, null, { shape: 'selected-1' })
 
 /** `stats --scope session` into state and the status line; any failure clears the line. */
 async function refresh($: EngineInterface): Promise<void> {
@@ -67,6 +79,53 @@ async function refresh($: EngineInterface): Promise<void> {
   $.ui.status(statusLine(s))
 }
 
+/**
+ * The visible Project / All tab (or the drill-down over All) from memoryctl.
+ * Without `force` a cache younger than CACHE_MS stands. Nothing runs for the
+ * Session tab: its numbers are `refresh`'s.
+ */
+async function loadTab($: EngineInterface, force: boolean): Promise<void> {
+  const active = await read($, tab)
+  if (active === 'session') return
+  const tag = active === 'all' ? await read($, drill) : null
+  const projectCache = await read($, project)
+  const allCache = await read($, all)
+  const dCache = await read($, drillCache)
+  const cache = active === 'project' ? projectCache : tag === null ? allCache : dCache?.tag === tag ? dCache : null
+  const now = await $.clock.now()
+  if (!force && cache !== null && now - cache.fetchedAt < CACHE_MS) return
+
+  const path = await read($, bin)
+  const sid = await read($, sessionId)
+  if (path === null || sid === null) return
+  const args =
+    active === 'project'
+      ? ['--scope', 'project']
+      : tag === null
+        ? ['--scope', 'all']
+        : ['--scope', 'project', '--project', tag]
+  const r = await stats($, path, args, sid)
+  if ((await read($, sessionId)) !== sid) return
+  const body = r.ok ? (active === 'all' && tag === null ? r.report.all : r.report.project_stats) : undefined
+  if (!r.ok || body === undefined) {
+    // The tabs stay: only this view says why it has nothing new.
+    await update($, tabError, () => (r.ok ? `memoryctl stats sent no ${args[1]} report` : r.error))
+    return
+  }
+  const fetchedAt = await $.clock.now()
+  const report = r.report
+  if (active === 'project') await update($, project, () => ({ report, fetchedAt }))
+  else if (tag === null) await update($, all, () => ({ report, fetchedAt }))
+  else await update($, drillCache, () => ({ report, fetchedAt, tag }))
+  await update($, tabError, () => null)
+}
+
+/** The open pane's timer tick: the visible tab only. */
+async function tick($: EngineInterface): Promise<void> {
+  if ((await read($, tab)) === 'session') await refresh($)
+  else await loadTab($, true)
+}
+
 /** A refresh on the next tick: the hook that asks for it never waits on it. */
 function later($: EngineInterface): void {
   try {
@@ -89,7 +148,7 @@ function stopPaneTimer(): void {
 function startPaneTimer($: EngineInterface): void {
   stopPaneTimer()
   paneTimer = $.clock.every(PANE_REFRESH_MS, () => {
-    refresh($).catch(() => $.ui.status(undefined))
+    tick($).catch(() => $.ui.status(undefined))
   })
 }
 
@@ -175,6 +234,11 @@ export const register: Register = on => {
     await $.ui.open({ id: PANE, title: 'Memory' })
     await update($, isOpen, () => true)
     startPaneTimer($)
+    try {
+      await loadTab($, false)
+    } catch {
+      // The tab shows what it has; the next press or tick fetches.
+    }
     return {}
   }).catch($ => {
     $.ui.toast('memboard: the dashboard could not toggle')
@@ -205,8 +269,81 @@ export const register: Register = on => {
 
     const active = await read($, tab)
     const name = TABS.find(([t]) => t === active)?.[2] ?? 'Session'
+    const open = async (t: Tab) => {
+      await update($, tab, () => t)
+      await update($, drill, () => null)
+      await update($, tabError, () => null)
+      try {
+        await loadTab($, false)
+      } catch {
+        // The tab shows what it has.
+      }
+    }
+    const els = { Box, Text, Button }
+    const lim = await read($, limits)
+    const onOpen = (fact: FactKey) => void update($, selected, () => fact)
+    const onMore = (list: string) => void update($, limits, l => ({ ...l, [list]: (l[list] ?? DEFAULT_LIMIT) + MORE_STEP }))
+    const why = await read($, tabError)
+    const loading = why === null ? <Text dimColor>{fit('Loading…', width)}</Text> : <Text color="warning">{fit(why, width)}</Text>
+    const tag = await read($, drill)
+    const projectCache = await read($, project)
+    const allCache = await read($, all)
+    const dCache = await read($, drillCache)
+    const goDrill = async (t: string | null) => {
+      await update($, drill, () => t)
+      try {
+        await loadTab($, false)
+      } catch {
+        // The view shows what it has.
+      }
+    }
     const body =
-      active === 'session' ? (
+      active === 'project' ? (
+        projectCache?.report.project_stats === undefined ? (
+          loading
+        ) : (
+          <ProjectView
+            ui={els}
+            width={width}
+            stats={projectCache.report.project_stats}
+            scope="project"
+            limits={lim}
+            onOpen={onOpen}
+            onMore={onMore}
+          />
+        )
+      ) : active === 'all' && tag !== null ? (
+        <Box flexDirection="column">
+          <Button key="back" label="b Back" hotkey="b" onPress={() => goDrill(null)} />
+          {dCache === null || dCache.tag !== tag || dCache.report.project_stats === undefined ? (
+            loading
+          ) : (
+            <ProjectView
+              ui={els}
+              width={width}
+              stats={dCache.report.project_stats}
+              scope="drill"
+              limits={lim}
+              onOpen={onOpen}
+              onMore={onMore}
+            />
+          )}
+        </Box>
+      ) : active === 'all' ? (
+        allCache?.report.all === undefined ? (
+          loading
+        ) : (
+          <AllView
+            ui={els}
+            width={width}
+            stats={allCache.report.all}
+            limits={lim}
+            onOpen={onOpen}
+            onMore={onMore}
+            onDrill={t => void goDrill(t)}
+          />
+        )
+      ) : active === 'session' ? (
         <SessionView
           ui={{ Box, Text, Button }}
           width={width}
@@ -229,7 +366,7 @@ export const register: Register = on => {
               label={`${hotkey} ${label}`}
               hotkey={hotkey}
               {...(t === active ? { variant: 'primary' as const } : {})}
-              onPress={() => update($, tab, () => t)}
+              onPress={() => open(t)}
             />
           ))}
         </Box>
