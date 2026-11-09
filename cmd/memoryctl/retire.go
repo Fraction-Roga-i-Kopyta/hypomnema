@@ -134,6 +134,7 @@ func doRetire(slug, reason, successor, project string) {
 		fatalf("retire: wal append: %v (fact left untouched)", err)
 	}
 	refreshStoreIndex(st)
+	refreshSidecar(st)
 }
 
 func doRevive(slug, project string) {
@@ -170,8 +171,11 @@ func doRevive(slug, project string) {
 		// WAL error here is reported but the restore is not rolled back.
 		if err := emitLifecycleEvent("revive", native.QKey(st.Project, strings.TrimSuffix(want, ".md"))); err != nil {
 			fmt.Fprintf(os.Stderr, "memoryctl revive: wal append: %v (file restored; sidecar heals at next close)\n", err)
+			refreshStoreIndex(st)
+			return
 		}
 		refreshStoreIndex(st)
+		refreshSidecar(st)
 		return
 	}
 	fatalf("revive: %s not found in any .archive/", want)

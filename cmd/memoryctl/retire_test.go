@@ -87,6 +87,34 @@ func TestRetireAndRevive(t *testing.T) {
 	}
 }
 
+// retire and revive refresh the sidecar like pin and mark do: the row's
+// status and the open-task queue (SessionStart's queue line, doctor's
+// memory_queue) change at once, not at the next Stop hook.
+func TestRetireRevive_RefreshSidecar(t *testing.T) {
+	env, _, memDir, _ := retireFixture(t)
+	if _, e, c := run(t, env, "mark", "old-rule", "rewrite"); c != 0 {
+		t.Fatalf("mark: %s", e)
+	}
+	if len(sidecarMarks(t, memDir)) != 1 {
+		t.Fatalf("precondition: one open task, got %q", sidecarMarks(t, memDir))
+	}
+
+	if _, e, c := run(t, env, "retire", "old-rule"); c != 0 {
+		t.Fatalf("retire: %s", e)
+	}
+	if r := sidecarRec(t, memDir, "old-rule.md"); r.Status != "retired" {
+		t.Fatalf("after retire: sidecar status=%q, want retired", r.Status)
+	}
+	wantSidecarMarks(t, memDir)
+
+	if _, e, c := run(t, env, "revive", "old-rule"); c != 0 {
+		t.Fatalf("revive: %s", e)
+	}
+	if r := sidecarRec(t, memDir, "old-rule.md"); r.Status != "active" {
+		t.Fatalf("after revive: sidecar status=%q, want active", r.Status)
+	}
+}
+
 func TestRetire_UnknownSlug(t *testing.T) {
 	env, _, _, _ := retireFixture(t)
 	_, errOut, code := run(t, env, "retire", "no-such-fact")
