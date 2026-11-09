@@ -234,10 +234,10 @@ export const STATS_PROJECT: StatsReport = {
       "warn": 3,
       "fail": 2,
       "problems": [
-        "/HOME/.claude/settings.json unreadab",
+        "~/.claude/settings.json unreadable: open ~/.claude/settings.json: no such file or directory",
         "missing: session-start.sh,user-prompt-submit.sh,pre-tool-write.sh,pre-tool-bash.sh,skill-learnings-inject.sh,skill-activ",
-        "/HOME/.claude/hooks absent",
-        "/HOME/.claude/bin absent",
+        "~/.claude/hooks absent",
+        "~/.claude/bin absent",
         "memoryctl binary not built — run `make build` then ./install.sh"
       ]
     },

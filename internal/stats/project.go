@@ -71,7 +71,7 @@ func BuildProject(st native.Store, files []native.MemFile, recs map[Key]sidecar.
 		case "pinned":
 			ps.Pinned++
 		}
-		if r.Injected30d >= noisyInjected && r.Useful30d == 0 {
+		if r.Injected30d >= noisyInjected && r.Useful30d == 0 && !handled(r.Marks, st.Project) {
 			ps.Triage.Noisy = append(ps.Triage.Noisy, r)
 		}
 		for _, m := range r.Marks {
@@ -86,6 +86,17 @@ func BuildProject(st native.Store, files []native.MemFile, recs map[Key]sidecar.
 	ps.Triage.Stale = triageSort(ps.Triage.Stale)
 	ps.Queue = triageSort(ps.Queue)
 	return ps
+}
+
+// handled: the user already dealt with the fact in this project (less, or
+// hidden here); hide only affects injection, so counts still include it.
+func handled(marks []string, project string) bool {
+	for _, m := range marks {
+		if m == "less" || m == "hide:"+project {
+			return true
+		}
+	}
+	return false
 }
 
 // triageSort orders by Injected30d desc then slug and caps at triageMax.

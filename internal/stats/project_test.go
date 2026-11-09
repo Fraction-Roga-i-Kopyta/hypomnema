@@ -66,6 +66,29 @@ func TestBuildProject_TriageNoisyThreshold(t *testing.T) {
 	}
 }
 
+func TestBuildProject_NoisySkipsMarked(t *testing.T) {
+	var lines []string
+	for _, s := range []string{"less.md", "hidehere.md", "hideother.md"} {
+		for i := 0; i < 6; i++ {
+			lines = append(lines, "2026-06-30|inject|"+native.QKey(proj, s)+"|s"+string(rune('a'+i)))
+		}
+	}
+	u := load(t, lines...)
+	var files []native.MemFile
+	for _, s := range []string{"less.md", "hidehere.md", "hideother.md"} {
+		files = append(files, pfile(proj, s, "note", "active"))
+	}
+	marks := []sidecar.Mark{
+		{Project: proj, Slug: "less.md", Directive: "less"},
+		{Project: proj, Slug: "hidehere.md", Directive: "hide", Arg: proj},
+		{Project: proj, Slug: "hideother.md", Directive: "hide", Arg: "other"},
+	}
+	ps := BuildProject(pstore(), files, nil, u, marks, map[string]bool{}, Health{}, home)
+	if len(ps.Triage.Noisy) != 1 || ps.Triage.Noisy[0].Slug != "hideother.md" || ps.Visible != 3 {
+		t.Fatalf("noisy: %+v visible %d", ps.Triage.Noisy, ps.Visible)
+	}
+}
+
 func TestBuildProject_TriageCap(t *testing.T) {
 	var files []native.MemFile
 	for i := 0; i < 60; i++ {

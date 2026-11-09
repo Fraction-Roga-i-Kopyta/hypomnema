@@ -157,12 +157,26 @@ func doctorHealth(st native.Store, anchor string) stats.Health {
 	h := stats.Health{Problems: []string{}}
 	rep := doctor.Run(claudeDir(), memoryDir(), st, anchor)
 	h.OK, h.Warn, h.Fail = rep.Counts()
+	home, _ := os.UserHomeDir()
 	for _, c := range rep.Checks {
 		if c.Status == doctor.WARN || c.Status == doctor.FAIL {
-			h.Problems = append(h.Problems, stats.Problem(c.Detail))
+			h.Problems = append(h.Problems, stats.Problem(scrubPaths(c.Detail, claudeDir(), home)))
 		}
 	}
 	return h
+}
+
+// scrubPaths shortens absolute paths in a doctor detail (claude dir first,
+// it is the longer one) so the text is shorter and independent of where
+// the install lives, before it is cut to the display limit.
+func scrubPaths(s, claude, home string) string {
+	if claude != "" {
+		s = strings.ReplaceAll(s, claude, "~/.claude")
+	}
+	if home != "" && home != "/" {
+		s = strings.ReplaceAll(s, home, "~")
+	}
+	return s
 }
 
 // parseStatsArgs parses by hand (no flag package, like the other verbs).

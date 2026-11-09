@@ -326,6 +326,11 @@ func TestStats_ProjectScopeCLI(t *testing.T) {
 	if p.Health.OK+p.Health.Warn+p.Health.Fail == 0 {
 		t.Fatalf("health empty: %+v", p.Health)
 	}
+	for _, pr := range p.Health.Problems {
+		if strings.Contains(pr, root) || len([]rune(pr)) > 120 {
+			t.Fatalf("problem leaks root or too long: %q", pr)
+		}
+	}
 
 	for _, args := range [][]string{
 		{"--scope", "project", "extra"},
@@ -343,6 +348,18 @@ func TestStats_ProjectScopeCLI(t *testing.T) {
 	rep2, _ := runStatsJSON(t, env, "--scope", "project", "--project", tag)
 	if rep2.ProjectStats.Project != tag {
 		t.Fatalf("--project tag: %+v", rep2.ProjectStats)
+	}
+}
+
+func TestScrubPaths_RootIndependent(t *testing.T) {
+	var got []string
+	for _, root := range []string{"/tmp/x", "/private/var/folders/zz/abcdefghijklmnop/T/TestLong123/001"} {
+		claude := root + "/.claude"
+		d := claude + "/settings.json unreadable: open " + claude + "/settings.json: no such file"
+		got = append(got, stats.Problem(scrubPaths(d, claude, root)))
+	}
+	if got[0] != got[1] || strings.Contains(got[0], "/tmp") {
+		t.Fatalf("root-dependent problems:\n%q\n%q", got[0], got[1])
 	}
 }
 
