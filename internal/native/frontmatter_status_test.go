@@ -48,6 +48,17 @@ func TestSetStatus_Insert(t *testing.T) {
 	}
 }
 
+func TestSetStatus_BOM(t *testing.T) {
+	in := "\xef\xbb\xbf---\nname: x\nstatus: active\n---\nb\n"
+	got, err := SetStatus(in, "pinned")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "\xef\xbb\xbf---\nname: x\nstatus: pinned\n---\nb\n" {
+		t.Fatalf("got:\n%q", got)
+	}
+}
+
 func TestSetStatus_NoFrontmatter(t *testing.T) {
 	if _, err := SetStatus("just body\n", "pinned"); err == nil {
 		t.Fatal("want error")
@@ -58,6 +69,11 @@ func TestBodySHA_IgnoresStatus(t *testing.T) {
 	a := "---\nname: x\nstatus: active\nmetadata:\n  status: candidate\n---\nbody\n"
 	b := "---\nname: x\nstatus: pinned\nmetadata:\n  status: pinned\n---\nbody\n"
 	c := "---\nname: x\nstatus: active\n---\nbody2\n"
+	bomA := "\xef\xbb\xbf---\nname: x\nstatus: active\n---\nbody\n"
+	bomB := "\xef\xbb\xbf---\nname: x\nstatus: pinned\n---\nbody\n"
+	if BodySHA(bomA) != BodySHA(bomB) {
+		t.Fatal("status must not affect sha for BOM files")
+	}
 	if BodySHA(a) != BodySHA(b) {
 		t.Fatal("status must not affect sha")
 	}

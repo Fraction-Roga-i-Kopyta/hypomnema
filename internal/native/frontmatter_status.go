@@ -101,6 +101,7 @@ func SetStatus(content, status string) (string, error) {
 // BodySHA is the first 12 hex chars of sha256 over content with every
 // frontmatter status line removed, so pin/unpin never change the anchor.
 func BodySHA(content string) string {
+	content = strings.TrimPrefix(content, "\xef\xbb\xbf")
 	lines := strings.Split(content, "\n")
 	if end := fmBounds(lines); end >= 0 {
 		drop := map[int]bool{}
