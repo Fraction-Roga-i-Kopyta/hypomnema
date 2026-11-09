@@ -37,6 +37,42 @@ func TestLoadUsage_MissingWAL(t *testing.T) {
 	}
 }
 
+// A WAL line longer than the reader's limit is skipped, not fatal: the rows
+// on both sides of it still count (a hand-edited or corrupt WAL must not
+// leave the panel dead).
+func TestLoadUsage_SkipsOverLongLine(t *testing.T) {
+	huge := today + "|inject|" + q("x.md") + "|" + strings.Repeat("s", maxWALLine+10)
+	u := load(t,
+		today+"|inject|"+q("a.md")+"|s1",
+		huge,
+		today+"|inject|"+q("b.md")+"|s1",
+		today+"|cite-useful|"+q("b.md")+"|s1",
+	)
+	s := u.Session("s1")
+	if s.Injected != 2 || s.Useful != 1 {
+		t.Fatalf("rows around the long line lost: %+v", s)
+	}
+	if inj, _ := u.Fact(Key{"p", "x.md"}); inj != 0 {
+		t.Fatalf("the over-long row was read: injected=%d", inj)
+	}
+}
+
+// A last line without a newline still counts.
+func TestLoadUsage_LastLineWithoutNewline(t *testing.T) {
+	p := filepath.Join(t.TempDir(), ".wal")
+	body := today + "|inject|" + q("a.md") + "|s1\n" + today + "|inject|" + q("b.md") + "|s1"
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	u, err := LoadUsage(p, today)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := u.Session("s1"); s.Injected != 2 {
+		t.Fatalf("injected = %d, want 2", s.Injected)
+	}
+}
+
 func TestUsage_SessionIncludesSubagents(t *testing.T) {
 	u := load(t,
 		"2026-06-30|inject|"+q("a.md")+"|s1",

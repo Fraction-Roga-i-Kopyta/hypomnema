@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -42,7 +43,8 @@ type Usage struct {
 	use30 map[Key]int
 }
 
-// LoadUsage reads the WAL once. A missing WAL yields an empty Usage.
+// LoadUsage reads the WAL once. A missing WAL yields an empty Usage; a line
+// over maxWALLine is skipped, the rest still read.
 func LoadUsage(walPath, today string) (*Usage, error) {
 	t, err := time.Parse("2006-01-02", today)
 	if err != nil {
@@ -57,44 +59,80 @@ func LoadUsage(walPath, today string) (*Usage, error) {
 		return nil, fmt.Errorf("stats.LoadUsage: open: %w", err)
 	}
 	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 1<<16), 1<<20)
-	for sc.Scan() {
-		p := strings.SplitN(sc.Text(), "|", 4)
-		if len(p) < 4 {
-			continue
-		}
-		switch p[1] {
-		case "inject", "recall", "cite-useful", "cite-silent", "cite-undelivered":
-		default:
-			continue
-		}
-		proj, slug, _ := native.ParseQKey(p[2])
-		parent := p[3]
-		if i := strings.IndexByte(parent, ':'); i >= 0 {
-			parent = parent[:i]
-		}
-		r := row{date: p[0], event: p[1], key: Key{proj, slug}, parent: parent}
-		u.rows = append(u.rows, r)
-		if p[1] == "cite-useful" || p[1] == "cite-silent" {
-			id := citeID{r.key, parent}
-			c, ok := u.cites[id]
-			useful := p[1] == "cite-useful"
-			switch {
-			case !ok:
-				u.cites[id] = cite{r.date, useful}
-			case useful && !c.useful: // useful wins over silent
-				u.cites[id] = cite{r.date, true}
-			case useful == c.useful && r.date < c.date:
-				u.cites[id] = cite{r.date, useful}
-			}
-		}
-	}
-	if err := sc.Err(); err != nil {
-		return nil, fmt.Errorf("stats.LoadUsage: scan: %w", err)
+	if err := eachLine(f, maxWALLine, u.add); err != nil {
+		return nil, fmt.Errorf("stats.LoadUsage: read: %w", err)
 	}
 	u.precompute30()
 	return u, nil
+}
+
+// maxWALLine is the longest WAL line LoadUsage reads (the other WAL readers'
+// bufio.Scanner limit); a longer one is skipped whole.
+const maxWALLine = 1 << 20
+
+// eachLine calls fn with each line of r without its line ending ("\n" or
+// "\r\n"), a last line without one included. A line longer than max bytes
+// is skipped whole and reading goes on. The error is r's, never io.EOF.
+func eachLine(r io.Reader, max int, fn func(string)) error {
+	br := bufio.NewReaderSize(r, 1<<16)
+	var line []byte
+	tooLong := false
+	for {
+		chunk, more, err := br.ReadLine()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
+		}
+		if !tooLong {
+			if len(line)+len(chunk) > max {
+				tooLong, line = true, line[:0]
+			} else {
+				line = append(line, chunk...)
+			}
+		}
+		if more {
+			continue
+		}
+		if !tooLong {
+			fn(string(line))
+		}
+		line, tooLong = line[:0], false
+	}
+}
+
+// add folds one WAL line into u.
+func (u *Usage) add(line string) {
+	p := strings.SplitN(line, "|", 4)
+	if len(p) < 4 {
+		return
+	}
+	switch p[1] {
+	case "inject", "recall", "cite-useful", "cite-silent", "cite-undelivered":
+	default:
+		return
+	}
+	proj, slug, _ := native.ParseQKey(p[2])
+	parent := p[3]
+	if i := strings.IndexByte(parent, ':'); i >= 0 {
+		parent = parent[:i]
+	}
+	r := row{date: p[0], event: p[1], key: Key{proj, slug}, parent: parent}
+	u.rows = append(u.rows, r)
+	if p[1] == "cite-useful" || p[1] == "cite-silent" {
+		id := citeID{r.key, parent}
+		c, ok := u.cites[id]
+		useful := p[1] == "cite-useful"
+		switch {
+		case !ok:
+			u.cites[id] = cite{r.date, useful}
+		case useful && !c.useful: // useful wins over silent
+			u.cites[id] = cite{r.date, true}
+		case useful == c.useful && r.date < c.date:
+			u.cites[id] = cite{r.date, useful}
+		}
+	}
 }
 
 // age returns whole days between date and today; ok is false for a bad date.
