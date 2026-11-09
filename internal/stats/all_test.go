@@ -96,3 +96,32 @@ func TestBuildAll_TriageAcrossStores(t *testing.T) {
 		t.Fatalf("candidates %+v", all.Triage.Candidates)
 	}
 }
+
+// TestBuildAll_FunnelIgnoresFileless: WAL keys without a file (deleted,
+// retired, or in a store outside the list) do not count, so useful <= injected
+// <= stored and the project rows sum to the funnel.
+func TestBuildAll_FunnelIgnoresFileless(t *testing.T) {
+	u := load(t,
+		"2026-06-30|inject|"+native.QKey(proj, "a.md")+"|s1",
+		"2026-06-30|cite-useful|"+native.QKey(proj, "a.md")+"|s1",
+		"2026-06-30|inject|"+native.QKey(proj, "ghost.md")+"|s1",
+		"2026-06-30|cite-useful|"+native.QKey(proj, "ghost.md")+"|s1",
+		"2026-06-30|inject|"+native.QKey("-elsewhere", "z.md")+"|s1",
+		"2026-06-30|cite-useful|"+native.QKey("-elsewhere", "z.md")+"|s1",
+	)
+	files := map[string][]native.MemFile{
+		"/a": {pfile(proj, "a.md", "note", "active")},
+		"/g": {pfile(native.GlobalProject, "g.md", "note", "active")},
+	}
+	all := BuildAll(allStores(), files, nil, u, nil, home)
+	if want := (Funnel{Stored: 2, Injected7d: 1, Useful7d: 1, NotInjected30d: 1}); all.Funnel != want {
+		t.Fatalf("funnel %+v want %+v", all.Funnel, want)
+	}
+	sum := 0
+	for _, p := range all.Projects {
+		sum += p.Useful7d
+	}
+	if sum != all.Funnel.Useful7d {
+		t.Fatalf("rows sum %d != funnel useful %d", sum, all.Funnel.Useful7d)
+	}
+}

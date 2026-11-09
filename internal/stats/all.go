@@ -9,6 +9,28 @@ import (
 
 const allDays = 7
 
+// InjectedKeys is the set of facts injected within the last days days.
+func (u *Usage) InjectedKeys(days int) map[Key]bool {
+	out := map[Key]bool{}
+	for _, r := range u.rows {
+		if r.event == "inject" && u.inWindow(r.date, days) {
+			out[r.key] = true
+		}
+	}
+	return out
+}
+
+// UsefulKeys is the set of facts with a useful citation in the window.
+func (u *Usage) UsefulKeys(days int) map[Key]bool {
+	out := map[Key]bool{}
+	for _, ks := range u.usefulKeys(days) {
+		for k := range ks {
+			out[k] = true
+		}
+	}
+	return out
+}
+
 // BuildAll assembles the all-memory scope. The corpus is the native files of
 // every store (files is keyed by Store.Dir, each MemFile has Project set);
 // the sidecar only supplies metadata, so stores it has never seen still
@@ -24,9 +46,11 @@ func BuildAll(stores []native.Store, files map[string][]native.MemFile, recs map
 		ByType:   map[string]int{},
 		Triage:   Triage{Noisy: []FactRef{}, Candidates: []FactRef{}, Stale: []FactRef{}},
 	}
-	useful := u.UsefulByProject(allDays)
+	// Funnel stages 2 and 3 only count facts that currently have a file, so
+	// useful <= injected <= stored and the project rows sum to the funnel.
+	injKeys, useKeys := u.InjectedKeys(allDays), u.UsefulKeys(allDays)
 	for _, st := range stores {
-		row := ProjectRow{Project: st.Project, Display: Display(st.Project, home), Useful7d: useful[st.Project]}
+		row := ProjectRow{Project: st.Project, Display: Display(st.Project, home)}
 		for _, f := range files[st.Dir] {
 			var rec *sidecar.Record
 			if r, ok := recs[Key{Project: f.Project, Slug: f.Slug}]; ok {
@@ -34,6 +58,14 @@ func BuildAll(stores []native.Store, files map[string][]native.MemFile, recs map
 			}
 			r := BuildFactRef(f, rec, u, marks, home)
 			row.Facts++
+			k := Key{Project: f.Project, Slug: f.Slug}
+			if injKeys[k] {
+				a.Funnel.Injected7d++
+			}
+			if useKeys[k] {
+				a.Funnel.Useful7d++
+				row.Useful7d++
+			}
 			a.ByType[r.Type]++
 			if r.Injected30d == 0 {
 				a.Funnel.NotInjected30d++
@@ -54,8 +86,6 @@ func BuildAll(stores []native.Store, files map[string][]native.MemFile, recs map
 		a.Projects = append(a.Projects, row)
 	}
 	a.Funnel.Stored = a.Facts
-	a.Funnel.Injected7d = u.DistinctInjected(allDays)
-	a.Funnel.Useful7d = u.DistinctUseful(allDays)
 	sort.SliceStable(a.Projects, func(i, j int) bool {
 		if a.Projects[i].Facts != a.Projects[j].Facts {
 			return a.Projects[i].Facts > a.Projects[j].Facts
