@@ -1,6 +1,9 @@
 # Changelog
 
-## [Unreleased]
+## [3.1.0] — 2026-11-09
+
+Upgrade: `git pull && make build && ./install.sh` (registers the ninth shim),
+then `memoryctl sidecar rebuild` and `memoryctl doctor`.
 
 ### Added
 
@@ -23,7 +26,8 @@
 ### Changed
 
 - Sidecar schema v8 (`mark` table); it rebuilds itself on first open. Run
-  `./install.sh` to register the new shim.
+  `make build && ./install.sh` to register the new shim.
+- `internal/doctor` split into one file per check group (no behaviour change).
 - `inject` on UserPromptSubmit skips the `/memboard` toggle (with or without
   arguments): opening the pane spends no once-per-context slot.
 - `retire` and `revive` refresh the sidecar at once, as `pin` and `mark` do.
