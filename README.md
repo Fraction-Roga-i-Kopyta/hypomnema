@@ -269,7 +269,7 @@ A truncated injection ends with `…(truncated — N B total; full text: <path>)
 
 ## Lifecycle
 
-`memoryctl close` down-ranks stale facts in the sidecar (no mutation of native content). Staleness counts from the **last injection** (fallback `created`), so facts in active rotation never age out. Explicit archiving ships as `memoryctl retire <slug> [--reason ...] [--superseded-by <ref>]`: the file moves into the store's `.archive/`, and `recall` renders a tombstone redirect (`[retired <date> → successor]`) instead of silently forgetting; `memoryctl revive` undoes it. Agent-written facts start as `status: candidate` and graduate on their first useful citation; `doctor` flags candidates still uncited after 5 silent sessions.
+`memoryctl close` down-ranks stale facts in the sidecar (no mutation of native content). Staleness counts from the **last injection** (fallback `created`), so facts in active rotation never age out. Explicit archiving ships as `memoryctl retire <slug> [--reason ...] [--superseded-by <ref>] [--project TAG]` (`--project` addresses a fact in any store, e.g. `global`): the file moves into the store's `.archive/` with tombstone keys `retired`, `retire-reason`, `superseded-by`, `archived-from`, and `recall` renders a tombstone redirect (`[retired <date> → successor]`) instead of silently forgetting; `memoryctl revive` undoes it. Agent-written facts start as `status: candidate` and graduate on their first useful citation; `doctor` flags candidates still uncited after 5 silent sessions.
 
 | Type | Stale after |
 |------|-------------|

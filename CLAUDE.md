@@ -219,7 +219,8 @@ The full loop: `candidate → active → stale (unused) → retire with a tombst
 — or, for a lesson that keeps recurring, turn it into a hook/lint/test and
 retire the fact. Retirement (`memoryctl retire <slug>
 [--reason ...] [--superseded-by <ref>]`) moves the file into the store's
-`.archive/`, stamps tombstone frontmatter, and leaves a redirect: `recall`
+`.archive/`, stamps tombstone frontmatter (`retired`, `retire-reason`,
+`superseded-by`, `archived-from`; `--project TAG` addresses any store), and leaves a redirect: `recall`
 shows `[retired <date> → successor]` instead of silently forgetting.
 `memoryctl revive <slug>` undoes it.
 

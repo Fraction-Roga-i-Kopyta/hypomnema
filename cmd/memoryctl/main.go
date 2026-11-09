@@ -59,12 +59,12 @@ Usage:
       "recall" WAL event for the delivered fact and unions it into the
       session's injected list. Includes stale facts (marked [stale]) —
       recalling one revives it.
-  memoryctl retire <slug> [--reason "..."] [--superseded-by <ref>]
+  memoryctl retire <slug> [--reason "..."] [--superseded-by <ref>] [--project TAG]
       Retire a fact: move its file to the store's .archive/, stamp tombstone
-      frontmatter (retired/retire-reason/superseded-by), emit a "retire" WAL
+      frontmatter (retired/retire-reason/superseded-by/archived-from), emit a "retire" WAL
       event. The sidecar projects the row as status=retired; recall shows a
       tombstone pointing at the successor. Undo with "memoryctl revive".
-  memoryctl revive <slug>
+  memoryctl revive <slug> [--project TAG]
       Move a retired fact back into its live store, strip the tombstone
       keys, and emit a "revive" WAL event.
   memoryctl skill-inject
