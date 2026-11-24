@@ -56,10 +56,7 @@ func runRecall(args []string) {
 
 	r := resolveStore("")
 	files := native.Collect(claudeDir(), r.Store)
-	bySlug := make(map[string]native.MemFile, len(files))
-	for _, f := range files {
-		bySlug[f.Slug] = f
-	}
+	byKey := filesByKey(files)
 	terms := tokenize.Relevance(query)
 	cands := inject.Candidates(memoryDir(), r.Store, files, terms)
 
@@ -77,17 +74,22 @@ func runRecall(args []string) {
 		Terms: terms, Project: r.Project,
 		Today: today(), IncludeStale: true,
 	}
-	// Over-fetch a few: rows whose native file vanished are skipped below.
+	// Over-fetch a few: rows whose native file vanished are skipped below,
+	// and a project + global pair of one file name collapses to one.
 	ranked := rank.Rank(q, matched, k+4)
 	kept := ranked[:0]
 	for _, sc := range ranked {
-		if _, ok := bySlug[sc.Slug]; !ok {
+		if _, ok := byKey[native.QKey(sc.Project, sc.Slug)]; !ok {
 			fmt.Fprintf(os.Stderr,
 				"memoryctl recall: skipping %s — native file missing (tombstones at next close)\n", sc.Slug)
 			continue
 		}
 		kept = append(kept, sc)
 	}
+	// One fact per file name, project-local winning — as in a push render.
+	// The model cites by file name: a same-named runner-up beside the
+	// rendered top-1 would be indistinguishable from it.
+	kept = inject.DistinctBySlug(kept, r.Project)
 	if len(kept) > k {
 		kept = kept[:k]
 	}
@@ -98,7 +100,7 @@ func runRecall(args []string) {
 	}
 
 	recordRecall(kept[0].Slug, kept[0].Project)
-	fmt.Print(renderRecall(kept[0], kept[1:], bySlug))
+	fmt.Print(renderRecall(kept[0], kept[1:], byKey))
 	fmt.Print(renderTombstones(terms, r.Store))
 }
 
@@ -194,8 +196,14 @@ func recordRecallWithSession(slug, project, sid string) {
 	if sid == "" {
 		return // no session — nothing to dedup against, no close to classify
 	}
+	// Session lists name facts by QKey (see readInjectedList); an unknown
+	// project falls back to the bare slug, read as "any store".
+	key := slug
+	if project != "" {
+		key = native.QKey(project, slug)
+	}
 	injected := readInjectedList(sid)
-	writeSessionList(injected, []string{slug}, sid)
+	writeSessionList(injected, []string{key}, sid)
 	// A pull delivery lands the slug straight in the model's context, same
 	// as a push render — so the rendered list (post-compaction dedup source)
 	// must reflect it too, or a later compact render could offer it again
@@ -207,15 +215,26 @@ func recordRecallWithSession(slug, project, sid string) {
 	if !ok {
 		rendered = injected
 	}
-	writeRenderedList(rendered, []string{slug}, sid)
+	writeRenderedList(rendered, []string{key}, sid)
+}
+
+// filesByKey indexes the in-scope facts by native.QKey(project, slug): a
+// project fact and a global fact with one file name are two entries.
+func filesByKey(files []native.MemFile) map[string]native.MemFile {
+	out := make(map[string]native.MemFile, len(files))
+	for _, f := range files {
+		out[native.QKey(f.Project, f.Slug)] = f
+	}
+	return out
 }
 
 // renderRecall renders the hybrid pull output: top-1 full body (same cap as
 // injection) plus an index of runner-ups with paths for follow-up reads.
-func renderRecall(top rank.Scored, rest []rank.Scored, bySlug map[string]native.MemFile) string {
+// byKey is filesByKey's index; each row renders its own fact's file.
+func renderRecall(top rank.Scored, rest []rank.Scored, byKey map[string]native.MemFile) string {
 	var b strings.Builder
 	b.WriteString(inject.CiteInstruction + "\n\n")
-	f, ok := bySlug[top.Slug]
+	f, ok := byKey[native.QKey(top.Project, top.Slug)]
 	if !ok {
 		// Sidecar row survived, native file vanished — keep the header
 		// citable even when the body render below finds nothing.
@@ -239,7 +258,7 @@ func renderRecall(top rank.Scored, rest []rank.Scored, bySlug map[string]native.
 	}
 	b.WriteString("\nAlso relevant:\n")
 	for i, sc := range rest {
-		rf := bySlug[sc.Slug]
+		rf := byKey[native.QKey(sc.Project, sc.Slug)]
 		desc := ""
 		if rf.Description != "" {
 			desc = " — " + rf.Description

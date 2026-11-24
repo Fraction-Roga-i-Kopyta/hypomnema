@@ -17,3 +17,27 @@ func TestQKeyRoundTrip(t *testing.T) {
 		t.Errorf("slug not intact at tail: %q", q)
 	}
 }
+
+// A session-list key set: a QKey line names one fact; a bare line (older
+// binary) names that file in every store.
+func TestKeySet(t *testing.T) {
+	s := NewKeySet([]string{QKey(GlobalProject, "x.md"), "y.md"})
+	cases := []struct {
+		project, slug string
+		want          bool
+	}{
+		{GlobalProject, "x.md", true},
+		{"-p", "x.md", false},
+		{"-p", "y.md", true},
+		{GlobalProject, "y.md", true},
+		{"-p", "z.md", false},
+	}
+	for _, c := range cases {
+		if got := s.Has(c.project, c.slug); got != c.want {
+			t.Errorf("Has(%q,%q) = %v, want %v", c.project, c.slug, got, c.want)
+		}
+	}
+	if NewKeySet(nil).Has("-p", "x.md") {
+		t.Error("empty set must hold nothing")
+	}
+}

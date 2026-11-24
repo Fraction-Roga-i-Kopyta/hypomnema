@@ -32,19 +32,19 @@ func TestPopulateKeywordsAndOverlap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OverlapScores: %v", err)
 	}
-	if scores["a.md"] != 1 {
-		t.Errorf("a.md overlap = %d, want 1 (docker)", scores["a.md"])
+	if scores[native.QKey("", "a.md")] != 1 {
+		t.Errorf("a.md overlap = %d, want 1 (docker)", scores[native.QKey("", "a.md")])
 	}
-	if scores["b.md"] != 1 {
-		t.Errorf("b.md overlap = %d, want 1 (index)", scores["b.md"])
+	if scores[native.QKey("", "b.md")] != 1 {
+		t.Errorf("b.md overlap = %d, want 1 (index)", scores[native.QKey("", "b.md")])
 	}
 
 	scores2, err := s.OverlapScores([]string{"layer", "docker"})
 	if err != nil {
 		t.Fatalf("OverlapScores 2: %v", err)
 	}
-	if scores2["a.md"] != 2 {
-		t.Errorf("a.md overlap = %d, want 2 (layer+docker)", scores2["a.md"])
+	if scores2[native.QKey("", "a.md")] != 2 {
+		t.Errorf("a.md overlap = %d, want 2 (layer+docker)", scores2[native.QKey("", "a.md")])
 	}
 
 	empty, err := s.OverlapScores(nil)
@@ -67,7 +67,31 @@ func TestPopulateKeywordsIsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	scores, _ := s.OverlapScores([]string{"docker"})
-	if scores["a.md"] != 1 {
-		t.Errorf("after 2 rebuilds, a.md overlap for 'docker' = %d, want 1 (no dup rows)", scores["a.md"])
+	if scores[native.QKey("", "a.md")] != 1 {
+		t.Errorf("after 2 rebuilds, a.md overlap for 'docker' = %d, want 1 (no dup rows)", scores[native.QKey("", "a.md")])
+	}
+}
+
+func TestOverlapScores_PerProject(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), ".sidecar.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+	if err := s.PopulateKeywords([]native.MemFile{
+		{Slug: "continuity.md", Project: "A", Name: "a", Keywords: []string{"kubernetes", "helm"}},
+		{Slug: "continuity.md", Project: "B", Name: "b", Keywords: []string{"postgres", "sql"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ov, err := s.OverlapScores([]string{"kubernetes", "helm"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ov[native.QKey("A", "continuity.md")]; got != 2 {
+		t.Errorf("A overlap = %d, want 2", got)
+	}
+	if got := ov[native.QKey("B", "continuity.md")]; got != 0 {
+		t.Errorf("B overlap = %d, want 0 (same slug, other project)", got)
 	}
 }

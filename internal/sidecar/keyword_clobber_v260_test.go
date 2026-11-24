@@ -20,11 +20,11 @@ func TestReproject_CrossProjectKeywordNoClobber(t *testing.T) { // review E5
 
 	// Project A's overlap must survive project B's reproject (was clobbered 2→0).
 	ov, _ := s.OverlapScores([]string{"react", "hooks"})
-	if ov["notes.md"] != 2 {
-		t.Errorf("projA keyword rows clobbered by projB reproject: overlap(react,hooks)=%d, want 2", ov["notes.md"])
+	if ov[native.QKey("projA", "notes.md")] != 2 {
+		t.Errorf("projA keyword rows clobbered by projB reproject: overlap(react,hooks)=%d, want 2", ov[native.QKey("projA", "notes.md")])
 	}
 	ov2, _ := s.OverlapScores([]string{"postgres", "sql"})
-	if ov2["notes.md"] != 2 {
-		t.Errorf("projB keyword rows missing: overlap(postgres,sql)=%d, want 2", ov2["notes.md"])
+	if ov2[native.QKey("projB", "notes.md")] != 2 {
+		t.Errorf("projB keyword rows missing: overlap(postgres,sql)=%d, want 2", ov2[native.QKey("projB", "notes.md")])
 	}
 }

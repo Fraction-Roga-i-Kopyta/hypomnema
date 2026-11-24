@@ -131,8 +131,9 @@ func TestSubagentStart_RanksByPendingTask(t *testing.T) {
 	}
 }
 
-// A subagent with no Agent call of its own has no task brief: the parent's
-// recent prompts still shape the ranking query, but nothing is injected.
+// A subagent with no Agent call of its own has no task brief, so nothing is
+// injected: the head gate needs the Agent description, and the parent's
+// prompts are not a substitute.
 func TestSubagentStart_NoAgentCallInjectsNothing(t *testing.T) {
 	f := newStoreFixture(t)
 	f.factHead(t, "/tmp/proj", "dockercache", "docker layer cache", "docker layer cache")

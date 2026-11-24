@@ -287,7 +287,7 @@ func TestPopulateKeywords_PreservesOtherSlugs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if overlap["a.md"] != 1 {
+	if overlap[native.QKey("", "a.md")] != 1 {
 		t.Errorf("a.md keyword signal wiped by a later populate of other files: %v", overlap)
 	}
 }

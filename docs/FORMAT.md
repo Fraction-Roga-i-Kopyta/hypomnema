@@ -48,7 +48,8 @@ Hypomnema's own runtime state is the only thing under `~/.claude/memory/`:
 ├── .wal.pre-compact-<date>  # original WAL kept by `memoryctl wal compact` (optional)
 ├── .sidecar.db       # SQLite projection: ref_count, effectiveness, status, ... (§6)
 └── .runtime/         # session-scoped markers
-    ├── injected-<session_id>.list   # slugs injected this session
+    ├── injected-<session_id>.list   # facts injected this session, one QKey (project\x1fslug) per line
+    ├── rendered-<session_id>.list   # facts in the current context, same line format
     └── active-skill-<sid>           # skill activated this session
 ```
 

@@ -112,7 +112,10 @@ side-effect-only (WAL writes, sidecar updates, `.runtime/` markers).
 envelope JSON, unreadable memory, missing session id. A broken memory file is
 never a reason to break the user's session. The **only** intentional non-zero
 exits are `2` from `guard` when it finds a secret and `2` from `guard-bash`
-when the command runs a panel verb.
+when the command runs a panel verb. A **panic** in any verb the shims call
+(`inject`, `close`, `guard`, `guard-bash`, `skill-inject`, `skill-active`) is
+recovered: one stderr line `memoryctl <verb>: recovered panic: <value>`, exit
+`0`, no stdout. For `guard`/`guard-bash` that means a panic fails open.
 
 ### 1.5 Environment variables
 
@@ -149,7 +152,13 @@ Verbs may read and write:
   injected union, for `close` classification, WAL `inject`-row dedup, and
   as the render-dedup fallback when no rendered list exists yet;
   `rendered-<session_id>.list` — what is in the model's *current* context,
-  the normative dedup source for the next render, reset on `compact`/`clear`;
+  the normative dedup source for the next render, reset on `compact`/`clear`.
+  Both lists hold one fact per line as `<project>\x1f<slug>` (the WAL's
+  project-qualified key), so a project and a global fact with the same file
+  name are two entries; a bare-slug line written by an older binary means
+  that file name in every store; it is rewritten in qualified form only when
+  `inject` next writes that list, and a bare line with no in-scope fact stays
+  bare;
   `active-skill-<sid>`
   — the marker `skill-active` writes; and the store-resolution session pin
   `project-<session_id>.json`, written by `inject` at `SessionStart` and read
@@ -202,7 +211,7 @@ context was wiped:
   for this session does **not** get a second WAL row on re-render —
   `ref_count` is not inflated by compaction.
 - any other value (or absent, for the normal session-open path) — dedup
-  against `.runtime/rendered-<session_id>.list`: the slugs currently in the
+  against `.runtime/rendered-<session_id>.list`: the facts currently in the
   model's context (this render's normative dedup source). A session whose
   rendered list does not exist yet — one that predates the file, or has not
   rendered anything this session — falls back to the injected-session-union
@@ -210,17 +219,19 @@ context was wiped:
 
 Contract:
 
-- Exit 0 always — a panic too (`failSafe`, invariant I5); empty
+- Exit 0 always — a panic too (`runHook`, invariant I5); empty
   `additionalContext` when the core is empty and no task is queued.
 - Writes an `inject` WAL event per **newly-logged** emitted fact (see above —
   a compact/clear re-render of an already-logged fact writes no second row).
   The sidecar bumps `ref_count` (a diagnostic) and the staleness clock from
   those events.
-- Records the injected slugs in `.runtime/injected-<session_id>.list` — the
-  session union used for WAL `inject`-row dedup and read by `close` to
-  classify the whole session's citations — and unions the newly rendered
-  slugs into `.runtime/rendered-<session_id>.list`, reset to exactly this
-  render's output on compact/clear.
+- Records the injected facts (project-qualified) in
+  `.runtime/injected-<session_id>.list` — the session union used for WAL
+  `inject`-row dedup (per fact: project `x.md` after global `x.md` gets its
+  own row) and read by `close` to classify the whole session's citations —
+  and unions the newly rendered facts into
+  `.runtime/rendered-<session_id>.list`, reset to exactly this render's
+  output on compact/clear.
 
 ## 3. UserPromptSubmit — `inject --event=UserPromptSubmit`
 
@@ -276,7 +287,9 @@ put inside `filenames="…"` to cite that fact:
   score N)` (plus a trailing `[stale]` mark when applicable), followed by
   its body; runner-ups are index-only numbered lines with no `##` header —
   `N. <file.md> (score)[stale][ — description]` followed by the file's
-  absolute path on the next line.
+  absolute path on the next line. One fact per file name: a project fact
+  and a global fact sharing one collapse to the project-local copy, as in
+  an `inject` render.
 - **`skill-inject`** (`cmd/memoryctl/skillinject.go`, `runSkillInject`) — a
   flat list, no `##` header at all: one `- (<file.md>) <body>` entry per
   delivered learning.
@@ -427,6 +440,12 @@ Contract (see CLAUDE.md "Lifecycle"):
   citations (nothing cited, or every citation was `cite-undelivered`)
   writes one session-level `cite-none` instead, so a broken citation
   channel never fabricates a session of silent facts.
+- Attributes by fact, not by file name: the session list holds
+  `native.QKey(project, slug)` lines, and a cited file name credits every
+  fact with that name that was delivered this session (a project and a
+  global fact may share one). Only when none was delivered does the name
+  fall back to the project-local copy for `cite-undelivered`. Candidate
+  graduation reads the credited fact's own status.
 - Writes a `session-close` row per turn (Stop fires once per turn, not once
   per session). The per-fact classification rows — `cite-useful`/`cite-silent`
   — are written once per (fact, session).

@@ -28,8 +28,8 @@ func TestOverlap_StopwordsNotCounted(t *testing.T) { // P3a stopwords
 	if err != nil {
 		t.Fatal(err)
 	}
-	if overlap["stuffed.md"] != 1 {
-		t.Errorf("only the real term 'sqlite' should count, got overlap=%d (function words leaked)", overlap["stuffed.md"])
+	if overlap[native.QKey("p", "stuffed.md")] != 1 {
+		t.Errorf("only the real term 'sqlite' should count, got overlap=%d (function words leaked)", overlap[native.QKey("p", "stuffed.md")])
 	}
 }
 
