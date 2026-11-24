@@ -271,7 +271,7 @@ sections (read in full, not the top-40 ranking query) — gated first, then
 ranked, cut to top-8. Terms that do not count toward that gate: path
 components of `$HOME` and of the canonical project root (not those below it —
 a worktree name is the task), digit-only tokens, and head terms present in
-at least `max(5, ⌈10 % × N⌉)` of the N in-scope facts. `doctor`'s candidate
+at least `max(5, ⌈10 % × N⌉)` of the N in-scope facts; path-like tokens (with a `/`) in the text are dropped first, and one of the two hits must be in the fact's `name` or `keywords`. `doctor`'s candidate
 check skips facts that are actually core — they are delivered every session
 by design.
 
@@ -364,7 +364,7 @@ any injected memory.
 
 ## Subagent context
 
-Subagents receive memory at `SubagentStart` only when the task names it: the brief is this agent's Agent-call description + prompt, and a fact must carry ≥2 distinct brief terms in its name/description/keywords/domains (minus the project root, `$HOME`, agent-type words, digits and corpus-common head terms), then ranks on the query and is cut to top-5. No Agent call of its own (the parent's recent prompts only) → nothing is injected. Continuity is not special-cased — except `fork`, `Explore`, `claude-code-guide`, `statusline-setup` (override with `HYPOMNEMA_SUBAGENT_SKIP`, a comma list; set-but-empty means none skipped, and a `*` entry means skip every agent type — set it in `settings.json`'s `env` block to opt every subagent out). The subagent's citations are measured under its own key, separately from the parent's; subagents are told to cite in their final report. Pass inline only what is specific to the task at hand — the ranker already covers general recall. `memoryctl recall` run inside a subagent records against the parent session (there is no agent id in the subagent's Bash environment); `skill-inject` run inside a subagent does the same, for the same reason.
+Subagents receive memory at `SubagentStart` only when the task names it. The brief is this agent's Agent-call description + prompt; a fact must carry ≥2 distinct brief terms in its name/description/keywords/domains, at least one in the name or keywords. Path-like tokens (anything with a `/`), the project root's and `$HOME`'s path words, agent-type words, digits and corpus-common head terms never count. Gated facts are then ranked on the query and cut to top-5; continuity is not special-cased. No Agent call of its own → nothing is injected; nested and Workflow subagents fall here too (their Agent call is not in the parent transcript). Not served at all: `fork`, `Explore`, `claude-code-guide`, `statusline-setup` (override with `HYPOMNEMA_SUBAGENT_SKIP`, a comma list; set-but-empty means none skipped, and a `*` entry means skip every agent type — set it in `settings.json`'s `env` block to opt every subagent out). The subagent's citations are measured under its own key, separately from the parent's; subagents are told to cite in their final report. Pass inline what the subagent needs; it receives only facts its brief names. `memoryctl recall` run inside a subagent records against the parent session (there is no agent id in the subagent's Bash environment); `skill-inject` run inside a subagent does the same, for the same reason.
 
 ## Source of truth
 

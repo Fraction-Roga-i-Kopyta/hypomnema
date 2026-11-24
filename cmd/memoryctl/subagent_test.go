@@ -22,7 +22,7 @@ func (f storeFixture) factHead(t *testing.T, projectDir, name, desc, body string
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	fm := "---\nname: " + name + "\ntype: mistake\ndescription: " + desc + "\nkeywords: [" + name + "]\n---\n" + body + "\n"
+	fm := "---\nname: " + name + "\ntype: mistake\ndescription: " + desc + "\nkeywords: [" + name + ", " + strings.Join(strings.Fields(desc), ", ") + "]\n---\n" + body + "\n"
 	if err := os.WriteFile(filepath.Join(dir, name+".md"), []byte(fm), 0o644); err != nil {
 		t.Fatal(err)
 	}

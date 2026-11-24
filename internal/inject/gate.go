@@ -30,11 +30,25 @@ const (
 // body.
 type gate struct{ want map[string]bool }
 
+// stripPaths drops every whitespace-delimited token containing "/": quoted
+// absolute, ~/ and relative paths carry the repo's directory words (docs,
+// internal, the worktree name), which name no task. Prose words stay.
+func stripPaths(text string) string {
+	fields := strings.Fields(text)
+	kept := fields[:0]
+	for _, w := range fields {
+		if !strings.Contains(w, "/") {
+			kept = append(kept, w)
+		}
+	}
+	return strings.Join(kept, " ")
+}
+
 // newGate builds the gate's term set from free text: relevance tokens minus
-// the exclusions and minus digit-only tokens (dates, counts, PR numbers).
+// paths, the exclusions and digit-only tokens (dates, counts, PR numbers).
 func newGate(text string, exclude map[string]bool) gate {
 	want := map[string]bool{}
-	for _, tok := range tokenize.Relevance(text) {
+	for _, tok := range tokenize.Relevance(stripPaths(text)) {
 		if exclude[tok] || digitsOnly(tok) {
 			continue
 		}
@@ -51,11 +65,18 @@ func (g gate) pass(f native.MemFile) bool {
 	}
 	seen := map[string]bool{}
 	for _, tok := range headTokens(f) {
-		if g.want[tok] && !seen[tok] {
+		if g.want[tok] {
 			seen[tok] = true
-			if len(seen) >= headGateMin {
-				return true
-			}
+		}
+	}
+	if len(seen) < headGateMin {
+		return false
+	}
+	// At least one hit must be in the name or keywords: two hits only in the
+	// description/domains are a coincidence of vocabulary.
+	for _, tok := range tokenize.Relevance(f.Name + " " + strings.Join(f.Keywords, " ")) {
+		if seen[tok] {
+			return true
 		}
 	}
 	return false

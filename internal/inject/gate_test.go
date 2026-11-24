@@ -110,3 +110,35 @@ func TestGateExclusions_WorktreeBelowRootNotExcluded(t *testing.T) {
 		t.Errorf("a fact named in the brief must pass")
 	}
 }
+
+// Path-like tokens never count: quoted absolute and relative paths carry the
+// repo's own directory words, which name no task.
+func TestGate_PathsNeverCount(t *testing.T) {
+	f := native.MemFile{Slug: "p.md", Name: "docs superpowers plans", Keywords: []string{"internal", "inject"}}
+	brief := "see /Users/u/proj/docs/superpowers/plans/x.md and internal/inject/gate.go and ~/docs/plans"
+	if newGate(brief, nil).pass(f) {
+		t.Errorf("terms found only inside paths must not pass")
+	}
+	if !newGate("read the docs superpowers notes", nil).pass(f) {
+		t.Errorf("the same words as prose must still count")
+	}
+}
+
+// Two hits are not enough when both are in description/domains: one must be
+// in the name or keywords.
+func TestGate_NeedsNameOrKeywordHit(t *testing.T) {
+	f := native.MemFile{Slug: "x.md", Name: "unrelated", Keywords: []string{"kwterm"},
+		Description: "sidecar reprojection truncates", Domains: []string{"storage"}}
+	if newGate("sidecar reprojection", nil).pass(f) {
+		t.Errorf("two description-only hits must not pass")
+	}
+	if newGate("sidecar storage", nil).pass(f) {
+		t.Errorf("description + domains hits must not pass")
+	}
+	if !newGate("unrelated sidecar", nil).pass(f) {
+		t.Errorf("a name hit plus a description hit must pass")
+	}
+	if !newGate("kwterm reprojection", nil).pass(f) {
+		t.Errorf("a keyword hit plus a description hit must pass")
+	}
+}

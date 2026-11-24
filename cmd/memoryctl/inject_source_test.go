@@ -359,8 +359,9 @@ func (f storeFixture) factFM(t *testing.T, projectDir, slug, fm, body string) {
 }
 
 // factDesc is fact() with the body also as the description, so the head
-// names the body's terms (the compact gate reads the head only).
+// names the body's terms (the gate reads the head only, and needs a name or
+// keyword hit, so the description words are keywords too).
 func (f storeFixture) factDesc(t *testing.T, projectDir, name, desc string) {
 	t.Helper()
-	f.factFM(t, projectDir, name, "name: "+name+"\ndescription: "+desc+"\ntype: mistake\nkeywords: ["+name+"]", desc)
+	f.factFM(t, projectDir, name, "name: "+name+"\ndescription: "+desc+"\ntype: mistake\nkeywords: ["+name+", "+strings.Join(strings.Fields(desc), ", ")+"]", desc)
 }

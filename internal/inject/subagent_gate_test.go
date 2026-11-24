@@ -140,7 +140,7 @@ func TestRun_SubagentGateIgnoresBodyAndAgentType(t *testing.T) {
 	os.WriteFile(filepath.Join(memDir, ".wal"), nil, 0o644)
 	res := runSub(t, memDir, home, Input{
 		Prompt:    "backend architect alpha bravo charlie delta echo foxtrot golf hotel india juliet",
-		Brief:     "alpha bravo charlie delta echo foxtrot golf hotel india juliet",
+		Brief:     "backend architect review: alpha bravo charlie delta echo foxtrot golf hotel india juliet",
 		AgentType: "backend-development:backend-architect",
 	})
 	if len(res.Injected) != 0 {
@@ -150,7 +150,7 @@ func TestRun_SubagentGateIgnoresBodyAndAgentType(t *testing.T) {
 
 func TestRun_SubagentContinuityGated(t *testing.T) {
 	memDir, projDir, home := setup(t)
-	subFact(t, projDir, "continuity", "continuity", "2026-11-24", "", "memboard tails card lock", "state")
+	subFact(t, projDir, "continuity", "continuity", "2026-11-24", "keywords: [memboard]\n", "memboard tails card lock", "state")
 	os.WriteFile(filepath.Join(memDir, ".wal"), nil, 0o644)
 	root := "/Users/u/Development/hypomnema"
 	cwd := root + "/.claude/worktrees/memboard-tails"
@@ -163,7 +163,7 @@ func TestRun_SubagentContinuityGated(t *testing.T) {
 	}
 	res = runSub(t, memDir, home, Input{
 		CWD: cwd, ProjectRoot: root, Prompt: "something else",
-		Brief: "refactor the database migration runner",
+		Brief: "refactor the memboard database migration runner",
 	})
 	if len(res.Injected) != 0 {
 		t.Errorf("continuity must not inject on an unrelated brief; injected=%v", res.Injected)

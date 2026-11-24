@@ -513,7 +513,7 @@ func TestCandidates_CorruptSidecarSiblingsRemoved(t *testing.T) {
 func TestRun_SubagentGetsReportCiteInstruction(t *testing.T) {
 	memDir, projDir, home := setup(t)
 	os.WriteFile(filepath.Join(projDir, "a.md"),
-		[]byte("---\nname: a\ntype: knowledge\ncreated: 2026-05-01\ndescription: docker layer cache\n---\ndocker layer cache\n"), 0o644)
+		[]byte("---\nname: a\ntype: knowledge\ncreated: 2026-05-01\nkeywords: [docker]\ndescription: docker layer cache\n---\ndocker layer cache\n"), 0o644)
 	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
 
 	sub, err := Run(Input{
