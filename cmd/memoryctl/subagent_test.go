@@ -100,7 +100,7 @@ func TestSubagentStart_RanksByPendingTask(t *testing.T) {
 	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
 	parent := writeTranscript(t,
 		userPromptLine("the dockercache layer is slow"),
-		agentCallLine("t1", "general-purpose", "Fix migration", "Investigate the pgmigration postgres lock timeout"),
+		agentCallLine("t1", "general-purpose", "Fix pgmigration postgres lock timeout", "Investigate the migration"),
 	)
 	out, _, code := runStdin(t, f.env, subagentEnv("s1", "a1", "general-purpose", "/tmp/proj", parent, ""),
 		"inject", "--event=SubagentStart")
@@ -166,7 +166,7 @@ func TestSubagentStart_TopFiveFacts(t *testing.T) {
 		brief = append(brief, fmt.Sprintf("gizmo%d sprocket%d", i, i))
 	}
 	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
-	parent := writeTranscript(t, agentCallLine("t1", "general-purpose", "widgets", "widget rendering "+strings.Join(brief, " ")))
+	parent := writeTranscript(t, agentCallLine("t1", "general-purpose", "widgets "+strings.Join(brief, " "), "widget rendering"))
 	out, _, _ := runStdin(t, f.env, subagentEnv("s1", "a1", "general-purpose", "/tmp/proj", parent, ""),
 		"inject", "--event=SubagentStart")
 	if n := strings.Count(additionalContext(t, out), "\n## "); n != 5 {
@@ -182,7 +182,7 @@ func TestSubagentStart_ByteBudget(t *testing.T) {
 		brief = append(brief, fmt.Sprintf("gizmo%d sprocket%d", i, i))
 	}
 	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
-	parent := writeTranscript(t, agentCallLine("t1", "general-purpose", "widgets", "widget rendering "+strings.Join(brief, " ")))
+	parent := writeTranscript(t, agentCallLine("t1", "general-purpose", "widgets "+strings.Join(brief, " "), "widget rendering"))
 	out, _, _ := runStdin(t, f.env, subagentEnv("s1", "a1", "general-purpose", "/tmp/proj", parent, ""),
 		"inject", "--event=SubagentStart")
 	if ctx := additionalContext(t, out); ctx == "" || len(ctx) > 5000 {
@@ -195,8 +195,8 @@ func TestSubagentStart_SkipList(t *testing.T) {
 	f.factHead(t, "/tmp/proj", "dockercache", "docker layer cache", "docker layer cache")
 	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
 	parent := writeTranscript(t,
-		agentCallLine("t1", "Explore", "docker", "dockercache layer"),
-		agentCallLine("t2", "Explore", "docker", "dockercache layer"))
+		agentCallLine("t1", "Explore", "docker dockercache layer", "x"),
+		agentCallLine("t2", "Explore", "docker dockercache layer", "x"))
 	rt := filepath.Join(f.mem, ".runtime")
 	for _, typ := range []string{"fork", "Explore", "claude-code-guide", "statusline-setup"} {
 		out, _, code := runStdin(t, f.env, subagentEnv("s1", "x-"+typ, typ, "/tmp/proj", parent, ""),
@@ -256,7 +256,7 @@ func TestSubagentStart_ResumeIsNoop(t *testing.T) {
 	f := newStoreFixture(t)
 	f.factHead(t, "/tmp/proj", "dockercache", "docker layer cache", "docker layer cache")
 	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
-	parent := writeTranscript(t, agentCallLine("t1", "general-purpose", "docker", "dockercache"))
+	parent := writeTranscript(t, agentCallLine("t1", "general-purpose", "docker dockercache", "x"))
 	in := subagentEnv("s1", "a1", "general-purpose", "/tmp/proj", parent, "")
 	first, _, _ := runStdin(t, f.env, in, "inject", "--event=SubagentStart")
 	if !strings.Contains(additionalContext(t, first), "docker layer cache") ||
@@ -298,8 +298,8 @@ func TestSubagentQuery_FromTaskFlag(t *testing.T) {
 	if fromTask2 || brief2 != "" {
 		t.Errorf("want fromTask=false and an empty brief on the parent-prompts fallback; brief=%q", brief2)
 	}
-	if !strings.Contains(brief, "Fix migration") || !strings.Contains(brief, "Investigate the pgmigration lock") {
-		t.Errorf("brief must carry the call's description and prompt; got %q", brief)
+	if brief != "Fix migration" {
+		t.Errorf("brief is the call's description only (the prompt names too many facts); got %q", brief)
 	}
 }
 
@@ -317,9 +317,9 @@ func TestSubagentStart_ParallelLaunchesGetDistinctCalls(t *testing.T) {
 	f.factHead(t, "/tmp/proj", "f3", "charlie widget content", "charlie widget content")
 	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
 	parent := writeTranscript(t,
-		agentCallLine("t1", "general-purpose", "task one", "alpha widget content"),
-		agentCallLine("t2", "general-purpose", "task two", "bravo widget content"),
-		agentCallLine("t3", "general-purpose", "task three", "charlie widget content"),
+		agentCallLine("t1", "general-purpose", "task one alpha widget content", "x"),
+		agentCallLine("t2", "general-purpose", "task two bravo widget content", "x"),
+		agentCallLine("t3", "general-purpose", "task three charlie widget content", "x"),
 	)
 	ranksFirst := func(agentID, want string, others ...string) {
 		t.Helper()
@@ -353,8 +353,8 @@ func TestSubagentStart_OwnAckBeatsOlderUnclaimedCall(t *testing.T) {
 	f.factHead(t, "/tmp/proj", "f2", "bravo widget content", "bravo widget content")
 	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
 	parent := writeTranscript(t,
-		agentCallLine("t1", "general-purpose", "task one", "alpha widget content"),
-		agentCallLine("t2", "general-purpose", "task two", "bravo widget content"),
+		agentCallLine("t1", "general-purpose", "task one alpha widget content", "x"),
+		agentCallLine("t2", "general-purpose", "task two bravo widget content", "x"),
 		agentAckLine("t2", "ab2"),
 	)
 	// ab2 is the acknowledged owner of t2 — even though t1 is the older
@@ -387,7 +387,7 @@ func TestSubagentStart_ConcurrentSameKeyRendersOnce(t *testing.T) {
 	f := newStoreFixture(t)
 	f.factHead(t, "/tmp/proj", "dockercache", "docker layer cache", "docker layer cache")
 	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
-	parent := writeTranscript(t, agentCallLine("t1", "general-purpose", "docker", "dockercache"))
+	parent := writeTranscript(t, agentCallLine("t1", "general-purpose", "docker dockercache", "x"))
 	in := subagentEnv("s1", "a1", "general-purpose", "/tmp/proj", parent, "")
 
 	const n = 10
@@ -463,7 +463,7 @@ func TestSubagentStop_ClassifiesUnderSubagentKey(t *testing.T) {
 	f.factHead(t, "/tmp/proj", "dockercache", "docker layer cache", "docker layer cache")
 	f.factHead(t, "/tmp/proj", "pgmigration", "postgres migration lock", "postgres migration lock")
 	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
-	parent := writeTranscript(t, agentCallLine("t1", "general-purpose", "Fix migration", "pgmigration postgres lock dockercache docker layer"))
+	parent := writeTranscript(t, agentCallLine("t1", "general-purpose", "Fix pgmigration postgres lock dockercache docker layer", "x"))
 	runStdin(t, f.env, subagentEnv("s1", "a1", "general-purpose", "/tmp/proj", parent, ""),
 		"inject", "--event=SubagentStart")
 	agent := writeTranscript(t, assistantCiteLine(`<cc-memory filenames="pgmigration.md">released the lock first</cc-memory>`))
@@ -495,7 +495,7 @@ func TestSubagentStop_CitationInHandbackReport(t *testing.T) {
 	f := newStoreFixture(t)
 	f.factHead(t, "/tmp/proj", "pgmigration", "postgres migration lock", "postgres migration lock")
 	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
-	parent := writeTranscript(t, agentCallLine("t1", "general-purpose", "Fix migration", "pgmigration postgres lock"))
+	parent := writeTranscript(t, agentCallLine("t1", "general-purpose", "Fix pgmigration postgres lock", "x"))
 	runStdin(t, f.env, subagentEnv("s1", "a1", "general-purpose", "/tmp/proj", parent, ""),
 		"inject", "--event=SubagentStart")
 	agent := writeTranscript(t, handbackLine(`Done. <cc-memory filenames="pgmigration.md">released the lock first</cc-memory>`))
@@ -556,7 +556,7 @@ func TestInject_SubagentFlagActsAsSubagentStart(t *testing.T) {
 	f := newStoreFixture(t)
 	f.factHead(t, "/tmp/proj", "dockercache", "docker layer cache", "docker layer cache")
 	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
-	parent := writeTranscript(t, agentCallLine("t1", "general-purpose", "docker", "dockercache"))
+	parent := writeTranscript(t, agentCallLine("t1", "general-purpose", "docker dockercache", "x"))
 	out, _, code := runStdin(t, f.env, subagentEnv("s1", "a1", "general-purpose", "/tmp/proj", parent, ""),
 		"inject", "--subagent")
 	if code != 0 {
@@ -610,7 +610,7 @@ func TestSubagentStart_WorktreeAnchorKeepsTaskTerms(t *testing.T) {
 	run("worktree", "add", "-q", wt)
 	f.factHead(t, repo, "tails", "memboard tails card lock", "body")
 	f.env["CLAUDE_PROJECT_DIR"] = wt
-	parent := writeTranscript(t, agentCallLine("t1", "general-purpose", "Fix tails", "Finish the memboard tails work"))
+	parent := writeTranscript(t, agentCallLine("t1", "general-purpose", "Fix memboard tails", "Finish the work"))
 	out, _, code := runStdin(t, f.env, subagentEnv("s1", "a1", "general-purpose", wt, parent, ""),
 		"inject", "--event=SubagentStart")
 	if code != 0 {
@@ -618,5 +618,20 @@ func TestSubagentStart_WorktreeAnchorKeepsTaskTerms(t *testing.T) {
 	}
 	if ctx := additionalContext(t, out); !strings.Contains(ctx, "tails.md") {
 		t.Errorf("worktree name terms must keep counting; ctx=%q", ctx)
+	}
+}
+
+// The gate reads the call's description only: a fact the prompt names but the
+// description does not is not injected.
+func TestSubagentStart_GateReadsDescriptionNotPrompt(t *testing.T) {
+	f := newStoreFixture(t)
+	f.factHead(t, "/tmp/proj", "pgmigration", "postgres migration lock", "body")
+	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
+	parent := writeTranscript(t, agentCallLine("t1", "general-purpose", "Fix the build",
+		"Investigate the pgmigration postgres migration lock timeout"))
+	out, _, code := runStdin(t, f.env, subagentEnv("s1", "a1", "general-purpose", "/tmp/proj", parent, ""),
+		"inject", "--event=SubagentStart")
+	if code != 0 || strings.TrimSpace(out) != "" {
+		t.Errorf("a fact named only in the prompt must not inject; code=%d out=%q", code, out)
 	}
 }

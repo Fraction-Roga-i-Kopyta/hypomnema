@@ -80,13 +80,15 @@ func agentTypeTerms(agentType string) string {
 // assigned (see pickAgentCall) plus the agent type's words. fromTask is true
 // only when a call was assigned — the caller then skips the git signal, since
 // a query that already names the task doesn't need the PARENT's branch and
-// working-tree tokens. brief is the call's description and full prompt, what
-// the head gate reads; without a call it is "" and the agent gets no memory.
+// working-tree tokens. brief is the call's description — the task statement
+// the head gate reads (a whole prompt names too many facts: on 362 real briefs
+// the median was 136 passing facts); without a call it is "" and the agent
+// gets no memory.
 func subagentQuery(parentTranscript, agentType, agentID string) (query, brief string, fromTask bool) {
 	typ := agentTypeTerms(agentType)
 	if c, ok := pickAgentCall(parentTranscript, agentType, agentID); ok {
 		return strings.TrimSpace(c.Description + " " + typ + " " + inject.TopTerms(c.Prompt, subagentPromptTerms)),
-			c.Description + "\n" + c.Prompt, true
+			c.Description, true
 	}
 	return typ, "", false
 }

@@ -178,8 +178,9 @@ type Input struct {
 	// its own Agent call), where the parent's branch and working-tree tokens
 	// are unrelated noise.
 	NoGitSignal bool
-	// Brief is the SubagentStart task brief (Agent-call description + prompt),
-	// read in full by the head gate. Empty on SubagentStart -> nothing is
+	// Brief is the SubagentStart task statement (the Agent call's
+	// description), read by the head gate; the long prompt only feeds the
+	// ranking query. Empty on SubagentStart -> nothing is
 	// injected: without a task there is nothing to name a fact.
 	Brief string
 	// AgentType is the subagent's type; its words do not count toward the

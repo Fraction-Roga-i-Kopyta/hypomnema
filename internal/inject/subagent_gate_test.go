@@ -76,27 +76,33 @@ func longBrief() string {
 	return b.String()
 }
 
+// The gate reads the task statement (the Agent call's description), not the
+// ~6 KB prompt: a fact the description names passes, a fact named only deep in
+// the prompt does not.
 func TestRun_SubagentGateLongBriefNamesFact(t *testing.T) {
 	memDir, projDir, home := setup(t)
 	subFact(t, projDir, "wal-oversized-row", "mistake", "2026-01-01", "",
 		"WAL oversized row truncates sidecar reprojection", "body text")
+	subFact(t, projDir, "prompt-only-topic", "mistake", "2026-01-01", "",
+		"quokka zephyr handling", "body text")
 	for i := 1; i <= subagentMaxKTest+1; i++ {
 		subFact(t, projDir, fmt.Sprintf("decoy-%d", i), "knowledge", "2026-11-24", "",
 			"decoy claude notes",
 			"Внимательно прочитай файл ranking function behaviour review carefully report findings details")
 	}
 	os.WriteFile(filepath.Join(memDir, ".wal"), nil, 0o644)
-	brief := longBrief()
+	prompt := longBrief() + " Также учти quokka zephyr."
 	res := runSub(t, memDir, home, Input{
-		Prompt: "ranking behaviour", Brief: brief,
+		Prompt:      "ranking behaviour " + prompt,
+		Brief:       "Проверить случай WAL oversized row (2026-11-24, /Users/u/Development/hypomnema/internal/inject)",
 		ProjectRoot: "/Users/u/Development/hypomnema",
 	})
 	if !injectedHas(res, "wal-oversized-row") {
-		t.Fatalf("wal-oversized-row must pass the gate; injected=%v", res.Injected)
+		t.Fatalf("wal-oversized-row is named by the description; injected=%v", res.Injected)
 	}
 	for _, s := range res.Injected {
-		if strings.HasPrefix(s, "decoy") {
-			t.Errorf("decoy %s must not inject", s)
+		if strings.HasPrefix(s, "decoy") || strings.HasPrefix(s, "prompt-only") {
+			t.Errorf("%s must not inject (named only in the prompt or not at all)", s)
 		}
 	}
 }

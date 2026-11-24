@@ -518,7 +518,7 @@ func TestRun_SubagentGetsReportCiteInstruction(t *testing.T) {
 
 	sub, err := Run(Input{
 		Event: "SubagentStart", SessionID: "s1:a1", CWD: "/tmp/proj", Prompt: "docker",
-		Brief: "tune the docker layer cache",
+		Brief:      "tune the docker layer cache",
 		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir,
 		Today: "2026-05-29", MaxK: 5, MaxBytes: 5000,
 	})
