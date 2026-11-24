@@ -39,7 +39,13 @@ func learningsForSkill(st native.Store, skill string, k int) ([]rank.Scored, map
 		Today:        today(),
 		IncludeStale: true,
 	}
-	return rank.Rank(q, matched, k), byKey
+	// One fact per file name (project wins), then the K cut: the model
+	// cites by file name, and a same-name pair would spend two slots.
+	ranked := inject.DistinctBySlug(rank.Rank(q, matched, 0), st.Project)
+	if k > 0 && len(ranked) > k {
+		ranked = ranked[:k]
+	}
+	return ranked, byKey
 }
 
 const skillInjectK = 5

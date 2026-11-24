@@ -73,7 +73,7 @@ func Run(in Input) (Result, error) {
 	st := in.store()
 	files := collectNative(in.ClaudeHome, st)
 	byName := factsBySlug(files, st.Project)
-	injected := readInjectedSet(in.MemoryDir, in.SessionID, byName)
+	injected := readInjectedSet(in.MemoryDir, in.SessionID, st.Project, byName)
 	status := slugStatus(files)
 
 	sess, sErr := jsonl.ReadSession(in.TranscriptPath)
@@ -213,8 +213,9 @@ func Run(in Input) (Result, error) {
 // names one fact; a bare slug line (written by an older binary) names that
 // file in every store, so it expands to every in-scope fact with that name —
 // or stays bare when none is in scope (its rows then carry the bare slug,
-// grandfathered on read, as before).
-func readInjectedSet(memDir, sessionID string, byName map[string][]native.MemFile) []string {
+// grandfathered on read, as before). A QKey line of a project other than the
+// current store's (or the global store) is ignored.
+func readInjectedSet(memDir, sessionID, project string, byName map[string][]native.MemFile) []string {
 	lines := readRuntimeList(filepath.Join(memDir, ".runtime",
 		"injected-"+pathutil.SafeFileName(sessionID)+".list"))
 	seen := make(map[string]bool, len(lines))
@@ -226,9 +227,11 @@ func readInjectedSet(memDir, sessionID string, byName map[string][]native.MemFil
 		}
 	}
 	for _, ln := range lines {
-		_, slug, qualified := native.ParseQKey(ln)
+		p, slug, qualified := native.ParseQKey(ln)
 		switch {
 		case slug == "":
+		case qualified && p != project && p != native.GlobalProject:
+			// Another project's fact: not in this store's scope.
 		case qualified:
 			add(ln)
 		case len(byName[slug]) == 0:

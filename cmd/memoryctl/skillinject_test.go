@@ -272,3 +272,23 @@ func TestSkillInject_TotalBudgetBounded(t *testing.T) { // review H2
 		t.Errorf("skill-inject additionalContext is %d bytes — no total budget (would be diverted)", n)
 	}
 }
+
+// One render never shows two facts with the same file name: a project and a
+// global learning sharing x.md render once, the project one winning.
+func TestSkillInject_SameSlugRendersOnce(t *testing.T) {
+	f := newStoreFixture(t)
+	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
+	fm := "name: x\ntype: skill-learning\nskill: commit\nstatus: active\ncreated: 2026-06-14"
+	f.globalFact(t, "x", fm, "GLOBAL LEARNING")
+	f.factFM(t, "/tmp/proj", "x", fm, "PROJECT LEARNING")
+	stdout, _, exit := runStdin(t, f.env, `{"session_id":"s9","cwd":"/tmp/proj","tool_input":{"skill":"commit"}}`, "skill-inject")
+	if exit != 0 {
+		t.Fatalf("exit=%d", exit)
+	}
+	if !strings.Contains(stdout, "PROJECT LEARNING") || strings.Contains(stdout, "GLOBAL LEARNING") {
+		t.Errorf("want the project learning only, got:\n%s", stdout)
+	}
+	if n := strings.Count(stdout, "- (x.md)"); n != 1 {
+		t.Errorf("x.md rendered %d times, want 1:\n%s", n, stdout)
+	}
+}

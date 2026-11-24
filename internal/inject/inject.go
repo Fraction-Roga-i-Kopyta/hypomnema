@@ -283,9 +283,22 @@ func Run(in Input) (Result, error) {
 		core = coreFacts(files, cands, st.Project)
 		ranked = append(ranked, core...)
 	} else {
+		// Facts already in context leave the pool before the K cut, so
+		// they hold no slot and a same-name project fact competes on its
+		// own score rather than inheriting the global twin's position.
+		if len(in.AlreadyInjected) > 0 {
+			seen := native.NewKeySet(in.AlreadyInjected)
+			fresh := cands[:0]
+			for _, c := range cands {
+				if !seen.Has(c.Project, c.Slug) {
+					fresh = append(fresh, c)
+				}
+			}
+			cands = fresh
+		}
 		ranked = topDistinct(q, cands, st.Project, in.MaxK)
 	}
-	if len(in.AlreadyInjected) > 0 {
+	if in.Event == "SessionStart" && len(in.AlreadyInjected) > 0 {
 		seen := native.NewKeySet(in.AlreadyInjected)
 		fresh := ranked[:0]
 		for _, sc := range ranked {

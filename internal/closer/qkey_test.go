@@ -140,3 +140,54 @@ func TestClose_CandidateConfirmedUsesOwnStatus(t *testing.T) {
 		}
 	})
 }
+
+// A session list can hold a QKey line of another project's store (a list
+// that outlived a cwd/store change): it is ignored, not classified.
+func TestClose_ForeignProjectQKeyLineIgnored(t *testing.T) {
+	x := "---\nname: x\ntype: knowledge\n---\nx body\n"
+	pX := native.QKey("-tmp-proj", "x.md")
+	foreign := native.QKey("-other-proj", "y.md")
+	cite := assistantText(`<cc-memory filenames="x.md">applied x</cc-memory>`)
+	w, _, _ := sameSlugFixture(t, map[string]string{"x.md": x}, nil, []string{foreign, pX}, cite)
+	if strings.Contains(w, "-other-proj") {
+		t.Errorf("foreign-project list line must produce no row:\n%s", w)
+	}
+	if !strings.Contains(w, "|cite-useful|"+pX+"|s1") {
+		t.Errorf("own fact must still be credited:\n%s", w)
+	}
+}
+
+// A bare line (older binary) with the file name in both stores names both.
+func TestClose_BareLineWithBothStores(t *testing.T) {
+	x := "---\nname: x\ntype: knowledge\n---\nx body\n"
+	other := "---\nname: other\ntype: note\n---\nother\n"
+	pX := native.QKey("-tmp-proj", "x.md")
+	gX := native.QKey(native.GlobalProject, "x.md")
+	pO := native.QKey("-tmp-proj", "other.md")
+	proj := map[string]string{"x.md": x, "other.md": other}
+	glob := map[string]string{"x.md": x}
+
+	t.Run("cited → both credited", func(t *testing.T) {
+		w, _, _ := sameSlugFixture(t, proj, glob, []string{"x.md"},
+			assistantText(`<cc-memory filenames="x.md">applied x</cc-memory>`))
+		rows := citeRows(w)
+		if len(rows) != 2 || !strings.Contains(w, "|cite-useful|"+pX+"|s1") || !strings.Contains(w, "|cite-useful|"+gX+"|s1") {
+			t.Errorf("want useful rows for both stores, got:\n%s", strings.Join(rows, "\n"))
+		}
+	})
+	t.Run("uncited beside another delivered citation → both silent", func(t *testing.T) {
+		w, _, _ := sameSlugFixture(t, proj, glob, []string{"x.md", pO},
+			assistantText(`<cc-memory filenames="other.md">applied other</cc-memory>`))
+		if !strings.Contains(w, "|cite-silent|"+pX+"|s1") || !strings.Contains(w, "|cite-silent|"+gX+"|s1") ||
+			!strings.Contains(w, "|cite-useful|"+pO+"|s1") || len(citeRows(w)) != 3 {
+			t.Errorf("want silent for both x.md, useful for other.md:\n%s", strings.Join(citeRows(w), "\n"))
+		}
+	})
+	t.Run("mixed bare and qualified → no double row", func(t *testing.T) {
+		w, _, _ := sameSlugFixture(t, proj, glob, []string{"x.md", pX},
+			assistantText(`<cc-memory filenames="x.md">applied x</cc-memory>`))
+		if rows := citeRows(w); len(rows) != 2 {
+			t.Errorf("want exactly one row per store, got:\n%s", strings.Join(rows, "\n"))
+		}
+	})
+}

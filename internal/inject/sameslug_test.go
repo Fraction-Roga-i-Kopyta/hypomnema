@@ -101,3 +101,62 @@ func TestDedupBySlug(t *testing.T) {
 		t.Errorf("dedupBySlug = %+v, want project x.md then y.md", got)
 	}
 }
+
+// The already-in-context filter runs before the K cut: a global x.md in
+// context must not lend its top position to the project x.md (which then
+// competes on its own score), and a fact already in context must not hold a
+// K slot a fresh fact could take.
+func TestRun_AlreadyInjectedFilteredBeforeKCut(t *testing.T) {
+	memDir, projDir, home := setup(t)
+	globDir := filepath.Join(home, ".claude", "memory-global")
+	os.MkdirAll(globDir, 0o755)
+	os.WriteFile(filepath.Join(globDir, "x.md"),
+		[]byte("---\nname: x\ntype: knowledge\nkeywords: [docker, cache, redis]\n---\nGLOBAL BODY\n"), 0o644)
+	os.WriteFile(filepath.Join(projDir, "x.md"),
+		[]byte("---\nname: x\ntype: knowledge\nkeywords: [docker]\n---\nPROJECT BODY\n"), 0o644)
+	os.WriteFile(filepath.Join(projDir, "y.md"),
+		[]byte("---\nname: y\ntype: knowledge\nkeywords: [docker, cache]\n---\nY BODY\n"), 0o644)
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
+	run := func(already []string, k int) Result {
+		res, err := Run(Input{
+			Event: "UserPromptSubmit", SessionID: "s1", CWD: "/tmp/proj",
+			Prompt:     "docker cache redis",
+			ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir,
+			Today: "2026-05-29", MaxK: k,
+			AlreadyInjected: already,
+		})
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		return res
+	}
+	res := run([]string{native.QKey(native.GlobalProject, "x.md")}, 1)
+	if strings.Contains(res.Markdown, "PROJECT BODY") || !strings.Contains(res.Markdown, "Y BODY") {
+		t.Errorf("project x.md must compete on its own (lower) score and lose the single slot to y.md:\n%s", res.Markdown)
+	}
+
+}
+
+// A fact ranked K+1 renders when one of the top-K is already in context.
+func TestRun_AlreadyInjectedFreesKSlot(t *testing.T) {
+	memDir, projDir, home := setup(t)
+	for i, n := range []string{"a", "b", "c"} {
+		kw := []string{"docker, cache, redis", "docker, cache", "docker"}[i]
+		os.WriteFile(filepath.Join(projDir, n+".md"),
+			[]byte("---\nname: "+n+"\ntype: knowledge\nkeywords: ["+kw+"]\n---\nBODY "+n+"\n"), 0o644)
+	}
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
+	res, err := Run(Input{
+		Event: "UserPromptSubmit", SessionID: "s1", CWD: "/tmp/proj",
+		Prompt:     "docker cache redis",
+		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir,
+		Today: "2026-05-29", MaxK: 2,
+		AlreadyInjected: []string{native.QKey("-tmp-proj", "a.md")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Markdown, "BODY b") || !strings.Contains(res.Markdown, "BODY c") || strings.Contains(res.Markdown, "BODY a") {
+		t.Errorf("want b and c rendered (a in context), got:\n%s", res.Markdown)
+	}
+}
