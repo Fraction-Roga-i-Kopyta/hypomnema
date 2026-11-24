@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -41,9 +43,35 @@ func TestFailSafe_CloseRecovers(t *testing.T) {
 
 // Every verb the shims call must be registered (dispatch reads this map).
 func TestHookVerbs_AllWrapped(t *testing.T) {
+	// The verb list comes from the shims themselves, so a new hook shim
+	// cannot ship a verb main dispatches outside the failSafe wrapper.
+	shims, err := filepath.Glob(filepath.Join("..", "..", "hooks", "v2", "*.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := regexp.MustCompile(`(?m)(?:^|[\s($])(?:exec\s+)?"\$MCTL"\s+([a-z][a-z-]*)`)
+	verbs := map[string]bool{}
+	for _, sh := range shims {
+		if strings.HasSuffix(sh, "_test.sh") {
+			continue
+		}
+		b, err := os.ReadFile(sh)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range call.FindAllStringSubmatch(string(b), -1) {
+			verbs[m[1]] = true
+		}
+	}
+	// Guard the parser itself: the shims call at least these verbs.
 	for _, v := range []string{"inject", "close", "guard", "guard-bash", "skill-inject", "skill-active"} {
+		if !verbs[v] {
+			t.Errorf("verb %q not found in hooks/v2 shims — shim parse broken? found %v", v, verbs)
+		}
+	}
+	for v := range verbs {
 		if hookVerbs[v] == nil {
-			t.Errorf("hook verb %q is not in hookVerbs (unwrapped)", v)
+			t.Errorf("hook verb %q (called by a hooks/v2 shim) is not in hookVerbs (unwrapped)", v)
 		}
 	}
 	src, err := os.ReadFile("main.go")

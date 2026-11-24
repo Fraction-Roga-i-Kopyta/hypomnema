@@ -64,9 +64,9 @@ SessionStart ──► memoryctl inject --event=SessionStart ──────�
      reserved first) as `# Memory Context` in additionalContext;│
      core bodies that do not fit → one-line pointers (not       │
      deliveries, no WAL row)                                    │
-   WAL: inject|<slug>|<session>  (one line per injected fact,   │
+   WAL: inject|<qslug>|<session>  (one line per injected fact,  │
      skipped for a slug already logged this session — a         │
-     compact/clear re-render never inflates ref_count)           │
+     compact/clear re-render never inflates ref_count)          │
    write per-session injected-set (.runtime/injected-<sid>.list)│
    source=compact|clear: the same core, NOT filtered against    │
      what was already injected earlier in the session — the     │
@@ -79,11 +79,12 @@ UserPromptSubmit ──► inject --event=UserPromptSubmit ───────
      session list untouched (machine-injected turn, not a       │
      user prompt — ranking it would waste a fact's once-per-    │
      session slot); the same for the /memboard toggle           │
-   else: the relevance ranker below; keywords += prompt tokens (reactive)      │
+   else: the relevance ranker below; keywords += prompt tokens  │
+     (reactive)                                                 │
    inject only facts newly entering the top-8 this session      │
-   WAL: inject|<slug>|<session>                                 │
+   WAL: inject|<qslug>|<session>                                │
                                                                 │
-PreToolUse(Write|Edit) ──► guard ──────────────────────────────┤
+PreToolUse(Write|Edit) ──► guard ───────────────────────────────┤
    guarded: legacy ~/.claude/memory, this session's             │
      resolved store (autoMemoryDirectory/env-override           │
      included), native projects/<slug>/memory/ under            │
@@ -93,15 +94,15 @@ PreToolUse(Write|Edit) ──► guard ─────────────�
    .secretsignore glob or HYPOMNEMA_ALLOW_SECRETS=1 → exit 0    │
    scanner error → fail-open (exit 0)                           │
                                                                 │
-PreToolUse(Skill) ──► skill-active ────────────────────────────┤
+PreToolUse(Skill) ──► skill-active ─────────────────────────────┤
    record activated skill name in .runtime/ (so PostToolUse can │
      tag skill-learning facts to the right skill)               │
                                                                 │
-PostToolUse(Skill) ──► skill-inject ───────────────────────────┤
+PostToolUse(Skill) ──► skill-inject ────────────────────────────┤
    inject skill-learning facts for the just-activated skill     │
-   WAL: recall|<slug>|<session>  (joins the injected-set)       │
+   WAL: recall|<qslug>|<session>  (joins the injected-set)      │
                                                                 │
-Stop ──► close ────────────────────────────────────────────────┤
+Stop ──► close ─────────────────────────────────────────────────┤
    read the session transcript (JSONL) for assistant text       │
    closer.Citations(assistant text): <cc-memory> tags           │
      cited + delivered → cite-useful ; cited, undelivered       │
@@ -110,8 +111,8 @@ Stop ──► close ───────────────────�
        this session → cite-none                                 │
      (skipped entirely if the transcript was unreadable —       │
       never fabricate silent evidence for a whole session)      │
-   WAL: cite-useful|<slug>, cite-silent|<slug>,                 │
-     cite-undelivered|<slug>, cite-none|<sid>                   │
+   WAL: cite-useful|<qslug>, cite-silent|<qslug>,               │
+     cite-undelivered|<qslug>, cite-none|<sid>                  │
    WAL: session-close|<sid>                                     │
    sidecar.Reproject: ref_count, effectiveness,                 │
      last_injected, last_useful                                 │
@@ -136,14 +137,14 @@ SubagentStart ──► inject --event=SubagentStart ─────────
      ≤2MiB, agent_type, agent_id) → own Agent/Task call, else   │
      the oldest unclaimed pending call of this type             │
      no call → nothing injected (no parent-prompt fallback)     │
-   brief = the call's description; query = description +       │
+   brief = the call's description; query = description +        │
      prompt (top-40 terms) + type words, NoGitSignal=true       │
    head gate BEFORE rank: ≥2 distinct brief terms in the head   │
      (name/description/keywords/domains), one in name or        │
      keywords; paths, $HOME/project-root words, type words,     │
      digits, corpus-common head terms never count               │
    rank the passing facts, MaxK=5, MaxBytes=5000 → emit         │
-   WAL: inject|<slug>|<key>                                     │
+   WAL: inject|<qslug>|<key>                                    │
    write injected-<key>.list (if non-empty), rendered-<key>.list│
      (always — marks the claim as fulfilled)                    │
                                                                 │
@@ -155,7 +156,7 @@ SubagentStop ──► close --subagent ─────────────�
      path, Subagent=true): same citation classification as      │
      close, jsonl folds SubagentHandback.input.message into the │
      transcript text first                                      │
-   WAL: cite-useful|<slug>|<key>, cite-silent/cite-undelivered, │
+   WAL: cite-useful|<qslug>|<key>, cite-silent/cite-undelivered,│
      cite-none|<key>|<key> as usual — no sidecar reproject/     │
      MarkStale, no MEMORY.md regen (left to the parent's Stop)  │
    WAL: session-close|<key>|<key>, deduped END-ANCHORED         │
@@ -318,7 +319,7 @@ mechanically checks the ones that can be. The load-bearing ones:
 6. **No network.** Zero HTTP/curl anywhere in `internal/`, `cmd/`, or the
    shims. Hypomnema is entirely offline.
 7. **Silent-fail.** A hook never breaks the session: any internal error in
-   hook verb exits 0, and a panic is recovered (`runHook`, stderr trace, exit
+   a hook verb exits 0, and a panic is recovered (`runHook`, stderr trace, exit
    0). The *only* non-zero exit is `guard`/`guard-bash` on a detected secret
    or panel verb (`exit 2`); even a scanner crash fails open.
 
