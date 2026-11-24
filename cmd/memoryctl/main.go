@@ -152,10 +152,10 @@ Environment:
   HYPOMNEMA_NOW           Freeze doctor's "now" (YYYY-MM-DD HH:MM) when
                           HYPOMNEMA_TODAY is unset.
   HYPOMNEMA_SESSION_ID    Session id stamped into WAL entries.
-  HYPOMNEMA_PROMPT_INJECT "off" = pull-only mode: UserPromptSubmit injects
-                          nothing; memory reaches the model through the
-                          MEMORY.md index (plus the global index, imported
-                          from CLAUDE.md) and its own reads.
+  HYPOMNEMA_PROMPT_INJECT Set to "off" for pull-only mode: prompts push no
+                          facts; the model works from the MEMORY.md indexes
+                          (the global one imported from CLAUDE.md) and
+                          reads the facts it needs.
   CLAUDE_CODE_SESSION_ID  Session id exported by Claude Code into Bash; recall
                           falls back to it when HYPOMNEMA_SESSION_ID is unset,
                           and resolves the SessionStart-written session pin.

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/doctor"
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/inject"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/sidecar"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/stats"
@@ -143,7 +144,7 @@ func runStats(args []string) {
 	switch a.scope {
 	case "session":
 		s := u.Session(sid)
-		s.PromptInject = !promptInjectOff()
+		s.PromptInject = !inject.PullOnlyFromEnv()
 		stats.EnrichTop(&s, collectNative(r.Store), recs, u, marks, home)
 		rep.Session = &s
 	case "fact":
