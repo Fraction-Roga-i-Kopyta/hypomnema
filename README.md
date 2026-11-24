@@ -17,7 +17,7 @@
 Not you. Hypomnema is not another markdown "second brain" — no Obsidian vault, no backlinks graph, no daily notes, nothing to browse or curate. Every fact is written for one reader: the agent, at the moment it starts work.
 
 - **The agent writes it.** Claude records a bug it should not repeat, an approach that worked, a rule you gave it. You can open, edit or delete any file, but you are not expected to maintain a knowledge base.
-- **The agent reads it.** A fresh session starts with the project's current state, its pinned card and your rules for it; a subagent gets only the facts its task names; everything else is listed in an index the agent reads when a description fits.
+- **The agent reads it.** A fresh session starts with the project's current state, its pinned card and your rules for it; a subagent gets only the facts its task names; everything else is listed in an index the agent reads when a description fits. That last part describes the recommended pull-only mode (`HYPOMNEMA_PROMPT_INJECT=off` plus an `@~/.claude/memory-global/MEMORY.md` import in your user CLAUDE.md — see [Setup](#recommended-pull-only-mode)); by default UserPromptSubmit still pushes a gated top-8 on every prompt.
 - **Success is measured on the agent.** A fact counts as useful only when it changed what Claude said, did or decided — Claude marks that with a hidden citation. How many notes are stored, or how they look to a human, is not a goal.
 - **Priorities, in order:** what reaches the agent's context is accurate → it is fast → it makes the agent more capable → anything a human sees. Human-facing features are dropped when they cost injection quality.
 
@@ -42,7 +42,7 @@ Repo layout, how to run the stack locally, deploy is via PR to main only, never 
 Integration tests must hit a real database, not a mock. Why: a mocked test passed while the migration failed.
 ```
 
-Claude reads it as part of its context — no RAG query, no vector database, just a markdown block prepended by the hook. Everything else stays out of the way: the agent sees the store's `MEMORY.md` index and reads a fact when its description fits the task; a subagent gets only the facts its own task names. The file name in each header is what a citation names: when a fact actually changes what Claude says or does, it wraps that sentence in `<cc-memory filenames="real-db-in-tests.md">…</cc-memory>` — hidden from the user, read by `close` as the honest usefulness signal. When Claude hits a new bug worth remembering, it writes a native memory file; the next time a task names that bug, the agent finds it. The core comes back after `/clear` and compaction — after compaction, followed by facts the compaction summary names — so a compacted session doesn't wake up having forgotten where it was.
+Claude reads it as part of its context — no RAG query, no vector database, just a markdown block prepended by the hook. Everything else stays out of the way: in pull-only mode (recommended, [Setup](#recommended-pull-only-mode)) the agent sees the store's `MEMORY.md` index and reads a fact when its description fits the task — by default each prompt still gets a gated ranked push; a subagent gets only the facts its own task names. The file name in each header is what a citation names: when a fact actually changes what Claude says or does, it wraps that sentence in `<cc-memory filenames="real-db-in-tests.md">…</cc-memory>` — hidden from the user, read by `close` as the honest usefulness signal. When Claude hits a new bug worth remembering, it writes a native memory file; the next time a task names that bug, the agent finds it. The core comes back after `/clear` and compaction — the core only: the compaction summary already carries the task — so a compacted session doesn't wake up having forgotten where it was.
 
 ## What hypomnema adds on top of native
 
@@ -98,7 +98,7 @@ size. See [`docs/measurements/2026-05-29-v2-ranker-ab.md`](docs/measurements/202
 
 | Event (matcher) | Shim | What memoryctl does |
 |---|---|---|
-| `SessionStart` | `session-start.sh` | Detect project → inject the fixed core (freshest continuity, pinned facts, project feedback) via `additionalContext`; after compaction, plus facts the summary names |
+| `SessionStart` | `session-start.sh` | Detect project → inject the fixed core (freshest continuity, pinned facts, project feedback) via `additionalContext` — after `/clear` and compaction too |
 | `UserPromptSubmit` | `user-prompt-submit.sh` | Re-rank with prompt tokens added → inject anything not yet in session |
 | `PreToolUse:Write\|Edit` | `pre-tool-write.sh` | `guard`: secrets scan on memory-path writes → exit 2 on a credential pattern |
 | `PreToolUse:Bash` | `pre-tool-bash.sh` | `guard-bash`: block the model's own `memoryctl pin` / `unpin` / `mark` (only `mark <slug> done` passes) — those are `/memboard` panel actions |
@@ -121,7 +121,7 @@ fight the harness for the index channel.
 
 ## How injection ranks files
 
-**SessionStart injects a fixed core, not a ranking:** the project's freshest `continuity`, then `status: pinned` facts (project-local, then global), then project-local `type: feedback` — freshest first within each group. Facts that are stale, hidden, or marked *less* in `/memboard` are left out. Core facts that do not fit the 8 KB budget are listed as one-line pointers (name, absolute path, description) that the model can Read; the Memory-queue line's room is reserved first. There is no ranked fill: memory beyond the core arrives by pull (the `MEMORY.md` index, `memoryctl recall`). After a compaction with a readable summary, the core is followed by up to 8 ranked facts whose name, description, keywords or domains contain at least two distinct terms of the summary's focus sections, read in full (the project root's and `$HOME`'s path components, numbers and corpus-common head words do not count). `/clear` and a compaction without a summary inject the core only.
+**SessionStart injects a fixed core, not a ranking:** the project's freshest `continuity`, then `status: pinned` facts (project-local, then global), then project-local `type: feedback` — freshest first within each group. Facts that are stale, hidden, or marked *less* in `/memboard` are left out. Core facts that do not fit the 8 KB budget are listed as one-line pointers (name, absolute path, description) that the model can Read; the Memory-queue line's room is reserved first. There is no ranked fill: memory beyond the core arrives by pull (the `MEMORY.md` index, `memoryctl recall`). `/clear` and compaction inject the core only, too: the compaction summary carries the task state, and gating the summary on fact heads was measured to pass a median of 187 facts on real summaries — no selection at all.
 
 Everywhere else, a single relevance ranker (merged from the two v1 pipelines) scores every candidate:
 
@@ -135,7 +135,7 @@ score = 3.0 × overlap(keywords, file keywords+name+description+body)
 
 Recency tracks the model's use, not the ranker's own output: it decays from the latest `cite-useful` date (sidecar `last_useful`), never from `last_injected`, so a fact can't refresh its own recency merely by being injected.
 
-The blend is additive and zero-safe: a brand-new fact with `ref_count=0` and no outcome history is still injectable — it scores on overlap and its frontmatter `created` recency, not zero. Status filter: `active` and `pinned` only; `stale` is skipped (down-ranked in sidecar, still on disk). Scope filter: only the current project's facts plus the global store inject — other projects' rows never leak in. The result is a flat top-8, capped at 2.5KB per body and 8KB total (Claude Code diverts larger hook payloads to a file the model never sees inline), and each fact injects at most once per context (again after a compaction/`/clear` wipes it).
+The blend is additive and zero-safe: a brand-new fact with `ref_count=0` and no outcome history is still injectable — it scores on overlap and its frontmatter `created` recency, not zero. Status filter: `active`, `pinned` and `candidate`; `stale` is skipped (down-ranked in sidecar, still on disk; `recall` still serves it). Scope filter: only the current project's facts plus the global store inject — other projects' rows never leak in. The result is a flat top-8, capped at 2.5KB per body and 8KB total (Claude Code diverts larger hook payloads to a file the model never sees inline), and each fact injects at most once per context (again after a compaction/`/clear` wipes it).
 
 Keyword overlap is the primary signal. Keywords come from git context (branch name, changed filenames, recent commit messages, CWD basename — skipped for the home directory) plus prompt tokens. On UserPromptSubmit a fact injects only if a prompt term is in its name/description/keywords/domains, or it shares at least two terms with the prompt. `HYPOMNEMA_PROMPT_INJECT=off` turns per-prompt injection off entirely (pull-only mode: the `MEMORY.md` index plus a global index imported from CLAUDE.md, and the model's own reads). The old substring-trigger mechanism is gone; the ranker treats all tokens as relevance signal, not imperative triggers.
 
@@ -145,7 +145,7 @@ Injection is push: the ranker sees the user's prompt, not what the agent
 hits mid-task. `memoryctl recall` is the pull counterpart — an explicit query
 against the same ranker. A recalled fact counts as delivered: it joins the
 session's injected set (the close hook classifies it useful/silent), bumps
-ref_count/recency, and — if it had gone stale — comes back to life.
+its ref_count and staleness clock, and — if it had gone stale — comes back to life.
 
 ## What gets remembered
 
@@ -266,6 +266,27 @@ v1 store.)
 - Before ending session → update the project's continuity file in its native store
 ```
 
+### Recommended: pull-only mode
+
+Turn off the per-prompt push and let the agent read the indexes — Claude
+Code's own design, and the mode the rest of this README describes. In
+`~/.claude/settings.json`:
+
+```json
+{ "env": { "HYPOMNEMA_PROMPT_INJECT": "off" } }
+```
+
+and in your user `~/.claude/CLAUDE.md`:
+
+```markdown
+@~/.claude/memory-global/MEMORY.md
+```
+
+The harness already loads each project's `MEMORY.md`; the import adds the
+global store's index (memoryctl regenerates it on every Stop). SessionStart
+(the core) and SubagentStart are unchanged. Without the variable,
+UserPromptSubmit pushes a gated, ranked top-8 on every prompt — the default.
+
 ### Restart Claude Code
 
 The shims activate on next session start.
@@ -373,11 +394,11 @@ precision_class: ambient  # going uncited carries no silence penalty (use for la
 ---
 ```
 
-`ref_count` and `effectiveness` are sidecar-managed — do not set them by hand. `memoryctl inject` reads them from the sidecar; `memoryctl close` updates them from WAL.
+`ref_count` and `effectiveness` are sidecar-managed — do not set them by hand. `memoryctl close` updates them from WAL; they are diagnostics (`/memboard`, `stats`, `doctor`), and the ranker does not read them.
 
 ## Subagents
 
-Subagents get memory at `SubagentStart` only when their own launch task names it: `memoryctl` reads the agent's `Agent`/`Task` call out of the parent transcript and injects a fact only if its head (name, description, keywords, domains) shares at least two distinct terms with the call's `description` — the task statement, not the long prompt — one of them in its name or keywords; paths, project and home path words, agent-type words, digits and corpus-common terms do not count. Gated facts are ranked to its own top-5 (5 KB cap) before the first turn. A subagent with no call of its own gets nothing. Lookup-only agents (`fork`, `Explore`, `claude-code-guide`, `statusline-setup` by default; override with `HYPOMNEMA_SUBAGENT_SKIP`) are skipped — memory would be noise there; set `HYPOMNEMA_SUBAGENT_SKIP=*` (in `settings.json`'s `env` block, so both subagent hooks inherit it) to opt every subagent out. A subagent's citations are classified at `SubagentStop` under its own key (`<session_id>:<agent_id>`), separate from the parent session, so its usefulness signal never mixes with the parent's. There is still no auto-generated context file (`_agent_context.md` was a v1 artefact) — pass inline only what is specific to the task beyond what the ranker already covers.
+Subagents get memory at `SubagentStart` only when their own launch task names it: `memoryctl` reads the agent's `Agent`/`Task` call out of the parent transcript and injects a fact only if its head (name, description, keywords, domains) shares at least two distinct terms with the call's `description` — the task statement, not the long prompt — one of them in its name or keywords; paths, project and home path words, agent-type words, digits and corpus-common terms do not count. Gated facts are ranked to its own top-5 (5 KB cap) before the first turn. A subagent with no call of its own gets nothing. Lookup-only agents (`fork`, `Explore`, `claude-code-guide`, `statusline-setup` by default; override with `HYPOMNEMA_SUBAGENT_SKIP`) are skipped — memory would be noise there; set `HYPOMNEMA_SUBAGENT_SKIP=*` (in `settings.json`'s `env` block, so both subagent hooks inherit it) to opt every subagent out. A subagent's citations are classified at `SubagentStop` under its own key (`<session_id>:<agent_id>`), separate from the parent session, so its usefulness signal never mixes with the parent's. There is still no auto-generated context file (`_agent_context.md` was a v1 artefact) — pass inline what the subagent needs; it receives only facts its brief names.
 
 ## Design decisions
 

@@ -31,6 +31,7 @@ Conventions:
 6. [precision-class-ambient](precision-class-ambient.md) — rules that shape behaviour without being cited are excluded from the measurable-precision denominator.
 7. [intuition-milestone](intuition-milestone.md) — when `silent_applied / trigger_useful > 1.0` sustained over a 30-day window, the system has crossed the intuition tier; observational milestone, not a release.
 8. [wal-header-v2-marker](wal-header-v2-marker.md) — optional first-line `# hypomnema-wal v2` marker; readers MUST tolerate absence, MAY warn on absence.
+9. [session-start-core](session-start-core.md) — SessionStart delivers a fixed core (freshest continuity, pinned, project feedback) instead of a ranking, after compaction too; SubagentStart gates on the Agent call's description; effectiveness and ref_count leave the score; project feedback never decays.
 
 ### Superseded (v1 mechanics retired in v2.0)
 
@@ -38,10 +39,10 @@ These record historical decisions whose mechanics no longer exist in v2.
 Bodies are preserved as an archive; each carries a superseded banner and a
 `superseded-by:` pointer in its frontmatter.
 
-9. [two-scoring-pipelines](two-scoring-pipelines.md) — two ranking algorithms (SessionStart composite + UserPromptSubmit priority key). → merged into one relevance ranker (`internal/rank`); see `go-primary-bash-shims`.
-10. [bash-go-gradual-port](bash-go-gradual-port.md) — bash as reference implementation with an opt-in Go parity gate. → reversed by `go-primary-bash-shims`; the parity harness (`scripts/parity-check.sh`, `make parity`) is gone.
-11. [substring-triggers-with-negation](substring-triggers-with-negation.md) — reactive injection via substring match with a ±40-character negation window. → replaced by keyword-overlap ranking; `triggers:` and negation windows removed.
-12. [fts5-shadow-retrieval](fts5-shadow-retrieval.md) — FTS5 + BM25 shadow recall signal alongside substring triggers. → shadow pass removed; the unified ranker makes it unnecessary.
-13. [quota-pool](quota-pool.md) — adaptive 12/10/8 per-type injection slot pool plus a 3+3 mistake cap. → replaced by a single relevance-ranked top-8 with no per-type slots.
-14. [cold-start-scoring](cold-start-scoring.md) — Bayesian/TF-IDF components stay dormant until the corpus accumulates signal. → cold-start gates removed; ranking validated directly by `memoryctl ab`.
-15. [scoring-weights](scoring-weights.md) — fixed weights for the five SessionStart components (incl. TF-IDF ×2). → replaced by the v2 additive blend (overlap / ref_count / recency / effectiveness).
+10. [two-scoring-pipelines](two-scoring-pipelines.md) — two ranking algorithms (SessionStart composite + UserPromptSubmit priority key). → merged into one relevance ranker (`internal/rank`); see `go-primary-bash-shims`.
+11. [bash-go-gradual-port](bash-go-gradual-port.md) — bash as reference implementation with an opt-in Go parity gate. → reversed by `go-primary-bash-shims`; the parity harness (`scripts/parity-check.sh`, `make parity`) is gone.
+12. [substring-triggers-with-negation](substring-triggers-with-negation.md) — reactive injection via substring match with a ±40-character negation window. → replaced by keyword-overlap ranking; `triggers:` and negation windows removed.
+13. [fts5-shadow-retrieval](fts5-shadow-retrieval.md) — FTS5 + BM25 shadow recall signal alongside substring triggers. → shadow pass removed; the unified ranker makes it unnecessary.
+14. [quota-pool](quota-pool.md) — adaptive 12/10/8 per-type injection slot pool plus a 3+3 mistake cap. → replaced by a single relevance-ranked top-8 with no per-type slots.
+15. [cold-start-scoring](cold-start-scoring.md) — Bayesian/TF-IDF components stay dormant until the corpus accumulates signal. → cold-start gates removed; ranking validated directly by `memoryctl ab`.
+16. [scoring-weights](scoring-weights.md) — fixed weights for the five SessionStart components (incl. TF-IDF ×2). → replaced by the v2 additive blend, since 2026-11 overlap / recency / project only (see `session-start-core`).

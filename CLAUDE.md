@@ -262,20 +262,15 @@ project-local winning. A fact that is `stale`/retired, hidden by `/memboard`,
 or marked **less** is not core (less keeps it rankable and pullable). There
 is no ranked fill after the core — cwd/git overlap was the source of
 unrelated facts; the rest arrives by pull (the `MEMORY.md` index, `recall`).
-`startup`, `resume`, `clear`, and `compact` without a readable summary inject
-the core only (`resume` keeps the session dedup: facts already in the
-transcript are not re-sent). After `compact` with a summary, the core is
-followed by ranked facts whose **head** (`name`, `description`, `keywords`,
-`domains`) contains at least **two distinct** terms of the summary's focus
-sections (read in full, not the top-40 ranking query) — gated first, then
-ranked, cut to top-8. Terms that do not count toward that gate: path
-components of `$HOME` and of the canonical project root (not those below it —
-a worktree name is the task), digit-only tokens, and head terms present in
-at least `max(5, ⌈10 % × N⌉)` of the N in-scope facts; path-like tokens (with a `/`) in the text are dropped first, and one of the two hits must be in the fact's `name` or `keywords`. `doctor`'s candidate
-check skips facts that are actually core — they are delivered every session
-by design.
+Every source injects the core only — `startup`, `resume`, `clear` and
+`compact` alike. `resume` keeps the session dedup (facts already in the
+transcript are not re-sent); `compact` and `clear` reset it, so the core
+comes back. After compaction the summary itself carries the task state:
+gating the summary on fact heads was measured to pass a median of 187 facts
+on real summaries, so nothing is ranked in. `doctor`'s candidate check skips
+facts that are actually core — they are delivered every session by design.
 
-Everywhere else (UserPromptSubmit, compact SessionStart's tail, SubagentStart,
+Everywhere else (UserPromptSubmit, SubagentStart after its head gate,
 `recall`, `skill-inject`) a single relevance ranker applies (v2 merged the two
 v1 pipelines into one). The score is an additive blend — no single zero
 signal annihilates a candidate:
@@ -304,11 +299,11 @@ demotes stops being injected and then ages out; nothing is staled by fiat.
 
 **Zero-safe:** a new fact with no citation history gets its frontmatter `created` as recency, so it is injectable from day one; no single zero signal annihilates a candidate.
 
-Status filter: `active` and `pinned` only (sidecar-managed `stale` is excluded). Scope filter: only the current project's facts plus the global store — other projects' rows never inject. Result cap: top-8, 8KB total, once per context per fact (again after compaction/`/clear`).
+Status filter: `active`, `pinned` and `candidate` (sidecar-managed `stale` is excluded; `recall` includes it). Scope filter: only the current project's facts plus the global store — other projects' rows never inject. Result cap: top-8, 8KB total, once per context per fact (again after compaction/`/clear`).
 
-`session_keywords` come from prompt tokens (on a compact SessionStart, the compaction summary's focus sections), CWD basename (skipped when CWD is the home directory — its basename is the login name, present in every fact that quotes an absolute path), and git context (branch name, changed filenames, recent commit subjects).
+`session_keywords` come from prompt tokens (for a subagent: its Agent call's description, agent-type words and the prompt's 40 most frequent terms, with no git context), CWD basename (skipped when CWD is the home directory — its basename is the login name, present in every fact that quotes an absolute path), and git context (branch name, changed filenames, recent commit subjects).
 
-**Prompt gate.** On UserPromptSubmit a fact injects only if the prompt names what it is about — a prompt term in its `name`, `description`, `keywords` or `domains` — or shares at least two terms with it anywhere (counted on the fact's own file, never on a same-named fact of another project); a single body-only hit does not pass (in conversational prompts it is mostly a filler word). CWD and git terms still rank but do not pass the gate. A prompt with no relevance terms ("ok", "да, и что там") injects nothing. SessionStart injects the fixed core, gated only for its post-compaction tail (two distinct head terms, above); SubagentStart uses the same head gate over the task statement (the Agent call's description, not its prompt or the ranking query), with the agent type's words excluded too; a subagent with no Agent call of its own has no brief and gets nothing.
+**Prompt gate.** On UserPromptSubmit a fact injects only if the prompt names what it is about — a prompt term in its `name`, `description`, `keywords` or `domains` — or shares at least two terms with it anywhere (counted on the fact's own file, never on a same-named fact of another project); a single body-only hit does not pass (in conversational prompts it is mostly a filler word). CWD and git terms still rank but do not pass the gate. A prompt with no relevance terms ("ok", "да, и что там") injects nothing. SessionStart injects the fixed core and is not gated; SubagentStart has its own head gate over the task statement (the Agent call's description, not its prompt or the ranking query — see "Subagent context"); a subagent with no Agent call of its own has no brief and gets nothing.
 
 **Pull-only mode.** `HYPOMNEMA_PROMPT_INJECT=off` (e.g. in `settings.json` `env`) makes UserPromptSubmit inject nothing — Claude Code's own design: the harness loads the project `MEMORY.md` index every session and the model reads the facts whose descriptions fit the task. The Stop hook and `memoryctl reindex` also write `~/.claude/memory-global/MEMORY.md` — the global store's index with absolute links — so the global store stays visible: import it from the user CLAUDE.md with `@~/.claude/memory-global/MEMORY.md`. A `MEMORY.md` already there that memoryctl did not generate is left untouched. A fact the model reads with the Read tool counts as delivered, so citations keep measuring usefulness. In this mode descriptions are the retrieval signal: write them so the first ~120 characters say what the fact is about.
 
@@ -364,7 +359,7 @@ any injected memory.
 
 ## Subagent context
 
-Subagents receive memory at `SubagentStart` only when the task names it. The gate text is the Agent call's `description` — the task statement; the long prompt only feeds the ranking query, because a whole prompt names dozens of facts (measured on 362 real briefs: median 136 passing facts for the full text, 1 for the description). A fact must carry ≥2 distinct description terms in its name/description/keywords/domains, at least one in the name or keywords. Path-like tokens (anything with a `/`), the project root's and `$HOME`'s path words, agent-type words, digits and corpus-common head terms never count. Gated facts are then ranked on the query and cut to top-5; continuity is not special-cased. No Agent call of its own → nothing is injected; nested and Workflow subagents fall here too (their Agent call is not in the parent transcript). Not served at all: `fork`, `Explore`, `claude-code-guide`, `statusline-setup` (override with `HYPOMNEMA_SUBAGENT_SKIP`, a comma list; set-but-empty means none skipped, and a `*` entry means skip every agent type — set it in `settings.json`'s `env` block to opt every subagent out). The subagent's citations are measured under its own key, separately from the parent's; subagents are told to cite in their final report. Pass inline what the subagent needs; it receives only facts its brief names. `memoryctl recall` run inside a subagent records against the parent session (there is no agent id in the subagent's Bash environment); `skill-inject` run inside a subagent does the same, for the same reason.
+Subagents receive memory at `SubagentStart` only when the task names it. The gate text is the Agent call's `description` — the task statement; the long prompt only feeds the ranking query, because a whole prompt names dozens of facts (measured on 362 real briefs: median 136 passing facts for the full text, 1 for the description). A fact must carry ≥2 distinct description terms in its name/description/keywords/domains, at least one in the name or keywords. Path-like tokens (anything with a `/`), the path words of `$HOME` and of the canonical project root (not those below it — a worktree name is the task), agent-type words, digit-only tokens and corpus-common head terms (in the heads of at least `max(5, ⌈10 % × N⌉)` of the N in-scope facts) never count. Gated facts are then ranked on the query and cut to top-5; continuity is not special-cased. No Agent call of its own → nothing is injected; nested and Workflow subagents fall here too (their Agent call is not in the parent transcript). Not served at all: `fork`, `Explore`, `claude-code-guide`, `statusline-setup` (override with `HYPOMNEMA_SUBAGENT_SKIP`, a comma list; set-but-empty means none skipped, and a `*` entry means skip every agent type — set it in `settings.json`'s `env` block to opt every subagent out). The subagent's citations are measured under its own key, separately from the parent's; subagents are told to cite in their final report. Pass inline what the subagent needs; it receives only facts its brief names. `memoryctl recall` run inside a subagent records against the parent session (there is no agent id in the subagent's Bash environment); `skill-inject` run inside a subagent does the same, for the same reason.
 
 ## Source of truth
 

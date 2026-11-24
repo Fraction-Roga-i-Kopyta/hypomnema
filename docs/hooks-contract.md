@@ -43,14 +43,14 @@ Code envelope (new event types / tool-input fields are tracked separately).
 
 | Event | Matcher | Shim | `memoryctl` verb | Timeout | Purpose |
 |---|---|---|---|:-:|---|
-| `SessionStart` | — | `session-start.sh` | `inject --event=SessionStart` | 15 s | Rank + inject memory at session open |
+| `SessionStart` | — | `session-start.sh` | `inject --event=SessionStart` | 15 s | Inject the fixed core at session open (and after compact/clear) |
 | `UserPromptSubmit` | — | `user-prompt-submit.sh` | `inject --event=UserPromptSubmit` | 10 s | Re-rank + inject for the just-typed prompt |
 | `PreToolUse` | `Write\|Edit` | `pre-tool-write.sh` | `guard` | 10 s | Secrets gate — block credential writes |
 | `PreToolUse` | `Bash` | `pre-tool-bash.sh` | `guard-bash` | 10 s | Block the model's own `memoryctl pin`/`unpin`/`mark` (`mark … done` passes) |
 | `PreToolUse` | `Skill` | `skill-active.sh` | `skill-active` | 10 s | Record the activated skill for this session |
 | `PostToolUse` | `Skill` | `skill-learnings-inject.sh` | `skill-inject` | 10 s | Inject skill-learning facts for the skill |
 | `Stop` | — | `session-stop.sh` | `close` | 10 s | Close the session: classify, reproject, decay, `MEMORY.md` |
-| `SubagentStart` | — | `subagent-start.sh` | `inject --event=SubagentStart --subagent` | 15 s | Rank + inject memory for a subagent's own task |
+| `SubagentStart` | — | `subagent-start.sh` | `inject --event=SubagentStart --subagent` | 15 s | Inject the facts a subagent's task names (head gate, then top-5) |
 | `SubagentStop` | — | `subagent-stop.sh` | `close --subagent` | 10 s | Classify the subagent's own citations under its key |
 
 Compaction is handled on `SessionStart` with `source=compact`; **no
@@ -66,7 +66,7 @@ each verb actually reads:
 
 | Verb | Fields read from stdin |
 |---|---|
-| `inject` | `session_id`, `cwd`, `prompt`, `source` (routes SessionStart's compact/clear re-render and UserPromptSubmit's system/poll_event skip), `transcript_path` (SessionStart only, to find the latest compaction summary when `source=compact`) |
+| `inject` | `session_id`, `cwd`, `prompt`, `source` (routes SessionStart's compact/clear re-render and UserPromptSubmit's system/poll_event skip) |
 | `guard` | `cwd` (resolves the store this invocation guards), `tool_input.file_path`, `tool_input.content` (Write), `tool_input.new_string` (Edit), `tool_input.new_source` (NotebookEdit), `tool_input.edits[].new_string` (MultiEdit) |
 | `guard-bash` | `tool_input.command` |
 | `skill-active` | `session_id`, `tool_input.skill` |
@@ -90,9 +90,9 @@ that Claude Code prepends to the model's context:
 ```
 
 `hookEventName` is `SessionStart`, `UserPromptSubmit`, or `SubagentStart` for
-`inject` (mirroring the `--event` flag). `additionalContext` is the ranked
-`# Memory Context` block (top-8 facts, ≤2.5 KB per body, ≤8 KB total for
-`SessionStart`/`UserPromptSubmit`; top-5, ≤5 KB total for `SubagentStart` —
+`inject` (mirroring the `--event` flag). `additionalContext` is the
+`# Memory Context` block (the fixed core for `SessionStart`, the ranked top-8
+for `UserPromptSubmit` — ≤2.5 KB per body, ≤8 KB total; top-5, ≤5 KB total for `SubagentStart` —
 same ≤2.5 KB per-fact body cap, just a smaller total and a smaller K — see
 §8 below). Empty context is valid and means nothing matched.
 
@@ -171,11 +171,21 @@ interactively (hooks run headless), or block past the configured timeout.
 
 **Timeout:** 15 s.
 
-Reads `session_id`, `cwd`, `prompt` (usually empty at session open), `source`,
-and `transcript_path`. Ranks the current project + global native memory
-against `session_keywords` (prompt tokens, CWD basename, git branch / changed
-files / recent commit subjects) and emits the top-8 as
-`hookSpecificOutput.additionalContext` with `hookEventName: SessionStart`.
+Reads `session_id`, `cwd` and `source`. Does **not** rank: emits the fixed
+core as `hookSpecificOutput.additionalContext` with `hookEventName:
+SessionStart` — in order, (1) the project's freshest `continuity`, (2)
+`status: pinned` facts, project-local then global, (3) project-local
+`type: feedback`; freshest first within a group (later of
+`created`/`modified`), slug tie-break, one fact per file name with
+project-local winning. A fact that is `stale`/retired, hidden by `/memboard`
+or marked *less* is not core. No query terms are computed (no git calls, no
+sidecar overlap query) and nothing ranked follows the core, for every
+`source`. Core facts whose bodies do not fit the 8 KB budget are listed
+after the rendered ones as one-line pointers (`- name — absolute path —
+description`) under `_Not loaded (budget): read if relevant._`; pointers are
+not deliveries (no `inject` row). The Memory-queue line's bytes are reserved
+before core bodies and pointers. Invariant I6.
+
 Of a project's `continuity` facts only the freshest (later of
 `created`/`modified`; on a tie, the lexically greater filename) is a
 candidate — on every inject event, subagents included; older ones are reachable
@@ -185,13 +195,10 @@ through `recall` only.
 context was wiped:
 
 - `source=compact` or `source=clear` — nothing previously rendered survives
-  in the model's context, so this render's dedup resets to nothing: any
-  fact still in the top-8 is re-emitted regardless of what
-  `.runtime/rendered-<session_id>.list` or the injected union hold. On
-  `compact` specifically, ranking uses a bounded query built from the
-  transcript's latest `isCompactSummary` record (focus sections, top-40
-  terms) instead of the empty prompt, so the re-render tracks what the
-  compaction summary is actually about. A slug already logged as `inject`
+  in the model's context, so this render's dedup resets to nothing: the core
+  is re-emitted regardless of what `.runtime/rendered-<session_id>.list` or
+  the injected union hold. After compaction it is the core only — the
+  summary itself carries the task state. A slug already logged as `inject`
   for this session does **not** get a second WAL row on re-render —
   `ref_count` is not inflated by compaction.
 - any other value (or absent, for the normal session-open path) — dedup
@@ -203,10 +210,12 @@ context was wiped:
 
 Contract:
 
-- Exit 0 always; empty `additionalContext` when nothing matched.
+- Exit 0 always — a panic too (`failSafe`, invariant I5); empty
+  `additionalContext` when the core is empty and no task is queued.
 - Writes an `inject` WAL event per **newly-logged** emitted fact (see above —
   a compact/clear re-render of an already-logged fact writes no second row).
-  The sidecar bumps `ref_count` and recency from those events.
+  The sidecar bumps `ref_count` (a diagnostic) and the staleness clock from
+  those events.
 - Records the injected slugs in `.runtime/injected-<session_id>.list` — the
   session union used for WAL `inject`-row dedup and read by `close` to
   classify the whole session's citations — and unions the newly rendered
@@ -481,11 +490,26 @@ on it is kept):
    terms (`inject.TopTerms`) of its `prompt`. The git-context signal (branch,
    changed files, recent commit subjects) is **not** added — the task
    description already names the work (`inject.Input.NoGitSignal`).
-3. Not found: query = agent-type words + top-40 terms of the parent's 3 most
-   recent user prompts (`jsonl.RecentUserPrompts`). The git-context signal
-   **is** kept here, since this fallback carries no task text of its own.
+3. Not found: nothing is injected (exit 0, no stdout; the
+   `rendered-<key>.list` marker is still written). The parent's prompts are
+   the parent's state, not this subagent's task — there is no fallback to
+   them. Nested and Workflow subagents land here: their Agent call is not in
+   the parent transcript.
 4. Agent-type words are omitted for `general-purpose` (~92% of launches) —
    they carry no ranking signal there.
+
+Head gate — before ranking, so facts the brief does not name cannot take the
+K slots. The brief is the call's `description` only (the 3–5 word task
+label; on 362 real briefs the full prompt passed a median of 136 facts, the
+description a median of 1). A fact passes when its head (`name`,
+`description`, `keywords`, `domains`) holds at least **two distinct** brief
+terms, one of them in `name` or `keywords`. Never counted: tokens containing
+`/` (dropped before tokenizing), path components of `$HOME` and of the
+canonical project root (`native.CanonicalRoot` of the store anchor — not
+components below it), agent-type words, digit-only tokens, and head terms
+present in at least `max(5, ⌈10 % × N⌉)` of the N in-scope facts. Body words
+never count. Zero passing facts → nothing is injected. Continuity is not
+special-cased: it passes or fails the same gate.
 
 Budget: `MaxK = 5`, `MaxBytes = 5000` total — smaller than the session budget
 (§1.3), since a subagent's context window is scarcer, but the same ≤2.5 KB
