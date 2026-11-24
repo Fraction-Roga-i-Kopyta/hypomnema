@@ -145,6 +145,7 @@ func Run(claudeDir, memoryDir string, st native.Store, anchor string) Report {
 		checkOversized(claudeDir, st),
 		checkCandidates(memoryDir, claudeDir, st),
 		checkStoreResolution(claudeDir, st, anchor),
+		checkGlobalIndex(claudeDir),
 	)
 	return r
 }
