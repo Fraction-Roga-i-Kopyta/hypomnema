@@ -15,7 +15,7 @@ import (
 )
 
 // learningsForSkill returns up to k skill-learning facts bound to `skill`,
-// ranked by effectiveness+recency (no query → overlap is 0 for all).
+// ranked by overlap+recency (no query → overlap is 0 for all).
 func learningsForSkill(st native.Store, skill string, k int) ([]rank.Scored, map[string]native.MemFile) {
 	files := native.Collect(claudeDir(), st)
 	bySlug := make(map[string]native.MemFile, len(files))

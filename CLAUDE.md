@@ -7,7 +7,7 @@ You are working inside the hypomnema project: a governance + ranking layer for C
 Claude Code v2.1.59+ ships native file memory: the harness stores markdown files in `~/.claude/projects/<slug>/memory/` and injects only a `MEMORY.md` index. Hypomnema adds what native lacks:
 
 - **Ranked auto-injection** — `memoryctl inject` (SessionStart + UserPromptSubmit shims) ranks native facts by relevance and injects the top-K via `additionalContext`, not just a table of contents, and `SubagentStart` (each eligible subagent gets its own ranked top-5 for the task it was launched with).
-- **Effectiveness measurement** — WAL tracks `<cc-memory>` citations (`cite-useful`/`cite-silent`) per session; Bayesian effectiveness feeds back into ranking.
+- **Effectiveness measurement** — WAL tracks `<cc-memory>` citations (`cite-useful`/`cite-silent`) per session; Bayesian effectiveness is a diagnostic, not part of the ranking score.
 - **Decay + lifecycle** — `memoryctl close` (Stop shim) down-ranks stale facts in the sidecar; content is never mutated by hooks.
 - **Secrets gate** — `memoryctl guard` (PreToolUse:Write shim) blocks credential patterns before they land in a memory file; `memoryctl guard-bash` (PreToolUse:Bash shim) blocks the model's own `memoryctl pin`/`unpin`/`mark` calls.
 - **Global store** — `~/.claude/memory-global/` for facts that apply across every project (native memory is per-project only).
@@ -253,13 +253,16 @@ score is an additive blend — no single zero signal annihilates a candidate:
 
 ```
 score = 3.0 × overlap(session_keywords, file keywords+name+description+body)
-      + 1.0 × log10(1 + ref_count) × effGate   # popularity, GATED by proven usefulness
       + 2.0 × recency                  # 1/(1 + days/30) from last USEFUL citation (cite-useful; fallback created)
-      + 2.0 × effectiveness            # Bayesian (pos+1)/(pos+0.25·neg+2); silent counts ¼; neutral 0.5 until signal lands
       + 1.0 if project-local           # project facts outrank global ones on ties
-
-effGate = clamp(2 × effectiveness, 0, 1)   # 1.0 at the prior (0.5); only damps, never amplifies
 ```
+
+`ref_count` and `effectiveness` do not enter the score. They are still computed
+and shown as diagnostics (`/memboard`, `memoryctl stats`, `doctor`,
+`sidecar show`); `close` still recomputes effectiveness
+for them, but the ranker never reads them. Both were circular as
+rank inputs: injection volume feeds `ref_count`, and `cite-silent` (a
+consequence of being injected) feeds `effectiveness`.
 
 **Recency is the model's signal, not the ranker's.** Recency decays from the
 last `cite-useful` date (sidecar `last_useful`), falling back to
@@ -270,13 +273,7 @@ ranker's own output, and keying recency on it let every pick refresh itself.
 Staleness (`MarkStale`) still counts from last injection — a fact the ranker
 demotes stops being injected and then ages out; nothing is staled by fiat.
 
-**Earned popularity:** the `ref_count` term is scaled by `effGate` so a fact
-injected hundreds of times that rarely proved useful cannot coast on volume.
-The gate is neutral (1.0) at the Bayesian prior 0.5 and capped at 1.0, so it
-only *damps* unearned popularity — high-eff facts get the full ref reward, not
-an inflated one.
-
-**Zero-safe:** a new fact with `ref_count=0` and no outcomes gets the neutral prior and its frontmatter `created` as recency — it is injectable from day one. The gate cannot hurt it either: an extreme low `effectiveness` *requires* substantial negative evidence (the prior holds new facts near 0.5), so `effGate≈1.0` until a fact has genuinely under-performed.
+**Zero-safe:** a new fact with no citation history gets its frontmatter `created` as recency, so it is injectable from day one; no single zero signal annihilates a candidate.
 
 Status filter: `active` and `pinned` only (sidecar-managed `stale` is excluded). Scope filter: only the current project's facts plus the global store — other projects' rows never inject. Result cap: top-8, 8KB total, once per context per fact (again after compaction/`/clear`).
 

@@ -41,9 +41,9 @@ Hypomnema adds:
 
 | Gap in native | What hypomnema provides |
 |---|---|
-| Native injects only an index, not ranked content | `memoryctl inject` ranks native facts by relevance (keyword overlap + ref_count + recency + effectiveness) and injects the top-K via `additionalContext` — not just a table of contents |
+| Native injects only an index, not ranked content | `memoryctl inject` ranks native facts by relevance (keyword overlap + recency + project boost) and injects the top-K via `additionalContext` — not just a table of contents |
 | Subagents start with a blank context | `SubagentStart` ranks the store against the subagent's own launch task (or a fallback query) and injects its own top-5, under a key that keeps its citations separate from the parent session |
-| No per-session effectiveness signal | WAL captures `<cc-memory>` citations (`cite-useful`/`cite-silent`) per session; effectiveness feeds back into ranking |
+| No per-session effectiveness signal | WAL captures `<cc-memory>` citations (`cite-useful`/`cite-silent`) per session; effectiveness is tracked as a diagnostic |
 | No decay / lifecycle | `memoryctl close` down-ranks stale facts in the sidecar; nothing is deleted from disk |
 | No secrets gate | `memoryctl guard` (PreToolUse:Write\|Edit) blocks credential patterns before they land in a memory file |
 | No global store | Native memory is per-project only; hypomnema owns `~/.claude/memory-global/` for facts that travel across every project (language rules, universal debugging patterns) |
@@ -114,20 +114,15 @@ A single relevance ranker (merged from the two v1 pipelines) scores every candid
 
 ```
 score = 3.0 × overlap(keywords, file keywords+name+description+body)
-      + 1.0 × log10(1 + ref_count) × effGate   # popularity, GATED by proven usefulness
       + 2.0 × recency                  # 1/(1 + days/30) from last USEFUL citation (cite-useful; fallback created)
-      + 2.0 × effectiveness            # Bayesian (pos+1)/(pos+0.25·neg+2) (silent counts ¼) — neutral 0.5 until signal lands
       + 1.0 × project boost            # project-local facts beat global ones on ties
-
-effGate = clamp(2 × effectiveness, 0, 1)       # 1.0 at the prior 0.5; only damps unearned volume
 ```
+
+`ref_count` and `effectiveness` are not ranking inputs: injection volume feeds the first and `cite-silent` (a consequence of being injected) feeds the second, so using them as rank signals was circular. They stay computed and visible as diagnostics in `/memboard`, `memoryctl stats`, `doctor` and `sidecar show`. `memoryctl ab` replay therefore measures the recency of usefulness only.
 
 Recency tracks the model's use, not the ranker's own output: it decays from the latest `cite-useful` date (sidecar `last_useful`), never from `last_injected`, so a fact can't refresh its own recency merely by being injected.
 
-Since v2.4.0 the `ref_count` reward is gated by `effGate`, so a fact injected
-hundreds of times that rarely proved useful can't coast on volume — the gate is
-neutral at the Bayesian prior and only *damps* unearned popularity, never
-amplifies. The blend is additive and zero-safe: a brand-new fact with `ref_count=0` and no outcome history is still injectable — it scores on overlap, its frontmatter `created` recency and the neutral prior, not zero. Status filter: `active` and `pinned` only; `stale` is skipped (down-ranked in sidecar, still on disk). Scope filter: only the current project's facts plus the global store inject — other projects' rows never leak in. The result is a flat top-8, capped at 2.5KB per body and 8KB total (Claude Code diverts larger hook payloads to a file the model never sees inline), and each fact injects at most once per context (again after a compaction/`/clear` wipes it).
+The blend is additive and zero-safe: a brand-new fact with `ref_count=0` and no outcome history is still injectable — it scores on overlap and its frontmatter `created` recency, not zero. Status filter: `active` and `pinned` only; `stale` is skipped (down-ranked in sidecar, still on disk). Scope filter: only the current project's facts plus the global store inject — other projects' rows never leak in. The result is a flat top-8, capped at 2.5KB per body and 8KB total (Claude Code diverts larger hook payloads to a file the model never sees inline), and each fact injects at most once per context (again after a compaction/`/clear` wipes it).
 
 Keyword overlap is the primary signal. Keywords come from git context (branch name, changed filenames, recent commit messages, CWD basename — skipped for the home directory) plus prompt tokens, on both events. On UserPromptSubmit a fact injects only if a prompt term is in its name/description/keywords/domains, or it shares at least two terms with the prompt; SessionStart is not gated. `HYPOMNEMA_PROMPT_INJECT=off` turns per-prompt injection off entirely (pull-only mode: the `MEMORY.md` index plus a global index imported from CLAUDE.md, and the model's own reads). The old substring-trigger mechanism is gone; the ranker treats all tokens as relevance signal, not imperative triggers.
 
@@ -382,7 +377,7 @@ Subagents get their own ranked memory at `SubagentStart`: `memoryctl` builds a q
 
 **Why a global store?** Native memory is per-project only. Rules like "always respond in Russian" or "list 2-3 root causes before the first fix" apply everywhere. `~/.claude/memory-global/` is hypomnema-owned, injected alongside project-local facts, with the same ranking pipeline.
 
-**Why spaced repetition (ref_count + effectiveness)?** Raw frequency is noisy (a record injected 50 times during a benchmark run isn't 50× more useful). Effectiveness (Bayesian `(pos+1)/(pos+0.25·neg+2)`; cite-silent counts ¼ — the model under-cites, so silence is weak evidence) rewards records that actually help and down-ranks those that don't. The neutral prior means a new fact starts injectable, not suppressed.
+**Why are ref_count and effectiveness not in the score?** Raw frequency is noisy (a record injected 50 times during a benchmark run isn't 50× more useful) and both signals are circular: being injected raises `ref_count` and produces `cite-silent`. Effectiveness (Bayesian `(pos+1)/(pos+0.25·neg+2)`; cite-silent counts ¼) is kept as a diagnostic; only recency of the last *useful* citation feeds the rank.
 
 **Why not multiple pipelines?** v1 had two: a composite-score SessionStart pipeline and a substring-trigger UserPromptSubmit pipeline. They solved similar problems with different mechanics, creating maintenance overhead and edge-case conflicts. v2 merges them: one ranker, all tokens (git context + prompt) as relevance signal. The old negation-window mechanism disappears.
 
@@ -404,7 +399,7 @@ Yes — native memory files are plain markdown in `~/.claude/projects/<slug>/mem
 `inject` runs well under 1s warm on a ~200-file corpus. Shims are ~10 lines of bash — they're not the bottleneck. `close` is the heavier operation (classification + sidecar reproject + index/profile regen) and runs on every Stop, off the prompt hot path.
 
 **What happens if the sidecar is missing or corrupted?**
-`memoryctl` rebuilds it from WAL + native frontmatter scan. During rebuild, the ranker runs in degraded mode (overlap over native files only; ref_count/recency/effectiveness neutral). Injection still happens — degraded, not absent.
+`memoryctl` rebuilds it from WAL + native frontmatter scan. During rebuild, the ranker runs in degraded mode (overlap over native files only; recency neutral). Injection still happens — degraded, not absent.
 
 ## Contributing
 
