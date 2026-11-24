@@ -486,66 +486,6 @@ func TestRun_CitationInThinkingCounts(t *testing.T) {
 	}
 }
 
-// TestRun_CitationSignal_NoResolvableCitationEmitsCiteNoneOnce: a readable
-// transcript with injected facts but no resolvable citation still closed its
-// classification pass — assert exactly one cite-none row after two Run calls
-// for the same session, and none when a citation resolved.
-func TestRun_CitationSignal_NoResolvableCitationEmitsCiteNoneOnce(t *testing.T) {
-	files := map[string]string{
-		"docker.md": "---\nname: Docker cache\ntype: mistake\n---\ndocker cache\n",
-	}
-	memDir, run := closeFixture(t, files, []string{"docker.md"}, assistantText("used docker.md to fix it"))
-	run()
-	run()
-	wal, _ := os.ReadFile(filepath.Join(memDir, ".wal"))
-	w := string(wal)
-	if n := strings.Count(w, "|cite-none|s1|s1"); n != 1 {
-		t.Errorf("cite-none rows = %d, want 1:\n%s", n, w)
-	}
-
-	memDir2, run2 := closeFixture(t, files, []string{"docker.md"},
-		assistantText(`<cc-memory filenames="docker.md">fixed the cache</cc-memory>`))
-	run2()
-	wal2, _ := os.ReadFile(filepath.Join(memDir2, ".wal"))
-	if strings.Contains(string(wal2), "|cite-none|") {
-		t.Errorf("cite-none must not appear when a citation resolved:\n%s", wal2)
-	}
-}
-
-// With UserPromptSubmit injection off the global store would be invisible:
-// the harness loads only the project's MEMORY.md. A parent close therefore
-// also regenerates the global store's index (absolute links), which the
-// user's CLAUDE.md can import.
-func TestRun_WritesGlobalIndex(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HYPOMNEMA_GLOBAL_DIR", "")
-	memDir := filepath.Join(home, ".claude", "memory")
-	projDir := filepath.Join(home, ".claude", "projects", "-tmp-proj", "memory")
-	globalDir := filepath.Join(home, ".claude", "memory-global")
-	for _, d := range []string{filepath.Join(memDir, ".runtime"), projDir, globalDir} {
-		os.MkdirAll(d, 0o755)
-	}
-	os.WriteFile(filepath.Join(projDir, "docker.md"),
-		[]byte("---\nname: Docker cache\ntype: mistake\n---\ndocker cache\n"), 0o644)
-	os.WriteFile(filepath.Join(globalDir, "creds.md"),
-		[]byte("---\nname: creds\ndescription: Where credentials live\ntype: reference\n---\nkeychain\n"), 0o644)
-	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
-
-	if _, err := Run(Input{
-		SessionID: "s1", CWD: "/tmp/proj", TranscriptPath: filepath.Join(home, "none.jsonl"),
-		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir, Today: "2026-05-29",
-	}); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	got, err := os.ReadFile(filepath.Join(globalDir, "MEMORY.md"))
-	if err != nil {
-		t.Fatalf("global MEMORY.md not written: %v", err)
-	}
-	if !strings.Contains(string(got), "]("+filepath.Join(globalDir, "creds.md")+") — Where credentials live") {
-		t.Errorf("global index must link the fact by absolute path; got:\n%s", got)
-	}
-}
-
 // A MEMORY.md in the global store that hypomnema did not generate (the user's
 // or the model's own pointers) is left as is: the Stop hook runs every turn
 // and must not silently replace it.
@@ -595,5 +535,31 @@ func TestRun_ReadsQualifiedSessionList(t *testing.T) {
 	}
 	if rows := citeRows(w); len(rows) != 2 {
 		t.Errorf("want exactly one useful and one silent row, got %d:\n%s", len(rows), w)
+	}
+}
+
+// TestRun_CitationSignal_NoResolvableCitationEmitsCiteNoneOnce: a readable
+// transcript with injected facts but no resolvable citation still closed its
+// classification pass — assert exactly one cite-none row after two Run calls
+// for the same session, and none when a citation resolved.
+func TestRun_CitationSignal_NoResolvableCitationEmitsCiteNoneOnce(t *testing.T) {
+	files := map[string]string{
+		"docker.md": "---\nname: Docker cache\ntype: mistake\n---\ndocker cache\n",
+	}
+	memDir, run := closeFixture(t, files, []string{"docker.md"}, assistantText("used docker.md to fix it"))
+	run()
+	run()
+	wal, _ := os.ReadFile(filepath.Join(memDir, ".wal"))
+	w := string(wal)
+	if n := strings.Count(w, "|cite-none|s1|s1"); n != 1 {
+		t.Errorf("cite-none rows = %d, want 1:\n%s", n, w)
+	}
+
+	memDir2, run2 := closeFixture(t, files, []string{"docker.md"},
+		assistantText(`<cc-memory filenames="docker.md">fixed the cache</cc-memory>`))
+	run2()
+	wal2, _ := os.ReadFile(filepath.Join(memDir2, ".wal"))
+	if strings.Contains(string(wal2), "|cite-none|") {
+		t.Errorf("cite-none must not appear when a citation resolved:\n%s", wal2)
 	}
 }

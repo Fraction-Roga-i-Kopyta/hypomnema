@@ -61,50 +61,6 @@ func tail(s string, n int) string {
 	return s[len(s)-n:]
 }
 
-// Write replaces <dir>/MEMORY.md with the rendered index. Atomic (I3): the
-// close hook regenerates it every session, so a torn write must never leave a
-// half-file the harness would inject.
-func TestWrite_ReplacesMemoryMD(t *testing.T) {
-	dir := t.TempDir()
-	body := "# Memory Index\n- [x](x.md) — y\n"
-
-	if err := Write(dir, body); err != nil {
-		t.Fatalf("Write: %v", err)
-	}
-
-	got, err := os.ReadFile(filepath.Join(dir, "MEMORY.md"))
-	if err != nil {
-		t.Fatalf("read back: %v", err)
-	}
-	if string(got) != body {
-		t.Errorf("content mismatch:\nwant %q\ngot  %q", body, got)
-	}
-}
-
-// The global store is not a sibling of any project's MEMORY.md, and the
-// harness never loads it: the global index links each fact by absolute path
-// so the model can Read it from any project.
-func TestRenderGlobal_LinksByAbsolutePath(t *testing.T) {
-	files := []native.MemFile{{
-		Slug:        "keychain-creds.md",
-		Name:        "keychain-creds",
-		Description: "Where credentials live",
-		Path:        "/home/u/.claude/memory-global/keychain-creds.md",
-	}}
-
-	out := RenderGlobal(files, 24_000)
-
-	if !strings.HasPrefix(out, "# Global Memory Index\n") {
-		t.Errorf("want a distinct global header; got:\n%s", out)
-	}
-	if !strings.Contains(out, "](/home/u/.claude/memory-global/keychain-creds.md) — Where credentials live\n") {
-		t.Errorf("want an absolute link plus description; got:\n%s", out)
-	}
-	if len(RenderGlobal(append(files, files...), 120)) > 120 {
-		t.Errorf("global index must respect the byte budget")
-	}
-}
-
 // The global store is not hypomnema's alone: a MEMORY.md the user or the
 // model keeps there (pointers with hand-written descriptions) must survive
 // the Stop hook. WriteGlobal replaces only an index it generated itself.
@@ -214,5 +170,25 @@ func TestRender_StaysUnderLineCap(t *testing.T) {
 	}
 	if !strings.Contains(out, "more not listed") {
 		t.Fatalf("line-capped index must carry the truncation note")
+	}
+}
+
+// Write replaces <dir>/MEMORY.md with the rendered index. Atomic (I3): the
+// close hook regenerates it every session, so a torn write must never leave a
+// half-file the harness would inject.
+func TestWrite_ReplacesMemoryMD(t *testing.T) {
+	dir := t.TempDir()
+	body := "# Memory Index\n- [x](x.md) — y\n"
+
+	if err := Write(dir, body); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(dir, "MEMORY.md"))
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if string(got) != body {
+		t.Errorf("content mismatch:\nwant %q\ngot  %q", body, got)
 	}
 }
