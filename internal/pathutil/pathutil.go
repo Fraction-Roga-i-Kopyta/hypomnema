@@ -92,3 +92,14 @@ func SafeFileName(s string) string {
 		}
 	}, s)
 }
+
+// IsHomeDir reports whether dir names the current user's home directory,
+// ignoring a trailing separator or other non-canonical spelling. An empty dir
+// or an unresolvable home never matches.
+func IsHomeDir(dir string) bool {
+	if dir == "" {
+		return false
+	}
+	home, err := os.UserHomeDir()
+	return err == nil && home != "" && filepath.Clean(dir) == filepath.Clean(home)
+}

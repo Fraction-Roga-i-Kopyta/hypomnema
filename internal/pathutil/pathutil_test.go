@@ -38,3 +38,25 @@ func TestSafeFileName(t *testing.T) {
 		}
 	}
 }
+
+func TestIsHomeDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	for dir, want := range map[string]bool{
+		home:                 true,
+		home + "/":           true,
+		home + "/./":         true,
+		home + "/project":    false,
+		home + "/project/..": true,
+		"":                   false,
+		"/":                  false,
+	} {
+		if got := IsHomeDir(dir); got != want {
+			t.Errorf("IsHomeDir(%q) = %v, want %v", dir, got, want)
+		}
+	}
+	t.Setenv("HOME", "")
+	if IsHomeDir("/") {
+		t.Error("an unset HOME must match nothing")
+	}
+}

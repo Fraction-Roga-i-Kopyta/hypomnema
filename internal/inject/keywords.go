@@ -4,11 +4,11 @@ package inject
 
 import (
 	"context"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"time"
 
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/pathutil"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/tokenize"
 )
 
@@ -42,27 +42,11 @@ func keywords(cwd, prompt string, withGit bool) []string {
 		}
 	}
 	add(tokenize.Relevance(prompt))
-	// The home directory's basename is the login name, not a project: it
-	// occurs in every fact that quotes an absolute path, so as a term it
-	// matched an arbitrary slice of the corpus (and was the only SessionStart
-	// term for sessions launched from ~).
-	if !isHomeDir(cwd) {
-		add(tokenize.Relevance(filepath.Base(cwd)))
-	}
+	add(dirHint(cwd))
 	if withGit {
 		add(gitSignal(cwd))
 	}
 	return out
-}
-
-// isHomeDir reports whether cwd is the user's home directory. An unknown
-// home (no $HOME) is never a match, so the basename hint stays on.
-func isHomeDir(cwd string) bool {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" || cwd == "" {
-		return false
-	}
-	return filepath.Clean(cwd) == filepath.Clean(home)
 }
 
 // gitSignal returns tokenized "what am I working on" context from cwd's git
@@ -90,4 +74,16 @@ func gitSignal(cwd string) []string {
 	toks = append(toks, tokenize.Relevance(git("status", "--porcelain"))...)
 	toks = append(toks, tokenize.Relevance(git("log", "-3", "--format=%s"))...)
 	return toks
+}
+
+// dirHint is the cwd basename as a weak project hint. From the home
+// directory there is no project to hint at: its basename is the login name,
+// which every fact quoting an absolute path contains, so the term would
+// match an arbitrary share of the corpus — and at SessionStart it could be
+// the only term there is.
+func dirHint(cwd string) []string {
+	if pathutil.IsHomeDir(cwd) {
+		return nil
+	}
+	return tokenize.Relevance(filepath.Base(cwd))
 }
