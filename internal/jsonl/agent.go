@@ -6,20 +6,16 @@ import (
 	"encoding/json"
 	"io"
 	"os"
-	"strings"
 )
 
-// agentTailBytes bounds how much of a parent transcript the subagent helpers
-// scan: only the newest part can hold the Agent call that is starting right
-// now or the latest user prompts, and the SubagentStart hook's cost must not
-// grow with session length.
+// agentTailBytes bounds how much of a parent transcript AgentCalls scans:
+// only the newest part can hold the Agent call that is starting right now,
+// and the SubagentStart hook's cost must not grow with session length.
 const agentTailBytes = 2 << 20
 
 type agentRecord struct {
-	Type             string `json:"type"`
-	IsMeta           bool   `json:"isMeta"`
-	IsCompactSummary bool   `json:"isCompactSummary"`
-	Message          *struct {
+	Type    string `json:"type"`
+	Message *struct {
 		Content json.RawMessage `json:"content"`
 	} `json:"message"`
 }
@@ -102,67 +98,6 @@ func AgentCalls(path, agentType, agentID string) (pending []AgentCall, own *Agen
 		}
 	}
 	return pending, own, true
-}
-
-// RecentUserPrompts returns up to n of the newest human-typed prompts in the
-// tail of a transcript, oldest first, newline-joined. A prompt is a user
-// record that is neither meta nor a compaction summary and carries no
-// tool_result; text parts that start with "<" (system reminders, task
-// notifications, command wrappers) are machine text and are dropped, and a
-// record with no remaining text is skipped.
-func RecentUserPrompts(path string, n int) (string, bool) {
-	lines, readable := readTailLines(path, agentTailBytes)
-	if !readable || n <= 0 {
-		return "", false
-	}
-	var picked []string
-	for i := len(lines) - 1; i >= 0 && len(picked) < n; i-- {
-		var rec agentRecord
-		if json.Unmarshal(lines[i], &rec) != nil || rec.Type != "user" || rec.Message == nil ||
-			rec.IsMeta || rec.IsCompactSummary {
-			continue
-		}
-		if text, ok := humanText(rec.Message.Content); ok {
-			picked = append(picked, text)
-		}
-	}
-	if len(picked) == 0 {
-		return "", false
-	}
-	for i, j := 0, len(picked)-1; i < j; i, j = i+1, j-1 {
-		picked[i], picked[j] = picked[j], picked[i]
-	}
-	return strings.Join(picked, "\n"), true
-}
-
-// humanText extracts the non-machine text of a user message content (a
-// string or content parts). ok is false for tool_result records and for
-// records whose every text starts with "<".
-func humanText(raw json.RawMessage) (string, bool) {
-	var texts []string
-	var s string
-	if json.Unmarshal(raw, &s) == nil {
-		texts = []string{s}
-	} else {
-		for _, p := range contentParts(raw) {
-			switch p.Type {
-			case "tool_result":
-				return "", false
-			case "text":
-				texts = append(texts, p.Text)
-			}
-		}
-	}
-	var kept []string
-	for _, t := range texts {
-		if t = strings.TrimSpace(t); t != "" && !strings.HasPrefix(t, "<") {
-			kept = append(kept, t)
-		}
-	}
-	if len(kept) == 0 {
-		return "", false
-	}
-	return strings.Join(kept, "\n"), true
 }
 
 func contentParts(raw json.RawMessage) []agentPart {

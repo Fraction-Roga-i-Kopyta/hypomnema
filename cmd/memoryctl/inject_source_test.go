@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 )
 
 func TestInject_SystemPromptSkipped(t *testing.T) {
@@ -104,106 +106,90 @@ func writeSummaryTranscript(t *testing.T, summary string) string {
 	return p
 }
 
-func TestInject_CompactReinjectsRankedBySummary(t *testing.T) {
+// After compaction SessionStart injects the core only: the core comes back
+// despite session dedup, and a fact the summary names (twice, in its head)
+// stays out — the summary carries the task state, the rest is pulled.
+func TestInject_CompactInjectsCoreOnly(t *testing.T) {
 	f := newStoreFixture(t)
-	f.fact(t, "/tmp/proj", "dockercache", "docker layer cache")
-	f.fact(t, "/tmp/proj", "pgmigration", "postgres migration lock")
+	f.factDesc(t, "/tmp/proj", "pgmigration", "postgres migration lock")
+	f.factFM(t, "/tmp/proj", "lintrule", "name: lintrule\ntype: feedback", "always run make lint")
 	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
-
-	// Earlier in the session both facts were injected.
-	runStdin(t, f.env, `{"session_id":"s1","cwd":"/tmp/proj","prompt":"dockercache pgmigration"}`,
+	runStdin(t, f.env, `{"session_id":"s1","cwd":"/tmp/proj","source":"startup"}`,
+		"inject", "--event=SessionStart")
+	runStdin(t, f.env, `{"session_id":"s1","cwd":"/tmp/proj","prompt":"pgmigration postgres lock"}`,
 		"inject", "--event=UserPromptSubmit")
 
-	transcript := writeSummaryTranscript(t, "We were fixing the pgmigration postgres lock.")
+	transcript := writeSummaryTranscript(t, "8. Current Work:\n   Fixing the pgmigration postgres migration lock; the postgres lock times out.")
 	out, _, code := runStdin(t, f.env,
 		`{"session_id":"s1","cwd":"/tmp/proj","source":"compact","transcript_path":"`+transcript+`"}`,
 		"inject", "--event=SessionStart")
 	ctx := additionalContext(t, out)
-	if code != 0 || !strings.Contains(ctx, "postgres migration lock") {
-		t.Fatalf("compact must re-inject despite session dedup; code=%d ctx=%q", code, ctx)
+	if code != 0 || !strings.Contains(ctx, "always run make lint") {
+		t.Fatalf("the core must come back after compaction despite session dedup; code=%d ctx=%q", code, ctx)
 	}
-	if d := strings.Index(ctx, "docker layer cache"); d >= 0 && d < strings.Index(ctx, "postgres migration lock") {
-		t.Errorf("summary-matching fact must rank first; ctx=%q", ctx)
+	if strings.Contains(ctx, "postgres migration lock") {
+		t.Errorf("compact injects the core only; a fact the summary names must stay out: %q", ctx)
 	}
 	// ref_count counts inject rows: a re-render after compaction must not add
 	// a second row for a fact already logged this session.
 	wal, _ := os.ReadFile(filepath.Join(f.mem, ".wal"))
-	if n := strings.Count(string(wal), "\x1fpgmigration.md|s1"); n != 1 {
+	if n := strings.Count(string(wal), "\x1flintrule.md|s1"); n != 1 {
 		t.Errorf("expected exactly 1 inject row per fact per session, got %d:\n%s", n, wal)
-	}
-}
-
-func TestInject_CompactLongSummaryDoesNotRewardLongBodies(t *testing.T) {
-	f := newStoreFixture(t)
-	noise := []string{"handler", "module", "package", "registry", "adapter", "builder", "config", "schema",
-		"router", "service", "gateway", "manifest", "pipeline", "artifact", "scheduler", "executor",
-		"listener", "resolver", "provider", "factory", "renderer", "tokenizer", "parser", "encoder",
-		"decoder", "buffer", "cursor", "session", "profile", "catalog", "ledger", "journal", "snapshot",
-		"cluster", "replica", "shard", "bucket", "channel", "socket", "payload"}
-	inventory := strings.Repeat(strings.Join(noise, " ")+" ", 8)
-	f.fact(t, "/tmp/proj", "buildjournal", inventory) // long, irrelevant
-	f.fact(t, "/tmp/proj", "pgmigration", "postgres migration lock")
-	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
-	// Markdown-styled headers, as in ~half of live summaries.
-	summary := strings.Join([]string{
-		"Summary:",
-		"1. **Primary Request and Intent:**",
-		"   Fix the pgmigration postgres lock.",
-		"3. **Files and Code Sections:**",
-		"   " + inventory,
-		"## 8. Current Work",
-		"   Retrying pgmigration after the postgres lock timeout.",
-	}, "\n")
-	transcript := writeSummaryTranscript(t, summary)
-	out, _, _ := runStdin(t, f.env,
-		`{"session_id":"s2","cwd":"/tmp/proj","source":"compact","transcript_path":"`+transcript+`"}`,
-		"inject", "--event=SessionStart")
-	ctx := additionalContext(t, out)
-	p, j := strings.Index(ctx, "postgres migration lock"), strings.Index(ctx, "## buildjournal")
-	if p < 0 || (j >= 0 && j < p) {
-		t.Errorf("targeted fact must outrank the long inventory-matching one; ctx=%q", ctx)
-	}
-}
-
-func TestInject_CompactWithoutSummaryStillInjects(t *testing.T) {
-	f := newStoreFixture(t)
-	f.fact(t, "/tmp/proj", "dockercache", "docker layer cache")
-	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
-	runStdin(t, f.env, `{"session_id":"s1","cwd":"/tmp/proj","prompt":"dockercache"}`,
-		"inject", "--event=UserPromptSubmit")
-	transcript := filepath.Join(t.TempDir(), "s1.jsonl")
-	os.WriteFile(transcript, []byte(`{"type":"system","subtype":"compact_boundary"}`+"\n"), 0o644)
-	out, _, _ := runStdin(t, f.env,
-		`{"session_id":"s1","cwd":"/tmp/proj","source":"compact","transcript_path":"`+transcript+`"}`,
-		"inject", "--event=SessionStart")
-	if !strings.Contains(additionalContext(t, out), "docker layer cache") {
-		t.Errorf("no summary yet → still re-inject on git/cwd context; got %q", out)
 	}
 }
 
 func TestInject_ClearReinjects(t *testing.T) {
 	f := newStoreFixture(t)
 	f.fact(t, "/tmp/proj", "dockercache", "docker layer cache")
+	f.factFM(t, "/tmp/proj", "lintrule", "name: lintrule\ntype: feedback", "always run make lint")
 	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
+	runStdin(t, f.env, `{"session_id":"s1","cwd":"/tmp/proj","source":"startup"}`,
+		"inject", "--event=SessionStart")
 	runStdin(t, f.env, `{"session_id":"s1","cwd":"/tmp/proj","prompt":"dockercache"}`,
 		"inject", "--event=UserPromptSubmit")
 	out, _, _ := runStdin(t, f.env, `{"session_id":"s1","cwd":"/tmp/proj","source":"clear"}`,
 		"inject", "--event=SessionStart")
-	if !strings.Contains(additionalContext(t, out), "docker layer cache") {
-		t.Errorf("/clear dropped the context; the fact must come back; got %q", out)
+	ctx := additionalContext(t, out)
+	if !strings.Contains(ctx, "always run make lint") {
+		t.Errorf("/clear dropped the context; the core must come back; got %q", ctx)
+	}
+	if strings.Contains(ctx, "docker layer cache") {
+		t.Errorf("/clear has no query; a non-core fact must not come back; got %q", ctx)
 	}
 }
 
 func TestInject_ResumeKeepsDedup(t *testing.T) {
 	f := newStoreFixture(t)
 	f.fact(t, "/tmp/proj", "dockercache", "docker layer cache")
+	f.factFM(t, "/tmp/proj", "lintrule", "name: lintrule\ntype: feedback", "always run make lint")
 	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
+	runStdin(t, f.env, `{"session_id":"s1","cwd":"/tmp/proj","source":"startup"}`,
+		"inject", "--event=SessionStart")
 	runStdin(t, f.env, `{"session_id":"s1","cwd":"/tmp/proj","prompt":"dockercache"}`,
 		"inject", "--event=UserPromptSubmit")
 	out, _, _ := runStdin(t, f.env, `{"session_id":"s1","cwd":"/tmp/proj","source":"resume"}`,
 		"inject", "--event=SessionStart")
-	if strings.Contains(additionalContext(t, out), "docker layer cache") {
-		t.Errorf("resume restores the conversation; dedup must still apply: %q", out)
+	ctx := additionalContext(t, out)
+	if strings.Contains(ctx, "docker layer cache") || strings.Contains(ctx, "always run make lint") {
+		t.Errorf("resume restores the conversation; dedup must still apply: %q", ctx)
+	}
+}
+
+// A fresh session injects the core only: a fact that merely matches the cwd
+// basename stays out.
+func TestInject_StartupSourceInjectsCoreOnly(t *testing.T) {
+	f := newStoreFixture(t)
+	f.fact(t, "/tmp/proj", "proj", "proj layout notes")
+	f.factFM(t, "/tmp/proj", "lintrule", "name: lintrule\ntype: feedback", "always run make lint")
+	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
+	out, _, code := runStdin(t, f.env, `{"session_id":"s1","cwd":"/tmp/proj","source":"startup"}`,
+		"inject", "--event=SessionStart")
+	ctx := additionalContext(t, out)
+	if code != 0 || !strings.Contains(ctx, "always run make lint") {
+		t.Fatalf("the core must inject at startup; code=%d ctx=%q", code, ctx)
+	}
+	if strings.Contains(ctx, "proj layout notes") {
+		t.Errorf("a cwd-matching non-core fact must not inject at startup: %q", ctx)
 	}
 }
 
@@ -234,22 +220,16 @@ func TestInject_RenderDedupUsesCurrentContextNotSessionUnion(t *testing.T) {
 func TestInject_CompactResetsRenderedList(t *testing.T) {
 	f := newStoreFixture(t)
 	f.fact(t, "/tmp/proj", "prealpha", "pre alpha fact")
-	f.fact(t, "/tmp/proj", "postbeta", "post beta fact")
+	f.factDesc(t, "/tmp/proj", "postbeta", "post beta fact")
+	f.factFM(t, "/tmp/proj", "lintrule", "name: lintrule\ntype: feedback", "always run make lint")
 	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
 	runStdin(t, f.env, `{"session_id":"s1","cwd":"/tmp/proj","prompt":"prealpha postbeta"}`, "inject", "--event=UserPromptSubmit")
-	transcript := writeSummaryTranscript(t, "8. Current Work:\n   postbeta")
-	out, _, _ := runStdin(t, f.env, `{"session_id":"s1","cwd":"/tmp/proj","source":"compact","transcript_path":"`+transcript+`"}`, "inject", "--event=SessionStart")
-	ctx := additionalContext(t, out)
+	transcript := writeSummaryTranscript(t, "8. Current Work:\n   postbeta beta")
+	runStdin(t, f.env, `{"session_id":"s1","cwd":"/tmp/proj","source":"compact","transcript_path":"`+transcript+`"}`, "inject", "--event=SessionStart")
 	rendered, _ := os.ReadFile(filepath.Join(f.mem, ".runtime", "rendered-s1.list"))
-	got := strings.Fields(string(rendered))
-	// The rendered list is exactly what the compact render showed.
-	for _, s := range got {
-		if !strings.Contains(ctx, strings.TrimSuffix(s, ".md")) {
-			t.Errorf("rendered list names %s which the compact render did not show; ctx=%q", s, ctx)
-		}
-	}
-	if len(got) == 0 {
-		t.Errorf("compact render must record what it showed")
+	// The rendered list is exactly what the compact render showed: the core.
+	if got := strings.Join(strings.Fields(string(rendered)), ","); got != "lintrule.md" {
+		t.Errorf("rendered list after compact = %q, want the core only (lintrule.md)", got)
 	}
 }
 
@@ -264,4 +244,20 @@ func TestInject_MissingRenderedListFallsBackToUnion(t *testing.T) {
 	if strings.Contains(additionalContext(t, out), "pre alpha fact") {
 		t.Errorf("a session that predates the rendered list must keep union dedup: %q", out)
 	}
+}
+
+// factFM writes a fact with explicit frontmatter lines into projectDir's store.
+func (f storeFixture) factFM(t *testing.T, projectDir, slug, fm, body string) {
+	t.Helper()
+	dir := native.StoreFor(f.claude, projectDir).Dir
+	os.MkdirAll(dir, 0o755)
+	os.WriteFile(filepath.Join(dir, slug+".md"), []byte("---\n"+fm+"\n---\n"+body+"\n"), 0o644)
+}
+
+// factDesc is fact() with the body also as the description, so the head
+// names the body's terms (the gate reads the head only, and needs a name or
+// keyword hit, so the description words are keywords too).
+func (f storeFixture) factDesc(t *testing.T, projectDir, name, desc string) {
+	t.Helper()
+	f.factFM(t, projectDir, name, "name: "+name+"\ndescription: "+desc+"\ntype: mistake\nkeywords: ["+name+", "+strings.Join(strings.Fields(desc), ", ")+"]", desc)
 }

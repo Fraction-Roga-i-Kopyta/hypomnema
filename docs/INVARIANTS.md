@@ -200,6 +200,11 @@ Observability shifts to WAL events + `memoryctl doctor`. See ADR
 - Go internal funcs called by `cmd/memoryctl` from hooks: the CLI
   wrapper must catch errors and exit 0 (`runInject` does this: an
   error from `inject.Run` exits 0 with no output).
+- Panics: Go exits 2 on an unrecovered panic, and the shims `exec`
+  memoryctl, so a panic would surface as exit 2 — which blocks the prompt
+  on UserPromptSubmit. The `inject` dispatch (SessionStart,
+  UserPromptSubmit and, through it, SubagentStart) runs under `failSafe`
+  (`cmd/memoryctl/inject.go`): a panic exits 0 with no output.
 
 **How to check.** Mechanized. `memoryctl audit invariants` runs
 `hookFailSafeChecker` (`internal/invariants`), which scans `hooks/**/*.sh`
@@ -211,30 +216,50 @@ only whitelisted fail-fast script is the test runner
 
 ---
 
-## I6 — `pinned` does not reserve an injection slot
+## I6 — The SessionStart core is delivered regardless of rank
 
-**What.** `status: pinned` protects a memory file from decay (it never
-goes `stale`). It does NOT reserve an injection slot. Pinned records
-compete in the same single relevance-ranked top-8 as `status: active`
-records; ordering is by score, not status priority.
+**What.** Every SessionStart (`startup`, `resume`, `clear`, `compact`)
+delivers a fixed core instead of a ranking: the project's freshest
+`continuity`, then `status: pinned` facts (project-local, then global),
+then project-local `type: feedback` — freshest first within a group, one
+fact per file name with project-local winning. Rank never decides
+membership. Eligibility still applies: a fact that is `stale` or retired in
+the sidecar, hidden by `/memboard`, or marked **less** is not core. Core
+facts whose bodies do not fit the 8 KB budget are listed as one-line
+pointer lines (`- name — absolute path — description`), which are **not**
+deliveries (no `inject` row); the Memory-queue line's bytes are reserved
+before core bodies and pointers. Nothing ranked follows the core, after
+compaction included. Outside SessionStart (UserPromptSubmit, SubagentStart,
+`recall`, `skill-inject`) `pinned` reserves nothing: facts compete on score.
 
-**Why.** Pinned-as-injection-guarantee is a tempting interpretation but
-would break pure-by-score ranking. v2 injects one ranked top-8 across all
-types with no per-type quotas — the adaptive 12/10/8 slot pool was retired
-(see superseded ADR [`quota-pool`](decisions/quota-pool.md)). Pinned buys
-decay immunity, not a reserved seat.
+**Why.** The core is what the agent marked as useful at session start
+(where the work stopped, the pinned project card, the user's rules for
+this project); ranked fill on cwd/git overlap was the source of unrelated
+facts. A core fact shapes every turn and is rarely quoted, so its silence
+is not evidence of uselessness. See ADR
+[`session-start-core`](decisions/session-start-core.md); the v1 per-type
+slot pool it does not revive is the superseded
+[`quota-pool`](decisions/quota-pool.md).
 
 **Where to enforce.**
 
-- `internal/rank` / `internal/inject` ranking pipeline. Status gates
-  eligibility (`stale` is excluded) but does not reserve a slot.
-- `internal/doctor` and any analysis tool — if it reports «pinned X not
-  injected this session», that is **not a bug**, just a ranking outcome
-  (the fact fell below the top-8).
+- `internal/inject/core.go` (`coreFacts`, `coreEligible`) — membership and
+  order; `continuity` enters only through the freshest-continuity slot.
+- `internal/inject/inject.go` (`Run`'s SessionStart branch,
+  `overflowCore`/`appendOverflow`, the queue reserve) — render, pointers,
+  no ranked tail.
+- `internal/sidecar` `MarkStale` — pinned facts, each project's freshest
+  continuity and project-local feedback never decay; a core fact is
+  refreshed only by being core, so decay by last injection would starve it.
+- `internal/doctor` candidate check — skips facts that are actually core
+  (`inject.CoreEligible`): they are delivered every session by design.
 
-**How to check.** Human-judgment. If a future contributor proposes to
-change pinned semantics (e.g. a reserved slot), that proposal needs a
-follow-up ADR, not a one-line frontmatter tweak.
+**How to check.** Human-judgment, backed by tests
+(`TestRun_SessionStart*` in `internal/inject`;
+`TestInject_StartupSourceInjectsCoreOnly`, `TestInject_ClearReinjects`,
+`TestInject_CompactInjectsCoreOnly` in `cmd/memoryctl`). Adding a ranked fill to
+SessionStart, or a reserved slot for pinned facts on any other event,
+needs a follow-up ADR.
 
 ---
 

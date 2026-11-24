@@ -108,7 +108,7 @@ In v2 `scope` (`universal` | `domain` | `narrow`) is **informational
 metadata** — it documents how broadly a lesson applies. It does **not** gate
 injection. The v1 substring-trigger mechanism is gone: the single ranker
 treats all tokens (keywords, name, description, body) as relevance signal, and
-every `active`/`pinned` fact in scope is a ranking candidate regardless of its
+every `active`/`pinned`/`candidate` fact in scope is a ranking candidate regardless of its
 `scope` value. Write good `keywords`/`domains` and let the ranker sort it out.
 
 ## Why is hypomnema written in Go, not pure bash?

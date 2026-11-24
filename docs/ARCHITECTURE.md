@@ -27,14 +27,14 @@ stderr starts with `BLOCKED (hypomnema)`.
 
 | Event | Matcher | Shim | Verb | Purpose |
 |---|---|---|---|---|
-| `SessionStart` | — | `session-start.sh` | `inject --event=SessionStart` | Rank native facts, inject top-K into `additionalContext`; on `compact` re-ranks against the compaction summary, on `clear` against the empty prompt — either way without render-dedup |
+| `SessionStart` | — | `session-start.sh` | `inject --event=SessionStart` | Inject the fixed core (freshest continuity, pinned facts, project feedback) into `additionalContext` — no ranking; on `compact`/`clear` the same core without render-dedup |
 | `UserPromptSubmit` | — | `user-prompt-submit.sh` | `inject --event=UserPromptSubmit` | Reactive re-rank with prompt tokens; inject newly-relevant facts |
 | `PreToolUse` | `Write\|Edit` | `pre-tool-write.sh` | `guard` | Secrets gate on memory-path writes (`exit 2` blocks) |
 | `PreToolUse` | `Bash` | `pre-tool-bash.sh` | `guard-bash` | Block the model's own `memoryctl pin`/`unpin`/`mark` (`mark … done` passes) — `/memboard` panel actions; stops accidental or injected CLI calls, not a security boundary |
 | `PreToolUse` | `Skill` | `skill-active.sh` | `skill-active` | Record the activated skill for this session |
 | `PostToolUse` | `Skill` | `skill-learnings-inject.sh` | `skill-inject` | Inject accumulated skill-learning facts for that skill |
 | `Stop` | — | `session-stop.sh` | `close` | Classify citations → WAL → effectiveness/decay → `MEMORY.md` |
-| `SubagentStart` | — | `subagent-start.sh` | `inject --event=SubagentStart` | Rank against the subagent's own task, inject its own top-5 under its own key |
+| `SubagentStart` | — | `subagent-start.sh` | `inject --event=SubagentStart` | Gate on the Agent call's description, rank the passing facts, inject its own top-5 under its own key |
 | `SubagentStop` | — | `subagent-stop.sh` | `close --subagent` | Classify the subagent's own citations (incl. its hand-back report) under its own key |
 
 Compaction is handled on `SessionStart` with `source=compact` (and `/clear`
@@ -43,35 +43,36 @@ hook is registered**. `PreCompact` was retired with v1. Claude Code does have
 a `PostCompact` event (fields `trigger`, `compact_summary`; no
 `additionalContext`), but it carries no way to reach the model's context —
 `SessionStart` with `source=compact` is the event whose `additionalContext`
-actually gets seen, so that is where hypomnema re-renders memory instead. The
+actually gets seen, so that is where hypomnema re-renders the core instead. The
 shims carry zero logic; everything below happens inside `memoryctl`.
 
 ## End-to-end data flow
 
 ```
 SessionStart ──► memoryctl inject --event=SessionStart ─────────┐
-   project.Detect(cwd) + domains.Infer(git)                     │
-   keywords ← prompt-absent: cwd basename, branch, changed      │
-             filenames, recent commit subjects                  │
+   resolveStore(cwd) → project store + global store             │
    native.List(project store + global store)                    │
    sidecar reproject if content_sha / mtime drift               │
-   continuity: only each project's freshest (created/modified)  │
-     is a candidate; older ones stay recall-only                │
-   rank.TopK(keywords, candidates)  ── pure, I/O-free           │
-     filter: status ∈ {active, pinned}; scope ∈ {project,global}│
-   emit top-8 (≤2.5KB/body, ≤8KB total) as `# Memory Context`   │
-     in additionalContext JSON                                  │
+   no query terms (no git calls, no overlap query): no ranking  │
+   core = coreFacts(...)  ── fixed, not ranked:                 │
+     1. the project's freshest continuity (created/modified)    │
+     2. status: pinned — project-local, then global             │
+     3. project-local type: feedback                            │
+     freshest first per group; stale/retired, /memboard hide or │
+     less → not core; one fact per slug, project-local wins     │
+   emit the core (≤2.5KB/body, ≤8KB total, Memory-queue line    │
+     reserved first) as `# Memory Context` in additionalContext;│
+     core bodies that do not fit → one-line pointers (not       │
+     deliveries, no WAL row)                                    │
    WAL: inject|<slug>|<session>  (one line per injected fact,   │
      skipped for a slug already logged this session — a         │
      compact/clear re-render never inflates ref_count)           │
    write per-session injected-set (.runtime/injected-<sid>.list)│
-   source=compact: rank against a bounded query built from the  │
-     transcript's latest isCompactSummary record (focus         │
-     sections, top-40 terms), not the empty prompt; source=clear│
-     re-ranks against the empty prompt. Either way the emitted  │
-     set is NOT filtered against what was already injected      │
-     earlier in the session — the model's context was just      │
-     wiped, so re-showing already-seen facts is the point.       │
+   source=compact|clear: the same core, NOT filtered against    │
+     what was already injected earlier in the session — the     │
+     model's context was just wiped, so re-showing the core is  │
+     the point. Nothing ranked follows it after compaction: the │
+     summary carries the task state.                            │
                                                                 │
 UserPromptSubmit ──► inject --event=UserPromptSubmit ───────────┤
    source ∈ {system, poll_event}: exit 0, no output, no WAL,    │
@@ -115,7 +116,9 @@ Stop ──► close ───────────────────�
    sidecar.Reproject: ref_count, effectiveness,                 │
      last_injected, last_useful                                 │
    sidecar.MarkStale: decay by age from last-injection          │
-     (each project's freshest continuity fact exempt)           │
+     (exempt: pinned, each project's freshest continuity,       │
+     project-local feedback — the SessionStart core, refreshed  │
+     only by being core)                                        │
    memindex.Write: regenerate this project's native MEMORY.md   │
    ── no native content is ever mutated by a hook ──────────────┤
                                                                 │
@@ -129,12 +132,17 @@ SubagentStart ──► inject --event=SubagentStart ─────────
    claim rendered-<key>.list (O_CREATE|O_EXCL) before ranking:  │
      already claimed (resumed agent / concurrent duplicate)     │
      → exit 0, nothing written                                  │
-   query: jsonl.PendingAgentCall(parent transcript tail ≤2MiB,  │
-     agent_type, agent_id) → own Agent/Task call's description  │
-     + prompt (top-40 terms) + type words, NoGitSignal=true;    │
-     else jsonl.RecentUserPrompts(parent, 3) + type words,      │
-     git signal kept                                            │
-   rank.TopK, MaxK=5, MaxBytes=5000 → emit under key            │
+   pickAgentCall: jsonl.AgentCalls(parent transcript tail       │
+     ≤2MiB, agent_type, agent_id) → own Agent/Task call, else   │
+     the oldest unclaimed pending call of this type             │
+     no call → nothing injected (no parent-prompt fallback)     │
+   brief = the call's description; query = description +       │
+     prompt (top-40 terms) + type words, NoGitSignal=true       │
+   head gate BEFORE rank: ≥2 distinct brief terms in the head   │
+     (name/description/keywords/domains), one in name or        │
+     keywords; paths, $HOME/project-root words, type words,     │
+     digits, corpus-common head terms never count               │
+   rank the passing facts, MaxK=5, MaxBytes=5000 → emit         │
    WAL: inject|<slug>|<key>                                     │
    write injected-<key>.list (if non-empty), rendered-<key>.list│
      (always — marks the claim as fulfilled)                    │
@@ -165,29 +173,36 @@ substring-trigger `UserPromptSubmit` with ±40-char negation windows) into a
 single pure ranker in `internal/rank`. The authoritative formula lives in
 `CLAUDE.md`; reproduced here:
 
+It serves UserPromptSubmit, SubagentStart (after its head gate), `recall`
+and `skill-inject`; SessionStart does not rank (it injects the fixed core,
+see the data flow above and invariant I6).
+
 ```
 score = 3.0 × overlap(session_keywords, file keywords+name+description+body)
-      + 1.0 × log10(1 + ref_count) × effGate   # popularity, gated by usefulness
       + 2.0 × recency                  # 1/(1 + days/30) from last USEFUL citation (cite-useful; fallback created)
-      + 2.0 × effectiveness            # Bayesian (pos+1)/(pos+0.25·neg+2); silent counts ¼; neutral 0.5 until signal
       + 1.0 if project-local           # project facts outrank global on ties
-
-effGate = clamp(2 × effectiveness, 0, 1)   # 1.0 at the prior (0.5); only damps, never amplifies
 ```
 
-**Additive and zero-safe.** No single zero signal annihilates a candidate — a
-brand-new fact with `ref_count=0` and no outcomes gets the neutral effectiveness
-prior (0.5) and its frontmatter `created` as recency (the date of Claude
-Code's `modified` stamp when `created` is absent), so it is injectable from
-day one. The `effGate` term scales `ref_count` by proven usefulness so a fact
-injected hundreds of times that rarely helped cannot coast on volume; it is
-neutral at the prior and capped at 1.0, so it only *damps* unearned popularity.
+A `/memboard` *less* mark halves the score; *hide* drops the fact.
+`ref_count` and `effectiveness` are not ranking inputs — both are circular
+(injection volume feeds `ref_count`; `cite-silent`, a consequence of being
+injected, feeds `effectiveness`). `close` still computes them as diagnostics
+for `/memboard`, `stats`, `doctor` and `sidecar show`. See ADR
+[`session-start-core`](decisions/session-start-core.md).
 
-**Filters:** `status ∈ {active, pinned}` (sidecar-managed `stale` excluded);
-scope = current project's store + the global store only (other projects never
-inject); result cap top-8, ≤8KB total, once per context per fact (again after compaction/clear). `session_keywords`
-come from prompt tokens, cwd basename, and git context (branch, changed
-filenames, recent commit subjects) on both `SessionStart` and `UserPromptSubmit`.
+**Additive and zero-safe.** No single zero signal annihilates a candidate — a
+brand-new fact with no citation history gets its frontmatter `created` as
+recency (the date of Claude Code's `modified` stamp when `created` is
+absent), so it is injectable from day one.
+
+**Filters:** `status ∈ {active, pinned, candidate}` (sidecar-managed `stale`
+excluded; `recall` includes it); scope = current project's store + the global
+store only (other projects never inject); result cap top-8 (top-5 for a
+subagent), ≤8KB total, once per context per fact (again after
+compaction/clear). `session_keywords` come from prompt tokens, cwd basename,
+and git context (branch, changed filenames, recent commit subjects) on
+`UserPromptSubmit`; a subagent's come from its Agent call, without git
+context.
 
 Pull retrieval (`memoryctl recall "<query>"`) runs the same ranker on an
 explicit query, includes `stale` facts (marked `[stale]`, reviving on recall),
@@ -266,7 +281,7 @@ One package, one responsibility. `memoryctl` (in `cmd/memoryctl/`) wires them.
 | `sidecar` | SQLite projection — schema, upserts, reproject, rank queries, `MarkStale`. Only place with SQLite |
 | `wal` | Append-only event log; `Append`/`AppendStrict`, `SanitizeField`, lock acquisition, `Validate`, `Compact`. Four-column invariant enforced |
 | `rank` | The pure relevance ranker (formula above). No I/O, no storage imports → trivially unit-testable and A/B-able |
-| `inject` | Orchestrator: keywords → `native.List` → `sidecar` → `rank.TopK` → JSON |
+| `inject` | Orchestrator: `native.List` → `sidecar` → SessionStart core (`coreFacts`) or keywords → head/prompt gate → `rank.Rank` top-K → JSON |
 | `closer` | Stop path: transcript classify → WAL → reproject/decay → `MEMORY.md`; `Subagent: true` runs the same classification under a subagent's own key and skips the session-level steps |
 | `secrets` | Secrets gate (credential patterns, `.secretsignore`) |
 | `tokenize` | Unicode-aware tokenizer (salvaged from v1's TF-IDF; Cyrillic/CJK/Greek participate, not just Latin) |
@@ -276,7 +291,7 @@ One package, one responsibility. `memoryctl` (in `cmd/memoryctl/`) wires them.
 | `pathutil` | Shared slug/filename sanitisers |
 | `ab` | Offline A/B harness: replay historical WAL, ranked-top-K vs dump-all on `cite-useful` proxy |
 | `invariants` | Automated checks for the mechanically-checkable rules in `docs/INVARIANTS.md` |
-| `jsonl` | Streams the session-transcript JSONL, extracting assistant-authored text and Read-tool paths for citation classification (folding in `SubagentHandback` text); `PendingAgentCall`/`RecentUserPrompts` read a parent transcript's tail to build a subagent's ranking query |
+| `jsonl` | Streams the session-transcript JSONL, extracting assistant-authored text and Read-tool paths for citation classification (folding in `SubagentHandback` text); `AgentCalls` reads a parent transcript's tail for the Agent call that launched a subagent (its description is the head-gate brief, description + prompt the ranking query) |
 
 ### `memoryctl` command surface
 

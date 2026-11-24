@@ -12,7 +12,7 @@ func TestReplay_RankedBeatsRandomWhenSignalPredicts(t *testing.T) {
 		fmt.Fprintf(&b, "2026-04-01|inject|cold%02d.md|s0\n", i)
 	}
 	b.WriteString("2026-04-01|inject-agg|hot.md|50\n")
-	b.WriteString("2026-04-01|outcome-positive|hot.md|s0\n")
+	b.WriteString("2026-04-01|cite-useful|hot.md|s0\n")
 	b.WriteString("2026-04-10|inject|hot.md|s1\n")
 	b.WriteString("2026-04-10|cite-useful|hot.md|s1\n")
 
@@ -26,22 +26,28 @@ func TestReplay_RankedBeatsRandomWhenSignalPredicts(t *testing.T) {
 	if r1.K != 1 {
 		t.Fatalf("first row K=%d, want 1", r1.K)
 	}
-	if r1.RankedRecall != 1.0 {
-		t.Errorf("ranked recall@1 = %.2f, want 1.0 (hot.md ranks first)", r1.RankedRecall)
+	// s0 (hot.md's first useful citation) has no prior signal and is missed;
+	// s1 hits because recency of that earlier useful citation carries hot.md.
+	if r1.RankedRecall != 0.5 {
+		t.Errorf("ranked recall@1 = %.2f, want 0.5 (hot.md ranks first in s1 only)", r1.RankedRecall)
 	}
 	if r1.RandomRecall != 0.0 {
 		t.Errorf("random recall@1 = %.4f, want 0.0 (seed 42 doesn't pick hot.md from 21 slugs)", r1.RandomRecall)
 	}
-	if r1.Sessions != 1 {
-		t.Errorf("sessions = %d, want 1", r1.Sessions)
+	if r1.Sessions != 2 {
+		t.Errorf("sessions = %d, want 2", r1.Sessions)
 	}
 
 	r3 := results[1]
-	if r3.K != 3 || r3.Sessions != 1 {
-		t.Errorf("K=3 row: K=%d sessions=%d, want 3/1", r3.K, r3.Sessions)
+	if r3.K != 3 || r3.Sessions != 2 {
+		t.Errorf("K=3 row: K=%d sessions=%d, want 3/2", r3.K, r3.Sessions)
 	}
-	if r3.RankedRecall != 1.0 {
-		t.Errorf("ranked recall@3 = %.2f, want 1.0 (hot.md in top-3)", r3.RankedRecall)
+	if r3.RankedRecall != 0.5 {
+		t.Errorf("ranked recall@3 = %.2f, want 0.5 (hot.md in top-3 in s1 only)", r3.RankedRecall)
+	}
+	if r1.RankedRecall <= r1.RandomRecall || r3.RankedRecall <= r3.RandomRecall {
+		t.Errorf("ranked must beat random: K=1 %.2f vs %.2f, K=3 %.2f vs %.2f",
+			r1.RankedRecall, r1.RandomRecall, r3.RankedRecall, r3.RandomRecall)
 	}
 }
 

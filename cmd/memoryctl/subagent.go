@@ -9,6 +9,7 @@ import (
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/closer"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/inject"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/jsonl"
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/pathutil"
 )
 
@@ -25,10 +26,9 @@ type subagentStdin struct {
 }
 
 const (
-	subagentMaxK         = 5
-	subagentMaxBytes     = 5000
-	subagentPromptTerms  = 40
-	subagentRecentPrompt = 3
+	subagentMaxK        = 5
+	subagentMaxBytes    = 5000
+	subagentPromptTerms = 40
 )
 
 // defaultSubagentSkip: fork inherits the parent's context, injected memory
@@ -76,21 +76,21 @@ func agentTypeTerms(agentType string) string {
 	}), " ")
 }
 
-// subagentQuery builds the ranking query: the task this agent was assigned
-// (see pickAgentCall), else the parent's recent prompts, always with the
-// agent type's words. fromTask is true only on the assigned-call branch —
-// the caller uses it to skip the git signal, since a query that already
-// names the task doesn't need the PARENT's branch and working-tree tokens
-// on top.
-func subagentQuery(parentTranscript, agentType, agentID string) (query string, fromTask bool) {
+// subagentQuery builds the ranking query from the task this agent was
+// assigned (see pickAgentCall) plus the agent type's words. fromTask is true
+// only when a call was assigned — the caller then skips the git signal, since
+// a query that already names the task doesn't need the PARENT's branch and
+// working-tree tokens. brief is the call's description — the task statement
+// the head gate reads (a whole prompt names too many facts: on 362 real briefs
+// the median was 136 passing facts); without a call it is "" and the agent
+// gets no memory.
+func subagentQuery(parentTranscript, agentType, agentID string) (query, brief string, fromTask bool) {
 	typ := agentTypeTerms(agentType)
 	if c, ok := pickAgentCall(parentTranscript, agentType, agentID); ok {
-		return strings.TrimSpace(c.Description + " " + typ + " " + inject.TopTerms(c.Prompt, subagentPromptTerms)), true
+		return strings.TrimSpace(c.Description + " " + typ + " " + inject.TopTerms(c.Prompt, subagentPromptTerms)),
+			c.Description, true
 	}
-	if p, ok := jsonl.RecentUserPrompts(parentTranscript, subagentRecentPrompt); ok {
-		return strings.TrimSpace(typ + " " + inject.TopTerms(p, subagentPromptTerms)), false
-	}
-	return typ, false
+	return typ, "", false
 }
 
 // pickAgentCall assigns this subagent the call that launched it. Its own
@@ -165,13 +165,19 @@ func runSubagentStart(raw []byte) {
 		// duplicate start: someone else already claimed this key.
 		return
 	}
-	query, fromTask := subagentQuery(in.TranscriptPath, in.AgentType, in.AgentID)
+	query, brief, fromTask := subagentQuery(in.TranscriptPath, in.AgentType, in.AgentID)
+	store := resolveStore(in.CWD)
+	projectRoot := ""
+	if brief != "" {
+		projectRoot = native.CanonicalRoot(store.Anchor)
+	}
 	res, err := inject.Run(inject.Input{
 		Event: "SubagentStart", SessionID: key, CWD: in.CWD,
 		Prompt: query, NoGitSignal: fromTask,
+		Brief: brief, AgentType: in.AgentType, ProjectRoot: projectRoot,
 		ClaudeHome: claudeDir(), ConfigDir: configDir(), MemoryDir: memoryDir(), Today: today(),
 		MaxK: subagentMaxK, MaxBytes: subagentMaxBytes,
-		Store: resolveStore(in.CWD).Store,
+		Store: store.Store,
 	})
 	if err != nil {
 		return

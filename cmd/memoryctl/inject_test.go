@@ -58,8 +58,9 @@ func TestInjectVerb_SessionDedup(t *testing.T) {
 	projDir := filepath.Join(home, ".claude", "projects", "-tmp-proj", "memory")
 	os.MkdirAll(projDir, 0o755)
 	os.MkdirAll(memDir, 0o755)
+	// Project feedback: part of the SessionStart core.
 	os.WriteFile(filepath.Join(projDir, "docker.md"),
-		[]byte("---\nname: Docker\ntype: mistake\n---\ndocker cache\n"), 0o644)
+		[]byte("---\nname: Docker\ntype: feedback\n---\ndocker cache\n"), 0o644)
 	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
 	env := map[string]string{
 		"CLAUDE_HOME": filepath.Join(home, ".claude"), "CLAUDE_MEMORY_DIR": memDir,
@@ -110,7 +111,7 @@ func TestInjectVerb_RuntimeListAccumulatesUnderBudget(t *testing.T) {
 		"HYPOMNEMA_TODAY": "2026-05-29",
 	}
 	stdin := `{"session_id":"s1","cwd":"/tmp/proj","prompt":"docker"}`
-	out1, _, _ := runStdin(t, env, stdin, "inject", "--event=SessionStart")
+	out1, _, _ := runStdin(t, env, stdin, "inject", "--event=UserPromptSubmit")
 	var env1 struct {
 		HookSpecificOutput struct {
 			AdditionalContext string `json:"additionalContext"`
@@ -150,8 +151,9 @@ func TestInjectVerb_PrunesOldRuntimeLists(t *testing.T) {
 	os.MkdirAll(projDir, 0o755)
 	runtimeDir := filepath.Join(memDir, ".runtime")
 	os.MkdirAll(runtimeDir, 0o755)
+	// Project feedback: part of the SessionStart core.
 	os.WriteFile(filepath.Join(projDir, "docker.md"),
-		[]byte("---\nname: Docker\ntype: mistake\n---\ndocker cache\n"), 0o644)
+		[]byte("---\nname: Docker\ntype: feedback\n---\ndocker cache\n"), 0o644)
 	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
 	stale := filepath.Join(runtimeDir, "injected-stale.list")
 	os.WriteFile(stale, []byte("old.md\n"), 0o600)
@@ -212,7 +214,7 @@ func TestInjectVerb_FailSafeOnBadStdin(t *testing.T) {
 // HYPOMNEMA_PROMPT_INJECT=off is the pull-only mode: UserPromptSubmit stays
 // silent (no output, no WAL event, no session list) and memory reaches the
 // model through the harness-loaded index and its own reads. SessionStart
-// still primes.
+// still primes the core.
 func TestInjectVerb_PromptInjectOff(t *testing.T) {
 	home := t.TempDir()
 	memDir := filepath.Join(home, ".claude", "memory")
@@ -220,7 +222,7 @@ func TestInjectVerb_PromptInjectOff(t *testing.T) {
 	os.MkdirAll(projDir, 0o755)
 	os.MkdirAll(memDir, 0o755)
 	os.WriteFile(filepath.Join(projDir, "docker.md"),
-		[]byte("---\nname: Docker cache\ntype: mistake\n---\ndocker layer cache\n"), 0o644)
+		[]byte("---\nname: Docker cache\ntype: feedback\n---\ndocker layer cache\n"), 0o644)
 	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
 	env := map[string]string{
 		"CLAUDE_HOME": filepath.Join(home, ".claude"), "CLAUDE_MEMORY_DIR": memDir,

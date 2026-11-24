@@ -1,12 +1,12 @@
 // Package rank is the v2 relevance ranker — the merged injection pipeline's
 // core. It is a pure, I/O-free leaf: no imports of sidecar/native, so it is
 // trivially unit-testable and A/B-able (Phase 2b). The caller maps storage
-// records into Candidate. Scoring is zero-safe: no single zero signal
-// annihilates a candidate (spec §3.3).
+// records into Candidate. Scoring is overlap + recency + project boost only:
+// RefCount and Effectiveness stay on Candidate as diagnostics but never enter
+// the score. Zero-safe: no single zero signal annihilates a candidate.
 package rank
 
 import (
-	"math"
 	"sort"
 	"time"
 )
@@ -18,8 +18,8 @@ type Candidate struct {
 	Type          string
 	Project       string
 	Domains       []string
-	RefCount      int
-	Effectiveness float64
+	RefCount      int     // diagnostic only; not read by the score
+	Effectiveness float64 // diagnostic only; not read by the score
 	Status        string
 	Created       string // YYYY-MM-DD, may be ""
 	LastInjected  string // YYYY-MM-DD, may be ""
@@ -53,9 +53,7 @@ type Scored struct {
 // Scoring weights — fixed here; Phase 2b's A/B harness calibrates them.
 const (
 	wOverlap     = 3.0
-	wRef         = 1.0
 	wRecency     = 2.0
-	wEffective   = 2.0
 	projectBoost = 1.0
 	// lessFactor scales the final score of a fact marked "less".
 	lessFactor = 0.5
@@ -98,10 +96,7 @@ func Rank(q Query, cands []Candidate, k int) []Scored {
 }
 
 func score(q Query, c Candidate, today time.Time) float64 {
-	s := wOverlap*float64(c.Overlap) +
-		wRef*math.Log10(1+float64(c.RefCount))*effGate(c.Effectiveness) +
-		wRecency*recency(c, today) +
-		wEffective*c.Effectiveness
+	s := wOverlap*float64(c.Overlap) + wRecency*recency(c, today)
 	if q.Project != "" && c.Project == q.Project {
 		s += projectBoost
 	}
@@ -109,33 +104,6 @@ func score(q Query, c Candidate, today time.Time) float64 {
 		s *= lessFactor
 	}
 	return s
-}
-
-// effGate makes popularity *earned*. The ref_count term rewards
-// heavily-injected facts, but a fact injected hundreds of times that rarely
-// proved useful (low effectiveness) must not coast on volume — that was the
-// failure mode where eff≈0.05 notes with ref in the hundreds out-ranked
-// proven facts purely on injection count. The gate scales the ref reward by
-// effectiveness, normalised so the Bayesian prior (0.5) is neutral (1.0) and
-// capped at 1.0 so it only *damps* unearned popularity, never amplifies it
-// (a single proven fact must not snowball on volume).
-//
-// Zero-safe by construction: a new or low-evidence fact sits near 0.5 — the
-// (pos+1)/(pos+0.25·neg+2) prior (see internal/usefulness) pulls it there
-// until many outcomes accrue, so an extreme low eff *requires* substantial
-// negative evidence — hence its ref reward is untouched; only well-evidenced
-// low-effectiveness facts are suppressed. Overlap, recency and the standalone
-// effectiveness term are unaffected, so no candidate is annihilated (spec
-// §3.3).
-func effGate(effectiveness float64) float64 {
-	g := 2.0 * effectiveness
-	if g > 1.0 {
-		return 1.0
-	}
-	if g < 0 {
-		return 0
-	}
-	return g
 }
 
 // recency decays from 1.0 (today) toward 0 with a 30-day scale, using
