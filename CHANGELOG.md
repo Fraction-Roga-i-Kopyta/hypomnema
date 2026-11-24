@@ -1,5 +1,26 @@
 # Changelog
 
+## [3.2.1] — 2026-11-24
+
+Internal re-implementation of the prompt gate, the home-directory basename
+skip, the stopword list, the pull-only switch and the global index — same
+behaviour, new structure. Upgrade: `git pull && make build && make install`,
+then `memoryctl sidecar rebuild`.
+
+### Changed
+
+- **Russian stopwords cover full paradigms.** Pronouns, determiners and
+  "который"/"такой"/"весь"/"сам" are listed with every case form (325 → 391
+  entries; nothing removed) — forms like "каком", "такого", "вашего",
+  "всему" no longer count as relevance terms. `memoryctl sidecar rebuild`
+  drops keyword rows they left behind.
+- The pull-only switch (`HYPOMNEMA_PROMPT_INJECT=off`) has one definition,
+  shared by `inject`, `stats` and `doctor`.
+- The generated global `MEMORY.md` has a reworded intro line under
+  `# Global Memory Index`; existing indexes are still recognised as
+  generated and are rewritten on the next Stop.
+- Measurement report replaced by `docs/measurements/2026-11-24-core-memory.md`.
+
 ## [3.2.0] — 2026-11-24
 
 Memory is the agent's working memory, not a human second brain: a session
