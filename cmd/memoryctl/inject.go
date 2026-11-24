@@ -39,15 +39,6 @@ func isMemboardToggle(prompt string) bool {
 	return ok && (rest == "" || unicode.IsSpace(rune(rest[0])))
 }
 
-// promptInjectOff reports the pull-only mode (HYPOMNEMA_PROMPT_INJECT=off):
-// UserPromptSubmit injects nothing, and memory reaches the model through the
-// harness-loaded MEMORY.md index (plus the global index imported from
-// CLAUDE.md) and the model's own reads — Claude Code's own design — instead
-// of a per-prompt lexical push. SessionStart and SubagentStart are unchanged.
-func promptInjectOff() bool {
-	return strings.EqualFold(strings.TrimSpace(os.Getenv("HYPOMNEMA_PROMPT_INJECT")), "off")
-}
-
 // contextWiped reports a SessionStart after which previously injected facts
 // are no longer in the model's context (compaction summarized them away, or
 // /clear dropped them), so render-dedup must not suppress them.
@@ -133,7 +124,7 @@ func runInject(args []string) {
 	if err := json.Unmarshal(raw, &in); err != nil {
 		os.Exit(0) // fail-safe
 	}
-	if event == "UserPromptSubmit" && (skipPromptSource(in.Source) || promptInjectOff() || isMemboardToggle(in.Prompt)) {
+	if event == "UserPromptSubmit" && (skipPromptSource(in.Source) || inject.PullOnlyFromEnv() || isMemboardToggle(in.Prompt)) {
 		os.Exit(0) // no output, no WAL, session list untouched
 	}
 	r := resolveStore(in.CWD)

@@ -7,27 +7,30 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/inject"
 )
 
-// hermeticEnviron is os.Environ() minus the variables a developer's Claude
-// Code session leaks into `go test`; each one changes which store the binary
-// resolves, so tests opt in explicitly through their env map.
+// leakyEnv lists the variables a developer's Claude Code session leaks into
+// `go test`. Each changes what the binary under test resolves (its store, its
+// session, whether prompts inject), so tests opt in through their env map.
+var leakyEnv = []string{
+	"CLAUDE_PROJECT_DIR", "CLAUDE_PROJECT_CWD", "CLAUDE_CONFIG_DIR",
+	"CLAUDE_COWORK_MEMORY_PATH_OVERRIDE", "CLAUDE_CODE_SESSION_ID",
+	"HYPOMNEMA_SESSION_ID", "HYPOMNEMA_GLOBAL_DIR", "HYPOMNEMA_SUBAGENT_SKIP",
+	inject.PromptInjectEnv,
+}
+
+// hermeticEnviron is os.Environ() without leakyEnv.
 func hermeticEnviron() []string {
-	drop := map[string]bool{
-		"CLAUDE_PROJECT_DIR": true, "CLAUDE_PROJECT_CWD": true,
-		"CLAUDE_CODE_SESSION_ID": true, "HYPOMNEMA_SESSION_ID": true,
-		"CLAUDE_CONFIG_DIR": true, "CLAUDE_COWORK_MEMORY_PATH_OVERRIDE": true,
-		"HYPOMNEMA_GLOBAL_DIR": true, "HYPOMNEMA_SUBAGENT_SKIP": true,
-		"HYPOMNEMA_PROMPT_INJECT": true,
-	}
 	var out []string
 	for _, kv := range os.Environ() {
-		if k, _, ok := strings.Cut(kv, "="); ok && drop[k] {
-			continue
+		if k, _, _ := strings.Cut(kv, "="); !slices.Contains(leakyEnv, k) {
+			out = append(out, kv)
 		}
-		out = append(out, kv)
 	}
 	return out
 }
@@ -37,20 +40,12 @@ func hermeticEnviron() []string {
 // subprocess run through run()/runStdin() and silently change which store
 // the binary under test resolves.
 func TestHermeticEnviron_DropsStoreAffectingVars(t *testing.T) {
-	vars := []string{
-		"CLAUDE_PROJECT_DIR", "CLAUDE_PROJECT_CWD", "CLAUDE_CODE_SESSION_ID",
-		"HYPOMNEMA_SESSION_ID", "CLAUDE_CONFIG_DIR", "CLAUDE_COWORK_MEMORY_PATH_OVERRIDE",
-		"HYPOMNEMA_GLOBAL_DIR", "HYPOMNEMA_SUBAGENT_SKIP", "HYPOMNEMA_PROMPT_INJECT",
-	}
-	for _, v := range vars {
+	for _, v := range leakyEnv {
 		t.Setenv(v, "/should-not-leak")
 	}
 	for _, kv := range hermeticEnviron() {
-		k, _, _ := strings.Cut(kv, "=")
-		for _, v := range vars {
-			if k == v {
-				t.Errorf("hermeticEnviron leaked %s into the subprocess env", v)
-			}
+		if k, _, _ := strings.Cut(kv, "="); slices.Contains(leakyEnv, k) {
+			t.Errorf("hermeticEnviron leaked %s into the subprocess env", k)
 		}
 	}
 }

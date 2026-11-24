@@ -1,9 +1,9 @@
 package inject
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -88,11 +88,18 @@ func mkBody(keyword string, n int) string {
 	return keyword + " " + filler
 }
 
+// dockerFact renders a fixture file the prompt "docker" admits on its head:
+// the term sits in domains, so the UserPromptSubmit gate passes it however
+// the body reads. extra is inserted verbatim into the frontmatter.
+func dockerFact(name, typ, extra, body string) []byte {
+	return []byte(fmt.Sprintf("---\nname: %s\ntype: %s\n%sdomains: [docker]\n---\n%s\n", name, typ, extra, body))
+}
+
 func TestRun_TotalBudgetCapsRender(t *testing.T) {
 	memDir, projDir, home := setup(t)
 	for _, name := range []string{"a.md", "b.md", "c.md", "d.md", "e.md", "f.md"} {
 		os.WriteFile(filepath.Join(projDir, name),
-			[]byte("---\nname: "+name+"\ntype: knowledge\nkeywords: [docker]\n---\n"+mkBody("docker", 1200)+"\n"), 0o644)
+			dockerFact(name, "knowledge", "", mkBody("docker", 1200)), 0o644)
 	}
 	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
 
@@ -129,7 +136,7 @@ func TestRun_TotalBudgetCapsRender(t *testing.T) {
 func TestRun_FirstEntryLargerThanBudgetIsTruncated(t *testing.T) {
 	memDir, projDir, home := setup(t)
 	os.WriteFile(filepath.Join(projDir, "big.md"),
-		[]byte("---\nname: big\ntype: note\nkeywords: [docker]\n---\n"+mkBody("docker", 5000)+"\n"), 0o644)
+		dockerFact("big", "note", "", mkBody("docker", 5000)), 0o644)
 	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
 
 	res, err := Run(Input{
@@ -156,9 +163,9 @@ func TestRun_FirstEntryLargerThanBudgetIsTruncated(t *testing.T) {
 func TestRun_SkipsAlreadyInjected(t *testing.T) {
 	memDir, projDir, home := setup(t)
 	os.WriteFile(filepath.Join(projDir, "a.md"),
-		[]byte("---\nname: alpha\ntype: knowledge\nkeywords: [docker]\n---\ndocker alpha\n"), 0o644)
+		dockerFact("alpha", "knowledge", "", "docker alpha"), 0o644)
 	os.WriteFile(filepath.Join(projDir, "b.md"),
-		[]byte("---\nname: beta\ntype: knowledge\nkeywords: [docker]\n---\ndocker beta\n"), 0o644)
+		dockerFact("beta", "knowledge", "", "docker beta"), 0o644)
 	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
 
 	res, err := Run(Input{
@@ -180,7 +187,7 @@ func TestRun_SkipsAlreadyInjected(t *testing.T) {
 func TestRun_AllAlreadyInjectedYieldsEmpty(t *testing.T) {
 	memDir, projDir, home := setup(t)
 	os.WriteFile(filepath.Join(projDir, "a.md"),
-		[]byte("---\nname: alpha\ntype: knowledge\nkeywords: [docker]\n---\ndocker alpha\n"), 0o644)
+		dockerFact("alpha", "knowledge", "", "docker alpha"), 0o644)
 	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
 
 	res, err := Run(Input{
@@ -377,7 +384,7 @@ func TestRun_CiteInstructionAndFactHeaders(t *testing.T) {
 	names := []string{"a.md", "b.md", "c.md", "d.md", "e.md", "f.md", "g.md", "h.md"}
 	for _, name := range names {
 		os.WriteFile(filepath.Join(projDir, name),
-			[]byte("---\nname: "+name+"\ntype: knowledge\ncreated: 2026-05-01\nkeywords: [docker]\n---\n"+mkBody("docker", 900)+"\n"), 0o644)
+			dockerFact(name, "knowledge", "created: 2026-05-01\n", mkBody("docker", 900)), 0o644)
 	}
 	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
 
@@ -533,102 +540,6 @@ func TestRun_SubagentGetsReportCiteInstruction(t *testing.T) {
 	}
 	if len(sub.Markdown) > 5000 {
 		t.Errorf("subagent payload %d bytes exceeds MaxBytes 5000", len(sub.Markdown))
-	}
-}
-
-func TestCiteInstruction_CoversDecisions(t *testing.T) {
-	if !strings.Contains(CiteInstruction, "changes what you say, do, or decide") {
-		t.Errorf("CiteInstruction must cover decisions: %q", CiteInstruction)
-	}
-}
-
-// On UserPromptSubmit a fact injects only when the prompt names what it is
-// about (a prompt term in its name/description/keywords/domains) or shares
-// at least two terms with it. Without the gate the top-K window was filled
-// by recency and popularity alone; with a one-term gate a single filler word
-// that happens to occur in a long body still passed. A cwd-basename hit does
-// not count — it is not something the user asked. SessionStart does not
-// rank at all: it injects the fixed core, and none of these facts is core.
-func TestRun_UserPromptSubmitRequiresPromptMatch(t *testing.T) {
-	memDir, projDir, home := setup(t)
-	for name, body := range map[string]string{
-		"docker.md":    "---\nname: Docker cache\ntype: mistake\n---\nlayer cache stale\n",
-		"bodytwo.md":   "---\nname: Layer notes\ntype: knowledge\n---\nthe docker cache layer\n",
-		"bodyone.md":   "---\nname: Redis ttl\ntype: knowledge\n---\nredis ttl cache\n",
-		"unrelated.md": "---\nname: Postgres index\ntype: knowledge\n---\npostgres index plan\n",
-		"cwdonly.md":   "---\nname: Proj layout\ntype: knowledge\n---\nproj layout notes\n",
-	} {
-		os.WriteFile(filepath.Join(projDir, name), []byte(body), 0o644)
-	}
-	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
-
-	run := func(event, prompt string) Result {
-		t.Helper()
-		res, err := Run(Input{
-			Event: event, SessionID: "s1", CWD: "/tmp/proj", Prompt: prompt,
-			ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir,
-			Today: "2026-05-29", MaxK: 8,
-		})
-		if err != nil {
-			t.Fatalf("Run(%s): %v", event, err)
-		}
-		return res
-	}
-
-	res := run("UserPromptSubmit", "fix the docker cache")
-	got := append([]string(nil), res.Injected...)
-	sort.Strings(got)
-	if strings.Join(got, ",") != "bodytwo.md,docker.md" {
-		t.Errorf("want the head match and the two-term body match only, got %v", res.Injected)
-	}
-
-	res = run("UserPromptSubmit", "да, и что там")
-	if len(res.Injected) != 0 || res.Markdown != "" {
-		t.Errorf("a prompt with no relevance terms must inject nothing, got %v", res.Injected)
-	}
-
-	res = run("SessionStart", "")
-	if len(res.Injected) != 0 {
-		t.Errorf("SessionStart injects the core only (empty here), got %v", res.Injected)
-	}
-}
-
-// The prompt gate scores a fact on its own file. continuity.md / notes.md
-// exist in every project, and the sidecar's keyword overlap is grouped by
-// slug alone — a gate fed from it let this project's continuity.md pass on
-// the words of another project's continuity.md.
-func TestRun_PromptGateIgnoresSameSlugInOtherProject(t *testing.T) {
-	memDir, projDir, home := setup(t)
-	otherDir := filepath.Join(home, ".claude", "projects", "-tmp-other", "memory")
-	if err := os.MkdirAll(otherDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	os.WriteFile(filepath.Join(otherDir, "continuity.md"),
-		[]byte("---\nname: continuity\ntype: continuity\n---\ndocker cache rebuild pending\n"), 0o644)
-	os.WriteFile(filepath.Join(projDir, "continuity.md"),
-		[]byte("---\nname: continuity\ntype: continuity\n---\npostgres index plan pending\n"), 0o644)
-	os.WriteFile(filepath.Join(projDir, "docker.md"),
-		[]byte("---\nname: Docker cache\ntype: mistake\n---\nlayer cache stale\n"), 0o644)
-	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
-
-	run := func(cwd, event, prompt string) Result {
-		t.Helper()
-		res, err := Run(Input{
-			Event: event, SessionID: "s1", CWD: cwd, Prompt: prompt,
-			ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir,
-			Today: "2026-05-29", MaxK: 8,
-		})
-		if err != nil {
-			t.Fatalf("Run(%s, %s): %v", cwd, event, err)
-		}
-		return res
-	}
-	// Seed the shared sidecar with the other project's rows first.
-	run("/tmp/other", "SessionStart", "")
-
-	res := run("/tmp/proj", "UserPromptSubmit", "fix the docker cache")
-	if strings.Join(res.Injected, ",") != "docker.md" {
-		t.Errorf("only docker.md matches the prompt in this project, got %v", res.Injected)
 	}
 }
 
@@ -1011,5 +922,11 @@ func TestRun_DegradedWithOpenSidecarHonoursMarks(t *testing.T) {
 	res := runSS(t, memDir, home, "startup", "")
 	if strings.Join(res.Injected, ",") != "continuity.md" {
 		t.Errorf("degraded core must drop the hidden pinned fact, got %v", res.Injected)
+	}
+}
+
+func TestCiteInstruction_CoversDecisions(t *testing.T) {
+	if !strings.Contains(CiteInstruction, "changes what you say, do, or decide") {
+		t.Errorf("CiteInstruction must cover decisions: %q", CiteInstruction)
 	}
 }

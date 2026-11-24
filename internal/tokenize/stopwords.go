@@ -1,72 +1,93 @@
 package tokenize
 
-// DefaultStopwords is the built-in English + Russian function-word set used for
-// relevance tokenization (keyword population and query building). Without it,
-// overlap counted common words at full weight (3.0), so a fact stuffed with
-// function words out-ranked a genuinely relevant one — keyword stuffing / the
-// "body lottery" (internal-audit ranker finding). Only words that survive the
-// MinTokenRunes>=3 cut are worth listing (shorter ones — "в", "на", "the"'s
-// 2-letter cousins — are already dropped by length).
+import "strings"
+
+// DefaultStopwords is the built-in English + Russian function-word set used by
+// Relevance, i.e. on both sides of every overlap count (fact keywords and the
+// query). A function word left in the set is worth a full overlap point (3.0,
+// more than the whole recency term), so a long body full of them out-ranked a
+// genuinely relevant fact — the "body lottery" the internal ranker audit
+// found.
 //
-// Kept deliberately to closed-class function words (articles, conjunctions,
-// prepositions, pronouns, auxiliaries). Content words are never listed — they
-// carry relevance even when common in a corpus (IDF, a separate future change,
-// handles corpus-common CONTENT terms).
-var DefaultStopwords = func() map[string]struct{} {
-	words := []string{
-		// English (>=3 runes)
-		"the", "and", "for", "are", "but", "not", "you", "all", "any", "can",
-		"her", "was", "one", "our", "out", "has", "had", "have", "his", "him",
-		"how", "its", "may", "new", "now", "old", "see", "two", "who", "did",
-		"does", "done", "this", "that", "these", "those", "then", "than", "with",
-		"from", "into", "onto", "over", "under", "your", "they", "them", "their",
-		"there", "here", "what", "when", "where", "which", "while", "will",
-		"would", "could", "should", "shall", "must", "might", "been", "being",
-		"were", "such", "some", "each", "most", "more", "much", "many", "only",
-		"also", "just", "very", "too", "about", "above", "after", "again",
-		"before", "because", "both", "between", "during", "other", "same",
-		"use", "used", "using", "get", "got", "make", "made", "let",
-		// Russian (>=3 runes)
-		"что", "как", "это", "этот", "эта", "эти", "того", "этого", "этой",
-		"для", "когда", "если", "или", "был", "была", "было", "были", "быть",
-		"есть", "надо", "может", "можно", "где", "уже", "только", "чтобы",
-		"чтоб", "потому", "поэтому", "так", "также", "тоже", "его", "они",
-		"она", "оно", "все", "всё", "всех", "всем", "всего", "весь", "вся",
-		"кто", "чем", "который", "которая", "которые", "которых", "нет", "да",
-		"без", "над", "под", "при", "про", "после", "перед", "через", "между",
-		"даже", "ещё", "еще", "уже", "вот", "нас", "вас", "них", "нам", "вам",
-		"им", "их", "ему", "ней", "нее", "неё", "том", "тем", "тот", "той",
-		"эту", "мой", "моя", "наш", "ваш", "свой", "своя", "себя", "себе",
-		"более", "менее", "очень", "почти", "потом", "затем", "теперь", "здесь",
-		"туда", "сюда", "тут", "там", "будет", "будут", "быть", "нужно",
-		// Russian case forms of the pronouns and determiners above, plus the
-		// remaining closed-class particles. Russian inflects function words,
-		// so listing only base forms left "этом", "тому", "тех" etc. in the
-		// relevance set, where each hit outweighed recency (3.0 vs ≤2.0).
-		"этом", "этим", "этих", "этими", "этому", "этою", "тому", "тех",
-		"теми", "тою", "такой", "такая", "такое", "такие", "таких", "таким",
-		"такую", "какой", "какая", "какое", "какие", "каких", "каким", "какую",
-		"чего", "чему", "чём", "кого", "кому", "ком", "него", "нему", "ним",
-		"ними", "нём", "меня", "мне", "мной", "мною", "тебя", "тебе", "тобой",
-		"нами", "вами", "ими", "сам", "сама", "само", "сами", "самого",
-		"самой", "самом", "свою", "своё", "свое", "свои", "своих", "своим",
-		"своей", "своего", "своему", "моё", "мое", "мои", "моих", "моей",
-		"моего", "мою", "твой", "твоя", "твоё", "твое", "твои", "наша",
-		"наше", "наши", "наших", "нашей", "нашего", "нашу", "ваша", "ваше",
-		"ваши", "ваших", "всю", "всей", "всеми", "буду", "будем", "будешь",
-		"будете", "сейчас", "тогда", "иногда", "всегда", "никогда", "опять",
-		"ведь", "вдруг", "будто", "разве", "лишь", "именно", "совсем",
-		"хоть", "хотя", "чуть", "куда", "откуда", "зачем", "почему",
-		"нибудь", "либо", "впрочем", "наконец", "зато", "однако", "кроме",
-		"ради", "среди", "вместо", "около", "давай", "давайте", "пусть",
-		"пожалуйста",
+// Only closed-class words belong here: articles, pronouns, determiners,
+// conjunctions, prepositions, auxiliaries and particles. Content words stay
+// relevance signal however common they are. Words shorter than MinTokenRunes
+// are dropped by Tokenize before this set is consulted, so listing them is
+// harmless but unnecessary.
+var DefaultStopwords = stopwordSet(englishFunctionWords, russianFunctionWords)
+
+// englishFunctionWords, one group per line.
+var englishFunctionWords = []string{
+	"the all any each both some such most more much many other same one two new old",                      // determiners, quantifiers
+	"you her his him its our your they them their this that these those who what which",                   // pronouns
+	"and but for than then when where while because how",                                                  // conjunctions
+	"with from into onto over under about above after before between during",                              // prepositions
+	"are was were been being has had have did does done can may will would could should shall must might", // auxiliaries
+	"not now here there only also just very too again out",                                                // adverbs
+	"see use used using get got make made let",                                                            // light verbs
+}
+
+// russianFunctionWords: Russian inflects its pronouns and determiners, so a
+// lemma alone leaves its oblique cases in the relevance set ("этом", "тому",
+// "своих" each scored like a content word). Declinable words are listed as
+// full paradigms, one lemma per line, both "ё" and "е" spellings; the
+// indeclinable rest follows by part of speech.
+var russianFunctionWords = []string{
+	// Personal and reflexive pronouns.
+	"я меня мне мной мною",
+	"ты тебя тебе тобой тобою",
+	"он его него ему нему им ним нём",
+	"она её ее неё нее ей ней ею нею",
+	"оно",
+	"мы нас нам нами",
+	"вы вас вам вами",
+	"они их них ими ними",
+	"себя себе собой собою",
+	// Interrogative and relative pronouns.
+	"кто кого кому кем ком",
+	"что чего чему чем чём",
+	"который которая которое которые которого которой которому которым котором которых которыми которую",
+	"какой какая какое какие какого какому каким каком каких какими какую",
+	// Demonstratives and determiners.
+	"этот эта это эти этого этой этому этим этом этих этими эту этою",
+	"тот та то те того той тому тем том тех теми ту тою",
+	"такой такая такое такие такого такому таким таком таких такими такую",
+	"весь вся всё все всего всей всему всем всём всех всеми всю",
+	"сам сама само сами самого самой самому самим самом самих самими саму",
+	// Possessives.
+	"мой моя моё мое мои моего моей моему моим моём моих моими мою",
+	"твой твоя твоё твое твои твоего твоей твоему твоим твоём твоих твоими твою",
+	"свой своя своё свое свои своего своей своему своим своём своих своими свою",
+	"наш наша наше наши нашего нашей нашему нашим нашем наших нашими нашу",
+	"ваш ваша ваше ваши вашего вашей вашему вашим вашем ваших вашими вашу",
+	// "быть": past, present and future forms.
+	"быть был была было были есть буду будешь будет будем будете будут",
+	// Conjunctions.
+	"если или когда чтобы чтоб потому поэтому также тоже хотя хоть зато однако либо нибудь будто",
+	// Prepositions.
+	"для без над под при про после перед через между кроме ради среди вместо около",
+	// Adverbs of place, time and degree.
+	"где куда откуда здесь тут там туда сюда",
+	"уже теперь сейчас потом затем тогда иногда всегда никогда опять наконец",
+	"как так очень почти более менее только даже именно совсем чуть лишь",
+	"зачем почему",
+	// Particles, modal words and conversational fillers.
+	"да нет вот ещё еще ведь вдруг разве впрочем надо нужно может можно",
+	"давай давайте пусть пожалуйста",
+}
+
+// stopwordSet flattens whitespace-separated word groups into a lookup set.
+func stopwordSet(groups ...[]string) map[string]struct{} {
+	set := map[string]struct{}{}
+	for _, lines := range groups {
+		for _, line := range lines {
+			for _, w := range strings.Fields(line) {
+				set[w] = struct{}{}
+			}
+		}
 	}
-	m := make(map[string]struct{}, len(words))
-	for _, w := range words {
-		m[w] = struct{}{}
-	}
-	return m
-}()
+	return set
+}
 
 // Relevance tokenizes text for ranking use: lowercased, Unicode-aware, minimum
 // rune length, with DefaultStopwords removed. This is the single policy point

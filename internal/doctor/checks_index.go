@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/inject"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/memindex"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 )
@@ -60,8 +61,7 @@ func checkGlobalIndex(claudeDir string) Check {
 // settings.json's env block — doctor usually runs from a plain shell that
 // does not carry Claude Code's env.
 func pullOnly(claudeDir string) bool {
-	off := func(v string) bool { return strings.EqualFold(strings.TrimSpace(v), "off") }
-	if off(os.Getenv("HYPOMNEMA_PROMPT_INJECT")) {
+	if inject.PullOnlyFromEnv() {
 		return true
 	}
 	data, err := os.ReadFile(filepath.Join(claudeDir, "settings.json"))
@@ -74,5 +74,5 @@ func pullOnly(claudeDir string) bool {
 	if json.Unmarshal(data, &s) != nil {
 		return false
 	}
-	return off(s.Env["HYPOMNEMA_PROMPT_INJECT"])
+	return inject.PullOnly(s.Env[inject.PromptInjectEnv])
 }
