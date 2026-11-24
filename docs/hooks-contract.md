@@ -424,7 +424,8 @@ Contract (see CLAUDE.md "Lifecycle"):
 - Recomputes effectiveness in the sidecar; marks unused facts `stale` past their
   type threshold (age from last injection, else `created`, else the date of
   Claude Code's `modified` stamp). No native content is mutated; `pinned`
-  facts and each project's freshest `continuity` fact never decay — older
+  facts, each project's freshest `continuity` fact and project-local
+  `feedback` (SessionStart core) never decay — older
   continuity files age like notes (30 days), `project` like knowledge (90).
 - Regenerates the project's native `MEMORY.md` (and the global index).
 - Ages out stale `active-skill-<sid>` markers (>24 h) from `.runtime/`.

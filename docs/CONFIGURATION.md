@@ -104,6 +104,9 @@ Rules:
   when `created` is absent, to the date of Claude Code's `modified` stamp).
   A fact in active rotation never goes stale just because its file is old.
 - `status: pinned` files never decay.
+- Project-local `feedback` never decays: it is SessionStart core, a stale
+  fact is not core, and a core fact is refreshed only by being core. Global
+  feedback ages (45 days).
 - A project's **freshest** `continuity` fact — the later of `created` and
   `modified`; on a tie, the lexically greater filename — is the live "where
   we left off" marker: never decays, and it is the only continuity fact

@@ -37,8 +37,8 @@ is what keeps memory actually visible). SessionStart fills it with the fixed
 core (see "How injection ranks files"); core facts that do not fit are listed
 as one-line pointers (`- name — absolute path — description`) under
 `_Not loaded (budget): read if relevant._` — pointers are not deliveries, a
-fact you then Read counts the usual way — and the Memory-queue line's bytes
-are reserved before them. UserPromptSubmit injects a ranked **top-8** across
+fact you then Read counts the usual way. The Memory-queue line's bytes are
+reserved first, before core bodies and pointers. UserPromptSubmit injects a ranked **top-8** across
 all types. A fact injects **once per context** — later prompts only add facts
 that newly enter the top-8, and a fact re-enters offerable state after a
 compaction or `/clear` wipes it from the model's context. Per-type quotas are
@@ -248,7 +248,7 @@ shows `[retired <date> → successor]` instead of silently forgetting.
   `session-metrics`), keeping the original as `.wal.pre-compact-<date>`.
 - Marks facts `stale` in the sidecar when unused past their type threshold — age counts from **last injection** (fallback `created`, which falls back to the date of Claude Code's `modified` stamp), so facts in rotation stay alive. No native content mutation.
 - Archiving ships as `memoryctl retire` (see the lifecycle loop above): the file moves to the store's `.archive/`, the sidecar row becomes `retired`, and recall shows a tombstone redirect. Stale facts that were never retired simply stop injecting.
-- `status: pinned` files and each project's **freshest** `continuity` fact (later of `created`/`modified`) never decay. Only that freshest continuity is injected; older continuity files are history — recallable, aging like notes (30 days). Claude Code's own `type: project` means ongoing work/goals, so it ages like knowledge (90 days); pin a project card that must never age.
+- `status: pinned` files, each project's **freshest** `continuity` fact (later of `created`/`modified`) and project-local `feedback` never decay — they are the SessionStart core, which a stale fact leaves, and a core fact is refreshed only by being core (global feedback still ages, 45 days). Only that freshest continuity is injected; older continuity files are history — recallable, aging like notes (30 days). Claude Code's own `type: project` means ongoing work/goals, so it ages like knowledge (90 days); pin a project card that must never age.
 - `memoryctl close --subagent` (SubagentStop) runs the same citation classification on the subagent's own transcript (including its SubagentHandback report) under the key `<session_id>:<agent_id>`; session-level work stays with the parent's Stop. Counters of "how many sessions" (doctor candidates) count a session and its subagents once.
 
 ## How injection ranks files
@@ -266,8 +266,9 @@ unrelated facts; the rest arrives by pull (the `MEMORY.md` index, `recall`).
 the core only (`resume` keeps the session dedup: facts already in the
 transcript are not re-sent). After `compact` with a summary, the core is
 followed by ranked facts whose **head** (`name`, `description`, `keywords`,
-`domains`) contains at least **two distinct** summary terms — gated first,
-then ranked, cut to top-8. Terms that do not count toward that gate: path
+`domains`) contains at least **two distinct** terms of the summary's focus
+sections (read in full, not the top-40 ranking query) — gated first, then
+ranked, cut to top-8. Terms that do not count toward that gate: path
 components of `$HOME` and of the canonical project root (not those below it —
 a worktree name is the task), digit-only tokens, and head terms present in
 at least `max(5, ⌈10 % × N⌉)` of the N in-scope facts. `doctor`'s candidate

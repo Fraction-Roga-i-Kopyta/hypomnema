@@ -95,7 +95,8 @@ regardless of age, and that `pinned` outranks `active` on ranking ties. It does
 NOT reserve an injection slot — the top-8 flex pool is allocated by relevance
 score, so a pinned fact with weak keyword/effectiveness signal can still lose
 its slot. A project's freshest `continuity` fact also never decays, pinned or
-not (§4); every other type ages, `project` included.
+not (§4), nor does project-local `feedback` (SessionStart core); every other
+type ages, `project` and global `feedback` included.
 
 ### 3.2 Tolerated syntax (parser MUST accept)
 

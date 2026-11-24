@@ -110,7 +110,7 @@ fight the harness for the index channel.
 
 ## How injection ranks files
 
-**SessionStart injects a fixed core, not a ranking:** the project's freshest `continuity`, then `status: pinned` facts (project-local, then global), then project-local `type: feedback` — freshest first within each group. Facts that are stale, hidden, or marked *less* in `/memboard` are left out. Core facts that do not fit the 8 KB budget are listed as one-line pointers (name, absolute path, description) that the model can Read; the Memory-queue line keeps its room. There is no ranked fill: memory beyond the core arrives by pull (the `MEMORY.md` index, `memoryctl recall`). After a compaction with a readable summary, the core is followed by up to 8 ranked facts whose name, description, keywords or domains contain at least two distinct summary terms (the project root's and `$HOME`'s path components, numbers and corpus-common head words do not count). `/clear` and a compaction without a summary inject the core only.
+**SessionStart injects a fixed core, not a ranking:** the project's freshest `continuity`, then `status: pinned` facts (project-local, then global), then project-local `type: feedback` — freshest first within each group. Facts that are stale, hidden, or marked *less* in `/memboard` are left out. Core facts that do not fit the 8 KB budget are listed as one-line pointers (name, absolute path, description) that the model can Read; the Memory-queue line's room is reserved first. There is no ranked fill: memory beyond the core arrives by pull (the `MEMORY.md` index, `memoryctl recall`). After a compaction with a readable summary, the core is followed by up to 8 ranked facts whose name, description, keywords or domains contain at least two distinct terms of the summary's focus sections, read in full (the project root's and `$HOME`'s path components, numbers and corpus-common head words do not count). `/clear` and a compaction without a summary inject the core only.
 
 Everywhere else, a single relevance ranker (merged from the two v1 pipelines) scores every candidate:
 
@@ -316,7 +316,7 @@ The same data is available as JSON: `memoryctl stats --json --scope session|proj
 | strategies | 90 days |
 | knowledge | 90 days |
 | decisions | 90 days |
-| feedback | 45 days |
+| feedback | never for project-local (SessionStart core); 45 days for global |
 | notes | 30 days |
 | project | 90 days |
 | continuity | never for a project's freshest one; 30 days for older ones |
