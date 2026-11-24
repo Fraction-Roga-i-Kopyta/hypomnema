@@ -40,6 +40,8 @@ Five coupled choices, shipped together (spec
 
 ## Why
 
+Figures and method: `docs/measurements/2026-11-24-core-memory.md`.
+
 - **Ranked push missed.** WAL 2026-11-09…24 (v3.1.0): parent sessions
   recorded 30 `cite-useful` against 975 `cite-silent` (3 %) at 42
   injections per session. The model's own account of a session: the

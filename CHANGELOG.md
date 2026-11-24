@@ -48,8 +48,9 @@ mode — `HYPOMNEMA_PROMPT_INJECT=off` in `settings.json` `env` plus
 
 - `doctor` check `global_index`: warns on a global MEMORY.md memoryctl did
   not generate, and on pull-only mode without the global index import.
-- ADR `docs/decisions/session-start-core.md`; INVARIANTS I6 rewritten for
-  the core.
+- ADR `docs/decisions/session-start-core.md`, with the numbers behind it in
+  `docs/measurements/2026-11-24-core-memory.md`; INVARIANTS I6 rewritten
+  for the core.
 
 ### Fixed
 
@@ -161,6 +162,53 @@ About 3 900 lines removed (code and tests).
   itself once on first open.
 
 ## [2.17.0] — 2026-11-08
+
+Prompt-time injection gets stricter about what a prompt actually asks for,
+and memory can be run without it.
+
+### Added
+
+- **Pull-only mode.** With `HYPOMNEMA_PROMPT_INJECT=off` (for example in
+  `settings.json` `env`) UserPromptSubmit pushes no facts at all — no output,
+  no WAL row, no session-list entry. The model reads the `MEMORY.md` index
+  the harness already loads and opens the facts it needs; a Read of a fact
+  still counts as its delivery, so citations keep measuring usefulness.
+  SessionStart, SubagentStart, decay and the secrets guard work as before.
+- **An index for the global store.** The harness only loads the project's
+  `MEMORY.md`, so without prompt-time push the global store was out of
+  sight. The Stop hook and `memoryctl reindex` now also write
+  `~/.claude/memory-global/MEMORY.md`, headed `# Global Memory Index`, with
+  an absolute-path link per fact; import it from the user CLAUDE.md with
+  `@~/.claude/memory-global/MEMORY.md`. An existing `MEMORY.md` there
+  without that header is someone else's and is never overwritten —
+  `reindex` reports it on stderr.
+
+### Fixed
+
+- **Prompt-time injection of facts the prompt did not ask about.** Ranking is
+  zero-safe, so after the matching facts, recency filled the rest of the
+  top-8 on every prompt. UserPromptSubmit now gates before ranking: a fact
+  passes when a prompt term is in its head (`name`, `description`,
+  `keywords`, `domains`), or when it shares two or more distinct prompt terms
+  with its file anywhere. One body-only hit is not enough — in a
+  conversational prompt it is usually a filler word. Terms from cwd and git
+  still rank but never pass the gate, a prompt with no relevance terms
+  injects nothing, and overlap is counted on the fact's own file, so another
+  project's `continuity.md` cannot lend it words. SessionStart and
+  SubagentStart are not affected. How the push performed on a live install
+  afterwards: `docs/measurements/2026-11-24-core-memory.md`.
+- **The login name as a query term.** Launched from `~`, the cwd basename is
+  the user's login, which every fact quoting an absolute path contains; it
+  matched an arbitrary slice of the corpus and was often the only
+  SessionStart term. The basename is no longer used when cwd is the home
+  directory.
+- **Inflected Russian function words scored as relevance.** The stopword
+  list had lemmas only, so case forms of pronouns and determiners ("этом",
+  "тому", "тех", "своих") and particles ("давай", "пусть") each earned a
+  full overlap point — 3.0, more than recency can give. They are stopwords
+  now. Nothing needs rebuilding (queries are filtered the same way);
+  `memoryctl sidecar rebuild` clears the keyword rows they left behind.
+
 ## [2.16.0] — 2026-10-11
 
 ### Changed
