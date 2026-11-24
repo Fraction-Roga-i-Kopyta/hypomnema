@@ -6,7 +6,7 @@
 
 **Working memory for your AI agent, not a second brain for you.** Hypomnema decides what Claude Code knows when a session or a subagent starts: the project's current state, the rules you gave it, the mistakes it already made. It is a governance and ranking layer over Claude Code's native file memory — a Go engine (`memoryctl`) + 9 thin shims. No cloud, no embeddings, no vault.
 
-> **Status:** v3.0.0; native-primary. Requires Claude Code ≥ v2.1.59 (native file memory). v1.x stays on its tag for older Claude Code installs — see [MIGRATION.md](docs/MIGRATION.md) for the v1.x → v2.x upgrade path.
+> **Status:** v3.2.0; native-primary. Requires Claude Code ≥ v2.1.59 (native file memory). v1.x stays on its tag for older Claude Code installs — see [MIGRATION.md](docs/MIGRATION.md) for the v1.x → v2.x upgrade path.
 >
 > **Platforms:** macOS (primary, daily-driver) and Linux (`ubuntu-latest`), both covered by CI. The core is the Go binary; the shims are ~5-line `sh` marshallers. Windows: WSL only, native unsupported.
 >
