@@ -283,20 +283,10 @@ func Run(in Input) (Result, error) {
 		core = coreFacts(files, cands, st.Project)
 		ranked = append(ranked, core...)
 	} else {
-		// Facts already in context leave the pool before the K cut, so
-		// they hold no slot and a same-name project fact competes on its
-		// own score rather than inheriting the global twin's position.
-		if len(in.AlreadyInjected) > 0 {
-			seen := native.NewKeySet(in.AlreadyInjected)
-			fresh := cands[:0]
-			for _, c := range cands {
-				if !seen.Has(c.Project, c.Slug) {
-					fresh = append(fresh, c)
-				}
-			}
-			cands = fresh
-		}
-		ranked = topDistinct(q, cands, st.Project, in.MaxK)
+		// Once per context: facts already in context keep their ranked
+		// slot and count toward K, then drop from the render — a prompt
+		// only adds facts that newly enter the top-K.
+		ranked = topDistinct(q, cands, st.Project, in.MaxK, native.NewKeySet(in.AlreadyInjected))
 	}
 	if in.Event == "SessionStart" && len(in.AlreadyInjected) > 0 {
 		seen := native.NewKeySet(in.AlreadyInjected)
@@ -354,15 +344,53 @@ func needsTerms(in Input) bool {
 	return in.Event != "SessionStart"
 }
 
-// topDistinct ranks cands without a K cut, keeps one fact per slug
-// (project-local wins), then cuts to k — deduplicating after the cut would
-// let a project/global same-slug pair spend two of the k slots on one fact.
-func topDistinct(q rank.Query, cands []rank.Candidate, project string, k int) []rank.Scored {
-	out := dedupBySlug(rank.Rank(q, cands, 0), project)
-	if k > 0 && len(out) > k {
-		out = out[:k]
+// topDistinct ranks cands without a K cut, keeps one fact per slug among
+// the facts not yet shown (project-local wins), cuts to k, then drops the
+// shown ones. Deduplicating after the cut would let a project/global
+// same-slug pair spend two of the k slots on one fact. A shown fact keeps
+// its ranked slot and counts toward k — later prompts only add facts that
+// newly enter the top-k — but takes no part in the dedup: a fact already in
+// context never swallows its unshown same-name twin, which competes on its
+// own score.
+func topDistinct(q rank.Query, cands []rank.Candidate, project string, k int, shown native.KeySet) []rank.Scored {
+	all := rank.Rank(q, cands, 0)
+	var fresh []rank.Scored
+	for _, sc := range all {
+		if !shown.Has(sc.Project, sc.Slug) {
+			fresh = append(fresh, sc)
+		}
 	}
-	return out
+	// Each unshown slug's winner sits at the rank of its first occurrence.
+	winner := make(map[string]rank.Scored, len(fresh))
+	for _, sc := range dedupBySlug(fresh, project) {
+		winner[sc.Slug] = sc
+	}
+	var out []rank.Scored
+	var isShown []bool
+	placed := make(map[string]bool, len(winner))
+	for _, sc := range all {
+		if shown.Has(sc.Project, sc.Slug) {
+			out = append(out, sc)
+			isShown = append(isShown, true)
+			continue
+		}
+		if placed[sc.Slug] {
+			continue
+		}
+		placed[sc.Slug] = true
+		out = append(out, winner[sc.Slug])
+		isShown = append(isShown, false)
+	}
+	if k > 0 && len(out) > k {
+		out, isShown = out[:k], isShown[:k]
+	}
+	kept := out[:0]
+	for i, sc := range out {
+		if !isShown[i] {
+			kept = append(kept, sc)
+		}
+	}
+	return kept
 }
 
 // overflowCore returns the core facts that were offered to render (ranked,
