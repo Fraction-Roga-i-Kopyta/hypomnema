@@ -6,7 +6,7 @@ You are working inside the hypomnema project: a governance + ranking layer for C
 
 Claude Code v2.1.59+ ships native file memory: the harness stores markdown files in `~/.claude/projects/<slug>/memory/` and injects only a `MEMORY.md` index. Hypomnema adds what native lacks:
 
-- **Ranked auto-injection** — `memoryctl inject` (SessionStart + UserPromptSubmit shims) ranks native facts by relevance and injects the top-K via `additionalContext`, not just a table of contents, and `SubagentStart` (each eligible subagent gets its own ranked top-5 for the task it was launched with).
+- **Core + ranked auto-injection** — `memoryctl inject` delivers via `additionalContext`, not just a table of contents: SessionStart injects a fixed core (the project's continuity, pinned facts, project feedback), UserPromptSubmit ranks native facts by relevance and injects the top-K, and `SubagentStart` gives each eligible subagent its own ranked top-5 for the task it was launched with.
 - **Effectiveness measurement** — WAL tracks `<cc-memory>` citations (`cite-useful`/`cite-silent`) per session; Bayesian effectiveness is a diagnostic, not part of the ranking score.
 - **Decay + lifecycle** — `memoryctl close` (Stop shim) down-ranks stale facts in the sidecar; content is never mutated by hooks.
 - **Secrets gate** — `memoryctl guard` (PreToolUse:Write shim) blocks credential patterns before they land in a memory file; `memoryctl guard-bash` (PreToolUse:Bash shim) blocks the model's own `memoryctl pin`/`unpin`/`mark` calls.
@@ -31,14 +31,19 @@ Logical types:
 | `project` | Ongoing work, goals, constraints (Claude Code's own type); pin a project card |
 | `continuity` | "Where we left off" — one `continuity.md` per project, rewritten in place |
 
-Injection budget: a single ranked **top-8** across all types, capped at
-**2.5KB per body and 8KB total** (Claude Code diverts oversized hook output
-to a file the model never reads inline, so the budget is what keeps memory
-actually visible). A fact injects **once per context** — later prompts only
-add facts that newly enter the top-8, and a fact re-enters offerable state
-after a compaction or `/clear` wipes it from the model's context. Per-type
-quotas are not implemented; type balance emerges from relevance. Subagents
-get a smaller budget — top-5, 5 KB total — ranked against their own task.
+Injection budget: **2.5KB per body and 8KB total** (Claude Code diverts
+oversized hook output to a file the model never reads inline, so the budget
+is what keeps memory actually visible). SessionStart fills it with the fixed
+core (see "How injection ranks files"); core facts that do not fit are listed
+as one-line pointers (`- name — absolute path — description`) under
+`_Not loaded (budget): read if relevant._` — pointers are not deliveries, a
+fact you then Read counts the usual way — and the Memory-queue line's bytes
+are reserved before them. UserPromptSubmit injects a ranked **top-8** across
+all types. A fact injects **once per context** — later prompts only add facts
+that newly enter the top-8, and a fact re-enters offerable state after a
+compaction or `/clear` wipes it from the model's context. Per-type quotas are
+not implemented; type balance emerges from relevance. Subagents get a smaller
+budget — top-5, 5 KB total — ranked against their own task.
 
 ## Frontmatter schema
 
@@ -248,8 +253,31 @@ shows `[retired <date> → successor]` instead of silently forgetting.
 
 ## How injection ranks files
 
-A single relevance ranker (v2 merged the two v1 pipelines into one). The
-score is an additive blend — no single zero signal annihilates a candidate:
+**SessionStart does not rank: it injects a fixed core.** In order: (1) the
+project's freshest `continuity` (only through this slot — a pinned or older
+continuity is never core); (2) `status: pinned` facts, project-local then
+global; (3) project-local `type: feedback`. Freshest first within a group
+(later of `created`/`modified`), slug tie-break; one fact per file name,
+project-local winning. A fact that is `stale`/retired, hidden by `/memboard`,
+or marked **less** is not core (less keeps it rankable and pullable). There
+is no ranked fill after the core — cwd/git overlap was the source of
+unrelated facts; the rest arrives by pull (the `MEMORY.md` index, `recall`).
+`startup`, `resume`, `clear`, and `compact` without a readable summary inject
+the core only (`resume` keeps the session dedup: facts already in the
+transcript are not re-sent). After `compact` with a summary, the core is
+followed by ranked facts whose **head** (`name`, `description`, `keywords`,
+`domains`) contains at least **two distinct** summary terms — gated first,
+then ranked, cut to top-8. Terms that do not count toward that gate: path
+components of `$HOME` and of the canonical project root (not those below it —
+a worktree name is the task), digit-only tokens, and head terms present in
+at least `max(5, ⌈10 % × N⌉)` of the N in-scope facts. `doctor`'s candidate
+check skips facts that are actually core — they are delivered every session
+by design.
+
+Everywhere else (UserPromptSubmit, compact SessionStart's tail, SubagentStart,
+`recall`, `skill-inject`) a single relevance ranker applies (v2 merged the two
+v1 pipelines into one). The score is an additive blend — no single zero
+signal annihilates a candidate:
 
 ```
 score = 3.0 × overlap(session_keywords, file keywords+name+description+body)
@@ -277,9 +305,9 @@ demotes stops being injected and then ages out; nothing is staled by fiat.
 
 Status filter: `active` and `pinned` only (sidecar-managed `stale` is excluded). Scope filter: only the current project's facts plus the global store — other projects' rows never inject. Result cap: top-8, 8KB total, once per context per fact (again after compaction/`/clear`).
 
-`session_keywords` come from prompt tokens, CWD basename (skipped when CWD is the home directory — its basename is the login name, present in every fact that quotes an absolute path), and git context (branch name, changed filenames, recent commit subjects) on both SessionStart and UserPromptSubmit (reactive re-rank).
+`session_keywords` come from prompt tokens (on a compact SessionStart, the compaction summary's focus sections), CWD basename (skipped when CWD is the home directory — its basename is the login name, present in every fact that quotes an absolute path), and git context (branch name, changed filenames, recent commit subjects).
 
-**Prompt gate.** On UserPromptSubmit a fact injects only if the prompt names what it is about — a prompt term in its `name`, `description`, `keywords` or `domains` — or shares at least two terms with it anywhere (counted on the fact's own file, never on a same-named fact of another project); a single body-only hit does not pass (in conversational prompts it is mostly a filler word). CWD and git terms still rank but do not pass the gate. A prompt with no relevance terms ("ok", "да, и что там") injects nothing. SessionStart has no prompt and keeps priming on static signals; SubagentStart queries are full task briefs and are not gated.
+**Prompt gate.** On UserPromptSubmit a fact injects only if the prompt names what it is about — a prompt term in its `name`, `description`, `keywords` or `domains` — or shares at least two terms with it anywhere (counted on the fact's own file, never on a same-named fact of another project); a single body-only hit does not pass (in conversational prompts it is mostly a filler word). CWD and git terms still rank but do not pass the gate. A prompt with no relevance terms ("ok", "да, и что там") injects nothing. SessionStart injects the fixed core, gated only for its post-compaction tail (two distinct head terms, above); SubagentStart queries are full task briefs and are not gated.
 
 **Pull-only mode.** `HYPOMNEMA_PROMPT_INJECT=off` (e.g. in `settings.json` `env`) makes UserPromptSubmit inject nothing — Claude Code's own design: the harness loads the project `MEMORY.md` index every session and the model reads the facts whose descriptions fit the task. The Stop hook and `memoryctl reindex` also write `~/.claude/memory-global/MEMORY.md` — the global store's index with absolute links — so the global store stays visible: import it from the user CLAUDE.md with `@~/.claude/memory-global/MEMORY.md`. A `MEMORY.md` already there that memoryctl did not generate is left untouched. A fact the model reads with the Read tool counts as delivered, so citations keep measuring usefulness. In this mode descriptions are the retrieval signal: write them so the first ~120 characters say what the fact is about.
 

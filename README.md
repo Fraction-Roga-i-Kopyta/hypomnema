@@ -87,7 +87,7 @@ size. See [`docs/measurements/2026-05-29-v2-ranker-ab.md`](docs/measurements/202
 
 | Event (matcher) | Shim | What memoryctl does |
 |---|---|---|
-| `SessionStart` | `session-start.sh` | Detect project + git context + keywords → rank native facts → inject top-K via `additionalContext` |
+| `SessionStart` | `session-start.sh` | Detect project → inject the fixed core (freshest continuity, pinned facts, project feedback) via `additionalContext`; after compaction, plus facts the summary names |
 | `UserPromptSubmit` | `user-prompt-submit.sh` | Re-rank with prompt tokens added → inject anything not yet in session |
 | `PreToolUse:Write\|Edit` | `pre-tool-write.sh` | `guard`: secrets scan on memory-path writes → exit 2 on a credential pattern |
 | `PreToolUse:Bash` | `pre-tool-bash.sh` | `guard-bash`: block the model's own `memoryctl pin` / `unpin` / `mark` (only `mark <slug> done` passes) — those are `/memboard` panel actions |
@@ -110,7 +110,9 @@ fight the harness for the index channel.
 
 ## How injection ranks files
 
-A single relevance ranker (merged from the two v1 pipelines) scores every candidate:
+**SessionStart injects a fixed core, not a ranking:** the project's freshest `continuity`, then `status: pinned` facts (project-local, then global), then project-local `type: feedback` — freshest first within each group. Facts that are stale, hidden, or marked *less* in `/memboard` are left out. Core facts that do not fit the 8 KB budget are listed as one-line pointers (name, absolute path, description) that the model can Read; the Memory-queue line keeps its room. There is no ranked fill: memory beyond the core arrives by pull (the `MEMORY.md` index, `memoryctl recall`). After a compaction with a readable summary, the core is followed by up to 8 ranked facts whose name, description, keywords or domains contain at least two distinct summary terms (the project root's and `$HOME`'s path components, numbers and corpus-common head words do not count). `/clear` and a compaction without a summary inject the core only.
+
+Everywhere else, a single relevance ranker (merged from the two v1 pipelines) scores every candidate:
 
 ```
 score = 3.0 × overlap(keywords, file keywords+name+description+body)
@@ -124,7 +126,7 @@ Recency tracks the model's use, not the ranker's own output: it decays from the 
 
 The blend is additive and zero-safe: a brand-new fact with `ref_count=0` and no outcome history is still injectable — it scores on overlap and its frontmatter `created` recency, not zero. Status filter: `active` and `pinned` only; `stale` is skipped (down-ranked in sidecar, still on disk). Scope filter: only the current project's facts plus the global store inject — other projects' rows never leak in. The result is a flat top-8, capped at 2.5KB per body and 8KB total (Claude Code diverts larger hook payloads to a file the model never sees inline), and each fact injects at most once per context (again after a compaction/`/clear` wipes it).
 
-Keyword overlap is the primary signal. Keywords come from git context (branch name, changed filenames, recent commit messages, CWD basename — skipped for the home directory) plus prompt tokens, on both events. On UserPromptSubmit a fact injects only if a prompt term is in its name/description/keywords/domains, or it shares at least two terms with the prompt; SessionStart is not gated. `HYPOMNEMA_PROMPT_INJECT=off` turns per-prompt injection off entirely (pull-only mode: the `MEMORY.md` index plus a global index imported from CLAUDE.md, and the model's own reads). The old substring-trigger mechanism is gone; the ranker treats all tokens as relevance signal, not imperative triggers.
+Keyword overlap is the primary signal. Keywords come from git context (branch name, changed filenames, recent commit messages, CWD basename — skipped for the home directory) plus prompt tokens. On UserPromptSubmit a fact injects only if a prompt term is in its name/description/keywords/domains, or it shares at least two terms with the prompt. `HYPOMNEMA_PROMPT_INJECT=off` turns per-prompt injection off entirely (pull-only mode: the `MEMORY.md` index plus a global index imported from CLAUDE.md, and the model's own reads). The old substring-trigger mechanism is gone; the ranker treats all tokens as relevance signal, not imperative triggers.
 
 You do NOT need to set ranks manually. Write good frontmatter (`keywords`, `domains`), let `memoryctl inject` handle the rest.
 
