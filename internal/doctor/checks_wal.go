@@ -1,11 +1,12 @@
 package doctor
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/lineio"
 )
 
 // walErrorEvents lists WAL event types that signal corpus-health trouble.
@@ -29,18 +30,15 @@ func checkWALErrors(walPath string, now time.Time) Check {
 	cutoff := now.AddDate(0, 0, -7).Format("2006-01-02")
 	counts := map[string]int{}
 	totalLines := 0
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for sc.Scan() {
+	err = lineio.Each(f, func(line string) error {
 		totalLines++
-		line := sc.Text()
 		// WAL grammar: date|event|target|session (docs/FORMAT.md §5).
 		parts := strings.SplitN(line, "|", 4)
 		if len(parts) < 2 {
-			continue
+			return nil
 		}
 		if parts[0] < cutoff {
-			continue
+			return nil
 		}
 		for _, ev := range walErrorEvents {
 			if parts[1] == ev {
@@ -48,9 +46,10 @@ func checkWALErrors(walPath string, now time.Time) Check {
 				break
 			}
 		}
-	}
-	if err := sc.Err(); err != nil {
-		return Check{Name: "wal_errors_last_7d", Status: WARN, Detail: "scan error: " + err.Error()}
+		return nil
+	})
+	if err != nil {
+		return Check{Name: "wal_errors_last_7d", Status: WARN, Detail: "read error: " + err.Error()}
 	}
 	totalErrs := 0
 	parts := []string{}
@@ -125,28 +124,26 @@ func checkOpenQuanta(walPath string, now time.Time) Check {
 	cutoff := now.AddDate(0, 0, -openQuantaWindowDays).Format("2006-01-02")
 	injectSess := map[string]int{} // session_id → inject count
 	closedSess := map[string]bool{}
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for sc.Scan() {
-		line := sc.Text()
+	err = lineio.Each(f, func(line string) error {
 		parts := strings.SplitN(line, "|", 4)
 		if len(parts) < 4 {
-			continue
+			return nil
 		}
 		if parts[0] < cutoff {
-			continue
+			return nil
 		}
 		event, sess := parts[1], parts[3]
 		if event == "inject" {
 			injectSess[sess]++
-			continue
+			return nil
 		}
 		if closingEvents[event] {
 			closedSess[sess] = true
 		}
-	}
-	if err := sc.Err(); err != nil {
-		return Check{Name: name, Status: WARN, Detail: "scan error: " + err.Error()}
+		return nil
+	})
+	if err != nil {
+		return Check{Name: name, Status: WARN, Detail: "read error: " + err.Error()}
 	}
 	total := len(injectSess)
 	if total == 0 {
@@ -244,19 +241,17 @@ func checkCitationSignal(walPath string, now time.Time) Check {
 	usefulSess := map[string]bool{}
 	factSess := map[string]bool{} // parent "slug|session" → cited useful
 
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for sc.Scan() {
-		parts := strings.SplitN(sc.Text(), "|", 4)
+	err = lineio.Each(f, func(line string) error {
+		parts := strings.SplitN(line, "|", 4)
 		if len(parts) < 4 {
-			continue
+			return nil
 		}
 		event, sess := parts[1], parts[3]
 		if strings.HasPrefix(event, "cite-") {
 			hasCiteHistory = true
 		}
 		if parts[0] < cutoff {
-			continue
+			return nil
 		}
 		if strings.HasPrefix(event, "cite-") {
 			classifiedSess[sess] = true
@@ -276,9 +271,10 @@ func checkCitationSignal(walPath string, now time.Time) Check {
 				}
 			}
 		}
-	}
-	if err := sc.Err(); err != nil {
-		return Check{Name: name, Status: WARN, Detail: "scan error: " + err.Error()}
+		return nil
+	})
+	if err != nil {
+		return Check{Name: name, Status: WARN, Detail: "read error: " + err.Error()}
 	}
 	factUseful, factSilent := 0, 0
 	for _, useful := range factSess {

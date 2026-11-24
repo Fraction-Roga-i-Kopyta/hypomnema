@@ -1,7 +1,6 @@
 package doctor
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"os"
@@ -9,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/lineio"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/sidecar"
 )
@@ -114,8 +114,8 @@ func atLineStart(walPath string, off int64) bool {
 
 // parentCloseAfter reports whether the WAL holds a parent session-close
 // (session column without ':') at or after byte offset off. Any open, seek or
-// scan error (including a line over the 1 MB scanner buffer) is returned, so
-// the caller can fail toward WARN rather than report a false "no close".
+// read error is returned, so the caller can fail toward WARN rather than
+// report a false "no close". Lines have no length cap.
 func parentCloseAfter(walPath string, off int64) (bool, error) {
 	f, err := os.Open(walPath)
 	if err != nil {
@@ -125,15 +125,16 @@ func parentCloseAfter(walPath string, off int64) (bool, error) {
 	if _, err := f.Seek(off, io.SeekStart); err != nil {
 		return false, err
 	}
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for sc.Scan() {
-		parts := strings.SplitN(sc.Text(), "|", 4)
+	closed := false
+	err = lineio.Each(f, func(line string) error {
+		parts := strings.SplitN(line, "|", 4)
 		if len(parts) == 4 && parts[1] == "session-close" && !strings.Contains(parts[3], ":") {
-			return true, nil
+			closed = true
+			return lineio.ErrStop
 		}
-	}
-	return false, sc.Err()
+		return nil
+	})
+	return closed, err
 }
 
 // checkStoreResolution reports the native store this invocation resolved

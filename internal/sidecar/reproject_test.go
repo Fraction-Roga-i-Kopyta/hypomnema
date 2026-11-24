@@ -4,6 +4,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
@@ -842,5 +843,41 @@ func TestReproject_CompactableRowsDoNotFeedProjection(t *testing.T) {
 	}
 	if r, _, _ := s.Get("fact.md"); r.Created != "2026-10-01" {
 		t.Errorf("created = %q, want 2026-10-01 (legacy rows ignored)", r.Created)
+	}
+}
+
+// A WAL row longer than any bufio.Scanner cap must not truncate the
+// projection: rows after it still feed the aggregates.
+func TestReproject_OversizedRowDoesNotTruncate(t *testing.T) {
+	dir := t.TempDir()
+	walPath := filepath.Join(dir, ".wal")
+	lines := "2026-04-01|inject|m.md|s1\n" +
+		"2026-04-02|inject|big.md|" + strings.Repeat("s", 2<<20) + "\n" +
+		"2026-04-03|inject|m.md|s3\n" +
+		"2026-04-03|inject|n.md|s3\n"
+	if err := os.WriteFile(walPath, []byte(lines), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(filepath.Join(dir, ".sidecar.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	files := []native.MemFile{
+		{Slug: "m.md", ContentSHA: "m"},
+		{Slug: "n.md", ContentSHA: "n"},
+		{Slug: "big.md", ContentSHA: "b"},
+	}
+	if err := Reproject(s, files, walPath, nil); err != nil {
+		t.Fatal(err)
+	}
+	if r, _, _ := s.Get("m.md"); r.RefCount != 2 || r.LastInjected != "2026-04-03" {
+		t.Errorf("m.md ref_count=%d last=%q, want 2 / 2026-04-03", r.RefCount, r.LastInjected)
+	}
+	if r, _, _ := s.Get("n.md"); r.RefCount != 1 || r.Created != "2026-04-03" {
+		t.Errorf("n.md ref_count=%d created=%q, want 1 / 2026-04-03", r.RefCount, r.Created)
+	}
+	if r, _, _ := s.Get("big.md"); r.RefCount != 1 {
+		t.Errorf("big.md ref_count=%d, want 1 (the oversized row itself)", r.RefCount)
 	}
 }
