@@ -720,7 +720,7 @@ func writeFM(t *testing.T, dir, slug, fm, body string) {
 func runSS(t *testing.T, memDir, home, source, prompt string) Result {
 	t.Helper()
 	res, err := Run(Input{
-		Event: "SessionStart", Source: source, SessionID: "s1", CWD: "/tmp/proj", Prompt: prompt, GateText: prompt,
+		Event: "SessionStart", Source: source, SessionID: "s1", CWD: "/tmp/proj", Prompt: prompt,
 		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir,
 		Today: "2026-11-24", MaxK: 8,
 	})
@@ -749,28 +749,16 @@ func TestRun_SessionStartStartupInjectsOnlyCore(t *testing.T) {
 	}
 }
 
-// After compaction the core comes first, then facts the summary names (two
-// distinct head terms) — gated BEFORE ranking, so prompt-body-matching fresh
-// facts cannot take the K slots.
-func TestRun_SessionStartCompactAddsGatedRanked(t *testing.T) {
+// After compaction SessionStart injects the core only: a fact whose head
+// the summary names twice stays out (the summary carries the task state).
+func TestRun_SessionStartCompactInjectsCoreOnly(t *testing.T) {
 	memDir, projDir, home := setup(t)
 	writeFM(t, projDir, "continuity.md", "name: continuity\ntype: continuity\ncreated: 2026-11-23", "next: ship the core")
 	writeFM(t, projDir, "zz-target.md", "name: Postgres migration lock\ntype: mistake\ncreated: 2025-01-01", "take the advisory lock first")
-	writeFM(t, projDir, "onehit.md", "name: postgres tuning\ntype: knowledge\ncreated: 2026-11-24", "shared buffers")
-	for i := 0; i < 9; i++ {
-		n := "noise" + string(rune('a'+i))
-		writeFM(t, projDir, n+".md", "name: "+n+"\ntype: knowledge\ncreated: 2026-11-24",
-			"we were fixing the postgres migration lock retry timeout again")
-	}
 	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
-	res := runSS(t, memDir, home, "compact", "fixing the postgres migration lock retry timeout")
-	if len(res.Injected) < 2 || res.Injected[0] != "continuity.md" || res.Injected[1] != "zz-target.md" {
-		t.Fatalf("want core then the gated fact, got %v", res.Injected)
-	}
-	for _, s := range res.Injected {
-		if s == "onehit.md" || strings.HasPrefix(s, "noise") {
-			t.Errorf("%s does not name the summary in its head and must not inject: %v", s, res.Injected)
-		}
+	res := runSS(t, memDir, home, "compact", "fixing the postgres migration lock; the postgres migration lock times out")
+	if strings.Join(res.Injected, ",") != "continuity.md" {
+		t.Errorf("compact must inject the core only, got %v", res.Injected)
 	}
 }
 
@@ -929,36 +917,6 @@ func TestRun_StaleProjectFeedbackReentersCoreAfterClose(t *testing.T) {
 	}
 }
 
-// The compact gate reads the summary's full focus text (GateText), not the
-// top-40 ranking query (Prompt): a fact named once in a long summary passes.
-func TestRun_CompactGateUsesFullFocusText(t *testing.T) {
-	memDir, projDir, home := setup(t)
-	writeFM(t, projDir, "x.md", "name: zephyr quokka\ntype: knowledge", "rare animals")
-	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
-	var b strings.Builder
-	b.WriteString("zephyr quokka ")
-	for i := 0; i < 45; i++ {
-		w := "noise" + string(rune('a'+i%26)) + string(rune('a'+i/26))
-		b.WriteString(strings.Repeat(w+" ", 3))
-	}
-	text := b.String()
-	query := CompactQuery(text)
-	if strings.Contains(query, "zephyr") {
-		t.Fatalf("precondition: zephyr must fall outside the top-40 query: %q", query)
-	}
-	res, err := Run(Input{
-		Event: "SessionStart", Source: "compact", SessionID: "s1", CWD: "/tmp/proj",
-		Prompt: query, GateText: text,
-		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir, Today: "2026-11-24", MaxK: 8,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Join(res.Injected, ",") != "x.md" {
-		t.Errorf("a fact named once in the summary must pass the gate, got %v", res.Injected)
-	}
-}
-
 // The Memory-queue line reserves its bytes before the core bodies too: a
 // pointer that would fit without the reserve is dropped, the queue stays.
 func TestRun_SessionStartQueueReservedBeforePointers(t *testing.T) {
@@ -999,7 +957,8 @@ func TestRun_SessionStartQueueReservedBeforePointers(t *testing.T) {
 	}
 }
 
-// Core-only SessionStarts need no query terms (no git calls, no overlap).
+// SessionStart is always core-only, so it needs no query terms (no git
+// calls, no overlap).
 func TestNeedsTerms(t *testing.T) {
 	for _, c := range []struct {
 		in   Input
@@ -1010,8 +969,7 @@ func TestNeedsTerms(t *testing.T) {
 		{Input{Event: "SessionStart", Source: "clear"}, false},
 		{Input{Event: "SessionStart"}, false},
 		{Input{Event: "SessionStart", Source: "compact"}, false},
-		{Input{Event: "SessionStart", Source: "compact", Prompt: "q", GateText: " "}, false},
-		{Input{Event: "SessionStart", Source: "compact", Prompt: "q", GateText: "summary"}, true},
+		{Input{Event: "SessionStart", Source: "compact", Prompt: "summary"}, false},
 		{Input{Event: "UserPromptSubmit", Prompt: "q"}, true},
 		{Input{Event: "SubagentStart", Prompt: "q"}, true},
 		{Input{Prompt: "q"}, true},

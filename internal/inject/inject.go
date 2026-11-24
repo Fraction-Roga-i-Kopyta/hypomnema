@@ -112,9 +112,8 @@ func Candidates(memoryDir string, st native.Store, files []native.MemFile, terms
 // typed; without the gate the remaining top-K slots were filled by recency
 // and popularity alone, so facts with nothing in common with the turn were
 // injected on every prompt. cwd and git terms still rank but do not pass the
-// gate — the user did not ask for them. SessionStart injects a fixed core
-// (plus, after compaction, facts passing the head gate); SubagentStart
-// queries are full task briefs.
+// gate — the user did not ask for them. SessionStart injects a fixed core;
+// SubagentStart has its own head gate on the Agent call's description.
 func requirePromptMatch(event string) bool { return event == "UserPromptSubmit" }
 
 // promptMatch is the UserPromptSubmit gate: a fact passes when the prompt
@@ -147,19 +146,13 @@ func promptMatch(f native.MemFile, want map[string]bool) bool {
 type Input struct {
 	Event string
 	// Source is the SessionStart source: startup, resume, compact, clear,
-	// or empty. Only "compact" with a GateText (the compaction summary)
-	// adds gated ranked facts after the core; every other SessionStart
-	// injects the core only.
+	// or empty. Every SessionStart injects the core only; the source only
+	// decides (in the caller) whether render-dedup is reset.
 	Source string
 	// ProjectRoot is the canonical project root (main checkout / git root /
 	// the directory itself). Its path components do not count toward the
-	// compact head gate; empty excludes none.
-	ProjectRoot string
-	// GateText is the text the compact head gate reads: the compaction
-	// summary's focus sections in full (CompactFocusText), not the top-40
-	// ranking query in Prompt — a fact named once in a long summary must
-	// still pass. Empty → a compact SessionStart injects the core only.
-	GateText        string
+	// SubagentStart head gate; empty excludes none.
+	ProjectRoot     string
 	SessionID       string
 	CWD             string
 	Prompt          string
@@ -219,8 +212,8 @@ type Result struct {
 
 // Run orchestrates a single injection: keywords → native files → ranked
 // top-K → Markdown. SessionStart renders the fixed core (coreFacts) instead
-// of a ranking — after compaction followed by facts the summary names — and
-// lists core facts the budget cut as pointers. Recovers from a corrupt
+// of a ranking — after compaction too — and lists core facts the budget cut
+// as pointers. Recovers from a corrupt
 // sidecar by rebuilding; falls back to a native-only degraded rank if the
 // sidecar is unusable.
 func Run(in Input) (Result, error) {
@@ -285,9 +278,6 @@ func Run(in Input) (Result, error) {
 	if in.Event == "SessionStart" {
 		core = coreFacts(files, cands, st.Project)
 		ranked = append(ranked, core...)
-		if compactRanks(in) {
-			ranked = append(ranked, compactExtras(in, files, byKey, cands, core, q)...)
-		}
 	} else {
 		ranked = topDistinct(q, cands, st.Project, in.MaxK)
 	}
@@ -344,24 +334,12 @@ func Run(in Input) (Result, error) {
 	return Result{Markdown: md, Injected: injected, ProjectBySlug: projectBySlug}, nil
 }
 
-// compactRanks reports a SessionStart after compaction with a readable
-// summary: the only SessionStart that adds gated ranked facts to the core.
-func compactRanks(in Input) bool {
-	return in.Event == "SessionStart" && in.Source == "compact" && strings.TrimSpace(in.GateText) != ""
-}
-
-// needsTerms reports whether this injection ranks at all. A core-only
-// SessionStart (startup, resume, clear, compact without a summary) does
-// not, so it skips the query terms — gitSignal's git commands and the
-// sidecar overlap query.
+// needsTerms reports whether this injection ranks at all. SessionStart is
+// always core-only (startup, resume, clear and compact alike), so it skips
+// the query terms — gitSignal's git commands and the sidecar overlap query.
 func needsTerms(in Input) bool {
-	return in.Event != "SessionStart" || compactRanks(in)
+	return in.Event != "SessionStart"
 }
-
-// CompactFocusText is the compaction summary's focus-section text (whole
-// summary without the standard headers) — what CompactQuery compresses to
-// a ranking query, given in full to the compact head gate.
-func CompactFocusText(summary string) string { return focusText(summary) }
 
 // topDistinct ranks cands without a K cut, keeps one fact per slug
 // (project-local wins), then cuts to k — deduplicating after the cut would
@@ -372,30 +350,6 @@ func topDistinct(q rank.Query, cands []rank.Candidate, project string, k int) []
 		out = out[:k]
 	}
 	return out
-}
-
-// compactExtras is the ranked part of a SessionStart after compaction: the
-// candidates whose head names the summary's focus text (newGate over
-// GateText, minus the project root, $HOME and corpus-common terms), not
-// already in the core, ranked on the Prompt query and cut to MaxK. Gate first, then rank — otherwise facts the gate would drop
-// take the K slots. A slug already in the core is skipped: the session lists
-// are slug-keyed.
-func compactExtras(in Input, files []native.MemFile, byKey map[string]native.MemFile, cands []rank.Candidate, core []rank.Scored, q rank.Query) []rank.Scored {
-	inCore := make(map[string]bool, len(core))
-	for _, sc := range core {
-		inCore[sc.Slug] = true
-	}
-	g := newGate(in.GateText, gateExclusions(in.ProjectRoot, filepath.Dir(in.ClaudeHome), "", files))
-	var gated []rank.Candidate
-	for _, c := range cands {
-		if inCore[c.Slug] {
-			continue
-		}
-		if f, ok := byKey[native.QKey(c.Project, c.Slug)]; ok && g.pass(f) {
-			gated = append(gated, c)
-		}
-	}
-	return topDistinct(q, gated, q.Project, in.MaxK)
 }
 
 // overflowCore returns the core facts that were offered to render (ranked,

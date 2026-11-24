@@ -12,18 +12,16 @@ import (
 	"unicode"
 
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/inject"
-	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/jsonl"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/pathutil"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/wal"
 )
 
 type hookStdin struct {
-	SessionID      string `json:"session_id"`
-	CWD            string `json:"cwd"`
-	Prompt         string `json:"prompt"`
-	Source         string `json:"source"`
-	TranscriptPath string `json:"transcript_path"`
+	SessionID string `json:"session_id"`
+	CWD       string `json:"cwd"`
+	Prompt    string `json:"prompt"`
+	Source    string `json:"source"`
 }
 
 // skipPromptSource reports machine-injected turns (task notifications, peer
@@ -108,30 +106,18 @@ func runInject(args []string) {
 	// but a later compaction/clear render dropped is no longer in context
 	// and must be re-offerable. Sessions that predate the rendered list
 	// (readRenderedList ok=false) fall back to the old union dedup.
-	renderDedup, prompt, gateText := already, in.Prompt, ""
+	renderDedup := already
 	if rl, ok := readRenderedList(in.SessionID); ok {
 		renderDedup = rl
 	}
 	if contextWiped(event, in.Source) {
+		// SessionStart injects the core only, after compaction too: the
+		// summary carries the task state, anything else is pulled.
 		renderDedup = nil
-		if in.Source == "compact" {
-			if s, ok := jsonl.LastCompactSummary(in.TranscriptPath); ok {
-				prompt = inject.CompactQuery(s)       // ranking: focus sections, top-40 terms
-				gateText = inject.CompactFocusText(s) // head gate: focus sections in full
-			}
-		}
-	}
-	// The project root's path components do not count toward the compact
-	// head gate. Canonical (worktree → main checkout, subdirectory → git
-	// root), never the raw anchor: components below the root name the task.
-	// Only a compact SessionStart gates, so only it pays for the git lookup.
-	projectRoot := ""
-	if gateText != "" {
-		projectRoot = native.CanonicalRoot(r.Anchor)
 	}
 	res, err := inject.Run(inject.Input{
-		Event: event, Source: in.Source, ProjectRoot: projectRoot, GateText: gateText,
-		SessionID: in.SessionID, CWD: in.CWD, Prompt: prompt,
+		Event: event, Source: in.Source,
+		SessionID: in.SessionID, CWD: in.CWD, Prompt: in.Prompt,
 		ClaudeHome: claudeDir(), ConfigDir: configDir(), MemoryDir: memoryDir(), Today: today(), MaxK: 8,
 		Store:           r.Store,
 		AlreadyInjected: renderDedup,

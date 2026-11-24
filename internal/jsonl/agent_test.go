@@ -162,39 +162,3 @@ func TestAgentCalls_UnreadablePath(t *testing.T) {
 		t.Fatal("missing file must be readable=false")
 	}
 }
-
-func TestRecentUserPrompts_SkipsMachineText(t *testing.T) {
-	parts := func(texts ...string) string {
-		var c []map[string]any
-		for _, s := range texts {
-			c = append(c, map[string]any{"type": "text", "text": s})
-		}
-		b, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"content": c}})
-		return string(b)
-	}
-	meta, _ := json.Marshal(map[string]any{"type": "user", "isMeta": true, "message": map[string]any{"content": "meta text"}})
-	summary, _ := json.Marshal(map[string]any{"type": "user", "isCompactSummary": true, "message": map[string]any{"content": "summary text"}})
-	p := writeLines(t,
-		userString("oldest prompt about queues"),
-		userString("fix the dockercache layer"),
-		parts("<system-reminder>ignore me</system-reminder>", "and the pgmigration lock"),
-		toolResult("t9"),
-		userString("<task-notification>done</task-notification>"),
-		string(meta),
-		string(summary),
-	)
-	got, ok := RecentUserPrompts(p, 2)
-	if !ok || got != "fix the dockercache layer\nand the pgmigration lock" {
-		t.Fatalf("got (%q, %v), want the two newest human prompts, oldest first", got, ok)
-	}
-	if got, _ := RecentUserPrompts(p, 3); !strings.HasPrefix(got, "oldest prompt about queues\n") {
-		t.Fatalf("n=3 must include the third-newest prompt; got %q", got)
-	}
-}
-
-func TestRecentUserPrompts_NoneFound(t *testing.T) {
-	p := writeLines(t, toolResult("t1"), userString("<command-name>/clear</command-name>"))
-	if _, ok := RecentUserPrompts(p, 3); ok {
-		t.Fatal("want ok=false when only machine text exists")
-	}
-}

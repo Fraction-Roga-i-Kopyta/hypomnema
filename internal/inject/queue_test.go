@@ -23,12 +23,23 @@ func queueFixture(t *testing.T) (memDir, home string) {
 	return memDir, home
 }
 
+// queueCoreFixture is queueFixture plus a project feedback fact: a core
+// fact that renders at SessionStart alongside the queue line.
+func queueCoreFixture(t *testing.T) (memDir, home string) {
+	t.Helper()
+	memDir, home = queueFixture(t)
+	st := native.StoreFor(filepath.Join(home, ".claude"), "/tmp/proj")
+	rule := "---\nname: lintrule\ntype: feedback\ndescription: run make lint\n---\nalways run make lint\n"
+	if err := os.WriteFile(filepath.Join(st.Dir, "lintrule.md"), []byte(rule), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return memDir, home
+}
+
 func runQueue(t *testing.T, memDir, home, event string, maxBytes int) Result {
 	t.Helper()
 	res, err := Run(Input{
-		// compact + a prompt: SessionStart ranks (behind the head gate)
-		// after the core, so oldfact renders alongside the queue line.
-		Event: event, Source: "compact", SessionID: "q", CWD: "/tmp/proj", Prompt: "docker cache", GateText: "docker cache",
+		Event: event, Source: "startup", SessionID: "q", CWD: "/tmp/proj", Prompt: "docker cache",
 		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir,
 		Today: "2026-05-29", MaxK: 5, MaxBytes: maxBytes,
 	})
@@ -39,7 +50,7 @@ func runQueue(t *testing.T, memDir, home, event string, maxBytes int) Result {
 }
 
 func TestRun_SessionStartQueueLine(t *testing.T) {
-	memDir, home := queueFixture(t)
+	memDir, home := queueCoreFixture(t)
 	st := native.StoreFor(filepath.Join(home, ".claude"), "/tmp/proj")
 	res := runQueue(t, memDir, home, "SessionStart", 0)
 	want := "Memory queue: 1 open task(s) from /memboard — rewrite: oldfact (" + st.Project +
@@ -47,8 +58,8 @@ func TestRun_SessionStartQueueLine(t *testing.T) {
 	if !strings.Contains(res.Markdown, want) {
 		t.Fatalf("queue line missing:\n%s\nwant:\n%s", res.Markdown, want)
 	}
-	if !hasSlug(res.Injected, "oldfact.md") {
-		t.Fatalf("fact still injected: %v", res.Injected)
+	if !hasSlug(res.Injected, "lintrule.md") {
+		t.Fatalf("the core still renders beside the queue line: %v", res.Injected)
 	}
 }
 
@@ -77,9 +88,9 @@ func TestRun_QueueNotOnUserPromptSubmit(t *testing.T) {
 // The queue line's bytes are reserved before facts render: when facts and
 // queue do not both fit, the queue stays and the fact gives way.
 func TestRun_QueueSurvivesOverBudget(t *testing.T) {
-	memDir, home := queueFixture(t)
+	memDir, home := queueCoreFixture(t)
 	full := runQueue(t, memDir, home, "SessionStart", 0)
-	if !strings.Contains(full.Markdown, "\nMemory queue") || !hasSlug(full.Injected, "oldfact.md") {
+	if !strings.Contains(full.Markdown, "\nMemory queue") || !hasSlug(full.Injected, "lintrule.md") {
 		t.Fatalf("precondition: fact and queue line both render:\n%s", full.Markdown)
 	}
 	budget := len(full.Markdown) - 1
@@ -87,7 +98,7 @@ func TestRun_QueueSurvivesOverBudget(t *testing.T) {
 	if !strings.Contains(res.Markdown, "Memory queue: 1 open task(s)") {
 		t.Fatalf("queue must survive over budget:\n%s", res.Markdown)
 	}
-	if hasSlug(res.Injected, "oldfact.md") {
+	if hasSlug(res.Injected, "lintrule.md") {
 		t.Fatalf("the fact does not fit beside the reserved queue line: %v", res.Injected)
 	}
 	if len(res.Markdown) > budget {

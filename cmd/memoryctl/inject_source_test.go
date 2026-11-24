@@ -106,89 +106,35 @@ func writeSummaryTranscript(t *testing.T, summary string) string {
 	return p
 }
 
-func TestInject_CompactReinjectsRankedBySummary(t *testing.T) {
+// After compaction SessionStart injects the core only: the core comes back
+// despite session dedup, and a fact the summary names (twice, in its head)
+// stays out — the summary carries the task state, the rest is pulled.
+func TestInject_CompactInjectsCoreOnly(t *testing.T) {
 	f := newStoreFixture(t)
-	f.factDesc(t, "/tmp/proj", "dockercache", "docker layer cache")
 	f.factDesc(t, "/tmp/proj", "pgmigration", "postgres migration lock")
-	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
-
-	// Earlier in the session both facts were injected.
-	runStdin(t, f.env, `{"session_id":"s1","cwd":"/tmp/proj","prompt":"dockercache pgmigration"}`,
-		"inject", "--event=UserPromptSubmit")
-
-	transcript := writeSummaryTranscript(t, "We were fixing the pgmigration postgres lock.")
-	out, _, code := runStdin(t, f.env,
-		`{"session_id":"s1","cwd":"/tmp/proj","source":"compact","transcript_path":"`+transcript+`"}`,
-		"inject", "--event=SessionStart")
-	ctx := additionalContext(t, out)
-	if code != 0 || !strings.Contains(ctx, "postgres migration lock") {
-		t.Fatalf("compact must re-inject despite session dedup; code=%d ctx=%q", code, ctx)
-	}
-	if d := strings.Index(ctx, "docker layer cache"); d >= 0 && d < strings.Index(ctx, "postgres migration lock") {
-		t.Errorf("summary-matching fact must rank first; ctx=%q", ctx)
-	}
-	// ref_count counts inject rows: a re-render after compaction must not add
-	// a second row for a fact already logged this session.
-	wal, _ := os.ReadFile(filepath.Join(f.mem, ".wal"))
-	if n := strings.Count(string(wal), "\x1fpgmigration.md|s1"); n != 1 {
-		t.Errorf("expected exactly 1 inject row per fact per session, got %d:\n%s", n, wal)
-	}
-}
-
-func TestInject_CompactLongSummaryDoesNotRewardLongBodies(t *testing.T) {
-	f := newStoreFixture(t)
-	noise := []string{"handler", "module", "package", "registry", "adapter", "builder", "config", "schema",
-		"router", "service", "gateway", "manifest", "pipeline", "artifact", "scheduler", "executor",
-		"listener", "resolver", "provider", "factory", "renderer", "tokenizer", "parser", "encoder",
-		"decoder", "buffer", "cursor", "session", "profile", "catalog", "ledger", "journal", "snapshot",
-		"cluster", "replica", "shard", "bucket", "channel", "socket", "payload"}
-	inventory := strings.Repeat(strings.Join(noise, " ")+" ", 8)
-	// Long and irrelevant, but its head names two summary terms so it
-	// passes the compact gate and competes on ranking alone.
-	f.factFM(t, "/tmp/proj", "buildjournal", "name: buildjournal\ndescription: postgres lock journal\ntype: note", inventory)
-	f.factDesc(t, "/tmp/proj", "pgmigration", "postgres migration lock")
-	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
-	// Markdown-styled headers, as in ~half of live summaries.
-	summary := strings.Join([]string{
-		"Summary:",
-		"1. **Primary Request and Intent:**",
-		"   Fix the pgmigration postgres lock.",
-		"3. **Files and Code Sections:**",
-		"   " + inventory,
-		"## 8. Current Work",
-		"   Retrying pgmigration after the postgres lock timeout.",
-	}, "\n")
-	transcript := writeSummaryTranscript(t, summary)
-	out, _, _ := runStdin(t, f.env,
-		`{"session_id":"s2","cwd":"/tmp/proj","source":"compact","transcript_path":"`+transcript+`"}`,
-		"inject", "--event=SessionStart")
-	ctx := additionalContext(t, out)
-	p, j := strings.Index(ctx, "postgres migration lock"), strings.Index(ctx, "## buildjournal")
-	if p < 0 || (j >= 0 && j < p) {
-		t.Errorf("targeted fact must outrank the long inventory-matching one; ctx=%q", ctx)
-	}
-}
-
-func TestInject_CompactWithoutSummaryStillInjects(t *testing.T) {
-	f := newStoreFixture(t)
-	f.fact(t, "/tmp/proj", "dockercache", "docker layer cache")
 	f.factFM(t, "/tmp/proj", "lintrule", "name: lintrule\ntype: feedback", "always run make lint")
 	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
 	runStdin(t, f.env, `{"session_id":"s1","cwd":"/tmp/proj","source":"startup"}`,
 		"inject", "--event=SessionStart")
-	runStdin(t, f.env, `{"session_id":"s1","cwd":"/tmp/proj","prompt":"dockercache"}`,
+	runStdin(t, f.env, `{"session_id":"s1","cwd":"/tmp/proj","prompt":"pgmigration postgres lock"}`,
 		"inject", "--event=UserPromptSubmit")
-	transcript := filepath.Join(t.TempDir(), "s1.jsonl")
-	os.WriteFile(transcript, []byte(`{"type":"system","subtype":"compact_boundary"}`+"\n"), 0o644)
-	out, _, _ := runStdin(t, f.env,
+
+	transcript := writeSummaryTranscript(t, "8. Current Work:\n   Fixing the pgmigration postgres migration lock; the postgres lock times out.")
+	out, _, code := runStdin(t, f.env,
 		`{"session_id":"s1","cwd":"/tmp/proj","source":"compact","transcript_path":"`+transcript+`"}`,
 		"inject", "--event=SessionStart")
 	ctx := additionalContext(t, out)
-	if !strings.Contains(ctx, "always run make lint") {
-		t.Errorf("no summary yet → the core comes back after compaction; got %q", ctx)
+	if code != 0 || !strings.Contains(ctx, "always run make lint") {
+		t.Fatalf("the core must come back after compaction despite session dedup; code=%d ctx=%q", code, ctx)
 	}
-	if strings.Contains(ctx, "docker layer cache") {
-		t.Errorf("no summary → no query → no ranked facts; got %q", ctx)
+	if strings.Contains(ctx, "postgres migration lock") {
+		t.Errorf("compact injects the core only; a fact the summary names must stay out: %q", ctx)
+	}
+	// ref_count counts inject rows: a re-render after compaction must not add
+	// a second row for a fact already logged this session.
+	wal, _ := os.ReadFile(filepath.Join(f.mem, ".wal"))
+	if n := strings.Count(string(wal), "\x1flintrule.md|s1"); n != 1 {
+		t.Errorf("expected exactly 1 inject row per fact per session, got %d:\n%s", n, wal)
 	}
 }
 
@@ -247,29 +193,6 @@ func TestInject_StartupSourceInjectsCoreOnly(t *testing.T) {
 	}
 }
 
-// The compact gate does not count the project root's path components: a
-// summary quoting the repo name plus one head term does not pull a fact in;
-// two task terms do.
-func TestInject_CompactGateExcludesProjectRoot(t *testing.T) {
-	f := newStoreFixture(t)
-	root := filepath.Join(t.TempDir(), "zebraproj")
-	os.MkdirAll(root, 0o755)
-	f.factDesc(t, root, "rootword", "zebraproj widget")
-	f.factDesc(t, root, "taskwords", "widget gizmo")
-	f.env["CLAUDE_PROJECT_DIR"] = root
-	transcript := writeSummaryTranscript(t, "We fixed the zebraproj widget and the gizmo.")
-	out, _, _ := runStdin(t, f.env,
-		`{"session_id":"s1","cwd":"`+root+`","source":"compact","transcript_path":"`+transcript+`"}`,
-		"inject", "--event=SessionStart")
-	ctx := additionalContext(t, out)
-	if !strings.Contains(ctx, "## taskwords") {
-		t.Errorf("two task terms in the head pass the gate; ctx=%q", ctx)
-	}
-	if strings.Contains(ctx, "## rootword") {
-		t.Errorf("the project root's name must not count toward the gate; ctx=%q", ctx)
-	}
-}
-
 func TestInject_RenderDedupUsesCurrentContextNotSessionUnion(t *testing.T) {
 	f := newStoreFixture(t)
 	f.fact(t, "/tmp/proj", "prealpha", "pre alpha fact")
@@ -298,21 +221,15 @@ func TestInject_CompactResetsRenderedList(t *testing.T) {
 	f := newStoreFixture(t)
 	f.fact(t, "/tmp/proj", "prealpha", "pre alpha fact")
 	f.factDesc(t, "/tmp/proj", "postbeta", "post beta fact")
+	f.factFM(t, "/tmp/proj", "lintrule", "name: lintrule\ntype: feedback", "always run make lint")
 	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
 	runStdin(t, f.env, `{"session_id":"s1","cwd":"/tmp/proj","prompt":"prealpha postbeta"}`, "inject", "--event=UserPromptSubmit")
 	transcript := writeSummaryTranscript(t, "8. Current Work:\n   postbeta beta")
-	out, _, _ := runStdin(t, f.env, `{"session_id":"s1","cwd":"/tmp/proj","source":"compact","transcript_path":"`+transcript+`"}`, "inject", "--event=SessionStart")
-	ctx := additionalContext(t, out)
+	runStdin(t, f.env, `{"session_id":"s1","cwd":"/tmp/proj","source":"compact","transcript_path":"`+transcript+`"}`, "inject", "--event=SessionStart")
 	rendered, _ := os.ReadFile(filepath.Join(f.mem, ".runtime", "rendered-s1.list"))
-	got := strings.Fields(string(rendered))
-	// The rendered list is exactly what the compact render showed.
-	for _, s := range got {
-		if !strings.Contains(ctx, strings.TrimSuffix(s, ".md")) {
-			t.Errorf("rendered list names %s which the compact render did not show; ctx=%q", s, ctx)
-		}
-	}
-	if len(got) == 0 {
-		t.Errorf("compact render must record what it showed")
+	// The rendered list is exactly what the compact render showed: the core.
+	if got := strings.Join(strings.Fields(string(rendered)), ","); got != "lintrule.md" {
+		t.Errorf("rendered list after compact = %q, want the core only (lintrule.md)", got)
 	}
 }
 
@@ -326,27 +243,6 @@ func TestInject_MissingRenderedListFallsBackToUnion(t *testing.T) {
 	out, _, _ := runStdin(t, f.env, `{"session_id":"s1","cwd":"/tmp/proj","prompt":"prealpha"}`, "inject", "--event=UserPromptSubmit")
 	if strings.Contains(additionalContext(t, out), "pre alpha fact") {
 		t.Errorf("a session that predates the rendered list must keep union dedup: %q", out)
-	}
-}
-
-// The compact gate reads the summary's focus text in full: a fact whose two
-// head terms each occur once — outside the top-40 ranking query — passes.
-func TestInject_CompactGateReadsFullFocusText(t *testing.T) {
-	f := newStoreFixture(t)
-	f.factDesc(t, "/tmp/proj", "rare", "zephyr quokka")
-	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
-	var b strings.Builder
-	b.WriteString("Summary:\n1. Primary Request and Intent:\n   Look after the zephyr quokka.\n")
-	for i := 0; i < 45; i++ {
-		w := "filler" + string(rune('a'+i%26)) + string(rune('a'+i/26))
-		b.WriteString("   " + strings.Repeat(w+" ", 3) + "\n")
-	}
-	transcript := writeSummaryTranscript(t, b.String())
-	out, _, _ := runStdin(t, f.env,
-		`{"session_id":"s1","cwd":"/tmp/proj","source":"compact","transcript_path":"`+transcript+`"}`,
-		"inject", "--event=SessionStart")
-	if ctx := additionalContext(t, out); !strings.Contains(ctx, "## rare") {
-		t.Errorf("a fact named once in the focus text must pass the compact gate; ctx=%q", ctx)
 	}
 }
 

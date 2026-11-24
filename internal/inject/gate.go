@@ -10,8 +10,8 @@ import (
 )
 
 // headGateMin is how many distinct query terms a fact's head must contain
-// to pass the head gate. Two, not one: compaction summaries and subagent
-// briefs are long, so a single shared word is coincidence.
+// to pass the head gate. Two, not one: a subagent brief is free text, so a
+// single shared word is coincidence.
 const headGateMin = 2
 
 // commonHeadFloor and commonHeadShare set when a head term is too common in
@@ -23,11 +23,10 @@ const (
 	commonHeadShare = 0.10
 )
 
-// gate is the head gate shared by compact SessionStart and SubagentStart: a
-// fact passes when the query names what it is about — at least headGateMin
-// distinct query terms in its name, description, keywords or domains. Body
-// words never count: a long query shares two words with almost any long
-// body.
+// gate is the SubagentStart head gate: a fact passes when the brief names
+// what it is about — at least headGateMin distinct brief terms in its name,
+// description, keywords or domains. Body words never count: free text
+// shares two words with almost any long body.
 type gate struct{ want map[string]bool }
 
 // stripPaths drops every whitespace-delimited token containing "/": quoted
