@@ -15,20 +15,20 @@ import (
 )
 
 // learningsForSkill returns up to k skill-learning facts bound to `skill`,
-// ranked by overlap+recency (no query → overlap is 0 for all).
+// ranked by overlap+recency (no query → overlap is 0 for all). The returned
+// index is keyed by native.QKey (filesByKey).
 func learningsForSkill(st native.Store, skill string, k int) ([]rank.Scored, map[string]native.MemFile) {
 	files := native.Collect(claudeDir(), st)
-	bySlug := make(map[string]native.MemFile, len(files))
-	for _, f := range files {
-		bySlug[f.Slug] = f
-	}
+	byKey := filesByKey(files)
 	// Empty terms → Candidates returns every file with Overlap 0; the
 	// effectiveness/refcount it carries are diagnostics only — rank.Rank
 	// scores on recency and project, not on them.
 	cands := inject.Candidates(memoryDir(), st, files, nil)
 	matched := cands[:0:0]
 	for _, c := range cands {
-		mf, ok := bySlug[c.Slug]
+		// The candidate's OWN file: a same-named fact in the other store
+		// must not decide whether this one is a learning for the skill.
+		mf, ok := byKey[native.QKey(c.Project, c.Slug)]
 		if !ok || mf.Type != "skill-learning" || mf.Skill != skill {
 			continue
 		}
@@ -39,7 +39,7 @@ func learningsForSkill(st native.Store, skill string, k int) ([]rank.Scored, map
 		Today:        today(),
 		IncludeStale: true,
 	}
-	return rank.Rank(q, matched, k), bySlug
+	return rank.Rank(q, matched, k), byKey
 }
 
 const skillInjectK = 5
@@ -67,7 +67,7 @@ func runSkillInject(_ []string) {
 		os.Exit(0) // nothing to inject
 	}
 
-	scored, bySlug := learningsForSkill(resolveStore(env.CWD).Store, skill, skillInjectK)
+	scored, byKey := learningsForSkill(resolveStore(env.CWD).Store, skill, skillInjectK)
 	if len(scored) == 0 {
 		os.Exit(0) // silent: skill has no learnings yet
 	}
@@ -81,7 +81,7 @@ func runSkillInject(_ []string) {
 	fmt.Fprintf(&b, "Accumulated learnings for skill `%s` (apply alongside the skill):\n\n", skill)
 	b.WriteString(inject.CiteInstruction + "\n\n")
 	for _, s := range scored {
-		f := bySlug[s.Slug]
+		f := byKey[native.QKey(s.Project, s.Slug)]
 		entry := fmt.Sprintf("- (%s) %s\n", s.Slug, inject.CapBody(f.Body, inject.MaxBodyBytes, inject.PathHint(f)))
 		// Honour the same total budget as injection: an oversized envelope is
 		// diverted to a file the model never reads inline, so learnings past the

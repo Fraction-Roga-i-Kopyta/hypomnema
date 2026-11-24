@@ -593,7 +593,7 @@ func TestRun_ReadsQualifiedSessionList(t *testing.T) {
 	if !strings.Contains(w, "|cite-silent|-tmp-proj\x1fsql.md|s1") {
 		t.Errorf("a bare list line must still be read:\n%s", w)
 	}
-	if strings.Contains(w, "|cite-undelivered|") || strings.Count(w, "\x1f") != 2 {
-		t.Errorf("want exactly one useful and one silent row:\n%s", w)
+	if rows := citeRows(w); len(rows) != 2 {
+		t.Errorf("want exactly one useful and one silent row, got %d:\n%s", len(rows), w)
 	}
 }

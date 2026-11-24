@@ -283,7 +283,9 @@ put inside `filenames="…"` to cite that fact:
   score N)` (plus a trailing `[stale]` mark when applicable), followed by
   its body; runner-ups are index-only numbered lines with no `##` header —
   `N. <file.md> (score)[stale][ — description]` followed by the file's
-  absolute path on the next line.
+  absolute path on the next line. One fact per file name: a project fact
+  and a global fact sharing one collapse to the project-local copy, as in
+  an `inject` render.
 - **`skill-inject`** (`cmd/memoryctl/skillinject.go`, `runSkillInject`) — a
   flat list, no `##` header at all: one `- (<file.md>) <body>` entry per
   delivered learning.
@@ -434,6 +436,12 @@ Contract (see CLAUDE.md "Lifecycle"):
   citations (nothing cited, or every citation was `cite-undelivered`)
   writes one session-level `cite-none` instead, so a broken citation
   channel never fabricates a session of silent facts.
+- Attributes by fact, not by file name: the session list holds
+  `native.QKey(project, slug)` lines, and a cited file name credits every
+  fact with that name that was delivered this session (a project and a
+  global fact may share one). Only when none was delivered does the name
+  fall back to the project-local copy for `cite-undelivered`. Candidate
+  graduation reads the credited fact's own status.
 - Writes a `session-close` row per turn (Stop fires once per turn, not once
   per session). The per-fact classification rows — `cite-useful`/`cite-silent`
   — are written once per (fact, session).

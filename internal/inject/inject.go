@@ -719,10 +719,16 @@ func capBody(body string, maxBytes int, hint string) string {
 	return strings.TrimRight(body[:cut], " \n") + marker
 }
 
+// DistinctBySlug is dedupBySlug for the pull path: recall renders one fact
+// per file name, the same way a push render does.
+func DistinctBySlug(ranked []rank.Scored, project string) []rank.Scored {
+	return dedupBySlug(ranked, project)
+}
+
 // dedupBySlug keeps one entry per slug, in first-seen order, preferring the
 // project-local one when a project and a global fact share a basename. The
-// session set and the rendered list are slug-keyed, so two entries with one
-// slug would collide there.
+// model cites by file name, so two same-named facts in one render would be
+// indistinguishable to it.
 func dedupBySlug(ranked []rank.Scored, project string) []rank.Scored {
 	at := make(map[string]int, len(ranked))
 	out := make([]rank.Scored, 0, len(ranked))

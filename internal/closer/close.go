@@ -71,8 +71,10 @@ type Result struct {
 func Run(in Input) (Result, error) {
 	var res Result
 	st := in.store()
-	injected := readInjectedSet(in.MemoryDir, in.SessionID)
-	status := slugStatus(in.ClaudeHome, st)
+	files := collectNative(in.ClaudeHome, st)
+	byName := factsBySlug(files, st.Project)
+	injected := readInjectedSet(in.MemoryDir, in.SessionID, byName)
+	status := slugStatus(files)
 
 	sess, sErr := jsonl.ReadSession(in.TranscriptPath)
 
@@ -90,13 +92,11 @@ func Run(in Input) (Result, error) {
 	// fabricating negative evidence for the whole session (review E4). v1
 	// skipped the evidence pass in this case; v2 must too.
 	if sErr == nil {
-		projectOf := projectBySlug(in.ClaudeHome, st)
-		cited := resolveCitations(Citations(sess.Text+"\n\n"+sess.Thinking), projectOf)
+		cited := resolveCitations(Citations(sess.Text+"\n\n"+sess.Thinking), byName)
 		injectedSet := make(map[string]bool, len(injected))
-		for _, slug := range injected {
-			injectedSet[slug] = true
+		for _, k := range injected {
+			injectedSet[k] = true
 		}
-		globalDir := native.GlobalMemoryDir(filepath.Dir(in.ClaudeHome))
 		// Delivery gate: a resolved citation only earns
 		// cite-useful if the fact actually reached the model this session —
 		// injected (inject + recall + skill-inject, already folded into
@@ -105,25 +105,41 @@ func Run(in Input) (Result, error) {
 		// happened to type in a <cc-memory> tag, fabricated, echoed, or
 		// name-only, with durable usefulness (effectiveness, candidate
 		// graduation) even though the fact was never shown to it.
+		//
+		// The model cites by file name, and a project fact and a global fact
+		// may share one. The name credits every fact with that name that was
+		// delivered this session (one, or both of a collision pair) — never a
+		// same-named fact that was not. Only when none was delivered does the
+		// name fall back to the project-local copy, as cite-undelivered.
 		var delivered, undelivered []string
 		deliveredSet := make(map[string]bool, len(cited))
-		for _, slug := range cited {
-			if injectedSet[slug] || readDelivered(sess.ReadPaths, slug, st.Dir, globalDir) {
-				deliveredSet[slug] = true
-				delivered = append(delivered, slug)
-			} else {
-				undelivered = append(undelivered, slug)
+		for _, name := range cited {
+			hit := false
+			for _, f := range byName[name] {
+				k := native.QKey(f.Project, f.Slug)
+				if !injectedSet[k] && !readDelivered(sess.ReadPaths, f.Path) {
+					continue
+				}
+				hit = true
+				if !deliveredSet[k] {
+					deliveredSet[k] = true
+					delivered = append(delivered, k)
+				}
+			}
+			if !hit {
+				f := byName[name][0]
+				undelivered = append(undelivered, native.QKey(f.Project, f.Slug))
 			}
 		}
-		for _, slug := range delivered {
-			appendWAL(in.MemoryDir, in.Today, "cite-useful", qualify(projectOf, slug), sid)
+		for _, k := range delivered {
+			appendWAL(in.MemoryDir, in.Today, "cite-useful", k, sid)
 		}
 		res.Useful = len(delivered)
-		for _, slug := range undelivered {
+		for _, k := range undelivered {
 			// Resolved but undelivered: counts for nothing else — not
 			// useful, not candidate-confirmed, and does not arm the
 			// cite-silent guard below. Diagnostic only (see docs/EVENTS.md).
-			appendWAL(in.MemoryDir, in.Today, "cite-undelivered", qualify(projectOf, slug), sid)
+			appendWAL(in.MemoryDir, in.Today, "cite-undelivered", k, sid)
 		}
 		// Silence is evidence only where the citation channel demonstrably
 		// worked this session: with no DELIVERED citation at all, an uncited
@@ -131,22 +147,23 @@ func Run(in Input) (Result, error) {
 		// fact — and an undelivered citation alone (fabricated/echoed/
 		// name-only) must not arm this guard either.
 		if len(delivered) > 0 {
-			for _, slug := range injected {
-				if deliveredSet[slug] {
+			for _, k := range injected {
+				if deliveredSet[k] {
 					continue
 				}
-				appendWAL(in.MemoryDir, in.Today, "cite-silent", qualify(projectOf, slug), sid)
+				appendWAL(in.MemoryDir, in.Today, "cite-silent", k, sid)
 				res.Silent++
 			}
 		}
-		for _, slug := range delivered {
-			if status[slug] != "candidate" {
+		for _, k := range delivered {
+			if status[k] != "candidate" {
 				continue
 			}
-			// Graduation: first useful citation confirms the candidate. The
+			// Graduation: first useful citation confirms the candidate — the
+			// credited fact's own status, not a same-named fact's. The
 			// dedupKey makes the WAL record it exactly once per fact —
 			// repeats add nothing for the reader (confirmed = seen ≥ 1).
-			target := wal.SanitizeField(qualify(projectOf, slug))
+			target := wal.SanitizeField(k)
 			line := fmt.Sprintf("%s|candidate-confirmed|%s|%s", in.Today, target, sid)
 			wal.Append(in.MemoryDir, line, "|candidate-confirmed|"+target+"|")
 		}
@@ -166,9 +183,8 @@ func Run(in Input) (Result, error) {
 	}
 	wal.Append(in.MemoryDir, fmt.Sprintf("%s|session-close|%s|%s", in.Today, sid, sid), "")
 
-	nativeFiles := collectNative(in.ClaudeHome, st)
 	if s, err := sidecar.Open(filepath.Join(in.MemoryDir, ".sidecar.db")); err == nil {
-		_ = sidecar.ReprojectAll(s, nativeFiles, filepath.Join(in.MemoryDir, ".wal"), st.Scope(), in.storeDirs(st))
+		_ = sidecar.ReprojectAll(s, files, filepath.Join(in.MemoryDir, ".wal"), st.Scope(), in.storeDirs(st))
 		if n, derr := s.MarkStale(in.Today); derr == nil {
 			res.Staled = n
 		}
@@ -192,20 +208,35 @@ func Run(in Input) (Result, error) {
 	return res, nil
 }
 
-// readInjectedSet returns the file names delivered this session, once each.
-// List lines are native.QKey(project, slug); a bare slug line written by an
-// older binary reads the same. Classification is per file name (the model
-// cites by file name), so the project part is dropped here.
-func readInjectedSet(memDir, sessionID string) []string {
+// readInjectedSet returns the facts delivered this session as QKeys, once
+// each, in list order. Lines are read by native.KeySet's rule: a QKey line
+// names one fact; a bare slug line (written by an older binary) names that
+// file in every store, so it expands to every in-scope fact with that name —
+// or stays bare when none is in scope (its rows then carry the bare slug,
+// grandfathered on read, as before).
+func readInjectedSet(memDir, sessionID string, byName map[string][]native.MemFile) []string {
 	lines := readRuntimeList(filepath.Join(memDir, ".runtime",
 		"injected-"+pathutil.SafeFileName(sessionID)+".list"))
 	seen := make(map[string]bool, len(lines))
 	var out []string
+	add := func(k string) {
+		if !seen[k] {
+			seen[k] = true
+			out = append(out, k)
+		}
+	}
 	for _, ln := range lines {
-		_, slug, _ := native.ParseQKey(ln)
-		if slug != "" && !seen[slug] {
-			seen[slug] = true
-			out = append(out, slug)
+		_, slug, qualified := native.ParseQKey(ln)
+		switch {
+		case slug == "":
+		case qualified:
+			add(ln)
+		case len(byName[slug]) == 0:
+			add(slug)
+		default:
+			for _, f := range byName[slug] {
+				add(native.QKey(f.Project, f.Slug))
+			}
 		}
 	}
 	return out
@@ -229,12 +260,12 @@ func collectNative(claudeHome string, st native.Store) []native.MemFile {
 	return native.Collect(claudeHome, st)
 }
 
-// slugStatus maps each in-scope fact's slug to its frontmatter status (the
-// candidate-graduation check reads it).
-func slugStatus(claudeHome string, st native.Store) map[string]string {
-	status := map[string]string{}
-	for _, f := range collectNative(claudeHome, st) {
-		status[f.Slug] = f.Status
+// slugStatus maps each in-scope fact's QKey to its frontmatter status (the
+// candidate-graduation check reads the credited fact's own status).
+func slugStatus(files []native.MemFile) map[string]string {
+	status := make(map[string]string, len(files))
+	for _, f := range files {
+		status[native.QKey(f.Project, f.Slug)] = f.Status
 	}
 	return status
 }
@@ -251,59 +282,46 @@ func appendWAL(memDir, day, event, slug, sid string) {
 	wal.AppendSuffixUnique(memDir, line, "|"+event+"|"+target+"|"+sid)
 }
 
-// projectBySlug maps each in-scope fact's slug to its owning project, project-
-// local winning over global on a basename tie (matches injection preference).
-func projectBySlug(claudeHome string, st native.Store) map[string]string {
-	out := map[string]string{}
-	for _, f := range collectNative(claudeHome, st) {
-		if f.Project == st.Project || out[f.Slug] == "" {
-			out[f.Slug] = f.Project
+// factsBySlug groups the in-scope facts by file name, the project-local copy
+// first — injection's preference on a basename tie, and the attribution of a
+// citation none of whose facts was delivered (cite-undelivered).
+func factsBySlug(files []native.MemFile, project string) map[string][]native.MemFile {
+	out := map[string][]native.MemFile{}
+	for _, f := range files {
+		if f.Project == project {
+			out[f.Slug] = append([]native.MemFile{f}, out[f.Slug]...)
+		} else {
+			out[f.Slug] = append(out[f.Slug], f)
 		}
 	}
 	return out
 }
 
-// resolveCitations keeps the cited names that are in-scope facts (projectOf
-// already prefers the project copy over the global one on a basename tie).
-func resolveCitations(names []string, projectOf map[string]string) []string {
+// resolveCitations keeps the cited names that name an in-scope fact.
+func resolveCitations(names []string, byName map[string][]native.MemFile) []string {
 	var out []string
 	for _, n := range names {
-		if _, ok := projectOf[n]; ok {
+		if len(byName[n]) > 0 {
 			out = append(out, n)
 		}
 	}
 	return out
 }
 
-// readDelivered reports whether slug (an in-scope fact's basename, e.g.
-// "docker.md") was delivered by a direct file read this session: one of
-// paths (Session.ReadPaths — every Read tool_use's input.file_path), once
-// filepath.Clean'd, has that basename AND sits directly in the resolved
-// project store dir or the global store dir. A same-named file read from
-// anywhere else does not count — the directory check is what makes this "a
-// direct read of THIS fact", not just a file that happens to share a name.
-func readDelivered(paths []string, slug, storeDir, globalDir string) bool {
-	storeDir = filepath.Clean(storeDir)
-	globalDir = filepath.Clean(globalDir)
+// readDelivered reports whether the fact stored at factPath (an in-scope
+// fact's file, directly in the project store or the global store) was
+// delivered by a direct file read this session: one of paths
+// (Session.ReadPaths — every Read tool_use's input.file_path), once
+// filepath.Clean'd, is that file. A same-named file read from anywhere else —
+// another directory, or the other store of a same-named pair — does not
+// count: the path check is what makes this "a direct read of THIS fact", not
+// just a file that happens to share a name.
+func readDelivered(paths []string, factPath string) bool {
+	want := filepath.Clean(factPath)
 	for _, p := range paths {
-		clean := filepath.Clean(p)
-		if filepath.Base(clean) != slug {
-			continue
-		}
-		dir := filepath.Dir(clean)
-		if dir == storeDir || dir == globalDir {
+		if filepath.Clean(p) == want {
 			return true
 		}
 	}
 	return false
-}
-
-// qualify project-qualifies a slug for the WAL target so classification events
-// feed per-project effectiveness (review E5-deep); an unknown project falls
-// back to the bare slug (grandfathered on read).
-func qualify(projectOf map[string]string, slug string) string {
-	if p := projectOf[slug]; p != "" {
-		return native.QKey(p, slug)
-	}
-	return slug
 }
