@@ -228,8 +228,9 @@ func TestInject_CompactResetsRenderedList(t *testing.T) {
 	runStdin(t, f.env, `{"session_id":"s1","cwd":"/tmp/proj","source":"compact","transcript_path":"`+transcript+`"}`, "inject", "--event=SessionStart")
 	rendered, _ := os.ReadFile(filepath.Join(f.mem, ".runtime", "rendered-s1.list"))
 	// The rendered list is exactly what the compact render showed: the core.
-	if got := strings.Join(strings.Fields(string(rendered)), ","); got != "lintrule.md" {
-		t.Errorf("rendered list after compact = %q, want the core only (lintrule.md)", got)
+	want := native.QKey(native.StoreFor(f.claude, "/tmp/proj").Project, "lintrule.md")
+	if got := strings.Join(strings.Fields(string(rendered)), ","); got != want {
+		t.Errorf("rendered list after compact = %q, want the core only (%q)", got, want)
 	}
 }
 

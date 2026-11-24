@@ -194,8 +194,14 @@ func recordRecallWithSession(slug, project, sid string) {
 	if sid == "" {
 		return // no session — nothing to dedup against, no close to classify
 	}
+	// Session lists name facts by QKey (see readInjectedList); an unknown
+	// project falls back to the bare slug, read as "any store".
+	key := slug
+	if project != "" {
+		key = native.QKey(project, slug)
+	}
 	injected := readInjectedList(sid)
-	writeSessionList(injected, []string{slug}, sid)
+	writeSessionList(injected, []string{key}, sid)
 	// A pull delivery lands the slug straight in the model's context, same
 	// as a push render — so the rendered list (post-compaction dedup source)
 	// must reflect it too, or a later compact render could offer it again
@@ -207,7 +213,7 @@ func recordRecallWithSession(slug, project, sid string) {
 	if !ok {
 		rendered = injected
 	}
-	writeRenderedList(rendered, []string{slug}, sid)
+	writeRenderedList(rendered, []string{key}, sid)
 }
 
 // renderRecall renders the hybrid pull output: top-1 full body (same cap as

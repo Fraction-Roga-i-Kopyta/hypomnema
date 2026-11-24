@@ -116,13 +116,20 @@ func runInject(args []string) {
 		writePin(in.SessionID, r)
 	}
 	already := readInjectedList(in.SessionID)
+	rl, rlOK := readRenderedList(in.SessionID)
+	if hasBareLine(already) || hasBareLine(rl) {
+		// Lists from an older binary: qualify their bare lines once, so the
+		// writes below leave QKeys only.
+		files := native.Collect(claudeDir(), r.Store)
+		already, rl = qualifyBareLines(already, files), qualifyBareLines(rl, files)
+	}
 	// The rendered list — what is in the model's CURRENT context — is the
 	// dedup source of truth: a fact the session union remembers delivering
 	// but a later compaction/clear render dropped is no longer in context
 	// and must be re-offerable. Sessions that predate the rendered list
 	// (readRenderedList ok=false) fall back to the old union dedup.
 	renderDedup := already
-	if rl, ok := readRenderedList(in.SessionID); ok {
+	if rlOK {
 		renderDedup = rl
 	}
 	if contextWiped(event, in.Source) {
@@ -140,14 +147,15 @@ func runInject(args []string) {
 	if err != nil {
 		os.Exit(0)
 	}
-	if len(res.Injected) > 0 && in.SessionID != "" {
-		persistInjected(already, res.Injected, res.ProjectBySlug, in.SessionID)
+	if len(res.InjectedKeys) > 0 && in.SessionID != "" {
+		persistInjected(already, res.InjectedKeys, in.SessionID)
 	}
 	if in.SessionID != "" {
 		// compact/clear reset renderDedup to nil above, so the union below
-		// collapses to exactly res.Injected — matching "the rendered list is
-		// what this render showed, nothing carried over from before the wipe".
-		writeRenderedList(renderDedup, res.Injected, in.SessionID)
+		// collapses to exactly res.InjectedKeys — matching "the rendered list
+		// is what this render showed, nothing carried over from before the
+		// wipe".
+		writeRenderedList(renderDedup, res.InjectedKeys, in.SessionID)
 	}
 	emitEnvelope(event, res.Markdown)
 	os.Exit(0)
@@ -158,7 +166,13 @@ func sessionListPath(sessionID string) string {
 		"injected-"+pathutil.SafeFileName(sessionID)+".list")
 }
 
-// readInjectedList returns the slugs already injected this session, so the
+// Session lists (injected-<sid>.list, rendered-<sid>.list) hold one fact
+// per line as native.QKey(project, slug): a project and a global fact with
+// the same file name are two facts. A bare slug line was written by an
+// older binary; readers treat it as that file name in every store
+// (native.KeySet), and inject rewrites it as QKeys (qualifyBareLines).
+
+// readInjectedList returns the facts already injected this session, so the
 // ranker never re-renders them (and close classifies the whole session's
 // set, not just the last batch).
 func readInjectedList(sessionID string) []string {
@@ -168,7 +182,7 @@ func readInjectedList(sessionID string) []string {
 	return readListFile(sessionListPath(sessionID))
 }
 
-// readListFile reads a newline-delimited slug list; a missing file is nil.
+// readListFile reads a newline-delimited session list; a missing file is nil.
 func readListFile(path string) []string {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -188,7 +202,7 @@ func renderedListPath(sessionID string) string {
 		"rendered-"+pathutil.SafeFileName(sessionID)+".list")
 }
 
-// readRenderedList returns the slugs in the model's CURRENT context (the
+// readRenderedList returns the facts in the model's CURRENT context (the
 // most recent render this session), distinguishing "no rendered list yet"
 // (ok=false — a session that predates this file, or has not rendered at
 // all) from "the last render showed nothing" (ok=true, nil).
@@ -238,51 +252,100 @@ func writeRenderedList(current, add []string, sessionID string) {
 	_ = pathutil.WriteFileAtomic(renderedListPath(sessionID), []byte(content), 0o600)
 }
 
-func persistInjected(already, slugs []string, projectBySlug map[string]string, sessionID string) {
+// persistInjected writes one WAL inject row per newly delivered fact and
+// unions keys (QKeys) into the session's injected list. Dedup is per fact:
+// project x.md delivered after global x.md gets its own row; a bare line in
+// already (older binary) still covers that file name in every store.
+func persistInjected(already, keys []string, sessionID string) {
 	day := today()
 	sid := wal.SanitizeField(sessionID)
-	logged := make(map[string]bool, len(already))
-	for _, s := range already {
-		logged[s] = true
-	}
-	for _, slug := range slugs {
+	logged := native.NewKeySet(already)
+	for _, key := range keys {
+		project, slug, qualified := native.ParseQKey(key)
 		// Re-rendered after compaction/clear: already counted for this
 		// session — another row would inflate ref_count (it counts rows).
-		if logged[slug] {
+		if logged.Has(project, slug) {
 			continue
 		}
-		// Project-qualify the WAL target so per-project effectiveness doesn't
-		// merge across same-basename facts (review E5-deep). Fall back to the
-		// bare slug if the project is unknown (grandfathered on read).
+		logged.Add(key)
+		// Project-qualified WAL target so per-project effectiveness doesn't
+		// merge across same-basename facts (review E5-deep). A key without
+		// a project falls back to the bare slug (grandfathered on read).
 		target := wal.SanitizeField(slug)
-		if p := projectBySlug[slug]; p != "" {
-			target = native.QKey(p, target)
+		if qualified && project != "" {
+			target = native.QKey(project, target)
 		}
 		line := fmt.Sprintf("%s|inject|%s|%s", day, target, sid)
 		wal.Append(memoryDir(), line, "")
 	}
-	writeSessionList(already, slugs, sessionID)
+	writeSessionList(already, keys, sessionID)
+}
+
+// hasBareLine reports whether a session list carries a line from an older
+// binary (a slug without its project).
+func hasBareLine(lines []string) bool {
+	for _, ln := range lines {
+		if _, _, qualified := native.ParseQKey(ln); !qualified {
+			return true
+		}
+	}
+	return false
+}
+
+// qualifyBareLines rewrites each bare slug line as the QKeys of every
+// in-scope fact with that file name — the same "this file name in any
+// store" reading the bare line had, now in the list's current form. A bare
+// slug with no in-scope fact stays as is (nothing to qualify it with; it
+// can match nothing in this scope either).
+func qualifyBareLines(lines []string, files []native.MemFile) []string {
+	if !hasBareLine(lines) {
+		return lines
+	}
+	bySlug := make(map[string][]string, len(files))
+	for _, f := range files {
+		bySlug[f.Slug] = append(bySlug[f.Slug], native.QKey(f.Project, f.Slug))
+	}
+	seen := make(map[string]bool, len(lines))
+	out := make([]string, 0, len(lines))
+	add := func(s string) {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	for _, ln := range lines {
+		_, slug, qualified := native.ParseQKey(ln)
+		if keys := bySlug[slug]; !qualified && len(keys) > 0 {
+			for _, k := range keys {
+				add(k)
+			}
+			continue
+		}
+		add(ln)
+	}
+	return out
 }
 
 // writeSessionList rewrites the session's injected list with the set-union
-// of already + slugs. Shared by push (inject) and pull (recall) so push
+// of already + keys (session-list lines, see readInjectedList). Shared by
+// push (inject) and pull (recall) so push
 // dedup and close classification see both delivery paths. The write is atomic
 // (tmp+rename) so the Stop-hook reader never sees a truncated/empty list mid-
 // write — a torn read there means a whole turn's trigger classification is
 // lost (review C4). Two concurrent writers still race read→union→write (last
 // writer wins), acceptable for per-session lists.
-func writeSessionList(already, slugs []string, sessionID string) {
+func writeSessionList(already, keys []string, sessionID string) {
 	runtimeDir := filepath.Join(memoryDir(), ".runtime")
 	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
 		return
 	}
 	pruneRuntimeLists(runtimeDir)
 	seen := make(map[string]bool, len(already))
-	union := append(make([]string, 0, len(already)+len(slugs)), already...)
+	union := append(make([]string, 0, len(already)+len(keys)), already...)
 	for _, s := range already {
 		seen[s] = true
 	}
-	for _, s := range slugs {
+	for _, s := range keys {
 		if !seen[s] {
 			union = append(union, s)
 			seen[s] = true

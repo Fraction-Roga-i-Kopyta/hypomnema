@@ -149,7 +149,12 @@ Verbs may read and write:
   injected union, for `close` classification, WAL `inject`-row dedup, and
   as the render-dedup fallback when no rendered list exists yet;
   `rendered-<session_id>.list` — what is in the model's *current* context,
-  the normative dedup source for the next render, reset on `compact`/`clear`;
+  the normative dedup source for the next render, reset on `compact`/`clear`.
+  Both lists hold one fact per line as `<project>\x1f<slug>` (the WAL's
+  project-qualified key), so a project and a global fact with the same file
+  name are two entries; a bare-slug line written by an older binary means
+  that file name in every store and is rewritten in qualified form by the
+  next `inject`;
   `active-skill-<sid>`
   — the marker `skill-active` writes; and the store-resolution session pin
   `project-<session_id>.json`, written by `inject` at `SessionStart` and read
@@ -202,7 +207,7 @@ context was wiped:
   for this session does **not** get a second WAL row on re-render —
   `ref_count` is not inflated by compaction.
 - any other value (or absent, for the normal session-open path) — dedup
-  against `.runtime/rendered-<session_id>.list`: the slugs currently in the
+  against `.runtime/rendered-<session_id>.list`: the facts currently in the
   model's context (this render's normative dedup source). A session whose
   rendered list does not exist yet — one that predates the file, or has not
   rendered anything this session — falls back to the injected-session-union
@@ -216,11 +221,13 @@ Contract:
   a compact/clear re-render of an already-logged fact writes no second row).
   The sidecar bumps `ref_count` (a diagnostic) and the staleness clock from
   those events.
-- Records the injected slugs in `.runtime/injected-<session_id>.list` — the
-  session union used for WAL `inject`-row dedup and read by `close` to
-  classify the whole session's citations — and unions the newly rendered
-  slugs into `.runtime/rendered-<session_id>.list`, reset to exactly this
-  render's output on compact/clear.
+- Records the injected facts (project-qualified) in
+  `.runtime/injected-<session_id>.list` — the session union used for WAL
+  `inject`-row dedup (per fact: project `x.md` after global `x.md` gets its
+  own row) and read by `close` to classify the whole session's citations —
+  and unions the newly rendered facts into
+  `.runtime/rendered-<session_id>.list`, reset to exactly this render's
+  output on compact/clear.
 
 ## 3. UserPromptSubmit — `inject --event=UserPromptSubmit`
 

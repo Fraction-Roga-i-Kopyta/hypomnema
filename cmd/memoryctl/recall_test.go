@@ -69,8 +69,11 @@ func TestRecallVerb(t *testing.T) {
 		t.Errorf("index entries must not emit recall events:\n%s", walB)
 	}
 	list, _ := os.ReadFile(filepath.Join(memDir, ".runtime", "injected-s9.list"))
-	if !strings.Contains(string(list), "docker.md") {
-		t.Errorf("top-1 must land in the session list, got %q", list)
+	if string(list) != native.QKey("-tmp-proj", "docker.md")+"\n" {
+		t.Errorf("top-1 must land in the session list as its QKey, got %q", list)
+	}
+	if rl, _ := os.ReadFile(filepath.Join(memDir, ".runtime", "rendered-s9.list")); string(rl) != string(list) {
+		t.Errorf("rendered list = %q, want %q", rl, list)
 	}
 	if strings.Contains(string(list), "redis.md") {
 		t.Errorf("index entries must not land in the session list, got %q", list)

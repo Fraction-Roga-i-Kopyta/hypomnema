@@ -45,16 +45,49 @@ func TestRun_SameSlugProjectAndGlobal(t *testing.T) {
 	if len(res.Injected) != 1 || res.Injected[0] != "x.md" {
 		t.Errorf("Injected = %v, want [x.md]", res.Injected)
 	}
-	if p := res.ProjectBySlug["x.md"]; p == "" || p == native.GlobalProject {
-		t.Errorf("ProjectBySlug[x.md] = %q, want the project tag", p)
+	if len(res.InjectedKeys) != 1 || res.InjectedKeys[0] != native.QKey("-tmp-proj", "x.md") {
+		t.Errorf("InjectedKeys = %q, want the project-qualified x.md", res.InjectedKeys)
 	}
 
 	res = run(t, "redis", "docker, cache")
 	if !strings.Contains(res.Markdown, "GLOBAL BODY") || strings.Contains(res.Markdown, "PROJECT BODY") {
 		t.Errorf("only the global fact matches; its body must render:\n%s", res.Markdown)
 	}
-	if p := res.ProjectBySlug["x.md"]; p != native.GlobalProject {
-		t.Errorf("ProjectBySlug[x.md] = %q, want %q", p, native.GlobalProject)
+	if len(res.InjectedKeys) != 1 || res.InjectedKeys[0] != native.QKey(native.GlobalProject, "x.md") {
+		t.Errorf("InjectedKeys = %q, want the global x.md", res.InjectedKeys)
+	}
+}
+
+// AlreadyInjected names facts, not file names: global x.md in context does
+// not hide project x.md; a bare line (older binary) hides both.
+func TestRun_AlreadyInjectedByQKey(t *testing.T) {
+	run := func(t *testing.T, already []string) Result {
+		t.Helper()
+		memDir, projDir, home := setup(t)
+		globDir := filepath.Join(home, ".claude", "memory-global")
+		os.MkdirAll(globDir, 0o755)
+		os.WriteFile(filepath.Join(projDir, "x.md"),
+			[]byte("---\nname: x\ntype: knowledge\nkeywords: [docker]\n---\nPROJECT BODY\n"), 0o644)
+		os.WriteFile(filepath.Join(globDir, "x.md"),
+			[]byte("---\nname: x\ntype: knowledge\nkeywords: [docker]\n---\nGLOBAL BODY\n"), 0o644)
+		os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
+		res, err := Run(Input{
+			Event: "UserPromptSubmit", SessionID: "s1", CWD: "/tmp/proj", Prompt: "docker",
+			ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir,
+			Today: "2026-05-29", MaxK: 8, AlreadyInjected: already,
+		})
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		return res
+	}
+	res := run(t, []string{native.QKey(native.GlobalProject, "x.md")})
+	if len(res.InjectedKeys) != 1 || !strings.HasSuffix(res.InjectedKeys[0], "x.md") ||
+		strings.HasPrefix(res.InjectedKeys[0], native.GlobalProject) || !strings.Contains(res.Markdown, "PROJECT BODY") {
+		t.Errorf("project x.md must render beside global x.md in context: keys=%q\n%s", res.InjectedKeys, res.Markdown)
+	}
+	if res = run(t, []string{"x.md"}); len(res.InjectedKeys) != 0 {
+		t.Errorf("a bare line hides the file name in every store: keys=%q", res.InjectedKeys)
 	}
 }
 

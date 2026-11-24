@@ -51,3 +51,36 @@ func ParseQKey(target string) (project, slug string, qualified bool) {
 	}
 	return "", target, false
 }
+
+// KeySet is the set of facts a session list names. A QKey line names one
+// fact; a bare slug line (written by a binary that predates project-qualified
+// session lists) names that file in every store — the conservative reading,
+// so an upgrade mid-session never re-offers or re-logs what the old binary
+// already delivered.
+type KeySet struct {
+	keys map[string]bool // QKey lines
+	bare map[string]bool // bare slug lines
+}
+
+// NewKeySet builds the set from session-list lines.
+func NewKeySet(lines []string) KeySet {
+	s := KeySet{keys: map[string]bool{}, bare: map[string]bool{}}
+	for _, ln := range lines {
+		s.Add(ln)
+	}
+	return s
+}
+
+// Add puts one session-list line (QKey or bare slug) into the set.
+func (s KeySet) Add(line string) {
+	if _, slug, qualified := ParseQKey(line); qualified {
+		s.keys[line] = true
+	} else if slug != "" {
+		s.bare[slug] = true
+	}
+}
+
+// Has reports whether the fact (project, slug) is in the set.
+func (s KeySet) Has(project, slug string) bool {
+	return s.keys[QKey(project, slug)] || s.bare[slug]
+}

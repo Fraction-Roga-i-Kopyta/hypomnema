@@ -192,9 +192,23 @@ func Run(in Input) (Result, error) {
 	return res, nil
 }
 
+// readInjectedSet returns the file names delivered this session, once each.
+// List lines are native.QKey(project, slug); a bare slug line written by an
+// older binary reads the same. Classification is per file name (the model
+// cites by file name), so the project part is dropped here.
 func readInjectedSet(memDir, sessionID string) []string {
-	return readRuntimeList(filepath.Join(memDir, ".runtime",
+	lines := readRuntimeList(filepath.Join(memDir, ".runtime",
 		"injected-"+pathutil.SafeFileName(sessionID)+".list"))
+	seen := make(map[string]bool, len(lines))
+	var out []string
+	for _, ln := range lines {
+		_, slug, _ := native.ParseQKey(ln)
+		if slug != "" && !seen[slug] {
+			seen[slug] = true
+			out = append(out, slug)
+		}
+	}
+	return out
 }
 
 func readRuntimeList(path string) []string {

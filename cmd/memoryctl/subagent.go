@@ -182,11 +182,11 @@ func runSubagentStart(raw []byte) {
 	if err != nil {
 		return
 	}
-	if len(res.Injected) > 0 {
-		persistInjected(nil, res.Injected, res.ProjectBySlug, key)
+	if len(res.InjectedKeys) > 0 {
+		persistInjected(nil, res.InjectedKeys, key)
 	}
 	// Written even when nothing rendered: it marks this agent's first start.
-	writeRenderedList(nil, res.Injected, key)
+	writeRenderedList(nil, res.InjectedKeys, key)
 	if strings.TrimSpace(res.Markdown) != "" {
 		emitEnvelope("SubagentStart", res.Markdown)
 	}

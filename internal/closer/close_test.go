@@ -573,3 +573,27 @@ func TestRun_KeepsForeignGlobalIndex(t *testing.T) {
 		t.Errorf("foreign global MEMORY.md must survive close; got:\n%s", got)
 	}
 }
+
+// Session lists carry project-qualified keys (one per line); a bare line
+// written by an older binary is still read. Classification stays per file
+// name, exactly as with bare lists.
+func TestRun_ReadsQualifiedSessionList(t *testing.T) {
+	files := map[string]string{
+		"docker.md": "---\nname: Docker cache\ntype: mistake\n---\ndocker cache\n",
+		"sql.md":    "---\nname: SQL index\ntype: knowledge\n---\nsql index\n",
+	}
+	memDir, run := closeFixture(t, files, []string{"-tmp-proj\x1fdocker.md", "sql.md"},
+		assistantText(`<cc-memory filenames="docker.md">fixed the cache</cc-memory>`))
+	run()
+	wal, _ := os.ReadFile(filepath.Join(memDir, ".wal"))
+	w := string(wal)
+	if !strings.Contains(w, "|cite-useful|-tmp-proj\x1fdocker.md|s1") {
+		t.Errorf("a qualified list line must count as delivered:\n%s", w)
+	}
+	if !strings.Contains(w, "|cite-silent|-tmp-proj\x1fsql.md|s1") {
+		t.Errorf("a bare list line must still be read:\n%s", w)
+	}
+	if strings.Contains(w, "|cite-undelivered|") || strings.Count(w, "\x1f") != 2 {
+		t.Errorf("want exactly one useful and one silent row:\n%s", w)
+	}
+}

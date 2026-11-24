@@ -152,17 +152,21 @@ type Input struct {
 	// ProjectRoot is the canonical project root (main checkout / git root /
 	// the directory itself). Its path components do not count toward the
 	// SubagentStart head gate; empty excludes none.
-	ProjectRoot     string
-	SessionID       string
-	CWD             string
-	Prompt          string
-	ClaudeHome      string // <home>/.claude
-	ConfigDir       string // Claude Code config dir (projects/); "" → ClaudeHome
-	MemoryDir       string
-	Today           string
-	MaxK            int
-	MaxBytes        int      // total render budget; <=0 → maxTotalBytes
-	AlreadyInjected []string // slugs already injected this session — not re-rendered while still in the current context
+	ProjectRoot string
+	SessionID   string
+	CWD         string
+	Prompt      string
+	ClaudeHome  string // <home>/.claude
+	ConfigDir   string // Claude Code config dir (projects/); "" → ClaudeHome
+	MemoryDir   string
+	Today       string
+	MaxK        int
+	MaxBytes    int // total render budget; <=0 → maxTotalBytes
+	// AlreadyInjected lists the facts in the session's current context, not
+	// re-rendered: one session-list line each — native.QKey(project, slug),
+	// or a bare slug from an older binary, which names that file in every
+	// store (native.KeySet).
+	AlreadyInjected []string
 	// Store is the resolved native store. Zero value → resolved from CWD
 	// (tests and legacy callers); the memoryctl verb always sets it.
 	Store native.Store
@@ -199,15 +203,15 @@ func (in Input) storeDirs(st native.Store) map[string]string {
 	return native.StoreDirs(cfg, in.ClaudeHome, st)
 }
 
-// Result is the rendered context plus the slugs injected.
+// Result is the rendered context plus the facts injected.
 type Result struct {
 	Markdown string
+	// InjectedKeys names each rendered fact as native.QKey(project, slug),
+	// in render order — the session-list and WAL identity: a project and a
+	// global fact with the same file name are two facts.
+	InjectedKeys []string
+	// Injected is the rendered facts' file names, in render order.
 	Injected []string
-	// ProjectBySlug maps each injected slug to its owning project (the
-	// resolved store's project tag, or GlobalProject), so the caller can
-	// write project-qualified WAL events. Project-local wins over global on
-	// a basename tie — matching scopeRecords' preference.
-	ProjectBySlug map[string]string
 }
 
 // Run orchestrates a single injection: keywords → native files → ranked
@@ -282,13 +286,10 @@ func Run(in Input) (Result, error) {
 		ranked = topDistinct(q, cands, st.Project, in.MaxK)
 	}
 	if len(in.AlreadyInjected) > 0 {
-		seen := make(map[string]bool, len(in.AlreadyInjected))
-		for _, s := range in.AlreadyInjected {
-			seen[s] = true
-		}
+		seen := native.NewKeySet(in.AlreadyInjected)
 		fresh := ranked[:0]
 		for _, sc := range ranked {
-			if !seen[sc.Slug] {
+			if !seen.Has(sc.Project, sc.Slug) {
 				fresh = append(fresh, sc)
 			}
 		}
@@ -325,13 +326,12 @@ func Run(in Input) (Result, error) {
 			}
 		}
 	}
-	var injected []string
-	projectBySlug := make(map[string]string, len(rendered))
+	var injected, keys []string
 	for _, sc := range rendered {
 		injected = append(injected, sc.Slug)
-		projectBySlug[sc.Slug] = sc.Project
+		keys = append(keys, native.QKey(sc.Project, sc.Slug))
 	}
-	return Result{Markdown: md, Injected: injected, ProjectBySlug: projectBySlug}, nil
+	return Result{Markdown: md, InjectedKeys: keys, Injected: injected}, nil
 }
 
 // needsTerms reports whether this injection ranks at all. SessionStart is
