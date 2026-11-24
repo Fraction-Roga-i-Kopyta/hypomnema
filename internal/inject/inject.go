@@ -482,7 +482,7 @@ func candidates(in Input, st native.Store, files []native.MemFile, terms []strin
 				Effectiveness: r.Effectiveness, Status: r.Status,
 				Created: r.Created, LastInjected: r.LastInjected,
 				LastUseful: r.LastUseful,
-				Overlap:    overlap[r.Slug],
+				Overlap:    overlap[k],
 			})
 		}
 		return out

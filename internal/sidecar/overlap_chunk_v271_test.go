@@ -30,8 +30,8 @@ func TestOverlapScores_HugeQueryChunks(t *testing.T) { // review E6
 	if err != nil {
 		t.Fatalf("OverlapScores must chunk past the variable limit, got error: %v", err)
 	}
-	if ov["x.md"] != 1 {
-		t.Errorf("overlap should find the needle across chunks: got %d, want 1", ov["x.md"])
+	if ov[native.QKey("p", "x.md")] != 1 {
+		t.Errorf("overlap should find the needle across chunks: got %d, want 1", ov[native.QKey("p", "x.md")])
 	}
 }
 
