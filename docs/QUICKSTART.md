@@ -27,8 +27,12 @@ first. It also checks that Claude Code is ≥ 2.1.59 before touching anything.
 Verify the install end-to-end:
 
 ```bash
-memoryctl doctor     # expect: all checks OK, 0 FAIL
+~/.claude/bin/memoryctl doctor   # expect: 0 FAIL; an empty corpus is a WARN on day one
 ```
+
+`memoryctl` is installed into `~/.claude/bin/`; add
+`export PATH="$HOME/.claude/bin:$PATH"` to your shell profile to call it as
+plain `memoryctl`.
 
 ## 2. Projects need no registration
 

@@ -1,5 +1,26 @@
 # Changelog
 
+## [3.2.2] — 2026-11-24
+
+First-run fixes found by a clean install from GitHub into an empty `HOME`.
+
+### Fixed
+
+- `install.sh` creates the runtime directory (`~/.claude/memory`, or
+  `CLAUDE_MEMORY_DIR`): `memoryctl doctor` reported FAIL right after a
+  clean install until the first session had run.
+- `install.sh` prints the full path to `memoryctl doctor`, plus the
+  `export PATH` line, when `~/.claude/bin` is not on `PATH`; README and
+  QUICKSTART use the full path.
+- `make build` printed `Built ./bin/memoryctl ()` on a first build — the
+  size is now read after the binary exists.
+
+### Added
+
+- `docs/measurements/2026-11-24-error-recall.md`: recall on a failed Bash
+  command by word overlap was calibrated on 466 real failures and not
+  shipped (3.0 % of delivered facts relevant).
+
 ## [3.2.1] — 2026-11-24
 
 Internal re-implementation of the prompt gate, the home-directory basename
