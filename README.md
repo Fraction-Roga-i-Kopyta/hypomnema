@@ -6,7 +6,7 @@
 
 **Working memory for your AI agent, not a second brain for you.** Hypomnema decides what Claude Code knows when a session or a subagent starts: the project's current state, the rules you gave it, the mistakes it already made. It is a governance and ranking layer over Claude Code's native file memory — a Go engine (`memoryctl`) + 9 thin shims. No cloud, no embeddings, no vault.
 
-> **Status:** v3.2.1; native-primary. Requires Claude Code ≥ v2.1.59 (native file memory). v1.x stays on its tag for older Claude Code installs — see [MIGRATION.md](docs/MIGRATION.md) for the v1.x → v2.x upgrade path.
+> **Status:** v3.2.2; native-primary. Requires Claude Code ≥ v2.1.59 (native file memory). v1.x stays on its tag for older Claude Code installs — see [MIGRATION.md](docs/MIGRATION.md) for the v1.x → v2.x upgrade path.
 >
 > **Platforms:** macOS (primary, daily-driver) and Linux (`ubuntu-latest`), both covered by CI. The core is the Go binary; the shims are ~5-line `sh` marshallers. Windows: WSL only, native unsupported.
 >
@@ -213,8 +213,12 @@ git clone https://github.com/Fraction-Roga-i-Kopyta/hypomnema.git
 cd hypomnema
 make build       # compiles ./bin/memoryctl — the binary is not checked in
 ./install.sh     # refuses to run if bin/memoryctl is missing
-memoryctl doctor # verify: all checks OK
+~/.claude/bin/memoryctl doctor   # verify: no FAIL (an empty corpus is a WARN on day one)
 ```
+
+`memoryctl` lives in `~/.claude/bin/`. To call it as plain `memoryctl`, add
+`export PATH="$HOME/.claude/bin:$PATH"` to your shell profile (`install.sh`
+prints this when the directory is not on your `PATH`).
 
 `./install.sh`:
 - Verifies Claude Code ≥ v2.1.59 and that `settings.json` is valid JSON — before touching anything.

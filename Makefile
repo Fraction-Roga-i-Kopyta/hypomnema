@@ -21,7 +21,7 @@ build: $(MEMORYCTL)
 $(MEMORYCTL): $(GO_FILES) go.mod go.sum
 	@mkdir -p $(BIN_DIR)
 	$(GO_BUILD) -o $(MEMORYCTL) ./cmd/memoryctl
-	@echo "Built $(MEMORYCTL) ($(shell du -h $(MEMORYCTL) | cut -f1))"
+	@echo "Built $(MEMORYCTL) ($$(du -h $(MEMORYCTL) | cut -f1))"
 
 test: test-go
 

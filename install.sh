@@ -70,6 +70,8 @@ _run() {
 
 CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
 MEMORY_GLOBAL_DIR="${CLAUDE_DIR}/memory-global"
+# Runtime dir (WAL, sidecar, .runtime/) — the path memoryctl resolves too.
+MEMORY_RUNTIME_DIR="${CLAUDE_MEMORY_DIR:-${CLAUDE_DIR}/memory}"
 HOOKS_DIR="${CLAUDE_DIR}/hooks"
 BIN_DIR="${CLAUDE_DIR}/bin"
 SETTINGS="${CLAUDE_DIR}/settings.json"
@@ -138,8 +140,10 @@ echo ""
 # --- [1/4] Create native global store directory ---
 echo "[1/4] Creating global memory store..."
 _run mkdir -p "$MEMORY_GLOBAL_DIR"
+_run mkdir -p "$MEMORY_RUNTIME_DIR"
 _run mkdir -p "$BIN_DIR"
 echo "  Created: $MEMORY_GLOBAL_DIR"
+echo "  Runtime: $MEMORY_RUNTIME_DIR (WAL and sidecar appear after the first session)"
 
 # --- [2/4] Install memoryctl binary ---
 echo "[2/4] Installing memoryctl..."
@@ -300,7 +304,14 @@ echo "=== Done ==="
 echo ""
 echo "Next steps:"
 echo "  1. Restart Claude Code (hooks take effect on next launch)"
-echo "  2. Run: memoryctl doctor   (verifies the install end-to-end)"
+case ":$PATH:" in
+  *":$BIN_DIR:"*)
+    echo "  2. Run: memoryctl doctor   (verifies the install end-to-end)" ;;
+  *)
+    echo "  2. Run: $BIN_DIR/memoryctl doctor   (verifies the install end-to-end)"
+    echo "     $BIN_DIR is not on your PATH. To call memoryctl directly, add to your shell profile:"
+    echo "       export PATH=\"\$HOME/.claude/bin:\$PATH\"" ;;
+esac
 [ "$_has_v1_store" -eq 1 ] && echo "  3. When ready: memoryctl migrate --execute  (to move v1 -> v2 store)"
 echo ""
 echo "Backup saved: ${SETTINGS}.backup-hypomnema"
