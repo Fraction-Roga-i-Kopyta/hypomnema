@@ -1,12 +1,12 @@
 package sidecar
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
 
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/lineio"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/usefulness"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/wal"
@@ -321,12 +321,12 @@ func readWALAgg(walPath string) (map[string]*agg, []walRow) {
 		return out, nil // missing WAL -> no history, not fatal
 	}
 	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 1<<16), 1<<20)
-	for sc.Scan() {
-		date, event, target, field4, ok := parseWALLine(sc.Text())
+	// lineio has no line-length cap: an oversized row no longer ends the
+	// read and drops every row after it from the projection.
+	_ = lineio.Each(f, func(line string) error {
+		date, event, target, field4, ok := parseWALLine(line)
 		if !ok {
-			continue
+			return nil
 		}
 		// cite-none's target is the session id, not a fact slug — keying it
 		// would create a phantom per-key aggregate under that session id.
@@ -340,7 +340,7 @@ func readWALAgg(walPath string) (map[string]*agg, []walRow) {
 		// the WAL-earliest created fallback, compaction would change the
 		// projection.
 		if wal.LegacyEvents[event] {
-			continue
+			return nil
 		}
 		switch event {
 		case "mark", "retire", "revive":
@@ -351,7 +351,7 @@ func readWALAgg(walPath string) (map[string]*agg, []walRow) {
 		switch event {
 		case "cite-none", "cite-undelivered", "pin", "unpin", "mark",
 			"ablate-start", "ablate-stop", "holdout-skip", "holdout-hit", "holdout-miss":
-			continue
+			return nil
 		}
 		// Targets may be project-qualified (project\x1fslug, v2.10+) or a legacy
 		// bare slug (pre-v2.10). Key qualified events by QKey(project, bareslug)
@@ -427,10 +427,12 @@ func readWALAgg(walPath string) (map[string]*agg, []walRow) {
 		if a.created == "" || date < a.created {
 			a.created = date
 		}
-	}
-	// sc.Err() is intentionally ignored: a partial/truncated WAL read yields
+		return nil
+	})
+	// A read error is intentionally ignored: an I/O failure mid-read yields
 	// partial history, which is acceptable (the WAL is the audit source of
-	// truth; the sidecar is a rebuildable projection).
+	// truth; the sidecar is a rebuildable projection, and this runs on hook
+	// paths that must not fail the user's turn).
 	return out, lifecycle
 }
 
@@ -440,22 +442,26 @@ func replayOutcomes(e dbtx, walPath string) error {
 		return nil
 	}
 	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 1<<16), 1<<20)
-	for sc.Scan() {
-		date, event, slug, _, ok := parseWALLine(sc.Text())
+	var insertErr error
+	err = lineio.Each(f, func(line string) error {
+		date, event, slug, _, ok := parseWALLine(line)
 		if !ok {
-			continue
+			return nil
 		}
 		if event == "outcome-positive" || event == "outcome-negative" {
 			if _, err := e.Exec(`INSERT INTO outcome (slug, ts, kind) VALUES (?,?,?)`,
 				slug, date, strings.TrimPrefix(event, "outcome-")); err != nil {
-				return fmt.Errorf("sidecar.replayOutcomes: insert %s: %w", slug, err)
+				insertErr = fmt.Errorf("sidecar.replayOutcomes: insert %s: %w", slug, err)
+				return insertErr
 			}
 		}
+		return nil
+	})
+	if insertErr != nil {
+		return insertErr
 	}
-	if err := sc.Err(); err != nil {
-		return fmt.Errorf("sidecar.replayOutcomes: scan: %w", err)
+	if err != nil {
+		return fmt.Errorf("sidecar.replayOutcomes: read: %w", err)
 	}
 	return nil
 }

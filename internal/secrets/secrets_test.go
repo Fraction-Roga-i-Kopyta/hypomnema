@@ -125,3 +125,19 @@ func TestIgnoreMatch(t *testing.T) {
 		t.Error("the global store's .secretsignore must whitelist too")
 	}
 }
+
+// A line past bufio.Scanner's default 64 KiB cap must not end the read: a
+// `!` negation after it still un-whitelists the path.
+func TestIgnoreMatch_LongLineDoesNotDropLaterNegation(t *testing.T) {
+	p := filepath.Join(t.TempDir(), ".secretsignore")
+	body := "notes/*.md\n# " + strings.Repeat("c", 100<<10) + "\n!notes/creds.md\n"
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if IgnoreMatch("notes/creds.md", p) {
+		t.Error("negation after a long line was dropped — path stays whitelisted")
+	}
+	if !IgnoreMatch("notes/other.md", p) {
+		t.Error("notes/other.md should still be whitelisted")
+	}
+}
