@@ -53,7 +53,7 @@ Hypomnema adds:
 | Gap in native | What hypomnema provides |
 |---|---|
 | Native injects only an index, not ranked content | `memoryctl inject` ranks native facts by relevance (keyword overlap + recency + project boost) and injects the top-K via `additionalContext` — not just a table of contents |
-| Subagents start with a blank context | `SubagentStart` ranks the store against the subagent's own launch task (or a fallback query) and injects its own top-5, under a key that keeps its citations separate from the parent session |
+| Subagents start with a blank context | `SubagentStart` injects only the facts the subagent's own launch task names (top-5; nothing without a task), under a key that keeps its citations separate from the parent session |
 | No per-session effectiveness signal | WAL captures `<cc-memory>` citations (`cite-useful`/`cite-silent`) per session; effectiveness is tracked as a diagnostic |
 | No decay / lifecycle | `memoryctl close` down-ranks stale facts in the sidecar; nothing is deleted from disk |
 | No secrets gate | `memoryctl guard` (PreToolUse:Write\|Edit) blocks credential patterns before they land in a memory file |
@@ -105,7 +105,7 @@ size. See [`docs/measurements/2026-05-29-v2-ranker-ab.md`](docs/measurements/202
 | `PreToolUse:Skill` | `skill-active.sh` | Record which skill just activated (marker for the capture path) |
 | `PostToolUse:Skill` | `skill-learnings-inject.sh` | `skill-inject`: surface accumulated learnings for the activated skill |
 | `Stop` | `session-stop.sh` | `close`: classify the injected set by `<cc-memory>` citation → WAL → recompute effectiveness/decay → regenerate `MEMORY.md` |
-| `SubagentStart` | `subagent-start.sh` | Rank against the subagent's own launch task (fallback: the parent's recent prompts) → inject its own top-5 |
+| `SubagentStart` | `subagent-start.sh` | Facts the subagent's own launch task names (head gate) → inject its own top-5; no task → nothing |
 | `SubagentStop` | `subagent-stop.sh` | `close --subagent`: classify the subagent's own citations (including its hand-back report) under its own key |
 
 `guard-bash` stops accidental or injected *CLI* calls — say, a prompt
@@ -377,7 +377,7 @@ precision_class: ambient  # going uncited carries no silence penalty (use for la
 
 ## Subagents
 
-Subagents get their own ranked memory at `SubagentStart`: `memoryctl` builds a query from the agent's own launch task (its `Agent`/`Task` call — description + prompt — read back out of the parent transcript) or, failing that, the parent's recent prompts, and injects its own top-5 (5 KB cap) before the subagent's first turn. Lookup-only agents (`fork`, `Explore`, `claude-code-guide`, `statusline-setup` by default; override with `HYPOMNEMA_SUBAGENT_SKIP`) are skipped — memory would be noise there; set `HYPOMNEMA_SUBAGENT_SKIP=*` (in `settings.json`'s `env` block, so both subagent hooks inherit it) to opt every subagent out. A subagent's citations are classified at `SubagentStop` under its own key (`<session_id>:<agent_id>`), separate from the parent session, so its usefulness signal never mixes with the parent's. There is still no auto-generated context file (`_agent_context.md` was a v1 artefact) — pass inline only what is specific to the task beyond what the ranker already covers.
+Subagents get memory at `SubagentStart` only when their own launch task names it: `memoryctl` reads the agent's `Agent`/`Task` call (description + prompt) out of the parent transcript and injects a fact only if its head (name, description, keywords, domains) shares at least two distinct terms with that brief — project and home path words, agent-type words, digits and corpus-common terms do not count — ranked to its own top-5 (5 KB cap) before the first turn. A subagent with no call of its own gets nothing. Lookup-only agents (`fork`, `Explore`, `claude-code-guide`, `statusline-setup` by default; override with `HYPOMNEMA_SUBAGENT_SKIP`) are skipped — memory would be noise there; set `HYPOMNEMA_SUBAGENT_SKIP=*` (in `settings.json`'s `env` block, so both subagent hooks inherit it) to opt every subagent out. A subagent's citations are classified at `SubagentStop` under its own key (`<session_id>:<agent_id>`), separate from the parent session, so its usefulness signal never mixes with the parent's. There is still no auto-generated context file (`_agent_context.md` was a v1 artefact) — pass inline only what is specific to the task beyond what the ranker already covers.
 
 ## Design decisions
 

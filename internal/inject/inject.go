@@ -178,6 +178,13 @@ type Input struct {
 	// its own Agent call), where the parent's branch and working-tree tokens
 	// are unrelated noise.
 	NoGitSignal bool
+	// Brief is the SubagentStart task brief (Agent-call description + prompt),
+	// read in full by the head gate. Empty on SubagentStart -> nothing is
+	// injected: without a task there is nothing to name a fact.
+	Brief string
+	// AgentType is the subagent's type; its words do not count toward the
+	// head gate.
+	AgentType string
 }
 
 func (in Input) store() native.Store {
@@ -216,6 +223,9 @@ type Result struct {
 // sidecar by rebuilding; falls back to a native-only degraded rank if the
 // sidecar is unusable.
 func Run(in Input) (Result, error) {
+	if in.Event == "SubagentStart" && strings.TrimSpace(in.Brief) == "" {
+		return Result{}, nil
+	}
 	st := in.store()
 	files := native.Collect(in.ClaudeHome, st)
 	if len(files) == 0 {
@@ -242,6 +252,18 @@ func Run(in Input) (Result, error) {
 		current = append(current, c)
 	}
 	cands = current
+	if in.Event == "SubagentStart" {
+		// Gate BEFORE rank: facts the brief does not name must not take the
+		// K slots.
+		g := newGate(in.Brief, gateExclusions(in.ProjectRoot, filepath.Dir(in.ClaudeHome), in.AgentType, files))
+		kept := cands[:0]
+		for _, c := range cands {
+			if f, ok := byKey[native.QKey(c.Project, c.Slug)]; ok && g.pass(f) {
+				kept = append(kept, c)
+			}
+		}
+		cands = kept
+	}
 	if requirePromptMatch(in.Event) {
 		want := termSet(tokenize.Relevance(in.Prompt))
 		kept := cands[:0]

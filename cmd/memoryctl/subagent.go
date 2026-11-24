@@ -9,6 +9,7 @@ import (
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/closer"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/inject"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/jsonl"
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/pathutil"
 )
 
@@ -81,16 +82,19 @@ func agentTypeTerms(agentType string) string {
 // agent type's words. fromTask is true only on the assigned-call branch —
 // the caller uses it to skip the git signal, since a query that already
 // names the task doesn't need the PARENT's branch and working-tree tokens
-// on top.
-func subagentQuery(parentTranscript, agentType, agentID string) (query string, fromTask bool) {
+// on top. brief is the assigned call's description and full prompt — what
+// the head gate reads — and "" on the fallback branches: a subagent with no
+// task of its own gets no memory.
+func subagentQuery(parentTranscript, agentType, agentID string) (query, brief string, fromTask bool) {
 	typ := agentTypeTerms(agentType)
 	if c, ok := pickAgentCall(parentTranscript, agentType, agentID); ok {
-		return strings.TrimSpace(c.Description + " " + typ + " " + inject.TopTerms(c.Prompt, subagentPromptTerms)), true
+		return strings.TrimSpace(c.Description + " " + typ + " " + inject.TopTerms(c.Prompt, subagentPromptTerms)),
+			c.Description + "\n" + c.Prompt, true
 	}
 	if p, ok := jsonl.RecentUserPrompts(parentTranscript, subagentRecentPrompt); ok {
-		return strings.TrimSpace(typ + " " + inject.TopTerms(p, subagentPromptTerms)), false
+		return strings.TrimSpace(typ + " " + inject.TopTerms(p, subagentPromptTerms)), "", false
 	}
-	return typ, false
+	return typ, "", false
 }
 
 // pickAgentCall assigns this subagent the call that launched it. Its own
@@ -165,13 +169,15 @@ func runSubagentStart(raw []byte) {
 		// duplicate start: someone else already claimed this key.
 		return
 	}
-	query, fromTask := subagentQuery(in.TranscriptPath, in.AgentType, in.AgentID)
+	query, brief, fromTask := subagentQuery(in.TranscriptPath, in.AgentType, in.AgentID)
+	store := resolveStore(in.CWD)
 	res, err := inject.Run(inject.Input{
 		Event: "SubagentStart", SessionID: key, CWD: in.CWD,
 		Prompt: query, NoGitSignal: fromTask,
+		Brief: brief, AgentType: in.AgentType, ProjectRoot: native.CanonicalRoot(store.Anchor),
 		ClaudeHome: claudeDir(), ConfigDir: configDir(), MemoryDir: memoryDir(), Today: today(),
 		MaxK: subagentMaxK, MaxBytes: subagentMaxBytes,
-		Store: resolveStore(in.CWD).Store,
+		Store: store.Store,
 	})
 	if err != nil {
 		return
