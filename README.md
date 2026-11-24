@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/Fraction-Roga-i-Kopyta/hypomnema?include_prereleases&sort=semver)](https://github.com/Fraction-Roga-i-Kopyta/hypomnema/releases)
 
-**Governance and ranking layer for Claude Code's native file memory — a Go engine (`memoryctl`) + 9 thin shims. No cloud, no embeddings.** Claude Code now ships native file memory; hypomnema adds ranked auto-injection (session AND subagents), effectiveness measurement, decay, and a global store that native lacks.
+**Working memory for your AI agent, not a second brain for you.** Hypomnema decides what Claude Code knows when a session or a subagent starts: the project's current state, the rules you gave it, the mistakes it already made. It is a governance and ranking layer over Claude Code's native file memory — a Go engine (`memoryctl`) + 9 thin shims. No cloud, no embeddings, no vault.
 
 > **Status:** v3.0.0; native-primary. Requires Claude Code ≥ v2.1.59 (native file memory). v1.x stays on its tag for older Claude Code installs — see [MIGRATION.md](docs/MIGRATION.md) for the v1.x → v2.x upgrade path.
 >
@@ -12,26 +12,37 @@
 >
 > _Not affiliated with or endorsed by Anthropic. Hypomnema is an independent project that integrates with Claude Code's public hook API._
 
+## Who reads this memory
+
+Not you. Hypomnema is not another markdown "second brain" — no Obsidian vault, no backlinks graph, no daily notes, nothing to browse or curate. Every fact is written for one reader: the agent, at the moment it starts work.
+
+- **The agent writes it.** Claude records a bug it should not repeat, an approach that worked, a rule you gave it. You can open, edit or delete any file, but you are not expected to maintain a knowledge base.
+- **The agent reads it.** A fresh session starts with the project's current state, its pinned card and your rules for it; a subagent gets only the facts its task names; everything else is listed in an index the agent reads when a description fits.
+- **Success is measured on the agent.** A fact counts as useful only when it changed what Claude said, did or decided — Claude marks that with a hidden citation. How many notes are stored, or how they look to a human, is not a goal.
+- **Priorities, in order:** what reaches the agent's context is accurate → it is fast → it makes the agent more capable → anything a human sees. Human-facing features are dropped when they cost injection quality.
+
+The human side is a control panel, not a reading app: `/memboard` shows what the agent got and lets you hide a fact, show it less, or ask Claude to rewrite it.
+
 ## What it looks like
 
-When you open a new Claude Code session in a project, hypomnema injects a `# Memory Context` block before the conversation starts:
+When you open a new Claude Code session in a project, hypomnema injects a `# Memory Context` block before the conversation starts — the session's fixed core: where the work stopped, the project's pinned card, and the rules you gave the agent in this project:
 
 ```markdown
 # Memory Context
 When a fact below changes what you say, do, or decide, wrap that sentence in <cc-memory filenames="FILE">…</cc-memory> (the tag is hidden from the user).
 
-## sqlalchemy-metadata-reserved-name — sqlalchemy-metadata-reserved-name.md (mistake, 2026-03-02)
-Root cause: `metadata_` mapped to column "metadata" collides with `Base.metadata`
-Prevention: Check SQLAlchemy reserved attribute names before mapping
+## continuity — continuity.md (continuity, 2026-11-24)
+Doing: migrate the billing webhooks to the v2 API. Status: 3 of 5 handlers ported, tests green.
+Next: port refund + dispute handlers; staging run before merge.
 
-## code-approach — code-approach.md (feedback, 2026-02-14)
-Parameterized queries only. No hardcoded secrets. No debug logging in committed code.
+## billing-service — billing-service.md (project, 2026-09-02)
+Repo layout, how to run the stack locally, deploy is via PR to main only, never push to prod directly.
 
-## verification-before-done — verification-before-done.md (strategy, 2026-01-20)
-Don't claim "done" before running a minimum verification set.
+## real-db-in-tests — real-db-in-tests.md (feedback, 2026-02-14)
+Integration tests must hit a real database, not a mock. Why: a mocked test passed while the migration failed.
 ```
 
-Claude reads it as part of its context — no RAG query, no vector database, just a markdown block prepended by the hook. The file name in each header is what a citation names: when a fact actually changes what Claude says or does, it wraps that sentence in `<cc-memory filenames="sqlalchemy-metadata-reserved-name.md">…</cc-memory>` — hidden from the user, read by `close` as the honest usefulness signal. When Claude hits a new bug worth remembering, it writes a native memory file and the next session injects it automatically. Memory also survives context compaction and `/clear`: hypomnema re-ranks — on compaction, against the compaction summary itself — and re-injects whatever lands in the top-8 right after, so a compacted session doesn't wake up having forgotten everything it already knew. A fact that misses that post-compaction top-8 is dropped from the model's *current* context, so a later prompt in the same session can offer it again — dedup now tracks what's actually still visible, not just what was ever shown.
+Claude reads it as part of its context — no RAG query, no vector database, just a markdown block prepended by the hook. Everything else stays out of the way: the agent sees the store's `MEMORY.md` index and reads a fact when its description fits the task; a subagent gets only the facts its own task names. The file name in each header is what a citation names: when a fact actually changes what Claude says or does, it wraps that sentence in `<cc-memory filenames="real-db-in-tests.md">…</cc-memory>` — hidden from the user, read by `close` as the honest usefulness signal. When Claude hits a new bug worth remembering, it writes a native memory file; the next time a task names that bug, the agent finds it. The core comes back after `/clear` and compaction — after compaction, followed by facts the compaction summary names — so a compacted session doesn't wake up having forgotten where it was.
 
 ## What hypomnema adds on top of native
 
@@ -189,8 +200,9 @@ This gets injected when relevant. After the fifth time, Claude stops doing it.
 | **`CLAUDE.md` files** (Anthropic native) | Static context injected verbatim, in-repo or `~/.claude/CLAUDE.md` | Hypomnema is dynamic: ranking, decay, per-session signal, WAL feedback loop. The two are complementary. |
 | **`mem0`** (Python, hosted or self-host) | Vector-embedding memory with a REST API | No embeddings, no service to run — native files are the store. Trade-off: semantic recall beyond keyword overlap is weaker; no multi-language client. |
 | **ChatGPT / Cursor memory** | Vendor-managed, opaque, cloud-stored | Local files you can `cat`/`grep`/`git diff`/`rm`. Trade-off: Claude Code specific. |
+| **Obsidian / PKM "second brain" vaults** (incl. MCP bridges to them) | Notes a human writes, links and browses; an agent can be pointed at the vault | Different reader. Hypomnema stores what the agent needs to act — state, rules, mistakes — and decides what enters its context; it has no graph, backlinks or reading UI, and does not try to be your notebook. |
 
-Sweet spot: daily-driver Claude Code users (v2.1.59+) who want visible, editable, diffable memory with effectiveness feedback. Not a fit for shared/team memory or users working across many AI tools.
+Sweet spot: daily-driver Claude Code users (v2.1.59+) who want their agent to start each session knowing what it should, with memory that stays visible, editable and diffable. Not a fit for personal note-taking, shared/team memory, or users working across many AI tools.
 
 ## Install
 
