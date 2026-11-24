@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/rank"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/sidecar"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/tokenize"
@@ -89,7 +90,7 @@ func runRank(args []string) {
 			Created:       r.Created,
 			LastInjected:  r.LastInjected,
 			LastUseful:    r.LastUseful,
-			Overlap:       overlap[r.Slug],
+			Overlap:       overlap[native.QKey(r.Project, r.Slug)],
 		})
 	}
 

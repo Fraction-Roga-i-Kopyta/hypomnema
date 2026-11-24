@@ -30,11 +30,8 @@ func runGuardBash(args []string) {
 		fmt.Fprintf(os.Stderr, "memoryctl guard-bash: unknown flag %q\n", a)
 		os.Exit(2)
 	}
-	defer func() {
-		if recover() != nil {
-			os.Exit(0) // a detector bug must never block a Bash call
-		}
-	}()
+	// No recover here: main runs this verb under runHook, whose trace line
+	// and exit 0 cover a detector panic (a bug must never block a Bash call).
 	raw, _ := io.ReadAll(os.Stdin)
 	var in struct {
 		ToolInput struct {

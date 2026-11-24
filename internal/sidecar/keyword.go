@@ -43,8 +43,10 @@ func populateKeywordsIn(e dbtx, files []native.MemFile) error {
 	return nil
 }
 
-// OverlapScores returns, per slug, the count of DISTINCT query terms that
-// appear in that slug's keyword set. Empty query → empty map.
+// OverlapScores returns, per project-qualified fact (native.QKey(project,
+// slug)), the count of DISTINCT query terms in that fact's keyword set. Keying
+// by slug alone merged same-basename facts (continuity.md) across projects.
+// Empty query → empty map.
 func (s *Store) OverlapScores(queryTerms []string) (map[string]int, error) {
 	out := map[string]int{}
 	seen := map[string]bool{}
@@ -83,19 +85,19 @@ func (s *Store) OverlapScores(queryTerms []string) (map[string]int, error) {
 
 func (s *Store) overlapBatch(out map[string]int, placeholders string, args []any) error {
 	rows, err := s.db.Query(
-		`SELECT slug, COUNT(DISTINCT term) FROM keyword WHERE term IN (`+placeholders+`) GROUP BY slug`,
+		`SELECT project, slug, COUNT(DISTINCT term) FROM keyword WHERE term IN (`+placeholders+`) GROUP BY project, slug`,
 		args...)
 	if err != nil {
 		return fmt.Errorf("sidecar.OverlapScores: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var slug string
+		var project, slug string
 		var n int
-		if err := rows.Scan(&slug, &n); err != nil {
+		if err := rows.Scan(&project, &slug, &n); err != nil {
 			return fmt.Errorf("sidecar.OverlapScores: scan: %w", err)
 		}
-		out[slug] += n // accumulate: chunks partition the (disjoint) term set
+		out[native.QKey(project, slug)] += n // accumulate: chunks partition the (disjoint) term set
 	}
 	return rows.Err()
 }

@@ -152,17 +152,21 @@ type Input struct {
 	// ProjectRoot is the canonical project root (main checkout / git root /
 	// the directory itself). Its path components do not count toward the
 	// SubagentStart head gate; empty excludes none.
-	ProjectRoot     string
-	SessionID       string
-	CWD             string
-	Prompt          string
-	ClaudeHome      string // <home>/.claude
-	ConfigDir       string // Claude Code config dir (projects/); "" → ClaudeHome
-	MemoryDir       string
-	Today           string
-	MaxK            int
-	MaxBytes        int      // total render budget; <=0 → maxTotalBytes
-	AlreadyInjected []string // slugs already injected this session — not re-rendered while still in the current context
+	ProjectRoot string
+	SessionID   string
+	CWD         string
+	Prompt      string
+	ClaudeHome  string // <home>/.claude
+	ConfigDir   string // Claude Code config dir (projects/); "" → ClaudeHome
+	MemoryDir   string
+	Today       string
+	MaxK        int
+	MaxBytes    int // total render budget; <=0 → maxTotalBytes
+	// AlreadyInjected lists the facts in the session's current context, not
+	// re-rendered: one session-list line each — native.QKey(project, slug),
+	// or a bare slug from an older binary, which names that file in every
+	// store (native.KeySet).
+	AlreadyInjected []string
 	// Store is the resolved native store. Zero value → resolved from CWD
 	// (tests and legacy callers); the memoryctl verb always sets it.
 	Store native.Store
@@ -199,15 +203,15 @@ func (in Input) storeDirs(st native.Store) map[string]string {
 	return native.StoreDirs(cfg, in.ClaudeHome, st)
 }
 
-// Result is the rendered context plus the slugs injected.
+// Result is the rendered context plus the facts injected.
 type Result struct {
 	Markdown string
+	// InjectedKeys names each rendered fact as native.QKey(project, slug),
+	// in render order — the session-list and WAL identity: a project and a
+	// global fact with the same file name are two facts.
+	InjectedKeys []string
+	// Injected is the rendered facts' file names, in render order.
 	Injected []string
-	// ProjectBySlug maps each injected slug to its owning project (the
-	// resolved store's project tag, or GlobalProject), so the caller can
-	// write project-qualified WAL events. Project-local wins over global on
-	// a basename tie — matching scopeRecords' preference.
-	ProjectBySlug map[string]string
 }
 
 // Run orchestrates a single injection: keywords → native files → ranked
@@ -279,16 +283,16 @@ func Run(in Input) (Result, error) {
 		core = coreFacts(files, cands, st.Project)
 		ranked = append(ranked, core...)
 	} else {
-		ranked = topDistinct(q, cands, st.Project, in.MaxK)
+		// Once per context: facts already in context keep their ranked
+		// slot and count toward K, then drop from the render — a prompt
+		// only adds facts that newly enter the top-K.
+		ranked = topDistinct(q, cands, st.Project, in.MaxK, native.NewKeySet(in.AlreadyInjected))
 	}
-	if len(in.AlreadyInjected) > 0 {
-		seen := make(map[string]bool, len(in.AlreadyInjected))
-		for _, s := range in.AlreadyInjected {
-			seen[s] = true
-		}
+	if in.Event == "SessionStart" && len(in.AlreadyInjected) > 0 {
+		seen := native.NewKeySet(in.AlreadyInjected)
 		fresh := ranked[:0]
 		for _, sc := range ranked {
-			if !seen[sc.Slug] {
+			if !seen.Has(sc.Project, sc.Slug) {
 				fresh = append(fresh, sc)
 			}
 		}
@@ -325,13 +329,12 @@ func Run(in Input) (Result, error) {
 			}
 		}
 	}
-	var injected []string
-	projectBySlug := make(map[string]string, len(rendered))
+	var injected, keys []string
 	for _, sc := range rendered {
 		injected = append(injected, sc.Slug)
-		projectBySlug[sc.Slug] = sc.Project
+		keys = append(keys, native.QKey(sc.Project, sc.Slug))
 	}
-	return Result{Markdown: md, Injected: injected, ProjectBySlug: projectBySlug}, nil
+	return Result{Markdown: md, InjectedKeys: keys, Injected: injected}, nil
 }
 
 // needsTerms reports whether this injection ranks at all. SessionStart is
@@ -341,15 +344,53 @@ func needsTerms(in Input) bool {
 	return in.Event != "SessionStart"
 }
 
-// topDistinct ranks cands without a K cut, keeps one fact per slug
-// (project-local wins), then cuts to k — deduplicating after the cut would
-// let a project/global same-slug pair spend two of the k slots on one fact.
-func topDistinct(q rank.Query, cands []rank.Candidate, project string, k int) []rank.Scored {
-	out := dedupBySlug(rank.Rank(q, cands, 0), project)
-	if k > 0 && len(out) > k {
-		out = out[:k]
+// topDistinct ranks cands without a K cut, keeps one fact per slug among
+// the facts not yet shown (project-local wins), cuts to k, then drops the
+// shown ones. Deduplicating after the cut would let a project/global
+// same-slug pair spend two of the k slots on one fact. A shown fact keeps
+// its ranked slot and counts toward k — later prompts only add facts that
+// newly enter the top-k — but takes no part in the dedup: a fact already in
+// context never swallows its unshown same-name twin, which competes on its
+// own score.
+func topDistinct(q rank.Query, cands []rank.Candidate, project string, k int, shown native.KeySet) []rank.Scored {
+	all := rank.Rank(q, cands, 0)
+	var fresh []rank.Scored
+	for _, sc := range all {
+		if !shown.Has(sc.Project, sc.Slug) {
+			fresh = append(fresh, sc)
+		}
 	}
-	return out
+	// Each unshown slug's winner sits at the rank of its first occurrence.
+	winner := make(map[string]rank.Scored, len(fresh))
+	for _, sc := range dedupBySlug(fresh, project) {
+		winner[sc.Slug] = sc
+	}
+	var out []rank.Scored
+	var isShown []bool
+	placed := make(map[string]bool, len(winner))
+	for _, sc := range all {
+		if shown.Has(sc.Project, sc.Slug) {
+			out = append(out, sc)
+			isShown = append(isShown, true)
+			continue
+		}
+		if placed[sc.Slug] {
+			continue
+		}
+		placed[sc.Slug] = true
+		out = append(out, winner[sc.Slug])
+		isShown = append(isShown, false)
+	}
+	if k > 0 && len(out) > k {
+		out, isShown = out[:k], isShown[:k]
+	}
+	kept := out[:0]
+	for i, sc := range out {
+		if !isShown[i] {
+			kept = append(kept, sc)
+		}
+	}
+	return kept
 }
 
 // overflowCore returns the core facts that were offered to render (ranked,
@@ -482,7 +523,7 @@ func candidates(in Input, st native.Store, files []native.MemFile, terms []strin
 				Effectiveness: r.Effectiveness, Status: r.Status,
 				Created: r.Created, LastInjected: r.LastInjected,
 				LastUseful: r.LastUseful,
-				Overlap:    overlap[r.Slug],
+				Overlap:    overlap[k],
 			})
 		}
 		return out
@@ -719,10 +760,16 @@ func capBody(body string, maxBytes int, hint string) string {
 	return strings.TrimRight(body[:cut], " \n") + marker
 }
 
+// DistinctBySlug is dedupBySlug for the pull path: recall renders one fact
+// per file name, the same way a push render does.
+func DistinctBySlug(ranked []rank.Scored, project string) []rank.Scored {
+	return dedupBySlug(ranked, project)
+}
+
 // dedupBySlug keeps one entry per slug, in first-seen order, preferring the
 // project-local one when a project and a global fact share a basename. The
-// session set and the rendered list are slug-keyed, so two entries with one
-// slug would collide there.
+// model cites by file name, so two same-named facts in one render would be
+// indistinguishable to it.
 func dedupBySlug(ranked []rank.Scored, project string) []rank.Scored {
 	at := make(map[string]int, len(ranked))
 	out := make([]rank.Scored, 0, len(ranked))
