@@ -10,7 +10,6 @@ import (
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/rank"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/sidecar"
-	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/tokenize"
 )
 
 // maxBodyBytes bounds each injected record body. Bodies range from ~500B to
@@ -105,41 +104,6 @@ func PathHint(f native.MemFile) string { return pathHint(f) }
 // Exported for the recall verb.
 func Candidates(memoryDir string, st native.Store, files []native.MemFile, terms []string) []rank.Candidate {
 	return candidates(Input{MemoryDir: memoryDir}, st, files, terms)
-}
-
-// requirePromptMatch reports whether a delivery event injects only facts
-// that pass promptMatch. UserPromptSubmit re-ranks on what the user just
-// typed; without the gate the remaining top-K slots were filled by recency
-// and popularity alone, so facts with nothing in common with the turn were
-// injected on every prompt. cwd and git terms still rank but do not pass the
-// gate — the user did not ask for them. SessionStart injects a fixed core;
-// SubagentStart has its own head gate on the Agent call's description.
-func requirePromptMatch(event string) bool { return event == "UserPromptSubmit" }
-
-// promptMatch is the UserPromptSubmit gate: a fact passes when the prompt
-// names what the fact is about — a prompt term in its name, description,
-// keywords or domains — or shares at least two terms with it anywhere. A
-// single body-only hit is too weak: in a conversational prompt it is mostly
-// a filler word ("today", "works", "again") that happens to occur somewhere
-// in a long body. The overlap is counted on the fact's own file, not the
-// sidecar's slug-grouped keyword index: same-basename facts of other
-// projects (continuity.md, notes.md) must not lend it their words.
-func promptMatch(f native.MemFile, want map[string]bool) bool {
-	hits := fileOverlap(f, want)
-	if hits >= 2 {
-		return true
-	}
-	if hits == 0 {
-		return false
-	}
-	head := f.Name + " " + f.Description + " " +
-		strings.Join(f.Keywords, " ") + " " + strings.Join(f.Domains, " ")
-	for _, tok := range tokenize.Relevance(head) {
-		if want[tok] {
-			return true
-		}
-	}
-	return false
 }
 
 // Input is everything Run needs (parsed by the memoryctl inject verb).
@@ -250,30 +214,9 @@ func Run(in Input) (Result, error) {
 		current = append(current, c)
 	}
 	cands = current
-	if in.Event == "SubagentStart" {
-		// Gate BEFORE rank: facts the brief does not name must not take the
-		// K slots.
-		g := newGate(in.Brief, gateExclusions(in.ProjectRoot, filepath.Dir(in.ClaudeHome), in.AgentType, files))
-		kept := cands[:0]
-		for _, c := range cands {
-			if f, ok := byKey[native.QKey(c.Project, c.Slug)]; ok && g.pass(f) {
-				kept = append(kept, c)
-			}
-		}
-		cands = kept
-	}
-	if requirePromptMatch(in.Event) {
-		want := termSet(tokenize.Relevance(in.Prompt))
-		kept := cands[:0]
-		for _, c := range cands {
-			// A candidate with no native file (sidecar row ahead of a
-			// deletion) cannot render anyway; it fails the gate.
-			if f, ok := byKey[native.QKey(c.Project, c.Slug)]; ok && promptMatch(f, want) {
-				kept = append(kept, c)
-			}
-		}
-		cands = kept
-	}
+	// The event's gate runs BEFORE rank: a fact the task does not name must
+	// not take one of the K slots.
+	cands = keepFiles(cands, byKey, admission(in, files))
 	if in.MaxK <= 0 {
 		in.MaxK = 8
 	}
@@ -632,7 +575,7 @@ func scopeRecords(recs []sidecar.Record, projectSlug string) []sidecar.Record {
 }
 
 func degradedCandidates(files []native.MemFile, terms []string) []rank.Candidate {
-	want := termSet(terms)
+	query := newWordSet(terms)
 	out := make([]rank.Candidate, 0, len(files))
 	for _, f := range files {
 		// Frontmatter pinned carries through, so the core keeps the pinned
@@ -643,37 +586,10 @@ func degradedCandidates(files []native.MemFile, terms []string) []rank.Candidate
 		}
 		out = append(out, rank.Candidate{
 			Slug: f.Slug, Type: f.Type, Project: f.Project, Status: status,
-			Effectiveness: 0.5, Overlap: fileOverlap(f, want),
+			Effectiveness: 0.5, Overlap: query.foundIn(f),
 		})
 	}
 	return out
-}
-
-func termSet(terms []string) map[string]bool {
-	want := make(map[string]bool, len(terms))
-	for _, t := range terms {
-		want[t] = true
-	}
-	return want
-}
-
-// fileOverlap counts the distinct wanted terms in a native file's name,
-// description, frontmatter keywords/domains and body.
-func fileOverlap(f native.MemFile, want map[string]bool) int {
-	if len(want) == 0 {
-		return 0
-	}
-	seen := map[string]bool{}
-	n := 0
-	text := f.Name + " " + f.Description + " " +
-		strings.Join(f.Keywords, " ") + " " + strings.Join(f.Domains, " ") + " " + f.Body
-	for _, tok := range tokenize.Relevance(text) {
-		if want[tok] && !seen[tok] {
-			seen[tok] = true
-			n++
-		}
-	}
-	return n
 }
 
 func splitCSV(s string) []string {

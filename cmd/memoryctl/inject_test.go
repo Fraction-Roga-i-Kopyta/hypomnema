@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -103,7 +104,7 @@ func TestInjectVerb_RuntimeListAccumulatesUnderBudget(t *testing.T) {
 	filler := strings.Repeat("lorem ", 400) // ~2.4KB per body
 	for _, name := range []string{"a.md", "b.md", "c.md", "d.md"} {
 		os.WriteFile(filepath.Join(projDir, name),
-			[]byte("---\nname: "+name+"\ntype: knowledge\nkeywords: [docker]\n---\ndocker "+filler+"\n"), 0o644)
+			[]byte(fmt.Sprintf("---\nname: %s\ntype: knowledge\ndomains: [docker]\n---\ndocker %s\n", name, filler)), 0o644)
 	}
 	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
 	env := map[string]string{
