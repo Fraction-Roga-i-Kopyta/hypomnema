@@ -79,7 +79,7 @@ UserPromptSubmit ──► inject --event=UserPromptSubmit ───────
      session list untouched (machine-injected turn, not a       │
      user prompt — ranking it would waste a fact's once-per-    │
      session slot); the same for the /memboard toggle           │
-   else: same ranker; keywords += prompt tokens (reactive)      │
+   else: the relevance ranker below; keywords += prompt tokens (reactive)      │
    inject only facts newly entering the top-8 this session      │
    WAL: inject|<slug>|<session>                                 │
                                                                 │
@@ -170,12 +170,11 @@ SubagentStop ──► close --subagent ─────────────�
 
 v2 merged v1's two scoring systems (composite-score `SessionStart` +
 substring-trigger `UserPromptSubmit` with ±40-char negation windows) into a
-single pure ranker in `internal/rank`. The authoritative formula lives in
-`CLAUDE.md`; reproduced here:
-
-It serves UserPromptSubmit, SubagentStart (after its head gate), `recall`
-and `skill-inject`; SessionStart does not rank (it injects the fixed core,
-see the data flow above and invariant I6).
+single pure ranker in `internal/rank`. It serves UserPromptSubmit,
+SubagentStart (after its head gate), `recall` and `skill-inject`;
+SessionStart does not rank (it injects the fixed core, see the data flow
+above and invariant I6). The authoritative formula lives in `CLAUDE.md`;
+reproduced here:
 
 ```
 score = 3.0 × overlap(session_keywords, file keywords+name+description+body)

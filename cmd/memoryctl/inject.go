@@ -195,7 +195,8 @@ func sessionListPath(sessionID string) string {
 // per line as native.QKey(project, slug): a project and a global fact with
 // the same file name are two facts. A bare slug line was written by an
 // older binary; readers treat it as that file name in every store
-// (native.KeySet), and inject rewrites it as QKeys (qualifyBareLines).
+// (native.KeySet). inject rewrites it as QKeys (qualifyBareLines) only when
+// it next writes that list; a bare line with no in-scope fact stays bare.
 
 // readInjectedList returns the facts already injected this session, so the
 // ranker never re-renders them (and close classifies the whole session's

@@ -20,6 +20,11 @@ review-triggers:
   - after: "2027-04-24"
 ---
 
+> **Superseded by [`session-start-core.md`](session-start-core.md):** the
+> ranker is now `3·overlap + 2·recency + 1·project-local`; effectiveness and
+> ref_count no longer enter the score, and SessionStart injects a fixed core
+> instead of ranking. Below: the v2.0 revision note, kept as history.
+>
 > **Revised (v2.0): new ranker weights (overlap / ref_count / recency /
 > effectiveness); calibrated via `memoryctl ab`
 > (`docs/measurements/2026-05-29-v2-ranker-ab.md`).** The v1 five-component

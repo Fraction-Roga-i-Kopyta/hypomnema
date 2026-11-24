@@ -156,8 +156,9 @@ Verbs may read and write:
   Both lists hold one fact per line as `<project>\x1f<slug>` (the WAL's
   project-qualified key), so a project and a global fact with the same file
   name are two entries; a bare-slug line written by an older binary means
-  that file name in every store and is rewritten in qualified form by the
-  next `inject`;
+  that file name in every store; it is rewritten in qualified form only when
+  `inject` next writes that list, and a bare line with no in-scope fact stays
+  bare;
   `active-skill-<sid>`
   — the marker `skill-active` writes; and the store-resolution session pin
   `project-<session_id>.json`, written by `inject` at `SessionStart` and read
