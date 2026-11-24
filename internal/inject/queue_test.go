@@ -26,7 +26,9 @@ func queueFixture(t *testing.T) (memDir, home string) {
 func runQueue(t *testing.T, memDir, home, event string, maxBytes int) Result {
 	t.Helper()
 	res, err := Run(Input{
-		Event: event, SessionID: "q", CWD: "/tmp/proj", Prompt: "docker cache",
+		// compact + a prompt: SessionStart ranks (behind the head gate)
+		// after the core, so oldfact renders alongside the queue line.
+		Event: event, Source: "compact", SessionID: "q", CWD: "/tmp/proj", Prompt: "docker cache",
 		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir,
 		Today: "2026-05-29", MaxK: 5, MaxBytes: maxBytes,
 	})

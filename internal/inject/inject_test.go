@@ -10,6 +10,7 @@ import (
 
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/closer"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/sidecar"
 )
 
 func setup(t *testing.T) (memDir, projDir, home string) {
@@ -64,7 +65,7 @@ func TestRun_EmptyCorpus(t *testing.T) {
 	memDir, _, home := setup(t)
 	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
 	res, err := Run(Input{
-		Event: "SessionStart", SessionID: "s1", CWD: "/tmp/proj",
+		Event: "UserPromptSubmit", SessionID: "s1", CWD: "/tmp/proj", Prompt: "docker",
 		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir,
 		Today: "2026-05-29", MaxK: 5,
 	})
@@ -264,8 +265,10 @@ func TestRun_ExcludesOtherProjectCandidates(t *testing.T) {
 		t.Fatalf("seed run: %v", err)
 	}
 
+	// The prompt names both facts (two terms each), so only scope keeps
+	// theirs.md out.
 	res, err := Run(Input{
-		Event: "SessionStart", SessionID: "sa", CWD: "/tmp/proj", Prompt: "docker",
+		Event: "UserPromptSubmit", SessionID: "sa", CWD: "/tmp/proj", Prompt: "docker mine theirs",
 		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir,
 		Today: "2026-05-29", MaxK: 8,
 	})
@@ -302,7 +305,7 @@ func TestRun_ProjectFactOutranksGlobalOnTie(t *testing.T) {
 	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
 
 	res, err := Run(Input{
-		Event: "SessionStart", SessionID: "s1", CWD: "/tmp/proj", Prompt: "docker",
+		Event: "UserPromptSubmit", SessionID: "s1", CWD: "/tmp/proj", Prompt: "docker body",
 		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir,
 		Today: "2026-05-29", MaxK: 8,
 	})
@@ -327,7 +330,7 @@ func TestRun_FrontmatterKeywordsDriveOverlap(t *testing.T) {
 	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
 
 	res, err := Run(Input{
-		Event: "SessionStart", SessionID: "s1", CWD: "/tmp/proj", Prompt: "kubernetes",
+		Event: "UserPromptSubmit", SessionID: "s1", CWD: "/tmp/proj", Prompt: "kubernetes",
 		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir,
 		Today: "2026-05-29", MaxK: 8,
 	})
@@ -352,7 +355,7 @@ func TestRun_DegradedHonoursFrontmatterKeywords(t *testing.T) {
 		t.Fatal(err)
 	}
 	res, err := Run(Input{
-		Event: "SessionStart", SessionID: "s1", CWD: "/tmp/proj", Prompt: "kubernetes",
+		Event: "UserPromptSubmit", SessionID: "s1", CWD: "/tmp/proj", Prompt: "kubernetes",
 		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir,
 		Today: "2026-05-29", MaxK: 8,
 	})
@@ -543,8 +546,8 @@ func TestCiteInstruction_CoversDecisions(t *testing.T) {
 // at least two terms with it. Without the gate the top-K window was filled
 // by recency and popularity alone; with a one-term gate a single filler word
 // that happens to occur in a long body still passed. A cwd-basename hit does
-// not count — it is not something the user asked. SessionStart has no
-// prompt and keeps priming on static signals.
+// not count — it is not something the user asked. SessionStart does not
+// rank at all: it injects the fixed core, and none of these facts is core.
 func TestRun_UserPromptSubmitRequiresPromptMatch(t *testing.T) {
 	memDir, projDir, home := setup(t)
 	for name, body := range map[string]string{
@@ -584,8 +587,8 @@ func TestRun_UserPromptSubmitRequiresPromptMatch(t *testing.T) {
 	}
 
 	res = run("SessionStart", "")
-	if len(res.Injected) != 5 {
-		t.Errorf("SessionStart keeps priming without a prompt, got %v", res.Injected)
+	if len(res.Injected) != 0 {
+		t.Errorf("SessionStart injects the core only (empty here), got %v", res.Injected)
 	}
 }
 
@@ -673,13 +676,17 @@ func TestRun_ContinuityChoiceMatchesDecay(t *testing.T) {
 		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir, Today: "2026-11-09"}); err != nil {
 		t.Fatal(err)
 	}
-	res, err := Run(Input{Event: "SessionStart", SessionID: "s1", CWD: "/tmp/proj",
-		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir, Today: "2026-11-09", MaxK: 8})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(res.Injected) != 1 {
-		t.Errorf("exactly one continuity (the freshest by frontmatter) must inject, got %v", res.Injected)
+	// SessionStart takes it through the core, UserPromptSubmit through the
+	// ranked path; both must agree with decay.
+	for ev, prompt := range map[string]string{"SessionStart": "", "UserPromptSubmit": "continuity plan"} {
+		res, err := Run(Input{Event: ev, SessionID: "s1", CWD: "/tmp/proj", Prompt: prompt,
+			ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir, Today: "2026-11-09", MaxK: 8})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(res.Injected) != 1 {
+			t.Errorf("%s: exactly one continuity (the freshest by frontmatter) must inject, got %v", ev, res.Injected)
+		}
 	}
 }
 
@@ -698,5 +705,192 @@ func TestRun_CapsAtMaxK(t *testing.T) {
 	}
 	if len(res.Injected) != 3 {
 		t.Errorf("want MaxK=3 facts, got %v", res.Injected)
+	}
+}
+
+// writeFM writes a native fact with the given frontmatter lines and body.
+func writeFM(t *testing.T, dir, slug, fm, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, slug), []byte("---\n"+fm+"\n---\n"+body+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func runSS(t *testing.T, memDir, home, source, prompt string) Result {
+	t.Helper()
+	res, err := Run(Input{
+		Event: "SessionStart", Source: source, SessionID: "s1", CWD: "/tmp/proj", Prompt: prompt,
+		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir,
+		Today: "2026-11-24", MaxK: 8,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	return res
+}
+
+// A fresh session gets the core (continuity, pinned, project feedback) and
+// nothing ranked on cwd/git overlap.
+func TestRun_SessionStartStartupInjectsOnlyCore(t *testing.T) {
+	memDir, projDir, home := setup(t)
+	writeFM(t, projDir, "continuity.md", "name: continuity\ntype: continuity\ncreated: 2026-11-23", "next: ship the core")
+	writeFM(t, projDir, "rule.md", "name: proj rule\ntype: feedback\ncreated: 2026-11-01", "always run make lint")
+	writeFM(t, projDir, "layout.md", "name: proj layout\ntype: knowledge\ncreated: 2026-11-24\nkeywords: [proj, tmp]", "proj tmp layout")
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
+	for _, src := range []string{"startup", "resume", "clear", "", "compact"} {
+		res := runSS(t, memDir, home, src, "")
+		if strings.Join(res.Injected, ",") != "continuity.md,rule.md" {
+			t.Errorf("source %q: want the core only, got %v", src, res.Injected)
+		}
+		if strings.Contains(res.Markdown, "proj tmp layout") {
+			t.Errorf("source %q: a cwd-matching knowledge fact must not inject:\n%s", src, res.Markdown)
+		}
+	}
+}
+
+// After compaction the core comes first, then facts the summary names (two
+// distinct head terms) — gated BEFORE ranking, so prompt-body-matching fresh
+// facts cannot take the K slots.
+func TestRun_SessionStartCompactAddsGatedRanked(t *testing.T) {
+	memDir, projDir, home := setup(t)
+	writeFM(t, projDir, "continuity.md", "name: continuity\ntype: continuity\ncreated: 2026-11-23", "next: ship the core")
+	writeFM(t, projDir, "zz-target.md", "name: Postgres migration lock\ntype: mistake\ncreated: 2025-01-01", "take the advisory lock first")
+	writeFM(t, projDir, "onehit.md", "name: postgres tuning\ntype: knowledge\ncreated: 2026-11-24", "shared buffers")
+	for i := 0; i < 9; i++ {
+		n := "noise" + string(rune('a'+i))
+		writeFM(t, projDir, n+".md", "name: "+n+"\ntype: knowledge\ncreated: 2026-11-24",
+			"we were fixing the postgres migration lock retry timeout again")
+	}
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
+	res := runSS(t, memDir, home, "compact", "fixing the postgres migration lock retry timeout")
+	if len(res.Injected) < 2 || res.Injected[0] != "continuity.md" || res.Injected[1] != "zz-target.md" {
+		t.Fatalf("want core then the gated fact, got %v", res.Injected)
+	}
+	for _, s := range res.Injected {
+		if s == "onehit.md" || strings.HasPrefix(s, "noise") {
+			t.Errorf("%s does not name the summary in its head and must not inject: %v", s, res.Injected)
+		}
+	}
+}
+
+// tail returns the last n bytes of s (all of it when shorter).
+func tail(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[len(s)-n:]
+}
+
+// Core facts that do not fit are listed as pointers (not deliveries), and
+// the Memory-queue line keeps its room.
+func TestRun_SessionStartCoreOverBudget(t *testing.T) {
+	memDir, projDir, home := setup(t)
+	writeFM(t, projDir, "continuity.md", "name: continuity\ntype: continuity\ncreated: 2026-11-23", strings.Repeat("c", 2000))
+	writeFM(t, projDir, "pin-a.md", "name: pin a\ntype: project\nstatus: pinned\ncreated: 2026-11-22", strings.Repeat("a", 2400))
+	pinB := "---\nname: pin b\ntype: project\nstatus: pinned\ncreated: 2026-11-21\n---\n" + strings.Repeat("b", 2400) + "\n"
+	os.WriteFile(filepath.Join(projDir, "pin-b.md"), []byte(pinB), 0o644)
+	writeFM(t, projDir, "rule.md", "name: lint rule\ndescription: run make lint before commit\ntype: feedback\ncreated: 2026-11-20", strings.Repeat("f", 2400))
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
+	st := native.StoreFor(filepath.Join(home, ".claude"), "/tmp/proj")
+	writeMark(t, memDir, st.Project, "pin-b", "review", native.BodySHA(pinB))
+
+	res := runSS(t, memDir, home, "startup", "")
+	if strings.Join(res.Injected, ",") != "continuity.md,pin-a.md,pin-b.md" {
+		t.Fatalf("continuity and pinned render; got %v", res.Injected)
+	}
+	md := res.Markdown
+	if len(md) > MaxTotalBytes {
+		t.Errorf("markdown %d bytes exceeds the budget", len(md))
+	}
+	ptr := "- lint rule — " + filepath.Join(projDir, "rule.md") + " — run make lint before commit"
+	if !strings.Contains(md, "_Not loaded (budget): read if relevant._\n"+ptr+"\n") {
+		t.Errorf("feedback must appear as a pointer line:\n%s", tail(md, 700))
+	}
+	if strings.Contains(md, strings.Repeat("f", 100)) {
+		t.Errorf("the overflowing body must not render")
+	}
+	if !strings.Contains(md, "Memory queue: 1 open task(s)") {
+		t.Errorf("the Memory-queue line must survive the core:\n%s", tail(md, 700))
+	}
+	if strings.Index(md, ptr) > strings.Index(md, "Memory queue") {
+		t.Errorf("pointers come before the queue line")
+	}
+}
+
+func TestRun_SessionStartCoreHonoursMarksAndStale(t *testing.T) {
+	memDir, projDir, home := setup(t)
+	writeFM(t, projDir, "pin.md", "name: hidden pin\ntype: project\nstatus: pinned\ncreated: 2026-11-20", "pinned body")
+	writeFM(t, projDir, "less.md", "name: less rule\ntype: feedback\ncreated: 2026-11-20", "less body")
+	writeFM(t, projDir, "old.md", "name: old rule\ntype: feedback\ncreated: 2025-01-01", "old body")
+	writeFM(t, projDir, "ok.md", "name: ok rule\ntype: feedback\ncreated: 2026-11-20", "ok body")
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
+	st := native.StoreFor(filepath.Join(home, ".claude"), "/tmp/proj")
+	writeMark(t, memDir, st.Project, "pin", "hide", st.Project)
+	writeMark(t, memDir, st.Project, "less", "less", "")
+	// Seed the sidecar, then let decay stale the year-old feedback.
+	runSS(t, memDir, home, "startup", "")
+	s, err := sidecar.Open(filepath.Join(memDir, ".sidecar.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.MarkStale("2026-11-24"); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	res := runSS(t, memDir, home, "startup", "")
+	if strings.Join(res.Injected, ",") != "ok.md" {
+		t.Errorf("hide, less and stale leave the core; got %v", res.Injected)
+	}
+}
+
+func TestRun_SessionStartCoreDegradedSidecar(t *testing.T) {
+	memDir, projDir, home := setup(t)
+	writeFM(t, projDir, "continuity.md", "name: continuity\ntype: continuity\ncreated: 2026-11-23", "next: ship")
+	writeFM(t, projDir, "card.md", "name: card\ntype: project\nstatus: pinned\ncreated: 2026-11-01", "project card")
+	writeFM(t, projDir, "kn.md", "name: kn\ntype: knowledge\ncreated: 2026-11-24", "proj knowledge")
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
+	if err := os.MkdirAll(filepath.Join(memDir, ".sidecar.db", "x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	res := runSS(t, memDir, home, "startup", "")
+	if strings.Join(res.Injected, ",") != "continuity.md,card.md" {
+		t.Errorf("degraded core must carry frontmatter pinned; got %v", res.Injected)
+	}
+}
+
+func TestRun_SessionStartEmptyCoreKeepsQueue(t *testing.T) {
+	memDir, home := queueFixture(t)
+	res := runSS(t, memDir, home, "startup", "")
+	if !strings.HasPrefix(res.Markdown, "# Memory Context\nMemory queue: 1 open task(s)") {
+		t.Fatalf("an empty core still announces the queue: %q", res.Markdown)
+	}
+	if len(res.Injected) != 0 {
+		t.Errorf("no core facts here: %v", res.Injected)
+	}
+}
+
+// Dedup by slug runs before the K cut, so a project/global same-slug pair
+// does not waste a slot: the K-th distinct fact still renders.
+func TestRun_DedupDoesNotWasteTopK(t *testing.T) {
+	memDir, projDir, home := setup(t)
+	globDir := filepath.Join(home, ".claude", "memory-global")
+	if err := os.MkdirAll(globDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFM(t, projDir, "x.md", "name: x\ntype: knowledge\nkeywords: [docker, cache]", "docker cache")
+	writeFM(t, globDir, "x.md", "name: x\ntype: knowledge\nkeywords: [docker, cache]", "docker cache")
+	writeFM(t, projDir, "a.md", "name: a docker\ntype: knowledge", "docker")
+	writeFM(t, projDir, "b.md", "name: b docker\ntype: knowledge", "docker")
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
+	res, err := Run(Input{
+		Event: "UserPromptSubmit", SessionID: "s1", CWD: "/tmp/proj", Prompt: "docker cache",
+		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir, Today: "2026-11-24", MaxK: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(res.Injected, ",") != "x.md,a.md,b.md" {
+		t.Errorf("want 3 distinct facts, got %v", res.Injected)
 	}
 }

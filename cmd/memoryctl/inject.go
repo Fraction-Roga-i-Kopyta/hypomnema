@@ -120,8 +120,17 @@ func runInject(args []string) {
 			}
 		}
 	}
+	// The project root's path components do not count toward the compact
+	// head gate. Canonical (worktree → main checkout, subdirectory → git
+	// root), never the raw anchor: components below the root name the task.
+	// Only a compact SessionStart gates, so only it pays for the git lookup.
+	projectRoot := ""
+	if event == "SessionStart" && in.Source == "compact" {
+		projectRoot = native.CanonicalRoot(r.Anchor)
+	}
 	res, err := inject.Run(inject.Input{
-		Event: event, SessionID: in.SessionID, CWD: in.CWD, Prompt: prompt,
+		Event: event, Source: in.Source, ProjectRoot: projectRoot,
+		SessionID: in.SessionID, CWD: in.CWD, Prompt: prompt,
 		ClaudeHome: claudeDir(), ConfigDir: configDir(), MemoryDir: memoryDir(), Today: today(), MaxK: 8,
 		Store:           r.Store,
 		AlreadyInjected: renderDedup,

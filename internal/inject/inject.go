@@ -112,8 +112,9 @@ func Candidates(memoryDir string, st native.Store, files []native.MemFile, terms
 // typed; without the gate the remaining top-K slots were filled by recency
 // and popularity alone, so facts with nothing in common with the turn were
 // injected on every prompt. cwd and git terms still rank but do not pass the
-// gate — the user did not ask for them. SessionStart has no prompt and keeps
-// priming on static signals; SubagentStart queries are full task briefs.
+// gate — the user did not ask for them. SessionStart injects a fixed core
+// (plus, after compaction, facts passing the head gate); SubagentStart
+// queries are full task briefs.
 func requirePromptMatch(event string) bool { return event == "UserPromptSubmit" }
 
 // promptMatch is the UserPromptSubmit gate: a fact passes when the prompt
@@ -144,7 +145,16 @@ func promptMatch(f native.MemFile, want map[string]bool) bool {
 
 // Input is everything Run needs (parsed by the memoryctl inject verb).
 type Input struct {
-	Event           string
+	Event string
+	// Source is the SessionStart source: startup, resume, compact, clear,
+	// or empty. Only "compact" with a Prompt (the compaction-summary query)
+	// adds gated ranked facts after the core; every other SessionStart
+	// injects the core only.
+	Source string
+	// ProjectRoot is the canonical project root (main checkout / git root /
+	// the directory itself). Its path components do not count toward the
+	// compact head gate; empty excludes none.
+	ProjectRoot     string
 	SessionID       string
 	CWD             string
 	Prompt          string
@@ -195,8 +205,11 @@ type Result struct {
 }
 
 // Run orchestrates a single injection: keywords → native files → ranked
-// top-K → Markdown. Recovers from a corrupt sidecar by rebuilding; falls
-// back to a native-only degraded rank if the sidecar is unusable.
+// top-K → Markdown. SessionStart renders the fixed core (coreFacts) instead
+// of a ranking — after compaction followed by facts the summary names — and
+// lists core facts the budget cut as pointers. Recovers from a corrupt
+// sidecar by rebuilding; falls back to a native-only degraded rank if the
+// sidecar is unusable.
 func Run(in Input) (Result, error) {
 	st := in.store()
 	files := native.Collect(in.ClaudeHome, st)
@@ -236,10 +249,17 @@ func Run(in Input) (Result, error) {
 	if in.MaxK <= 0 {
 		in.MaxK = 8
 	}
-	ranked := rank.Rank(rank.Query{
-		Terms: terms, Today: in.Today, Project: st.Project,
-	}, cands, in.MaxK)
-	ranked = dedupBySlug(ranked, st.Project)
+	q := rank.Query{Terms: terms, Today: in.Today, Project: st.Project}
+	var ranked, core []rank.Scored
+	if in.Event == "SessionStart" {
+		core = coreFacts(files, cands, st.Project)
+		ranked = append(ranked, core...)
+		if in.Source == "compact" && strings.TrimSpace(in.Prompt) != "" {
+			ranked = append(ranked, compactExtras(in, files, byKey, cands, core, q)...)
+		}
+	} else {
+		ranked = topDistinct(q, cands, st.Project, in.MaxK)
+	}
 	if len(in.AlreadyInjected) > 0 {
 		seen := make(map[string]bool, len(in.AlreadyInjected))
 		for _, s := range in.AlreadyInjected {
@@ -259,12 +279,20 @@ func Run(in Input) (Result, error) {
 	}
 	md, rendered := render(ranked, byKey, instructionFor(in.Event), maxBodyBytes, maxTotal)
 	if in.Event == "SessionStart" {
-		if q := renderQueue(openTasks(in, st)); q != "" {
+		queue := renderQueue(openTasks(in, st))
+		if md != "" {
+			reserve := 0
+			if queue != "" {
+				reserve = 1 + len(queue) + 1
+			}
+			md = appendOverflow(md, overflowCore(ranked, core, rendered), byKey, maxTotal-reserve)
+		}
+		if queue != "" {
 			switch {
 			case md == "":
-				md = "# Memory Context\n" + q + "\n"
-			case len(md)+1+len(q)+1 <= maxTotal:
-				md += "\n" + q + "\n"
+				md = "# Memory Context\n" + queue + "\n"
+			case len(md)+1+len(queue)+1 <= maxTotal:
+				md += "\n" + queue + "\n"
 			}
 		}
 	}
@@ -275,6 +303,103 @@ func Run(in Input) (Result, error) {
 		projectBySlug[sc.Slug] = sc.Project
 	}
 	return Result{Markdown: md, Injected: injected, ProjectBySlug: projectBySlug}, nil
+}
+
+// topDistinct ranks cands without a K cut, keeps one fact per slug
+// (project-local wins), then cuts to k — deduplicating after the cut would
+// let a project/global same-slug pair spend two of the k slots on one fact.
+func topDistinct(q rank.Query, cands []rank.Candidate, project string, k int) []rank.Scored {
+	out := dedupBySlug(rank.Rank(q, cands, 0), project)
+	if k > 0 && len(out) > k {
+		out = out[:k]
+	}
+	return out
+}
+
+// compactExtras is the ranked part of a SessionStart after compaction: the
+// candidates whose head names the summary query (newGate, minus the project
+// root, $HOME and corpus-common terms), not already in the core, ranked and
+// cut to MaxK. Gate first, then rank — otherwise facts the gate would drop
+// take the K slots. A slug already in the core is skipped: the session lists
+// are slug-keyed.
+func compactExtras(in Input, files []native.MemFile, byKey map[string]native.MemFile, cands []rank.Candidate, core []rank.Scored, q rank.Query) []rank.Scored {
+	inCore := make(map[string]bool, len(core))
+	for _, sc := range core {
+		inCore[sc.Slug] = true
+	}
+	g := newGate(in.Prompt, gateExclusions(in.ProjectRoot, filepath.Dir(in.ClaudeHome), "", files))
+	var gated []rank.Candidate
+	for _, c := range cands {
+		if inCore[c.Slug] {
+			continue
+		}
+		if f, ok := byKey[native.QKey(c.Project, c.Slug)]; ok && g.pass(f) {
+			gated = append(gated, c)
+		}
+	}
+	return topDistinct(q, gated, q.Project, in.MaxK)
+}
+
+// overflowCore returns the core facts that were offered to render (ranked,
+// after the already-in-context filter) but did not fit the budget.
+func overflowCore(ranked, core, rendered []rank.Scored) []rank.Scored {
+	isCore := make(map[string]bool, len(core))
+	for _, sc := range core {
+		isCore[native.QKey(sc.Project, sc.Slug)] = true
+	}
+	shown := make(map[string]bool, len(rendered))
+	for _, sc := range rendered {
+		shown[native.QKey(sc.Project, sc.Slug)] = true
+	}
+	var out []rank.Scored
+	for _, sc := range ranked {
+		k := native.QKey(sc.Project, sc.Slug)
+		if isCore[k] && !shown[k] {
+			out = append(out, sc)
+		}
+	}
+	return out
+}
+
+// overflowHeader introduces the pointer lines for core facts cut by the
+// budget.
+const overflowHeader = "_Not loaded (budget): read if relevant._"
+
+// appendOverflow lists core facts that did not fit as one-line pointers —
+// "- name — absolute path — description" — under overflowHeader, while md
+// stays within budget. Pointers are not deliveries: the caller keeps them
+// out of Injected, so they are not logged; a fact the model then Reads
+// counts as delivered the usual way.
+func appendOverflow(md string, over []rank.Scored, byKey map[string]native.MemFile, budget int) string {
+	head := "\n" + overflowHeader + "\n"
+	var lines strings.Builder
+	for _, sc := range over {
+		f, ok := byKey[native.QKey(sc.Project, sc.Slug)]
+		if !ok {
+			continue
+		}
+		name := f.Name
+		if name == "" {
+			name = f.Slug
+		}
+		where := f.Path
+		if where == "" {
+			where = f.Slug
+		}
+		ln := "- " + name + " — " + where
+		if f.Description != "" {
+			ln += " — " + f.Description
+		}
+		ln += "\n"
+		if len(md)+len(head)+lines.Len()+len(ln) > budget {
+			break
+		}
+		lines.WriteString(ln)
+	}
+	if lines.Len() == 0 {
+		return md
+	}
+	return md + head + lines.String()
 }
 
 // candidates returns ranker-ready candidates: sidecar rows for this project
@@ -440,8 +565,14 @@ func degradedCandidates(files []native.MemFile, terms []string) []rank.Candidate
 	want := termSet(terms)
 	out := make([]rank.Candidate, 0, len(files))
 	for _, f := range files {
+		// Frontmatter pinned carries through, so the core keeps the pinned
+		// project card even without a sidecar.
+		status := "active"
+		if f.Status == "pinned" {
+			status = "pinned"
+		}
 		out = append(out, rank.Candidate{
-			Slug: f.Slug, Type: f.Type, Project: f.Project, Status: "active",
+			Slug: f.Slug, Type: f.Type, Project: f.Project, Status: status,
 			Effectiveness: 0.5, Overlap: fileOverlap(f, want),
 		})
 	}

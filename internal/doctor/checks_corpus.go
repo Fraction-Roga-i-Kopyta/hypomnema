@@ -127,8 +127,18 @@ func checkCandidates(memoryDir, claudeHome string, st native.Store) Check {
 		}
 	}
 	var flagged []string
-	for _, mf := range native.Collect(claudeHome, st) {
+	files := native.Collect(claudeHome, st)
+	newest := native.NewestContinuity(files)
+	hidden, less := pushMarkSets(memoryDir, st.Project)
+	for _, mf := range files {
 		if mf.Status != "candidate" {
+			continue
+		}
+		// A fact that is actually core is delivered every session by
+		// design: silence is no evidence against it, and "rewrite keywords"
+		// does not apply.
+		k := native.QKey(mf.Project, mf.Slug)
+		if inject.CoreEligible(mf, mf.Status, mf.Type, st.Project, hidden[k], less[k], newest) {
 			continue
 		}
 		bare := strings.TrimSuffix(mf.Slug, ".md")
@@ -149,6 +159,38 @@ func checkCandidates(memoryDir, claudeHome string, st native.Store) Check {
 		Detail: fmt.Sprintf("%d candidate(s) never corroborated after ≥%d silent sessions: %s — retire or rewrite keywords",
 			len(flagged), candidateSilentMin, strings.Join(flagged, ", ")),
 		Extra: map[string]interface{}{"slugs": flagged}}
+}
+
+// pushMarkSets returns the /memboard hide (for project only) and less sets,
+// keyed by native.QKey(fact project, slug.md) — the marks push injection
+// honours. Read-only: a missing or unreadable sidecar means no marks.
+func pushMarkSets(memoryDir, project string) (hidden, less map[string]bool) {
+	hidden, less = map[string]bool{}, map[string]bool{}
+	dbPath := filepath.Join(memoryDir, ".sidecar.db")
+	if _, err := os.Stat(dbPath); err != nil {
+		return hidden, less
+	}
+	s, err := sidecar.Open(dbPath)
+	if err != nil {
+		return hidden, less
+	}
+	defer s.Close()
+	marks, err := s.Marks()
+	if err != nil {
+		return hidden, less
+	}
+	for _, m := range marks {
+		k := native.QKey(m.Project, m.Slug)
+		switch m.Directive {
+		case "hide":
+			if m.Arg == project {
+				hidden[k] = true
+			}
+		case "less":
+			less[k] = true
+		}
+	}
+	return hidden, less
 }
 
 // checkCorpus enumerates the v2 native corpus (per-project + global, merged
