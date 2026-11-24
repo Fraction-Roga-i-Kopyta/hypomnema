@@ -161,36 +161,20 @@ func checkCandidates(memoryDir, claudeHome string, st native.Store) Check {
 		Extra: map[string]interface{}{"slugs": flagged}}
 }
 
-// pushMarkSets returns the /memboard hide (for project only) and less sets,
-// keyed by native.QKey(fact project, slug.md) — the marks push injection
-// honours. Read-only: a missing or unreadable sidecar means no marks.
+// pushMarkSets returns inject.PushMarkSets — the hide/less marks push
+// injection honours — from an existing sidecar; doctor never creates one. A
+// missing or unreadable sidecar means no marks.
 func pushMarkSets(memoryDir, project string) (hidden, less map[string]bool) {
-	hidden, less = map[string]bool{}, map[string]bool{}
 	dbPath := filepath.Join(memoryDir, ".sidecar.db")
 	if _, err := os.Stat(dbPath); err != nil {
-		return hidden, less
+		return nil, nil
 	}
 	s, err := sidecar.Open(dbPath)
 	if err != nil {
-		return hidden, less
+		return nil, nil
 	}
 	defer s.Close()
-	marks, err := s.Marks()
-	if err != nil {
-		return hidden, less
-	}
-	for _, m := range marks {
-		k := native.QKey(m.Project, m.Slug)
-		switch m.Directive {
-		case "hide":
-			if m.Arg == project {
-				hidden[k] = true
-			}
-		case "less":
-			less[k] = true
-		}
-	}
-	return hidden, less
+	return inject.PushMarkSets(s, project)
 }
 
 // checkCorpus enumerates the v2 native corpus (per-project + global, merged

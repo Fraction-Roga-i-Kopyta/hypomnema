@@ -329,6 +329,27 @@ func TestInject_MissingRenderedListFallsBackToUnion(t *testing.T) {
 	}
 }
 
+// The compact gate reads the summary's focus text in full: a fact whose two
+// head terms each occur once — outside the top-40 ranking query — passes.
+func TestInject_CompactGateReadsFullFocusText(t *testing.T) {
+	f := newStoreFixture(t)
+	f.factDesc(t, "/tmp/proj", "rare", "zephyr quokka")
+	f.env["CLAUDE_PROJECT_DIR"] = "/tmp/proj"
+	var b strings.Builder
+	b.WriteString("Summary:\n1. Primary Request and Intent:\n   Look after the zephyr quokka.\n")
+	for i := 0; i < 45; i++ {
+		w := "filler" + string(rune('a'+i%26)) + string(rune('a'+i/26))
+		b.WriteString("   " + strings.Repeat(w+" ", 3) + "\n")
+	}
+	transcript := writeSummaryTranscript(t, b.String())
+	out, _, _ := runStdin(t, f.env,
+		`{"session_id":"s1","cwd":"/tmp/proj","source":"compact","transcript_path":"`+transcript+`"}`,
+		"inject", "--event=SessionStart")
+	if ctx := additionalContext(t, out); !strings.Contains(ctx, "## rare") {
+		t.Errorf("a fact named once in the focus text must pass the compact gate; ctx=%q", ctx)
+	}
+}
+
 // factFM writes a fact with explicit frontmatter lines into projectDir's store.
 func (f storeFixture) factFM(t *testing.T, projectDir, slug, fm, body string) {
 	t.Helper()

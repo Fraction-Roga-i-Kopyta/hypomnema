@@ -28,7 +28,7 @@ func runQueue(t *testing.T, memDir, home, event string, maxBytes int) Result {
 	res, err := Run(Input{
 		// compact + a prompt: SessionStart ranks (behind the head gate)
 		// after the core, so oldfact renders alongside the queue line.
-		Event: event, Source: "compact", SessionID: "q", CWD: "/tmp/proj", Prompt: "docker cache",
+		Event: event, Source: "compact", SessionID: "q", CWD: "/tmp/proj", Prompt: "docker cache", GateText: "docker cache",
 		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir,
 		Today: "2026-05-29", MaxK: 5, MaxBytes: maxBytes,
 	})
@@ -74,19 +74,23 @@ func TestRun_QueueNotOnUserPromptSubmit(t *testing.T) {
 	}
 }
 
-func TestRun_QueueDroppedWhenOverBudget(t *testing.T) {
+// The queue line's bytes are reserved before facts render: when facts and
+// queue do not both fit, the queue stays and the fact gives way.
+func TestRun_QueueSurvivesOverBudget(t *testing.T) {
 	memDir, home := queueFixture(t)
 	full := runQueue(t, memDir, home, "SessionStart", 0)
-	idx := strings.Index(full.Markdown, "\nMemory queue")
-	if idx < 0 {
-		t.Fatalf("no queue line:\n%s", full.Markdown)
+	if !strings.Contains(full.Markdown, "\nMemory queue") || !hasSlug(full.Injected, "oldfact.md") {
+		t.Fatalf("precondition: fact and queue line both render:\n%s", full.Markdown)
 	}
-	factsOnly := full.Markdown[:idx]
-	res := runQueue(t, memDir, home, "SessionStart", len(factsOnly)+10)
-	if strings.Contains(res.Markdown, "Memory queue") {
-		t.Fatalf("queue should be dropped over budget:\n%s", res.Markdown)
+	budget := len(full.Markdown) - 1
+	res := runQueue(t, memDir, home, "SessionStart", budget)
+	if !strings.Contains(res.Markdown, "Memory queue: 1 open task(s)") {
+		t.Fatalf("queue must survive over budget:\n%s", res.Markdown)
 	}
-	if !hasSlug(res.Injected, "oldfact.md") {
-		t.Fatalf("fact must survive: %v", res.Injected)
+	if hasSlug(res.Injected, "oldfact.md") {
+		t.Fatalf("the fact does not fit beside the reserved queue line: %v", res.Injected)
+	}
+	if len(res.Markdown) > budget {
+		t.Fatalf("markdown %d bytes exceeds the %d budget", len(res.Markdown), budget)
 	}
 }

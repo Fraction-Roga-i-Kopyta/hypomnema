@@ -108,7 +108,7 @@ func runInject(args []string) {
 	// but a later compaction/clear render dropped is no longer in context
 	// and must be re-offerable. Sessions that predate the rendered list
 	// (readRenderedList ok=false) fall back to the old union dedup.
-	renderDedup, prompt := already, in.Prompt
+	renderDedup, prompt, gateText := already, in.Prompt, ""
 	if rl, ok := readRenderedList(in.SessionID); ok {
 		renderDedup = rl
 	}
@@ -116,7 +116,8 @@ func runInject(args []string) {
 		renderDedup = nil
 		if in.Source == "compact" {
 			if s, ok := jsonl.LastCompactSummary(in.TranscriptPath); ok {
-				prompt = inject.CompactQuery(s) // bounded: focus sections, top-40 terms
+				prompt = inject.CompactQuery(s)       // ranking: focus sections, top-40 terms
+				gateText = inject.CompactFocusText(s) // head gate: focus sections in full
 			}
 		}
 	}
@@ -125,11 +126,11 @@ func runInject(args []string) {
 	// root), never the raw anchor: components below the root name the task.
 	// Only a compact SessionStart gates, so only it pays for the git lookup.
 	projectRoot := ""
-	if event == "SessionStart" && in.Source == "compact" {
+	if gateText != "" {
 		projectRoot = native.CanonicalRoot(r.Anchor)
 	}
 	res, err := inject.Run(inject.Input{
-		Event: event, Source: in.Source, ProjectRoot: projectRoot,
+		Event: event, Source: in.Source, ProjectRoot: projectRoot, GateText: gateText,
 		SessionID: in.SessionID, CWD: in.CWD, Prompt: prompt,
 		ClaudeHome: claudeDir(), ConfigDir: configDir(), MemoryDir: memoryDir(), Today: today(), MaxK: 8,
 		Store:           r.Store,

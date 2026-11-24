@@ -719,7 +719,7 @@ func writeFM(t *testing.T, dir, slug, fm, body string) {
 func runSS(t *testing.T, memDir, home, source, prompt string) Result {
 	t.Helper()
 	res, err := Run(Input{
-		Event: "SessionStart", Source: source, SessionID: "s1", CWD: "/tmp/proj", Prompt: prompt,
+		Event: "SessionStart", Source: source, SessionID: "s1", CWD: "/tmp/proj", Prompt: prompt, GateText: prompt,
 		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir,
 		Today: "2026-11-24", MaxK: 8,
 	})
@@ -827,13 +827,16 @@ func TestRun_SessionStartCoreHonoursMarksAndStale(t *testing.T) {
 	st := native.StoreFor(filepath.Join(home, ".claude"), "/tmp/proj")
 	writeMark(t, memDir, st.Project, "pin", "hide", st.Project)
 	writeMark(t, memDir, st.Project, "less", "less", "")
-	// Seed the sidecar, then let decay stale the year-old feedback.
+	// Seed the sidecar, then hold the year-old feedback as stale (decay no
+	// longer stales project feedback; a row staled before that exemption, or
+	// any other sidecar-owned stale state, must still leave the core).
 	runSS(t, memDir, home, "startup", "")
 	s, err := sidecar.Open(filepath.Join(memDir, ".sidecar.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.MarkStale("2026-11-24"); err != nil {
+	if err := s.Upsert(sidecar.Record{Slug: "old.md", Project: st.Project, Type: "feedback",
+		Created: "2025-01-01", Status: "stale"}); err != nil {
 		t.Fatal(err)
 	}
 	s.Close()
@@ -892,5 +895,162 @@ func TestRun_DedupDoesNotWasteTopK(t *testing.T) {
 	}
 	if strings.Join(res.Injected, ",") != "x.md,a.md,b.md" {
 		t.Errorf("want 3 distinct facts, got %v", res.Injected)
+	}
+}
+
+// A project feedback the sidecar holds as stale (decayed before feedback was
+// exempt) is not core; one close (reproject + decay) must bring it back and
+// keep it — otherwise a core fact, refreshed only by being core, is lost.
+func TestRun_StaleProjectFeedbackReentersCoreAfterClose(t *testing.T) {
+	memDir, projDir, home := setup(t)
+	writeFM(t, projDir, "rule.md", "name: rule\ntype: feedback\ncreated: 2025-01-01", "always lint")
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
+	runSS(t, memDir, home, "startup", "") // seeds the sidecar
+	st := native.StoreFor(filepath.Join(home, ".claude"), "/tmp/proj")
+	s, err := sidecar.Open(filepath.Join(memDir, ".sidecar.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Upsert(sidecar.Record{Slug: "rule.md", Project: st.Project, Type: "feedback",
+		Created: "2025-01-01", Status: "stale"}); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	if res := runSS(t, memDir, home, "startup", ""); len(res.Injected) != 0 {
+		t.Fatalf("precondition: a stale fact is not core, got %v", res.Injected)
+	}
+	if _, err := closer.Run(closer.Input{SessionID: "s0", CWD: "/tmp/proj",
+		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir, Today: "2026-11-24"}); err != nil {
+		t.Fatal(err)
+	}
+	if res := runSS(t, memDir, home, "startup", ""); strings.Join(res.Injected, ",") != "rule.md" {
+		t.Errorf("after one close the project feedback must be core again, got %v", res.Injected)
+	}
+}
+
+// The compact gate reads the summary's full focus text (GateText), not the
+// top-40 ranking query (Prompt): a fact named once in a long summary passes.
+func TestRun_CompactGateUsesFullFocusText(t *testing.T) {
+	memDir, projDir, home := setup(t)
+	writeFM(t, projDir, "x.md", "name: zephyr quokka\ntype: knowledge", "rare animals")
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
+	var b strings.Builder
+	b.WriteString("zephyr quokka ")
+	for i := 0; i < 45; i++ {
+		w := "noise" + string(rune('a'+i%26)) + string(rune('a'+i/26))
+		b.WriteString(strings.Repeat(w+" ", 3))
+	}
+	text := b.String()
+	query := CompactQuery(text)
+	if strings.Contains(query, "zephyr") {
+		t.Fatalf("precondition: zephyr must fall outside the top-40 query: %q", query)
+	}
+	res, err := Run(Input{
+		Event: "SessionStart", Source: "compact", SessionID: "s1", CWD: "/tmp/proj",
+		Prompt: query, GateText: text,
+		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir, Today: "2026-11-24", MaxK: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(res.Injected, ",") != "x.md" {
+		t.Errorf("a fact named once in the summary must pass the gate, got %v", res.Injected)
+	}
+}
+
+// The Memory-queue line reserves its bytes before the core bodies too: a
+// pointer that would fit without the reserve is dropped, the queue stays.
+func TestRun_SessionStartQueueReservedBeforePointers(t *testing.T) {
+	memDir, projDir, home := setup(t)
+	writeFM(t, projDir, "continuity.md", "name: continuity\ntype: continuity\ncreated: 2026-11-23", strings.Repeat("c", 2400))
+	rule := "---\nname: lint rule\ndescription: run make lint\ntype: feedback\ncreated: 2026-11-20\n---\n" + strings.Repeat("f", 2400) + "\n"
+	os.WriteFile(filepath.Join(projDir, "rule.md"), []byte(rule), 0o644)
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
+	run := func(maxBytes int) Result {
+		t.Helper()
+		res, err := Run(Input{Event: "SessionStart", Source: "startup", SessionID: "s1", CWD: "/tmp/proj",
+			ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir, Today: "2026-11-24", MaxK: 8, MaxBytes: maxBytes})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+	noQueue := run(3000)
+	if !strings.Contains(noQueue.Markdown, "- lint rule — ") {
+		t.Fatalf("precondition: without a queue the pointer fits:\n%s", tail(noQueue.Markdown, 400))
+	}
+	budget := len(noQueue.Markdown)
+	st := native.StoreFor(filepath.Join(home, ".claude"), "/tmp/proj")
+	writeMark(t, memDir, st.Project, "rule", "review", native.BodySHA(rule))
+	// The new mark must reach the sidecar's mark table: rebuild it.
+	for _, sfx := range []string{"", "-wal", "-shm"} {
+		os.Remove(filepath.Join(memDir, ".sidecar.db"+sfx))
+	}
+	res := run(budget)
+	if !strings.Contains(res.Markdown, "Memory queue: 1 open task(s)") {
+		t.Errorf("the queue line must survive:\n%s", tail(res.Markdown, 500))
+	}
+	if strings.Contains(res.Markdown, "- lint rule — ") {
+		t.Errorf("the pointer only fits without the queue reserve:\n%s", tail(res.Markdown, 500))
+	}
+	if len(res.Markdown) > budget {
+		t.Errorf("markdown %d bytes exceeds the %d budget", len(res.Markdown), budget)
+	}
+}
+
+// Core-only SessionStarts need no query terms (no git calls, no overlap).
+func TestNeedsTerms(t *testing.T) {
+	for _, c := range []struct {
+		in   Input
+		want bool
+	}{
+		{Input{Event: "SessionStart", Source: "startup"}, false},
+		{Input{Event: "SessionStart", Source: "resume"}, false},
+		{Input{Event: "SessionStart", Source: "clear"}, false},
+		{Input{Event: "SessionStart"}, false},
+		{Input{Event: "SessionStart", Source: "compact"}, false},
+		{Input{Event: "SessionStart", Source: "compact", Prompt: "q", GateText: " "}, false},
+		{Input{Event: "SessionStart", Source: "compact", Prompt: "q", GateText: "summary"}, true},
+		{Input{Event: "UserPromptSubmit", Prompt: "q"}, true},
+		{Input{Event: "SubagentStart", Prompt: "q"}, true},
+		{Input{Prompt: "q"}, true},
+	} {
+		if got := needsTerms(c.in); got != c.want {
+			t.Errorf("needsTerms(%+v) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
+// When the sidecar opens but cannot serve this scope (here: read-only, so
+// the self-heal reproject fails) the degraded list still honours its marks.
+func TestRun_DegradedWithOpenSidecarHonoursMarks(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores the read-only file mode")
+	}
+	memDir, projDir, home := setup(t)
+	otherDir := filepath.Join(home, ".claude", "projects", "-tmp-other", "memory")
+	if err := os.MkdirAll(otherDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFM(t, otherDir, "o.md", "name: o\ntype: knowledge", "other")
+	writeFM(t, projDir, "continuity.md", "name: continuity\ntype: continuity\ncreated: 2026-11-23", "next: ship")
+	writeFM(t, projDir, "pin.md", "name: pin\ntype: project\nstatus: pinned\ncreated: 2026-11-20", "pinned body")
+	os.WriteFile(filepath.Join(memDir, ".wal"), []byte(""), 0o644)
+	st := native.StoreFor(filepath.Join(home, ".claude"), "/tmp/proj")
+	writeMark(t, memDir, st.Project, "pin", "hide", st.Project)
+	// Another project's session builds the sidecar (rows for it only, the
+	// mark table for everyone); then it turns read-only.
+	if _, err := Run(Input{Event: "SessionStart", SessionID: "so", CWD: "/tmp/other",
+		ClaudeHome: filepath.Join(home, ".claude"), MemoryDir: memDir, Today: "2026-11-24"}); err != nil {
+		t.Fatal(err)
+	}
+	db := filepath.Join(memDir, ".sidecar.db")
+	if err := os.Chmod(db, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(db, 0o644) })
+	res := runSS(t, memDir, home, "startup", "")
+	if strings.Join(res.Injected, ",") != "continuity.md" {
+		t.Errorf("degraded core must drop the hidden pinned fact, got %v", res.Injected)
 	}
 }

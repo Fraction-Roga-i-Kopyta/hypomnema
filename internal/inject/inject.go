@@ -147,14 +147,19 @@ func promptMatch(f native.MemFile, want map[string]bool) bool {
 type Input struct {
 	Event string
 	// Source is the SessionStart source: startup, resume, compact, clear,
-	// or empty. Only "compact" with a Prompt (the compaction-summary query)
+	// or empty. Only "compact" with a GateText (the compaction summary)
 	// adds gated ranked facts after the core; every other SessionStart
 	// injects the core only.
 	Source string
 	// ProjectRoot is the canonical project root (main checkout / git root /
 	// the directory itself). Its path components do not count toward the
 	// compact head gate; empty excludes none.
-	ProjectRoot     string
+	ProjectRoot string
+	// GateText is the text the compact head gate reads: the compaction
+	// summary's focus sections in full (CompactFocusText), not the top-40
+	// ranking query in Prompt — a fact named once in a long summary must
+	// still pass. Empty → a compact SessionStart injects the core only.
+	GateText        string
 	SessionID       string
 	CWD             string
 	Prompt          string
@@ -221,7 +226,10 @@ func Run(in Input) (Result, error) {
 	for _, f := range files {
 		byKey[native.QKey(f.Project, f.Slug)] = f
 	}
-	terms := keywords(in.CWD, in.Prompt, !in.NoGitSignal)
+	var terms []string
+	if needsTerms(in) {
+		terms = keywords(in.CWD, in.Prompt, !in.NoGitSignal)
+	}
 	cands := candidates(in, st, files, terms)
 	// Only a project's freshest continuity is pushed; older ones are history
 	// (still recallable) and would otherwise pile up in the window.
@@ -254,7 +262,7 @@ func Run(in Input) (Result, error) {
 	if in.Event == "SessionStart" {
 		core = coreFacts(files, cands, st.Project)
 		ranked = append(ranked, core...)
-		if in.Source == "compact" && strings.TrimSpace(in.Prompt) != "" {
+		if compactRanks(in) {
 			ranked = append(ranked, compactExtras(in, files, byKey, cands, core, q)...)
 		}
 	} else {
@@ -277,15 +285,23 @@ func Run(in Input) (Result, error) {
 	if maxTotal <= 0 {
 		maxTotal = maxTotalBytes
 	}
-	md, rendered := render(ranked, byKey, instructionFor(in.Event), maxBodyBytes, maxTotal)
-	if in.Event == "SessionStart" {
+	var md string
+	var rendered []rank.Scored
+	if in.Event != "SessionStart" {
+		md, rendered = render(ranked, byKey, instructionFor(in.Event), maxBodyBytes, maxTotal)
+	} else {
+		// The Memory-queue line's bytes are reserved first: neither core
+		// bodies nor overflow pointers crowd it out.
 		queue := renderQueue(openTasks(in, st))
+		budget := maxTotal
+		if queue != "" {
+			budget -= 1 + len(queue) + 1
+		}
+		if budget > 0 { // render treats a budget <= 0 as unlimited
+			md, rendered = render(ranked, byKey, instructionFor(in.Event), maxBodyBytes, budget)
+		}
 		if md != "" {
-			reserve := 0
-			if queue != "" {
-				reserve = 1 + len(queue) + 1
-			}
-			md = appendOverflow(md, overflowCore(ranked, core, rendered), byKey, maxTotal-reserve)
+			md = appendOverflow(md, overflowCore(ranked, core, rendered), byKey, budget)
 		}
 		if queue != "" {
 			switch {
@@ -305,6 +321,25 @@ func Run(in Input) (Result, error) {
 	return Result{Markdown: md, Injected: injected, ProjectBySlug: projectBySlug}, nil
 }
 
+// compactRanks reports a SessionStart after compaction with a readable
+// summary: the only SessionStart that adds gated ranked facts to the core.
+func compactRanks(in Input) bool {
+	return in.Event == "SessionStart" && in.Source == "compact" && strings.TrimSpace(in.GateText) != ""
+}
+
+// needsTerms reports whether this injection ranks at all. A core-only
+// SessionStart (startup, resume, clear, compact without a summary) does
+// not, so it skips the query terms — gitSignal's git commands and the
+// sidecar overlap query.
+func needsTerms(in Input) bool {
+	return in.Event != "SessionStart" || compactRanks(in)
+}
+
+// CompactFocusText is the compaction summary's focus-section text (whole
+// summary without the standard headers) — what CompactQuery compresses to
+// a ranking query, given in full to the compact head gate.
+func CompactFocusText(summary string) string { return focusText(summary) }
+
 // topDistinct ranks cands without a K cut, keeps one fact per slug
 // (project-local wins), then cuts to k — deduplicating after the cut would
 // let a project/global same-slug pair spend two of the k slots on one fact.
@@ -317,9 +352,9 @@ func topDistinct(q rank.Query, cands []rank.Candidate, project string, k int) []
 }
 
 // compactExtras is the ranked part of a SessionStart after compaction: the
-// candidates whose head names the summary query (newGate, minus the project
-// root, $HOME and corpus-common terms), not already in the core, ranked and
-// cut to MaxK. Gate first, then rank — otherwise facts the gate would drop
+// candidates whose head names the summary's focus text (newGate over
+// GateText, minus the project root, $HOME and corpus-common terms), not
+// already in the core, ranked on the Prompt query and cut to MaxK. Gate first, then rank — otherwise facts the gate would drop
 // take the K slots. A slug already in the core is skipped: the session lists
 // are slug-keyed.
 func compactExtras(in Input, files []native.MemFile, byKey map[string]native.MemFile, cands []rank.Candidate, core []rank.Scored, q rank.Query) []rank.Scored {
@@ -327,7 +362,7 @@ func compactExtras(in Input, files []native.MemFile, byKey map[string]native.Mem
 	for _, sc := range core {
 		inCore[sc.Slug] = true
 	}
-	g := newGate(in.Prompt, gateExclusions(in.ProjectRoot, filepath.Dir(in.ClaudeHome), "", files))
+	g := newGate(in.GateText, gateExclusions(in.ProjectRoot, filepath.Dir(in.ClaudeHome), "", files))
 	var gated []rank.Candidate
 	for _, c := range cands {
 		if inCore[c.Slug] {
@@ -436,55 +471,72 @@ func candidates(in Input, st native.Store, files []native.MemFile, terms []strin
 				}
 			}
 		}
-		// Use the sidecar ONLY if it yielded rows for this scope. An empty
-		// result (failed or empty reproject) must NOT shadow the native
-		// corpus — fall through to the degraded native-only rank. Spec §5:
-		// injection still happens.
-		if lerr == nil && len(scoped) > 0 {
-			// A failed overlap query must degrade to no-overlap, never crash the
-			// hook; chunking (review E6) keeps the common >32766-term case from
-			// erroring in the first place.
-			overlap, oerr := s.OverlapScores(terms)
-			if oerr != nil {
-				overlap = map[string]int{}
-			}
-			hidden, less := pushMarks(s, in.Event, projectSlug)
-			out := make([]rank.Candidate, 0, len(scoped))
-			for _, r := range scoped {
-				k := r.Project + "\x1f" + r.Slug
-				out = append(out, rank.Candidate{
-					Hidden: hidden[k], Less: less[k],
-					Slug: r.Slug, Type: r.Type, Project: r.Project,
-					Domains: splitCSV(r.Domains), RefCount: r.RefCount,
-					Effectiveness: r.Effectiveness, Status: r.Status,
-					Created: r.Created, LastInjected: r.LastInjected,
-					LastUseful: r.LastUseful,
-					Overlap:    overlap[r.Slug],
-				})
+		hidden, less := pushMarks(s, in.Event, projectSlug)
+		// Use the sidecar's rows ONLY if it yielded rows for this scope. An
+		// empty result (failed or empty reproject) must NOT shadow the native
+		// corpus — fall through to the degraded native-only rank (spec §5:
+		// injection still happens). The sidecar is open, so its marks still
+		// apply to the degraded list.
+		if lerr != nil || len(scoped) == 0 {
+			out := degradedCandidates(files, terms)
+			for i := range out {
+				k := native.QKey(out[i].Project, out[i].Slug)
+				out[i].Hidden, out[i].Less = hidden[k], less[k]
 			}
 			return out
 		}
+		// A failed overlap query must degrade to no-overlap, never crash the
+		// hook; chunking (review E6) keeps the common >32766-term case from
+		// erroring in the first place. No terms (a core-only SessionStart) →
+		// no query at all.
+		overlap := map[string]int{}
+		if len(terms) > 0 {
+			if o, oerr := s.OverlapScores(terms); oerr == nil {
+				overlap = o
+			}
+		}
+		out := make([]rank.Candidate, 0, len(scoped))
+		for _, r := range scoped {
+			k := native.QKey(r.Project, r.Slug)
+			out = append(out, rank.Candidate{
+				Hidden: hidden[k], Less: less[k],
+				Slug: r.Slug, Type: r.Type, Project: r.Project,
+				Domains: splitCSV(r.Domains), RefCount: r.RefCount,
+				Effectiveness: r.Effectiveness, Status: r.Status,
+				Created: r.Created, LastInjected: r.LastInjected,
+				LastUseful: r.LastUseful,
+				Overlap:    overlap[r.Slug],
+			})
+		}
+		return out
 	}
 	return degradedCandidates(files, terms)
 }
 
-// pushMarks returns the /memboard hide (for this project only) and less
-// sets keyed "<fact project>\x1f<slug.md>". Only the push events honour
-// marks; recall, skill-inject, the rank verb and ab pass another Event and
-// get empty sets. A read failure degrades to no marks.
+// pushMarks returns the /memboard hide and less sets (PushMarkSets) for the
+// push events only; recall, skill-inject, the rank verb and ab pass another
+// Event and get empty sets.
 func pushMarks(s *sidecar.Store, event, project string) (hidden, less map[string]bool) {
 	switch event {
 	case "SessionStart", "UserPromptSubmit", "SubagentStart":
 	default:
 		return nil, nil
 	}
+	return PushMarkSets(s, project)
+}
+
+// PushMarkSets returns the /memboard hide (for project only) and less sets,
+// keyed native.QKey(fact project, slug.md) — the marks push injection
+// honours, shared with doctor's core check. A read failure degrades to no
+// marks.
+func PushMarkSets(s *sidecar.Store, project string) (hidden, less map[string]bool) {
 	ms, err := s.Marks()
 	if err != nil {
 		return nil, nil
 	}
 	hidden, less = map[string]bool{}, map[string]bool{}
 	for _, m := range ms {
-		k := m.Project + "\x1f" + m.Slug
+		k := native.QKey(m.Project, m.Slug)
 		switch m.Directive {
 		case "hide":
 			if m.Arg == project {
