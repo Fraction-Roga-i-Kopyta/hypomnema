@@ -6,11 +6,12 @@
 package tokenize
 
 import (
-	"bufio"
 	"os"
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/lineio"
 )
 
 // MinTokenRunes is the minimum UTF-8-rune length a token must reach to be
@@ -57,14 +58,12 @@ func LoadStopwords(path string) (map[string]struct{}, error) {
 	}
 	defer f.Close()
 	sw := map[string]struct{}{}
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
-			continue
+	err = lineio.Each(f, func(line string) error {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			sw[strings.ToLower(line)] = struct{}{}
 		}
-		sw[strings.ToLower(line)] = struct{}{}
-	}
-	return sw, sc.Err()
+		return nil
+	})
+	return sw, err
 }

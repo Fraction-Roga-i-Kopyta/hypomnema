@@ -4,13 +4,13 @@
 package migrate
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/lineio"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 )
 
@@ -57,7 +57,10 @@ func BuildPlan(o Opts) (Plan, error) {
 		nameToCWD[name] = cwd
 	}
 	// Build WAL-active set (I2): slugs with any inject/outcome activity.
-	walActive := readWALActive(o.WALPath)
+	walActive, err := readWALActive(o.WALPath)
+	if err != nil {
+		return Plan{}, err
+	}
 
 	var p Plan
 	p.GlobalFallbacks = map[string]int{}
@@ -142,35 +145,41 @@ func shouldPrune(filename string, fm map[string]string, today day, walActive map
 }
 
 // readWALActive reads the WAL and returns a set of bare slugs that have any
-// inject or outcome event (spec §4.3.2: do not prune if WAL-active).
-func readWALActive(walPath string) map[string]bool {
+// inject or outcome event (spec §4.3.2: do not prune if WAL-active). A read
+// error is returned rather than a partial set: a truncated set would let
+// the plan prune facts the unread rows mark as active.
+func readWALActive(walPath string) (map[string]bool, error) {
 	active := map[string]bool{}
 	if walPath == "" {
-		return active
+		return active, nil
 	}
 	f, err := os.Open(walPath)
 	if err != nil {
-		return active // missing WAL → empty set, fine
+		if os.IsNotExist(err) {
+			return active, nil // missing WAL → empty set, fine
+		}
+		return nil, fmt.Errorf("migrate: open WAL: %w", err)
 	}
 	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 1<<16), 1<<20)
-	for sc.Scan() {
-		line := strings.TrimRight(sc.Text(), "\r")
+	err = lineio.Each(f, func(line string) error {
+		line = strings.TrimRight(line, "\r")
 		if line == "" || strings.HasPrefix(line, "#") {
-			continue
+			return nil
 		}
 		parts := strings.SplitN(line, "|", 4)
 		if len(parts) != 4 {
-			continue
+			return nil
 		}
-		event := parts[1]
-		switch event {
+		switch parts[1] {
 		case "inject", "inject-agg", "outcome-positive", "outcome-negative", "trigger-useful":
 			active[strings.TrimSuffix(parts[2], ".md")] = true
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("migrate: read WAL: %w", err)
 	}
-	return active
+	return active, nil
 }
 
 func routeDir(project string, o Opts, nameToCWD map[string]string) string {

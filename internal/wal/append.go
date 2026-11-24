@@ -1,10 +1,11 @@
 package wal
 
 import (
-	"bufio"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/lineio"
 )
 
 // Append writes a single line to the WAL file under lock. If dedupKey is
@@ -117,20 +118,24 @@ func scanTail(walPath string, match func(string) bool) (bool, error) {
 		}
 	}
 
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	// When we seeked into the middle of a line, the first Scan() returns a
+	// The read is bounded by the dedup window (plus whatever lands
+	// concurrently), so the uncapped line reader cannot balloon here.
+	// When we seeked into the middle of a line, the first line is a
 	// fragment. Skip it — any real duplicate in that fragment would also
 	// exist in the next full line(s) since dedup events are rewritten, not
 	// partially embedded.
-	if offset > 0 && scanner.Scan() {
-		// Discard the first (partial) line.
-		_ = scanner.Text()
-	}
-	for scanner.Scan() {
-		if match(scanner.Text()) {
-			return true, nil
+	skipFirst := offset > 0
+	seen := false
+	err = lineio.Each(f, func(l string) error {
+		if skipFirst {
+			skipFirst = false
+			return nil
 		}
-	}
-	return false, scanner.Err()
+		if match(l) {
+			seen = true
+			return lineio.ErrStop
+		}
+		return nil
+	})
+	return seen, err
 }

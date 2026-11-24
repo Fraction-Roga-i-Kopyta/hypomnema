@@ -1,12 +1,13 @@
 package wal
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"os"
 	"regexp"
 	"strings"
+
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/lineio"
 )
 
 // ValidationFailure describes one row that violates the WAL grammar
@@ -54,7 +55,7 @@ var ErrWALMissing = errors.New("wal: file does not exist")
 //   - event does not match `^[a-z][a-z0-9-]*$`
 //   - target contains `|` (impossible after correct split, but
 //     defensive — embedded `\n` would split a row in two and we'd
-//     never see it as one line; the bufio.Scanner already drops the
+//     never see it as one line; the line reader already drops the
 //     trailing `\n`)
 //   - session is empty (writers always sanitise to a non-empty string;
 //     an empty session indicates a corrupted or malicious row)
@@ -72,25 +73,19 @@ func Validate(walPath string) (ValidationReport, error) {
 	defer f.Close()
 
 	report := ValidationReport{}
-	sc := bufio.NewScanner(f)
-	// WAL lines can be long if a target carries a large blob (rare —
-	// the bash side capped most blob fields at 4 KiB long ago — but
-	// legacy session-metrics rows with many domains can approach that).
-	// Bump the buffer to avoid silent truncation.
-	sc.Buffer(make([]byte, 0, 1<<16), 1<<20)
-
+	// lineio has no line-length cap: an oversized row is validated like
+	// any other instead of ending the read and hiding every row after it.
 	lineNum := 0
-	for sc.Scan() {
+	err = lineio.Each(f, func(line string) error {
 		lineNum++
-		line := sc.Text()
 		if line == "" {
-			continue
+			return nil
 		}
 		// Tolerate optional v2 header on the very first non-empty line.
 		// Anything after row 1 that starts with `#` is a malformed row
 		// (events never start with `#`).
 		if lineNum == 1 && strings.HasPrefix(line, "# hypomnema-wal ") {
-			continue
+			return nil
 		}
 
 		report.Total++
@@ -101,7 +96,7 @@ func Validate(walPath string) (ValidationReport, error) {
 				Reason:  fmt.Sprintf("column count = %d, want 4", len(fields)),
 				Line:    line,
 			})
-			continue
+			return nil
 		}
 
 		date, event, target, session := fields[0], fields[1], fields[2], fields[3]
@@ -112,7 +107,7 @@ func Validate(walPath string) (ValidationReport, error) {
 				Reason:  fmt.Sprintf("date %q does not match YYYY-MM-DD", date),
 				Line:    line,
 			})
-			continue
+			return nil
 		}
 		if !eventRe.MatchString(event) {
 			report.Failures = append(report.Failures, ValidationFailure{
@@ -120,7 +115,7 @@ func Validate(walPath string) (ValidationReport, error) {
 				Reason:  fmt.Sprintf("event %q does not match [a-z][a-z0-9-]*", event),
 				Line:    line,
 			})
-			continue
+			return nil
 		}
 		// strings.Split already separated on `|`; if any column had a
 		// literal `|`, the row would have failed the column count check
@@ -133,7 +128,7 @@ func Validate(walPath string) (ValidationReport, error) {
 				Reason:  "target contains a carriage-return — sanitise via pathutil.SlugFromPath",
 				Line:    line,
 			})
-			continue
+			return nil
 		}
 		if session == "" {
 			report.Failures = append(report.Failures, ValidationFailure{
@@ -141,13 +136,14 @@ func Validate(walPath string) (ValidationReport, error) {
 				Reason:  "session is empty — writers always sanitise to a non-empty string (use \"unknown\")",
 				Line:    line,
 			})
-			continue
+			return nil
 		}
 
 		report.Passing++
-	}
-	if err := sc.Err(); err != nil {
-		return report, fmt.Errorf("wal: scan %s: %w", walPath, err)
+		return nil
+	})
+	if err != nil {
+		return report, fmt.Errorf("wal: read %s: %w", walPath, err)
 	}
 	return report, nil
 }
