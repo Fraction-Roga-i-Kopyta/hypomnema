@@ -197,7 +197,11 @@ func main() {
 	case "close":
 		runClose(os.Args[2:])
 	case "inject":
-		runInject(os.Args[2:])
+		// Prompt path (SessionStart, UserPromptSubmit, SubagentStart): a
+		// panic exits 0 with no output instead of blocking the turn.
+		if failSafe(func() { runInject(os.Args[2:]) }) {
+			os.Exit(0)
+		}
 	case "rank":
 		runRank(os.Args[2:])
 	case "recall":

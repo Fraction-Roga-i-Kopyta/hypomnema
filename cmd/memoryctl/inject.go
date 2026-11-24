@@ -55,6 +55,21 @@ func contextWiped(event, src string) bool {
 	return event == "SessionStart" && (src == "compact" || src == "clear")
 }
 
+// failSafe runs f and reports whether it panicked, swallowing the panic.
+// It wraps the prompt-path hook entry points (runInject, and through it
+// runSubagentStart): Go exits 2 on an unrecovered panic, the shims exec
+// memoryctl, and exit 2 on UserPromptSubmit blocks the user's prompt (I5).
+// The caller exits 0 with no output instead.
+func failSafe(f func()) (panicked bool) {
+	defer func() {
+		if recover() != nil {
+			panicked = true
+		}
+	}()
+	f()
+	return false
+}
+
 func runInject(args []string) {
 	event := "SessionStart"
 	subagent := false
