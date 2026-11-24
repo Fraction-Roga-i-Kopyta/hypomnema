@@ -141,3 +141,25 @@ func TestValidate_EmptyFile(t *testing.T) {
 		t.Errorf("expected clean empty report, got Total=%d Failures=%+v", r.Total, r.Failures)
 	}
 }
+
+// A row longer than any bufio.Scanner cap must not end the read: every row
+// after it is still validated (the WAL is the source of truth).
+func TestValidate_OversizedRowDoesNotTruncate(t *testing.T) {
+	huge := "2026-04-02|inject|big|" + strings.Repeat("s", 2<<20)
+	p := writeWAL(t, strings.Join([]string{
+		"2026-04-01|inject|a|sess1",
+		huge,
+		"2026-04-03|inject|b|sess2",
+		"2026-04-04|bad event|c|sess3",
+	}, "\n")+"\n")
+	r, err := Validate(p)
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if r.Total != 4 || r.Passing != 3 {
+		t.Fatalf("Total=%d Passing=%d, want 4/3 (rows after the oversized one dropped?)", r.Total, r.Passing)
+	}
+	if len(r.Failures) != 1 || r.Failures[0].LineNum != 4 {
+		t.Fatalf("failures = %+v, want one at line 4", r.Failures)
+	}
+}

@@ -146,3 +146,73 @@ func TestWriteGlobal_ReplacesOwnOrMissingIndex(t *testing.T) {
 }
 
 func ptr(s string) *string { return &s }
+
+// The index is cut at the byte/line budget, so the order decides which facts
+// stay visible: pinned first, then the freshest (later of created/modified),
+// slug as tie-break. A plain alphabetical listing silently dropped every fact
+// past the budget's letter.
+func TestRender_OrdersPinnedThenFreshest(t *testing.T) {
+	files := []native.MemFile{
+		{Slug: "a-old.md", Name: "a-old", Created: "2026-01-01"},
+		{Slug: "b-new.md", Name: "b-new", Created: "2026-11-01"},
+		{Slug: "c-pinned.md", Name: "c-pinned", Created: "2025-01-01", Status: "pinned"},
+		{Slug: "d-edited.md", Name: "d-edited", Created: "2026-02-01", Modified: "2026-11-20"},
+	}
+	out := Render(files, DefaultMaxBytes)
+	want := []string{"c-pinned", "d-edited", "b-new", "a-old"}
+	last := -1
+	for _, w := range want {
+		i := strings.Index(out, "["+w+"]")
+		if i < 0 || i < last {
+			t.Fatalf("want order %v, got:\n%s", want, out)
+		}
+		last = i
+	}
+}
+
+// A cut index says so: the model must know more facts exist and how to find
+// them, and the note itself stays inside the budget.
+func TestRender_TruncationNoteNamesHiddenCount(t *testing.T) {
+	var files []native.MemFile
+	for i := 0; i < 50; i++ {
+		files = append(files, native.MemFile{
+			Slug:        fmt.Sprintf("f-%02d.md", i),
+			Name:        fmt.Sprintf("f-%02d", i),
+			Description: strings.Repeat("x", 100),
+		})
+	}
+	out := Render(files, 2000)
+	if len(out) > 2000 {
+		t.Fatalf("output %d bytes exceeds budget 2000", len(out))
+	}
+	shown := strings.Count(out, "\n- [")
+	if strings.HasPrefix(out, "- [") {
+		shown++
+	}
+	note := fmt.Sprintf("%d more not listed", 50-shown)
+	if !strings.Contains(out, note) || !strings.Contains(out, "memoryctl recall") {
+		t.Fatalf("want truncation note %q with a recall hint, got tail:\n%s", note, tail(out, 200))
+	}
+}
+
+func TestRender_NoNoteWhenEverythingFits(t *testing.T) {
+	out := Render([]native.MemFile{{Slug: "a.md", Name: "a"}}, DefaultMaxBytes)
+	if strings.Contains(out, "not listed") {
+		t.Fatalf("unexpected truncation note:\n%s", out)
+	}
+}
+
+// The harness also stops reading MEMORY.md after 200 lines.
+func TestRender_StaysUnderLineCap(t *testing.T) {
+	var files []native.MemFile
+	for i := 0; i < 400; i++ {
+		files = append(files, native.MemFile{Slug: fmt.Sprintf("f%03d.md", i), Name: fmt.Sprintf("f%03d", i)})
+	}
+	out := Render(files, 1<<20)
+	if n := strings.Count(out, "\n"); n > MaxLines {
+		t.Fatalf("%d lines, cap %d", n, MaxLines)
+	}
+	if !strings.Contains(out, "more not listed") {
+		t.Fatalf("line-capped index must carry the truncation note")
+	}
+}

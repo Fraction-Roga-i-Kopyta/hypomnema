@@ -1,7 +1,6 @@
 package doctor
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/inject"
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/lineio"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/sidecar"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/wal"
@@ -82,13 +82,11 @@ func checkCandidates(memoryDir, claudeHome string, st native.Store) Check {
 	byKey := map[string]*tally{}
 	if f, err := os.Open(filepath.Join(memoryDir, ".wal")); err == nil {
 		defer f.Close()
-		sc := bufio.NewScanner(f)
-		sc.Buffer(make([]byte, 0, 1<<16), 1<<20)
 		seen := map[string]bool{} // slug+session+kind dedup (close fires per turn)
-		for sc.Scan() {
-			parts := strings.SplitN(strings.TrimRight(sc.Text(), "\r"), "|", 4)
+		rerr := lineio.Each(f, func(line string) error {
+			parts := strings.SplitN(strings.TrimRight(line, "\r"), "|", 4)
 			if len(parts) != 4 {
-				continue
+				return nil
 			}
 			event := parts[1]
 			// cite-none's target is the session id, not a fact slug — keying
@@ -97,7 +95,7 @@ func checkCandidates(memoryDir, claudeHome string, st native.Store) Check {
 			// only) must not create or contribute to a tally either. Skip
 			// both before any key is computed.
 			if event == "cite-none" || event == "cite-undelivered" {
-				continue
+				return nil
 			}
 			project, slug, qualified := native.ParseQKey(parts[2])
 			slug = strings.TrimSuffix(slug, ".md")
@@ -124,6 +122,11 @@ func checkCandidates(memoryDir, claudeHome string, st native.Store) Check {
 			case "candidate-confirmed":
 				t.confirmed = true
 			}
+			return nil
+		})
+		if rerr != nil {
+			return Check{Name: "candidate_corroboration", Status: WARN,
+				Detail: "cannot read WAL: " + rerr.Error()}
 		}
 	}
 	var flagged []string
@@ -272,28 +275,26 @@ func fmStatus(path string) (present bool, value string) {
 		return false, ""
 	}
 	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 8*1024), 64*1024)
 	fmCount := 0
-	for sc.Scan() {
-		line := sc.Text()
+	_ = lineio.Each(f, func(line string) error {
 		if strings.TrimRight(line, " \t\r") == "---" {
 			fmCount++
 			if fmCount >= 2 {
-				break
+				return lineio.ErrStop
 			}
-			continue
+			return nil
 		}
 		if fmCount != 1 {
-			continue
+			return nil
 		}
 		if strings.HasPrefix(line, "status:") {
 			v := strings.TrimSpace(strings.TrimPrefix(line, "status:"))
-			v = strings.Trim(v, `"'`)
-			return true, v
+			present, value = true, strings.Trim(v, `"'`)
+			return lineio.ErrStop
 		}
-	}
-	return false, ""
+		return nil
+	})
+	return present, value
 }
 
 // fmHasNestedMetadata reports whether the file's frontmatter opens a
@@ -305,26 +306,26 @@ func fmHasNestedMetadata(path string) bool {
 		return false
 	}
 	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 8*1024), 64*1024)
 	fmCount := 0
-	for sc.Scan() {
-		line := sc.Text()
+	nested := false
+	_ = lineio.Each(f, func(line string) error {
 		if strings.TrimRight(line, " \t\r") == "---" {
 			fmCount++
 			if fmCount >= 2 {
-				break
+				return lineio.ErrStop
 			}
-			continue
+			return nil
 		}
 		if fmCount != 1 {
-			continue
+			return nil
 		}
 		if strings.TrimRight(line, " \t\r") == "metadata:" {
-			return true
+			nested = true
+			return lineio.ErrStop
 		}
-	}
-	return false
+		return nil
+	})
+	return nested
 }
 
 // checkCorpusQuality surfaces frontmatter issues the ranking pipeline cannot

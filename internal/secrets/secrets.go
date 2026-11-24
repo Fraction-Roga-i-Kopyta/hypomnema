@@ -4,12 +4,13 @@
 package secrets
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/lineio"
 )
 
 // secretRe matches a credential-looking KEY = VALUE. The key is any word
@@ -144,15 +145,17 @@ func matchIgnoreFile(path, rel string) bool {
 	}
 	defer f.Close()
 	matched := false
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		line := sc.Text()
+	// lineio has no line-length cap, so a long line no longer ends the read
+	// early and drops later patterns (a lost `!` negation would leave the
+	// path whitelisted). A read error fails closed: not whitelisted, the
+	// gate stays armed.
+	err = lineio.Each(f, func(line string) error {
 		if i := strings.IndexByte(line, '#'); i >= 0 {
 			line = line[:i]
 		}
 		line = strings.TrimSpace(line)
 		if line == "" {
-			continue
+			return nil
 		}
 		negate := false
 		if strings.HasPrefix(line, "!") {
@@ -164,11 +167,15 @@ func matchIgnoreFile(path, rel string) bool {
 		// self-add one with a single non-secret write to `.secretsignore`
 		// (review S4). Ignore such patterns; per-file/glob patterns still work.
 		if isOverBroad(line) {
-			continue
+			return nil
 		}
 		if globToRe(line).MatchString(rel) {
 			matched = !negate
 		}
+		return nil
+	})
+	if err != nil {
+		return false
 	}
 	return matched
 }

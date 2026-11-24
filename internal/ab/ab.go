@@ -6,11 +6,12 @@
 package ab
 
 import (
-	"bufio"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/lineio"
 )
 
 // Event is one parsed WAL row: DATE|KIND|SLUG|FIELD4.
@@ -49,20 +50,19 @@ func ParseWAL(path string) ([]Event, error) {
 	}
 	defer f.Close()
 	var out []Event
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 1<<16), 1<<20)
-	for sc.Scan() {
-		line := strings.TrimRight(sc.Text(), "\r")
+	err = lineio.Each(f, func(line string) error {
+		line = strings.TrimRight(line, "\r")
 		if line == "" || strings.HasPrefix(line, "#") {
-			continue
+			return nil
 		}
 		parts := strings.SplitN(line, "|", 4)
 		if len(parts) != 4 {
-			continue
+			return nil
 		}
 		out = append(out, Event{Date: parts[0], Kind: parts[1], Slug: parts[2], Field: parts[3]})
-	}
-	return out, sc.Err()
+		return nil
+	})
+	return out, err
 }
 
 // EvalSessions groups cite-useful events by session id (Field), attaching
