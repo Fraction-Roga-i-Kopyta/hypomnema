@@ -203,10 +203,9 @@ func Run(in Input) (Result, error) {
 	if len(files) == 0 {
 		return Result{}, nil
 	}
-	bySlug := map[string]native.MemFile{}
-	byKey := make(map[string]native.MemFile, len(files)) // project-qualified: the gate's lookup
+	// Project-qualified: a project and a global fact may share a basename.
+	byKey := make(map[string]native.MemFile, len(files))
 	for _, f := range files {
-		bySlug[f.Slug] = f
 		byKey[native.QKey(f.Project, f.Slug)] = f
 	}
 	terms := keywords(in.CWD, in.Prompt, !in.NoGitSignal)
@@ -240,6 +239,7 @@ func Run(in Input) (Result, error) {
 	ranked := rank.Rank(rank.Query{
 		Terms: terms, Today: in.Today, Project: st.Project,
 	}, cands, in.MaxK)
+	ranked = dedupBySlug(ranked, st.Project)
 	if len(in.AlreadyInjected) > 0 {
 		seen := make(map[string]bool, len(in.AlreadyInjected))
 		for _, s := range in.AlreadyInjected {
@@ -257,7 +257,7 @@ func Run(in Input) (Result, error) {
 	if maxTotal <= 0 {
 		maxTotal = maxTotalBytes
 	}
-	md, injected := render(ranked, bySlug, instructionFor(in.Event), maxBodyBytes, maxTotal)
+	md, rendered := render(ranked, byKey, instructionFor(in.Event), maxBodyBytes, maxTotal)
 	if in.Event == "SessionStart" {
 		if q := renderQueue(openTasks(in, st)); q != "" {
 			switch {
@@ -268,22 +268,11 @@ func Run(in Input) (Result, error) {
 			}
 		}
 	}
-	projectSlug := st.Project
-	localSlug := map[string]bool{}
-	for _, f := range files {
-		if f.Project == projectSlug {
-			localSlug[f.Slug] = true
-		}
-	}
-	projectBySlug := make(map[string]string, len(injected))
-	for _, slug := range injected {
-		// Prefer the project-local owner over global on a basename tie
-		// (matches scopeRecords / bySlug rendering preference).
-		if localSlug[slug] {
-			projectBySlug[slug] = projectSlug
-		} else if f, ok := bySlug[slug]; ok {
-			projectBySlug[slug] = f.Project
-		}
+	var injected []string
+	projectBySlug := make(map[string]string, len(rendered))
+	for _, sc := range rendered {
+		injected = append(injected, sc.Slug)
+		projectBySlug[sc.Slug] = sc.Project
 	}
 	return Result{Markdown: md, Injected: injected, ProjectBySlug: projectBySlug}, nil
 }
@@ -494,20 +483,20 @@ func splitCSV(s string) []string {
 }
 
 // render writes ranked entries in order until the total budget is spent and
-// returns the markdown plus the slugs actually rendered — the injection
+// returns the markdown plus the entries actually rendered — the injection
 // bookkeeping (WAL events, session set) must follow what the model can see,
 // not what the ranker picked. The top entry always lands, truncated to the
 // budget if it alone overflows.
-func render(ranked []rank.Scored, bySlug map[string]native.MemFile, instruction string, maxBody, maxTotal int) (string, []string) {
+func render(ranked []rank.Scored, byKey map[string]native.MemFile, instruction string, maxBody, maxTotal int) (string, []rank.Scored) {
 	if len(ranked) == 0 {
 		return "", nil
 	}
 	var b strings.Builder
 	b.WriteString("# Memory Context\n")
 	b.WriteString(instruction + "\n")
-	var injected []string
+	var injected []rank.Scored
 	for _, sc := range ranked {
-		f, ok := bySlug[sc.Slug]
+		f, ok := byKey[native.QKey(sc.Project, sc.Slug)]
 		if !ok {
 			// A sidecar row whose native file vanished before reconciliation
 			// (e.g. the file was deleted between rank and render) — the row
@@ -536,7 +525,7 @@ func render(ranked []rank.Scored, bySlug map[string]native.MemFile, instruction 
 		}
 		b.WriteString(head)
 		b.WriteString(body)
-		injected = append(injected, sc.Slug)
+		injected = append(injected, sc)
 	}
 	if len(injected) == 0 {
 		return "", nil
@@ -568,4 +557,23 @@ func capBody(body string, maxBytes int, hint string) string {
 		cut--
 	}
 	return strings.TrimRight(body[:cut], " \n") + marker
+}
+
+// dedupBySlug keeps one entry per slug, in first-seen order, preferring the
+// project-local one when a project and a global fact share a basename. The
+// session set and the rendered list are slug-keyed, so two entries with one
+// slug would collide there.
+func dedupBySlug(ranked []rank.Scored, project string) []rank.Scored {
+	at := make(map[string]int, len(ranked))
+	out := make([]rank.Scored, 0, len(ranked))
+	for _, sc := range ranked {
+		i, seen := at[sc.Slug]
+		if !seen {
+			at[sc.Slug] = len(out)
+			out = append(out, sc)
+		} else if sc.Project == project && out[i].Project != project {
+			out[i] = sc
+		}
+	}
+	return out
 }
