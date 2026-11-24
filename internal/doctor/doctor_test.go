@@ -869,6 +869,52 @@ func TestCheckCandidates_CiteNoneAndUndeliveredDoNotCount(t *testing.T) {
 	}
 }
 
+// A candidate that is actually core (project feedback, not marked less) is
+// delivered every session by design: silence is no evidence against it, and
+// "rewrite keywords" does not apply. Marked less, it leaves the core and is
+// judged like any other candidate.
+func TestCheckCandidates_SkipsCoreEligible(t *testing.T) {
+	home := t.TempDir()
+	claudeHome := filepath.Join(home, ".claude")
+	memDir := filepath.Join(claudeHome, "memory")
+	cwd := "/tmp/proj"
+	st := native.StoreFor(claudeHome, cwd)
+	for _, d := range []string{memDir, st.Dir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	os.WriteFile(filepath.Join(st.Dir, "rule.md"),
+		[]byte("---\nname: rule\ntype: feedback\nstatus: candidate\n---\nalways lint\n"), 0o644)
+	var wal strings.Builder
+	for i := 1; i <= 5; i++ {
+		fmt.Fprintf(&wal, "2026-09-1%d|cite-silent|%s|s%d\n", i, native.QKey(st.Project, "rule.md"), i)
+	}
+	walPath := filepath.Join(memDir, ".wal")
+	if err := os.WriteFile(walPath, []byte(wal.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if c := checkCandidates(memDir, claudeHome, st); c.Status != OK {
+		t.Fatalf("core-eligible candidate must not flag: %+v", c)
+	}
+
+	wal.WriteString("2026-09-20|mark|" + native.QKey(st.Project, "rule") + ":less|cli\n")
+	if err := os.WriteFile(walPath, []byte(wal.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := sidecar.Open(filepath.Join(memDir, ".sidecar.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sidecar.ReprojectAll(s, native.Collect(claudeHome, st), walPath, st.Scope(), native.StoreDirs(claudeHome, claudeHome, st)); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	if c := checkCandidates(memDir, claudeHome, st); c.Status != WARN || !strings.Contains(c.Detail, "rule") {
+		t.Fatalf("a less-marked candidate is not core and must flag: %+v", c)
+	}
+}
+
 func TestCheckCorpusQuality_CountsNestedMetadata(t *testing.T) {
 	home := t.TempDir()
 	claudeHome := filepath.Join(home, ".claude")

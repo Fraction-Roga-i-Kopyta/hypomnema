@@ -6,8 +6,8 @@ You are working inside the hypomnema project: a governance + ranking layer for C
 
 Claude Code v2.1.59+ ships native file memory: the harness stores markdown files in `~/.claude/projects/<slug>/memory/` and injects only a `MEMORY.md` index. Hypomnema adds what native lacks:
 
-- **Ranked auto-injection** — `memoryctl inject` (SessionStart + UserPromptSubmit shims) ranks native facts by relevance and injects the top-K via `additionalContext`, not just a table of contents, and `SubagentStart` (each eligible subagent gets its own ranked top-5 for the task it was launched with).
-- **Effectiveness measurement** — WAL tracks `<cc-memory>` citations (`cite-useful`/`cite-silent`) per session; Bayesian effectiveness feeds back into ranking.
+- **Core + ranked auto-injection** — `memoryctl inject` delivers via `additionalContext`, not just a table of contents: SessionStart injects a fixed core (the project's continuity, pinned facts, project feedback), UserPromptSubmit ranks native facts by relevance and injects the top-K, and `SubagentStart` gives each eligible subagent only the facts its launch task names (head gate over the brief, then its own ranked top-5).
+- **Effectiveness measurement** — WAL tracks `<cc-memory>` citations (`cite-useful`/`cite-silent`) per session; Bayesian effectiveness is a diagnostic, not part of the ranking score.
 - **Decay + lifecycle** — `memoryctl close` (Stop shim) down-ranks stale facts in the sidecar; content is never mutated by hooks.
 - **Secrets gate** — `memoryctl guard` (PreToolUse:Write shim) blocks credential patterns before they land in a memory file; `memoryctl guard-bash` (PreToolUse:Bash shim) blocks the model's own `memoryctl pin`/`unpin`/`mark` calls.
 - **Global store** — `~/.claude/memory-global/` for facts that apply across every project (native memory is per-project only).
@@ -31,14 +31,19 @@ Logical types:
 | `project` | Ongoing work, goals, constraints (Claude Code's own type); pin a project card |
 | `continuity` | "Where we left off" — one `continuity.md` per project, rewritten in place |
 
-Injection budget: a single ranked **top-8** across all types, capped at
-**2.5KB per body and 8KB total** (Claude Code diverts oversized hook output
-to a file the model never reads inline, so the budget is what keeps memory
-actually visible). A fact injects **once per context** — later prompts only
-add facts that newly enter the top-8, and a fact re-enters offerable state
-after a compaction or `/clear` wipes it from the model's context. Per-type
-quotas are not implemented; type balance emerges from relevance. Subagents
-get a smaller budget — top-5, 5 KB total — ranked against their own task.
+Injection budget: **2.5KB per body and 8KB total** (Claude Code diverts
+oversized hook output to a file the model never reads inline, so the budget
+is what keeps memory actually visible). SessionStart fills it with the fixed
+core (see "How injection ranks files"); core facts that do not fit are listed
+as one-line pointers (`- name — absolute path — description`) under
+`_Not loaded (budget): read if relevant._` — pointers are not deliveries, a
+fact you then Read counts the usual way. The Memory-queue line's bytes are
+reserved first, before core bodies and pointers. UserPromptSubmit injects a ranked **top-8** across
+all types. A fact injects **once per context** — later prompts only add facts
+that newly enter the top-8, and a fact re-enters offerable state after a
+compaction or `/clear` wipes it from the model's context. Per-type quotas are
+not implemented; type balance emerges from relevance. Subagents get a smaller
+budget — top-5, 5 KB total — ranked against their own task.
 
 ## Frontmatter schema
 
@@ -243,23 +248,45 @@ shows `[retired <date> → successor]` instead of silently forgetting.
   `session-metrics`), keeping the original as `.wal.pre-compact-<date>`.
 - Marks facts `stale` in the sidecar when unused past their type threshold — age counts from **last injection** (fallback `created`, which falls back to the date of Claude Code's `modified` stamp), so facts in rotation stay alive. No native content mutation.
 - Archiving ships as `memoryctl retire` (see the lifecycle loop above): the file moves to the store's `.archive/`, the sidecar row becomes `retired`, and recall shows a tombstone redirect. Stale facts that were never retired simply stop injecting.
-- `status: pinned` files and each project's **freshest** `continuity` fact (later of `created`/`modified`) never decay. Only that freshest continuity is injected; older continuity files are history — recallable, aging like notes (30 days). Claude Code's own `type: project` means ongoing work/goals, so it ages like knowledge (90 days); pin a project card that must never age.
+- `status: pinned` files, each project's **freshest** `continuity` fact (later of `created`/`modified`) and project-local `feedback` never decay — they are the SessionStart core, which a stale fact leaves, and a core fact is refreshed only by being core (global feedback still ages, 45 days). Only that freshest continuity is injected; older continuity files are history — recallable, aging like notes (30 days). Claude Code's own `type: project` means ongoing work/goals, so it ages like knowledge (90 days); pin a project card that must never age.
 - `memoryctl close --subagent` (SubagentStop) runs the same citation classification on the subagent's own transcript (including its SubagentHandback report) under the key `<session_id>:<agent_id>`; session-level work stays with the parent's Stop. Counters of "how many sessions" (doctor candidates) count a session and its subagents once.
 
 ## How injection ranks files
 
-A single relevance ranker (v2 merged the two v1 pipelines into one). The
-score is an additive blend — no single zero signal annihilates a candidate:
+**SessionStart does not rank: it injects a fixed core.** In order: (1) the
+project's freshest `continuity` (only through this slot — a pinned or older
+continuity is never core); (2) `status: pinned` facts, project-local then
+global; (3) project-local `type: feedback`. Freshest first within a group
+(later of `created`/`modified`), slug tie-break; one fact per file name,
+project-local winning. A fact that is `stale`/retired, hidden by `/memboard`,
+or marked **less** is not core (less keeps it rankable and pullable). There
+is no ranked fill after the core — cwd/git overlap was the source of
+unrelated facts; the rest arrives by pull (the `MEMORY.md` index, `recall`).
+Every source injects the core only — `startup`, `resume`, `clear` and
+`compact` alike. `resume` keeps the session dedup (facts already in the
+transcript are not re-sent); `compact` and `clear` reset it, so the core
+comes back. After compaction the summary itself carries the task state:
+gating the summary on fact heads was measured to pass a median of 187 facts
+on real summaries, so nothing is ranked in. `doctor`'s candidate check skips
+facts that are actually core — they are delivered every session by design.
+
+Everywhere else (UserPromptSubmit, SubagentStart after its head gate,
+`recall`, `skill-inject`) a single relevance ranker applies (v2 merged the two
+v1 pipelines into one). The score is an additive blend — no single zero
+signal annihilates a candidate:
 
 ```
 score = 3.0 × overlap(session_keywords, file keywords+name+description+body)
-      + 1.0 × log10(1 + ref_count) × effGate   # popularity, GATED by proven usefulness
       + 2.0 × recency                  # 1/(1 + days/30) from last USEFUL citation (cite-useful; fallback created)
-      + 2.0 × effectiveness            # Bayesian (pos+1)/(pos+0.25·neg+2); silent counts ¼; neutral 0.5 until signal lands
       + 1.0 if project-local           # project facts outrank global ones on ties
-
-effGate = clamp(2 × effectiveness, 0, 1)   # 1.0 at the prior (0.5); only damps, never amplifies
 ```
+
+`ref_count` and `effectiveness` do not enter the score. They are still computed
+and shown as diagnostics (`/memboard`, `memoryctl stats`, `doctor`,
+`sidecar show`); `close` still recomputes effectiveness
+for them, but the ranker never reads them. Both were circular as
+rank inputs: injection volume feeds `ref_count`, and `cite-silent` (a
+consequence of being injected) feeds `effectiveness`.
 
 **Recency is the model's signal, not the ranker's.** Recency decays from the
 last `cite-useful` date (sidecar `last_useful`), falling back to
@@ -270,19 +297,13 @@ ranker's own output, and keying recency on it let every pick refresh itself.
 Staleness (`MarkStale`) still counts from last injection — a fact the ranker
 demotes stops being injected and then ages out; nothing is staled by fiat.
 
-**Earned popularity:** the `ref_count` term is scaled by `effGate` so a fact
-injected hundreds of times that rarely proved useful cannot coast on volume.
-The gate is neutral (1.0) at the Bayesian prior 0.5 and capped at 1.0, so it
-only *damps* unearned popularity — high-eff facts get the full ref reward, not
-an inflated one.
+**Zero-safe:** a new fact with no citation history gets its frontmatter `created` as recency, so it is injectable from day one; no single zero signal annihilates a candidate.
 
-**Zero-safe:** a new fact with `ref_count=0` and no outcomes gets the neutral prior and its frontmatter `created` as recency — it is injectable from day one. The gate cannot hurt it either: an extreme low `effectiveness` *requires* substantial negative evidence (the prior holds new facts near 0.5), so `effGate≈1.0` until a fact has genuinely under-performed.
+Status filter: `active`, `pinned` and `candidate` (sidecar-managed `stale` is excluded; `recall` includes it). Scope filter: only the current project's facts plus the global store — other projects' rows never inject. Result cap: top-8, 8KB total, once per context per fact (again after compaction/`/clear`).
 
-Status filter: `active` and `pinned` only (sidecar-managed `stale` is excluded). Scope filter: only the current project's facts plus the global store — other projects' rows never inject. Result cap: top-8, 8KB total, once per context per fact (again after compaction/`/clear`).
+`session_keywords` come from prompt tokens (for a subagent: its Agent call's description, agent-type words and the prompt's 40 most frequent terms, with no git context), CWD basename (skipped when CWD is the home directory — its basename is the login name, present in every fact that quotes an absolute path), and git context (branch name, changed filenames, recent commit subjects).
 
-`session_keywords` come from prompt tokens, CWD basename (skipped when CWD is the home directory — its basename is the login name, present in every fact that quotes an absolute path), and git context (branch name, changed filenames, recent commit subjects) on both SessionStart and UserPromptSubmit (reactive re-rank).
-
-**Prompt gate.** On UserPromptSubmit a fact injects only if the prompt names what it is about — a prompt term in its `name`, `description`, `keywords` or `domains` — or shares at least two terms with it anywhere (counted on the fact's own file, never on a same-named fact of another project); a single body-only hit does not pass (in conversational prompts it is mostly a filler word). CWD and git terms still rank but do not pass the gate. A prompt with no relevance terms ("ok", "да, и что там") injects nothing. SessionStart has no prompt and keeps priming on static signals; SubagentStart queries are full task briefs and are not gated.
+**Prompt gate.** On UserPromptSubmit a fact injects only if the prompt names what it is about — a prompt term in its `name`, `description`, `keywords` or `domains` — or shares at least two terms with it anywhere (counted on the fact's own file, never on a same-named fact of another project); a single body-only hit does not pass (in conversational prompts it is mostly a filler word). CWD and git terms still rank but do not pass the gate. A prompt with no relevance terms ("ok", "да, и что там") injects nothing. SessionStart injects the fixed core and is not gated; SubagentStart has its own head gate over the task statement (the Agent call's description, not its prompt or the ranking query — see "Subagent context"); a subagent with no Agent call of its own has no brief and gets nothing.
 
 **Pull-only mode.** `HYPOMNEMA_PROMPT_INJECT=off` (e.g. in `settings.json` `env`) makes UserPromptSubmit inject nothing — Claude Code's own design: the harness loads the project `MEMORY.md` index every session and the model reads the facts whose descriptions fit the task. The Stop hook and `memoryctl reindex` also write `~/.claude/memory-global/MEMORY.md` — the global store's index with absolute links — so the global store stays visible: import it from the user CLAUDE.md with `@~/.claude/memory-global/MEMORY.md`. A `MEMORY.md` already there that memoryctl did not generate is left untouched — `doctor` (`global_index`) warns about it, and about pull-only mode without the import. Both indexes list pinned facts first, then the freshest, within 24 KB / 200 lines; a cut index ends with a note naming how many facts it left out. A fact the model reads with the Read tool counts as delivered, so citations keep measuring usefulness. In this mode descriptions are the retrieval signal: write them so the first ~120 characters say what the fact is about.
 
@@ -338,7 +359,7 @@ any injected memory.
 
 ## Subagent context
 
-Subagents receive ranked memory automatically at `SubagentStart` — query = this agent's Agent-call description + prompt, else the parent's recent prompts — except `fork`, `Explore`, `claude-code-guide`, `statusline-setup` (override with `HYPOMNEMA_SUBAGENT_SKIP`, a comma list; set-but-empty means none skipped, and a `*` entry means skip every agent type — set it in `settings.json`'s `env` block to opt every subagent out). The subagent's citations are measured under its own key, separately from the parent's; subagents are told to cite in their final report. Pass inline only what is specific to the task at hand — the ranker already covers general recall. `memoryctl recall` run inside a subagent records against the parent session (there is no agent id in the subagent's Bash environment); `skill-inject` run inside a subagent does the same, for the same reason.
+Subagents receive memory at `SubagentStart` only when the task names it. The gate text is the Agent call's `description` — the task statement; the long prompt only feeds the ranking query, because a whole prompt names dozens of facts (measured on 362 real briefs: median 136 passing facts for the full text, 1 for the description). A fact must carry ≥2 distinct description terms in its name/description/keywords/domains, at least one in the name or keywords. Path-like tokens (anything with a `/`), the path words of `$HOME` and of the canonical project root (not those below it — a worktree name is the task), agent-type words, digit-only tokens and corpus-common head terms (in the heads of at least `max(5, ⌈10 % × N⌉)` of the N in-scope facts) never count. Gated facts are then ranked on the query and cut to top-5; continuity is not special-cased. No Agent call of its own → nothing is injected; nested and Workflow subagents fall here too (their Agent call is not in the parent transcript). Not served at all: `fork`, `Explore`, `claude-code-guide`, `statusline-setup` (override with `HYPOMNEMA_SUBAGENT_SKIP`, a comma list; set-but-empty means none skipped, and a `*` entry means skip every agent type — set it in `settings.json`'s `env` block to opt every subagent out). The subagent's citations are measured under its own key, separately from the parent's; subagents are told to cite in their final report. Pass inline what the subagent needs; it receives only facts its brief names. `memoryctl recall` run inside a subagent records against the parent session (there is no agent id in the subagent's Bash environment); `skill-inject` run inside a subagent does the same, for the same reason.
 
 ## Source of truth
 

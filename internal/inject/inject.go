@@ -112,8 +112,8 @@ func Candidates(memoryDir string, st native.Store, files []native.MemFile, terms
 // typed; without the gate the remaining top-K slots were filled by recency
 // and popularity alone, so facts with nothing in common with the turn were
 // injected on every prompt. cwd and git terms still rank but do not pass the
-// gate — the user did not ask for them. SessionStart has no prompt and keeps
-// priming on static signals; SubagentStart queries are full task briefs.
+// gate — the user did not ask for them. SessionStart injects a fixed core;
+// SubagentStart has its own head gate on the Agent call's description.
 func requirePromptMatch(event string) bool { return event == "UserPromptSubmit" }
 
 // promptMatch is the UserPromptSubmit gate: a fact passes when the prompt
@@ -144,7 +144,15 @@ func promptMatch(f native.MemFile, want map[string]bool) bool {
 
 // Input is everything Run needs (parsed by the memoryctl inject verb).
 type Input struct {
-	Event           string
+	Event string
+	// Source is the SessionStart source: startup, resume, compact, clear,
+	// or empty. Every SessionStart injects the core only; the source only
+	// decides (in the caller) whether render-dedup is reset.
+	Source string
+	// ProjectRoot is the canonical project root (main checkout / git root /
+	// the directory itself). Its path components do not count toward the
+	// SubagentStart head gate; empty excludes none.
+	ProjectRoot     string
 	SessionID       string
 	CWD             string
 	Prompt          string
@@ -163,6 +171,14 @@ type Input struct {
 	// its own Agent call), where the parent's branch and working-tree tokens
 	// are unrelated noise.
 	NoGitSignal bool
+	// Brief is the SubagentStart task statement (the Agent call's
+	// description), read by the head gate; the long prompt only feeds the
+	// ranking query. Empty on SubagentStart -> nothing is
+	// injected: without a task there is nothing to name a fact.
+	Brief string
+	// AgentType is the subagent's type; its words do not count toward the
+	// head gate.
+	AgentType string
 }
 
 func (in Input) store() native.Store {
@@ -195,21 +211,29 @@ type Result struct {
 }
 
 // Run orchestrates a single injection: keywords → native files → ranked
-// top-K → Markdown. Recovers from a corrupt sidecar by rebuilding; falls
-// back to a native-only degraded rank if the sidecar is unusable.
+// top-K → Markdown. SessionStart renders the fixed core (coreFacts) instead
+// of a ranking — after compaction too — and lists core facts the budget cut
+// as pointers. Recovers from a corrupt
+// sidecar by rebuilding; falls back to a native-only degraded rank if the
+// sidecar is unusable.
 func Run(in Input) (Result, error) {
+	if in.Event == "SubagentStart" && strings.TrimSpace(in.Brief) == "" {
+		return Result{}, nil
+	}
 	st := in.store()
 	files := native.Collect(in.ClaudeHome, st)
 	if len(files) == 0 {
 		return Result{}, nil
 	}
-	bySlug := map[string]native.MemFile{}
-	byKey := make(map[string]native.MemFile, len(files)) // project-qualified: the gate's lookup
+	// Project-qualified: a project and a global fact may share a basename.
+	byKey := make(map[string]native.MemFile, len(files))
 	for _, f := range files {
-		bySlug[f.Slug] = f
 		byKey[native.QKey(f.Project, f.Slug)] = f
 	}
-	terms := keywords(in.CWD, in.Prompt, !in.NoGitSignal)
+	var terms []string
+	if needsTerms(in) {
+		terms = keywords(in.CWD, in.Prompt, !in.NoGitSignal)
+	}
 	cands := candidates(in, st, files, terms)
 	// Only a project's freshest continuity is pushed; older ones are history
 	// (still recallable) and would otherwise pile up in the window.
@@ -222,6 +246,18 @@ func Run(in Input) (Result, error) {
 		current = append(current, c)
 	}
 	cands = current
+	if in.Event == "SubagentStart" {
+		// Gate BEFORE rank: facts the brief does not name must not take the
+		// K slots.
+		g := newGate(in.Brief, gateExclusions(in.ProjectRoot, filepath.Dir(in.ClaudeHome), in.AgentType, files))
+		kept := cands[:0]
+		for _, c := range cands {
+			if f, ok := byKey[native.QKey(c.Project, c.Slug)]; ok && g.pass(f) {
+				kept = append(kept, c)
+			}
+		}
+		cands = kept
+	}
 	if requirePromptMatch(in.Event) {
 		want := termSet(tokenize.Relevance(in.Prompt))
 		kept := cands[:0]
@@ -237,9 +273,14 @@ func Run(in Input) (Result, error) {
 	if in.MaxK <= 0 {
 		in.MaxK = 8
 	}
-	ranked := rank.Rank(rank.Query{
-		Terms: terms, Today: in.Today, Project: st.Project,
-	}, cands, in.MaxK)
+	q := rank.Query{Terms: terms, Today: in.Today, Project: st.Project}
+	var ranked, core []rank.Scored
+	if in.Event == "SessionStart" {
+		core = coreFacts(files, cands, st.Project)
+		ranked = append(ranked, core...)
+	} else {
+		ranked = topDistinct(q, cands, st.Project, in.MaxK)
+	}
 	if len(in.AlreadyInjected) > 0 {
 		seen := make(map[string]bool, len(in.AlreadyInjected))
 		for _, s := range in.AlreadyInjected {
@@ -257,35 +298,120 @@ func Run(in Input) (Result, error) {
 	if maxTotal <= 0 {
 		maxTotal = maxTotalBytes
 	}
-	md, injected := render(ranked, bySlug, instructionFor(in.Event), maxBodyBytes, maxTotal)
-	if in.Event == "SessionStart" {
-		if q := renderQueue(openTasks(in, st)); q != "" {
+	var md string
+	var rendered []rank.Scored
+	if in.Event != "SessionStart" {
+		md, rendered = render(ranked, byKey, instructionFor(in.Event), maxBodyBytes, maxTotal)
+	} else {
+		// The Memory-queue line's bytes are reserved first: neither core
+		// bodies nor overflow pointers crowd it out.
+		queue := renderQueue(openTasks(in, st))
+		budget := maxTotal
+		if queue != "" {
+			budget -= 1 + len(queue) + 1
+		}
+		if budget > 0 { // render treats a budget <= 0 as unlimited
+			md, rendered = render(ranked, byKey, instructionFor(in.Event), maxBodyBytes, budget)
+		}
+		if md != "" {
+			md = appendOverflow(md, overflowCore(ranked, core, rendered), byKey, budget)
+		}
+		if queue != "" {
 			switch {
 			case md == "":
-				md = "# Memory Context\n" + q + "\n"
-			case len(md)+1+len(q)+1 <= maxTotal:
-				md += "\n" + q + "\n"
+				md = "# Memory Context\n" + queue + "\n"
+			case len(md)+1+len(queue)+1 <= maxTotal:
+				md += "\n" + queue + "\n"
 			}
 		}
 	}
-	projectSlug := st.Project
-	localSlug := map[string]bool{}
-	for _, f := range files {
-		if f.Project == projectSlug {
-			localSlug[f.Slug] = true
-		}
-	}
-	projectBySlug := make(map[string]string, len(injected))
-	for _, slug := range injected {
-		// Prefer the project-local owner over global on a basename tie
-		// (matches scopeRecords / bySlug rendering preference).
-		if localSlug[slug] {
-			projectBySlug[slug] = projectSlug
-		} else if f, ok := bySlug[slug]; ok {
-			projectBySlug[slug] = f.Project
-		}
+	var injected []string
+	projectBySlug := make(map[string]string, len(rendered))
+	for _, sc := range rendered {
+		injected = append(injected, sc.Slug)
+		projectBySlug[sc.Slug] = sc.Project
 	}
 	return Result{Markdown: md, Injected: injected, ProjectBySlug: projectBySlug}, nil
+}
+
+// needsTerms reports whether this injection ranks at all. SessionStart is
+// always core-only (startup, resume, clear and compact alike), so it skips
+// the query terms — gitSignal's git commands and the sidecar overlap query.
+func needsTerms(in Input) bool {
+	return in.Event != "SessionStart"
+}
+
+// topDistinct ranks cands without a K cut, keeps one fact per slug
+// (project-local wins), then cuts to k — deduplicating after the cut would
+// let a project/global same-slug pair spend two of the k slots on one fact.
+func topDistinct(q rank.Query, cands []rank.Candidate, project string, k int) []rank.Scored {
+	out := dedupBySlug(rank.Rank(q, cands, 0), project)
+	if k > 0 && len(out) > k {
+		out = out[:k]
+	}
+	return out
+}
+
+// overflowCore returns the core facts that were offered to render (ranked,
+// after the already-in-context filter) but did not fit the budget.
+func overflowCore(ranked, core, rendered []rank.Scored) []rank.Scored {
+	isCore := make(map[string]bool, len(core))
+	for _, sc := range core {
+		isCore[native.QKey(sc.Project, sc.Slug)] = true
+	}
+	shown := make(map[string]bool, len(rendered))
+	for _, sc := range rendered {
+		shown[native.QKey(sc.Project, sc.Slug)] = true
+	}
+	var out []rank.Scored
+	for _, sc := range ranked {
+		k := native.QKey(sc.Project, sc.Slug)
+		if isCore[k] && !shown[k] {
+			out = append(out, sc)
+		}
+	}
+	return out
+}
+
+// overflowHeader introduces the pointer lines for core facts cut by the
+// budget.
+const overflowHeader = "_Not loaded (budget): read if relevant._"
+
+// appendOverflow lists core facts that did not fit as one-line pointers —
+// "- name — absolute path — description" — under overflowHeader, while md
+// stays within budget. Pointers are not deliveries: the caller keeps them
+// out of Injected, so they are not logged; a fact the model then Reads
+// counts as delivered the usual way.
+func appendOverflow(md string, over []rank.Scored, byKey map[string]native.MemFile, budget int) string {
+	head := "\n" + overflowHeader + "\n"
+	var lines strings.Builder
+	for _, sc := range over {
+		f, ok := byKey[native.QKey(sc.Project, sc.Slug)]
+		if !ok {
+			continue
+		}
+		name := f.Name
+		if name == "" {
+			name = f.Slug
+		}
+		where := f.Path
+		if where == "" {
+			where = f.Slug
+		}
+		ln := "- " + name + " — " + where
+		if f.Description != "" {
+			ln += " — " + f.Description
+		}
+		ln += "\n"
+		if len(md)+len(head)+lines.Len()+len(ln) > budget {
+			break
+		}
+		lines.WriteString(ln)
+	}
+	if lines.Len() == 0 {
+		return md
+	}
+	return md + head + lines.String()
 }
 
 // candidates returns ranker-ready candidates: sidecar rows for this project
@@ -322,55 +448,72 @@ func candidates(in Input, st native.Store, files []native.MemFile, terms []strin
 				}
 			}
 		}
-		// Use the sidecar ONLY if it yielded rows for this scope. An empty
-		// result (failed or empty reproject) must NOT shadow the native
-		// corpus — fall through to the degraded native-only rank. Spec §5:
-		// injection still happens.
-		if lerr == nil && len(scoped) > 0 {
-			// A failed overlap query must degrade to no-overlap, never crash the
-			// hook; chunking (review E6) keeps the common >32766-term case from
-			// erroring in the first place.
-			overlap, oerr := s.OverlapScores(terms)
-			if oerr != nil {
-				overlap = map[string]int{}
-			}
-			hidden, less := pushMarks(s, in.Event, projectSlug)
-			out := make([]rank.Candidate, 0, len(scoped))
-			for _, r := range scoped {
-				k := r.Project + "\x1f" + r.Slug
-				out = append(out, rank.Candidate{
-					Hidden: hidden[k], Less: less[k],
-					Slug: r.Slug, Type: r.Type, Project: r.Project,
-					Domains: splitCSV(r.Domains), RefCount: r.RefCount,
-					Effectiveness: r.Effectiveness, Status: r.Status,
-					Created: r.Created, LastInjected: r.LastInjected,
-					LastUseful: r.LastUseful,
-					Overlap:    overlap[r.Slug],
-				})
+		hidden, less := pushMarks(s, in.Event, projectSlug)
+		// Use the sidecar's rows ONLY if it yielded rows for this scope. An
+		// empty result (failed or empty reproject) must NOT shadow the native
+		// corpus — fall through to the degraded native-only rank (spec §5:
+		// injection still happens). The sidecar is open, so its marks still
+		// apply to the degraded list.
+		if lerr != nil || len(scoped) == 0 {
+			out := degradedCandidates(files, terms)
+			for i := range out {
+				k := native.QKey(out[i].Project, out[i].Slug)
+				out[i].Hidden, out[i].Less = hidden[k], less[k]
 			}
 			return out
 		}
+		// A failed overlap query must degrade to no-overlap, never crash the
+		// hook; chunking (review E6) keeps the common >32766-term case from
+		// erroring in the first place. No terms (a core-only SessionStart) →
+		// no query at all.
+		overlap := map[string]int{}
+		if len(terms) > 0 {
+			if o, oerr := s.OverlapScores(terms); oerr == nil {
+				overlap = o
+			}
+		}
+		out := make([]rank.Candidate, 0, len(scoped))
+		for _, r := range scoped {
+			k := native.QKey(r.Project, r.Slug)
+			out = append(out, rank.Candidate{
+				Hidden: hidden[k], Less: less[k],
+				Slug: r.Slug, Type: r.Type, Project: r.Project,
+				Domains: splitCSV(r.Domains), RefCount: r.RefCount,
+				Effectiveness: r.Effectiveness, Status: r.Status,
+				Created: r.Created, LastInjected: r.LastInjected,
+				LastUseful: r.LastUseful,
+				Overlap:    overlap[r.Slug],
+			})
+		}
+		return out
 	}
 	return degradedCandidates(files, terms)
 }
 
-// pushMarks returns the /memboard hide (for this project only) and less
-// sets keyed "<fact project>\x1f<slug.md>". Only the push events honour
-// marks; recall, skill-inject, the rank verb and ab pass another Event and
-// get empty sets. A read failure degrades to no marks.
+// pushMarks returns the /memboard hide and less sets (PushMarkSets) for the
+// push events only; recall, skill-inject, the rank verb and ab pass another
+// Event and get empty sets.
 func pushMarks(s *sidecar.Store, event, project string) (hidden, less map[string]bool) {
 	switch event {
 	case "SessionStart", "UserPromptSubmit", "SubagentStart":
 	default:
 		return nil, nil
 	}
+	return PushMarkSets(s, project)
+}
+
+// PushMarkSets returns the /memboard hide (for project only) and less sets,
+// keyed native.QKey(fact project, slug.md) — the marks push injection
+// honours, shared with doctor's core check. A read failure degrades to no
+// marks.
+func PushMarkSets(s *sidecar.Store, project string) (hidden, less map[string]bool) {
 	ms, err := s.Marks()
 	if err != nil {
 		return nil, nil
 	}
 	hidden, less = map[string]bool{}, map[string]bool{}
 	for _, m := range ms {
-		k := m.Project + "\x1f" + m.Slug
+		k := native.QKey(m.Project, m.Slug)
 		switch m.Directive {
 		case "hide":
 			if m.Arg == project {
@@ -451,8 +594,14 @@ func degradedCandidates(files []native.MemFile, terms []string) []rank.Candidate
 	want := termSet(terms)
 	out := make([]rank.Candidate, 0, len(files))
 	for _, f := range files {
+		// Frontmatter pinned carries through, so the core keeps the pinned
+		// project card even without a sidecar.
+		status := "active"
+		if f.Status == "pinned" {
+			status = "pinned"
+		}
 		out = append(out, rank.Candidate{
-			Slug: f.Slug, Type: f.Type, Project: f.Project, Status: "active",
+			Slug: f.Slug, Type: f.Type, Project: f.Project, Status: status,
 			Effectiveness: 0.5, Overlap: fileOverlap(f, want),
 		})
 	}
@@ -494,20 +643,20 @@ func splitCSV(s string) []string {
 }
 
 // render writes ranked entries in order until the total budget is spent and
-// returns the markdown plus the slugs actually rendered — the injection
+// returns the markdown plus the entries actually rendered — the injection
 // bookkeeping (WAL events, session set) must follow what the model can see,
 // not what the ranker picked. The top entry always lands, truncated to the
 // budget if it alone overflows.
-func render(ranked []rank.Scored, bySlug map[string]native.MemFile, instruction string, maxBody, maxTotal int) (string, []string) {
+func render(ranked []rank.Scored, byKey map[string]native.MemFile, instruction string, maxBody, maxTotal int) (string, []rank.Scored) {
 	if len(ranked) == 0 {
 		return "", nil
 	}
 	var b strings.Builder
 	b.WriteString("# Memory Context\n")
 	b.WriteString(instruction + "\n")
-	var injected []string
+	var injected []rank.Scored
 	for _, sc := range ranked {
-		f, ok := bySlug[sc.Slug]
+		f, ok := byKey[native.QKey(sc.Project, sc.Slug)]
 		if !ok {
 			// A sidecar row whose native file vanished before reconciliation
 			// (e.g. the file was deleted between rank and render) — the row
@@ -536,7 +685,7 @@ func render(ranked []rank.Scored, bySlug map[string]native.MemFile, instruction 
 		}
 		b.WriteString(head)
 		b.WriteString(body)
-		injected = append(injected, sc.Slug)
+		injected = append(injected, sc)
 	}
 	if len(injected) == 0 {
 		return "", nil
@@ -568,4 +717,23 @@ func capBody(body string, maxBytes int, hint string) string {
 		cut--
 	}
 	return strings.TrimRight(body[:cut], " \n") + marker
+}
+
+// dedupBySlug keeps one entry per slug, in first-seen order, preferring the
+// project-local one when a project and a global fact share a basename. The
+// session set and the rendered list are slug-keyed, so two entries with one
+// slug would collide there.
+func dedupBySlug(ranked []rank.Scored, project string) []rank.Scored {
+	at := make(map[string]int, len(ranked))
+	out := make([]rank.Scored, 0, len(ranked))
+	for _, sc := range ranked {
+		i, seen := at[sc.Slug]
+		if !seen {
+			at[sc.Slug] = len(out)
+			out = append(out, sc)
+		} else if sc.Project == project && out[i].Project != project {
+			out[i] = sc
+		}
+	}
+	return out
 }

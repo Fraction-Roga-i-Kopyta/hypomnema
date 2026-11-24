@@ -76,7 +76,7 @@ printf '%s' '{"tool_name":"Write","tool_input":{"file_path":"'"$TMP"'/.claude/me
 
 # subagent-start: a pending Agent call in the parent transcript → envelope; missing binary exits 0
 cat > "$TMP/parent.jsonl" <<'EOF'
-{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Agent","input":{"description":"docker","prompt":"docker cache layer","subagent_type":"general-purpose"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Agent","input":{"description":"docker cache","prompt":"docker cache layer","subagent_type":"general-purpose"}}]}}
 EOF
 out=$(printf '%s' '{"session_id":"s1","cwd":"/tmp/proj","transcript_path":"'"$TMP"'/parent.jsonl","agent_id":"a1","agent_type":"general-purpose"}' \
   | HYPOMNEMA_MEMORYCTL="$MCTL" CLAUDE_HOME="$TMP/.claude" CLAUDE_MEMORY_DIR="$TMP/.claude/memory" \

@@ -15,15 +15,16 @@ import (
 )
 
 // learningsForSkill returns up to k skill-learning facts bound to `skill`,
-// ranked by effectiveness+recency (no query → overlap is 0 for all).
+// ranked by overlap+recency (no query → overlap is 0 for all).
 func learningsForSkill(st native.Store, skill string, k int) ([]rank.Scored, map[string]native.MemFile) {
 	files := native.Collect(claudeDir(), st)
 	bySlug := make(map[string]native.MemFile, len(files))
 	for _, f := range files {
 		bySlug[f.Slug] = f
 	}
-	// Empty terms → Candidates returns every file with Overlap 0 but
-	// effectiveness/refcount populated from the sidecar/WAL.
+	// Empty terms → Candidates returns every file with Overlap 0; the
+	// effectiveness/refcount it carries are diagnostics only — rank.Rank
+	// scores on recency and project, not on them.
 	cands := inject.Candidates(memoryDir(), st, files, nil)
 	matched := cands[:0:0]
 	for _, c := range cands {

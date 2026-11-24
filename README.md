@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/Fraction-Roga-i-Kopyta/hypomnema?include_prereleases&sort=semver)](https://github.com/Fraction-Roga-i-Kopyta/hypomnema/releases)
 
-**Governance and ranking layer for Claude Code's native file memory — a Go engine (`memoryctl`) + 9 thin shims. No cloud, no embeddings.** Claude Code now ships native file memory; hypomnema adds ranked auto-injection (session AND subagents), effectiveness measurement, decay, and a global store that native lacks.
+**Working memory for your AI agent, not a second brain for you.** Hypomnema decides what Claude Code knows when a session or a subagent starts: the project's current state, the rules you gave it, the mistakes it already made. It is a governance and ranking layer over Claude Code's native file memory — a Go engine (`memoryctl`) + 9 thin shims. No cloud, no embeddings, no vault.
 
 > **Status:** v3.0.0; native-primary. Requires Claude Code ≥ v2.1.59 (native file memory). v1.x stays on its tag for older Claude Code installs — see [MIGRATION.md](docs/MIGRATION.md) for the v1.x → v2.x upgrade path.
 >
@@ -12,26 +12,37 @@
 >
 > _Not affiliated with or endorsed by Anthropic. Hypomnema is an independent project that integrates with Claude Code's public hook API._
 
+## Who reads this memory
+
+Not you. Hypomnema is not another markdown "second brain" — no Obsidian vault, no backlinks graph, no daily notes, nothing to browse or curate. Every fact is written for one reader: the agent, at the moment it starts work.
+
+- **The agent writes it.** Claude records a bug it should not repeat, an approach that worked, a rule you gave it. You can open, edit or delete any file, but you are not expected to maintain a knowledge base.
+- **The agent reads it.** A fresh session starts with the project's current state, its pinned card and your rules for it; a subagent gets only the facts its task names; everything else is listed in an index the agent reads when a description fits. That last part describes the recommended pull-only mode (`HYPOMNEMA_PROMPT_INJECT=off` plus an `@~/.claude/memory-global/MEMORY.md` import in your user CLAUDE.md — see [Setup](#recommended-pull-only-mode)); by default UserPromptSubmit still pushes a gated top-8 on every prompt.
+- **Success is measured on the agent.** A fact counts as useful only when it changed what Claude said, did or decided — Claude marks that with a hidden citation. How many notes are stored, or how they look to a human, is not a goal.
+- **Priorities, in order:** what reaches the agent's context is accurate → it is fast → it makes the agent more capable → anything a human sees. Human-facing features are dropped when they cost injection quality.
+
+The human side is a control panel, not a reading app: `/memboard` shows what the agent got and lets you hide a fact, show it less, or ask Claude to rewrite it.
+
 ## What it looks like
 
-When you open a new Claude Code session in a project, hypomnema injects a `# Memory Context` block before the conversation starts:
+When you open a new Claude Code session in a project, hypomnema injects a `# Memory Context` block before the conversation starts — the session's fixed core: where the work stopped, the project's pinned card, and the rules you gave the agent in this project:
 
 ```markdown
 # Memory Context
 When a fact below changes what you say, do, or decide, wrap that sentence in <cc-memory filenames="FILE">…</cc-memory> (the tag is hidden from the user).
 
-## sqlalchemy-metadata-reserved-name — sqlalchemy-metadata-reserved-name.md (mistake, 2026-03-02)
-Root cause: `metadata_` mapped to column "metadata" collides with `Base.metadata`
-Prevention: Check SQLAlchemy reserved attribute names before mapping
+## continuity — continuity.md (continuity, 2026-11-24)
+Doing: migrate the billing webhooks to the v2 API. Status: 3 of 5 handlers ported, tests green.
+Next: port refund + dispute handlers; staging run before merge.
 
-## code-approach — code-approach.md (feedback, 2026-02-14)
-Parameterized queries only. No hardcoded secrets. No debug logging in committed code.
+## billing-service — billing-service.md (project, 2026-09-02)
+Repo layout, how to run the stack locally, deploy is via PR to main only, never push to prod directly.
 
-## verification-before-done — verification-before-done.md (strategy, 2026-01-20)
-Don't claim "done" before running a minimum verification set.
+## real-db-in-tests — real-db-in-tests.md (feedback, 2026-02-14)
+Integration tests must hit a real database, not a mock. Why: a mocked test passed while the migration failed.
 ```
 
-Claude reads it as part of its context — no RAG query, no vector database, just a markdown block prepended by the hook. The file name in each header is what a citation names: when a fact actually changes what Claude says or does, it wraps that sentence in `<cc-memory filenames="sqlalchemy-metadata-reserved-name.md">…</cc-memory>` — hidden from the user, read by `close` as the honest usefulness signal. When Claude hits a new bug worth remembering, it writes a native memory file and the next session injects it automatically. Memory also survives context compaction and `/clear`: hypomnema re-ranks — on compaction, against the compaction summary itself — and re-injects whatever lands in the top-8 right after, so a compacted session doesn't wake up having forgotten everything it already knew. A fact that misses that post-compaction top-8 is dropped from the model's *current* context, so a later prompt in the same session can offer it again — dedup now tracks what's actually still visible, not just what was ever shown.
+Claude reads it as part of its context — no RAG query, no vector database, just a markdown block prepended by the hook. Everything else stays out of the way: in pull-only mode (recommended, [Setup](#recommended-pull-only-mode)) the agent sees the store's `MEMORY.md` index and reads a fact when its description fits the task — by default each prompt still gets a gated ranked push; a subagent gets only the facts its own task names. The file name in each header is what a citation names: when a fact actually changes what Claude says or does, it wraps that sentence in `<cc-memory filenames="real-db-in-tests.md">…</cc-memory>` — hidden from the user, read by `close` as the honest usefulness signal. When Claude hits a new bug worth remembering, it writes a native memory file; the next time a task names that bug, the agent finds it. The core comes back after `/clear` and compaction — the core only: the compaction summary already carries the task — so a compacted session doesn't wake up having forgotten where it was.
 
 ## What hypomnema adds on top of native
 
@@ -41,9 +52,9 @@ Hypomnema adds:
 
 | Gap in native | What hypomnema provides |
 |---|---|
-| Native injects only an index, not ranked content | `memoryctl inject` ranks native facts by relevance (keyword overlap + ref_count + recency + effectiveness) and injects the top-K via `additionalContext` — not just a table of contents |
-| Subagents start with a blank context | `SubagentStart` ranks the store against the subagent's own launch task (or a fallback query) and injects its own top-5, under a key that keeps its citations separate from the parent session |
-| No per-session effectiveness signal | WAL captures `<cc-memory>` citations (`cite-useful`/`cite-silent`) per session; effectiveness feeds back into ranking |
+| Native injects only an index, not ranked content | `memoryctl inject` ranks native facts by relevance (keyword overlap + recency + project boost) and injects the top-K via `additionalContext` — not just a table of contents |
+| Subagents start with a blank context | `SubagentStart` injects only the facts the subagent's own launch task names (top-5; nothing without a task), under a key that keeps its citations separate from the parent session |
+| No per-session effectiveness signal | WAL captures `<cc-memory>` citations (`cite-useful`/`cite-silent`) per session; effectiveness is tracked as a diagnostic |
 | No decay / lifecycle | `memoryctl close` down-ranks stale facts in the sidecar; nothing is deleted from disk |
 | No secrets gate | `memoryctl guard` (PreToolUse:Write\|Edit) blocks credential patterns before they land in a memory file |
 | No global store | Native memory is per-project only; hypomnema owns `~/.claude/memory-global/` for facts that travel across every project (language rules, universal debugging patterns) |
@@ -87,14 +98,14 @@ size. See [`docs/measurements/2026-05-29-v2-ranker-ab.md`](docs/measurements/202
 
 | Event (matcher) | Shim | What memoryctl does |
 |---|---|---|
-| `SessionStart` | `session-start.sh` | Detect project + git context + keywords → rank native facts → inject top-K via `additionalContext` |
+| `SessionStart` | `session-start.sh` | Detect project → inject the fixed core (freshest continuity, pinned facts, project feedback) via `additionalContext` — after `/clear` and compaction too |
 | `UserPromptSubmit` | `user-prompt-submit.sh` | Re-rank with prompt tokens added → inject anything not yet in session |
 | `PreToolUse:Write\|Edit` | `pre-tool-write.sh` | `guard`: secrets scan on memory-path writes → exit 2 on a credential pattern |
 | `PreToolUse:Bash` | `pre-tool-bash.sh` | `guard-bash`: block the model's own `memoryctl pin` / `unpin` / `mark` (only `mark <slug> done` passes) — those are `/memboard` panel actions |
 | `PreToolUse:Skill` | `skill-active.sh` | Record which skill just activated (marker for the capture path) |
 | `PostToolUse:Skill` | `skill-learnings-inject.sh` | `skill-inject`: surface accumulated learnings for the activated skill |
 | `Stop` | `session-stop.sh` | `close`: classify the injected set by `<cc-memory>` citation → WAL → recompute effectiveness/decay → regenerate `MEMORY.md` |
-| `SubagentStart` | `subagent-start.sh` | Rank against the subagent's own launch task (fallback: the parent's recent prompts) → inject its own top-5 |
+| `SubagentStart` | `subagent-start.sh` | Facts the subagent's own launch task names (head gate) → inject its own top-5; no task → nothing |
 | `SubagentStop` | `subagent-stop.sh` | `close --subagent`: classify the subagent's own citations (including its hand-back report) under its own key |
 
 `guard-bash` stops accidental or injected *CLI* calls — say, a prompt
@@ -110,26 +121,23 @@ fight the harness for the index channel.
 
 ## How injection ranks files
 
-A single relevance ranker (merged from the two v1 pipelines) scores every candidate:
+**SessionStart injects a fixed core, not a ranking:** the project's freshest `continuity`, then `status: pinned` facts (project-local, then global), then project-local `type: feedback` — freshest first within each group. Facts that are stale, hidden, or marked *less* in `/memboard` are left out. Core facts that do not fit the 8 KB budget are listed as one-line pointers (name, absolute path, description) that the model can Read; the Memory-queue line's room is reserved first. There is no ranked fill: memory beyond the core arrives by pull (the `MEMORY.md` index, `memoryctl recall`). `/clear` and compaction inject the core only, too: the compaction summary carries the task state, and gating the summary on fact heads was measured to pass a median of 187 facts on real summaries — no selection at all.
+
+Everywhere else, a single relevance ranker (merged from the two v1 pipelines) scores every candidate:
 
 ```
 score = 3.0 × overlap(keywords, file keywords+name+description+body)
-      + 1.0 × log10(1 + ref_count) × effGate   # popularity, GATED by proven usefulness
       + 2.0 × recency                  # 1/(1 + days/30) from last USEFUL citation (cite-useful; fallback created)
-      + 2.0 × effectiveness            # Bayesian (pos+1)/(pos+0.25·neg+2) (silent counts ¼) — neutral 0.5 until signal lands
       + 1.0 × project boost            # project-local facts beat global ones on ties
-
-effGate = clamp(2 × effectiveness, 0, 1)       # 1.0 at the prior 0.5; only damps unearned volume
 ```
+
+`ref_count` and `effectiveness` are not ranking inputs: injection volume feeds the first and `cite-silent` (a consequence of being injected) feeds the second, so using them as rank signals was circular. They stay computed and visible as diagnostics in `/memboard`, `memoryctl stats`, `doctor` and `sidecar show`. `memoryctl ab` replay therefore measures the recency of usefulness only.
 
 Recency tracks the model's use, not the ranker's own output: it decays from the latest `cite-useful` date (sidecar `last_useful`), never from `last_injected`, so a fact can't refresh its own recency merely by being injected.
 
-Since v2.4.0 the `ref_count` reward is gated by `effGate`, so a fact injected
-hundreds of times that rarely proved useful can't coast on volume — the gate is
-neutral at the Bayesian prior and only *damps* unearned popularity, never
-amplifies. The blend is additive and zero-safe: a brand-new fact with `ref_count=0` and no outcome history is still injectable — it scores on overlap, its frontmatter `created` recency and the neutral prior, not zero. Status filter: `active` and `pinned` only; `stale` is skipped (down-ranked in sidecar, still on disk). Scope filter: only the current project's facts plus the global store inject — other projects' rows never leak in. The result is a flat top-8, capped at 2.5KB per body and 8KB total (Claude Code diverts larger hook payloads to a file the model never sees inline), and each fact injects at most once per context (again after a compaction/`/clear` wipes it).
+The blend is additive and zero-safe: a brand-new fact with `ref_count=0` and no outcome history is still injectable — it scores on overlap and its frontmatter `created` recency, not zero. Status filter: `active`, `pinned` and `candidate`; `stale` is skipped (down-ranked in sidecar, still on disk; `recall` still serves it). Scope filter: only the current project's facts plus the global store inject — other projects' rows never leak in. The result is a flat top-8, capped at 2.5KB per body and 8KB total (Claude Code diverts larger hook payloads to a file the model never sees inline), and each fact injects at most once per context (again after a compaction/`/clear` wipes it).
 
-Keyword overlap is the primary signal. Keywords come from git context (branch name, changed filenames, recent commit messages, CWD basename — skipped for the home directory) plus prompt tokens, on both events. On UserPromptSubmit a fact injects only if a prompt term is in its name/description/keywords/domains, or it shares at least two terms with the prompt; SessionStart is not gated. `HYPOMNEMA_PROMPT_INJECT=off` turns per-prompt injection off entirely (pull-only mode: the `MEMORY.md` index plus a global index imported from CLAUDE.md, and the model's own reads). The old substring-trigger mechanism is gone; the ranker treats all tokens as relevance signal, not imperative triggers.
+Keyword overlap is the primary signal. Keywords come from git context (branch name, changed filenames, recent commit messages, CWD basename — skipped for the home directory) plus prompt tokens. On UserPromptSubmit a fact injects only if a prompt term is in its name/description/keywords/domains, or it shares at least two terms with the prompt. `HYPOMNEMA_PROMPT_INJECT=off` turns per-prompt injection off entirely (pull-only mode: the `MEMORY.md` index plus a global index imported from CLAUDE.md, and the model's own reads). The old substring-trigger mechanism is gone; the ranker treats all tokens as relevance signal, not imperative triggers.
 
 You do NOT need to set ranks manually. Write good frontmatter (`keywords`, `domains`), let `memoryctl inject` handle the rest.
 
@@ -137,7 +145,7 @@ Injection is push: the ranker sees the user's prompt, not what the agent
 hits mid-task. `memoryctl recall` is the pull counterpart — an explicit query
 against the same ranker. A recalled fact counts as delivered: it joins the
 session's injected set (the close hook classifies it useful/silent), bumps
-ref_count/recency, and — if it had gone stale — comes back to life.
+its ref_count and staleness clock, and — if it had gone stale — comes back to life.
 
 ## What gets remembered
 
@@ -192,8 +200,9 @@ This gets injected when relevant. After the fifth time, Claude stops doing it.
 | **`CLAUDE.md` files** (Anthropic native) | Static context injected verbatim, in-repo or `~/.claude/CLAUDE.md` | Hypomnema is dynamic: ranking, decay, per-session signal, WAL feedback loop. The two are complementary. |
 | **`mem0`** (Python, hosted or self-host) | Vector-embedding memory with a REST API | No embeddings, no service to run — native files are the store. Trade-off: semantic recall beyond keyword overlap is weaker; no multi-language client. |
 | **ChatGPT / Cursor memory** | Vendor-managed, opaque, cloud-stored | Local files you can `cat`/`grep`/`git diff`/`rm`. Trade-off: Claude Code specific. |
+| **Obsidian / PKM "second brain" vaults** (incl. MCP bridges to them) | Notes a human writes, links and browses; an agent can be pointed at the vault | Different reader. Hypomnema stores what the agent needs to act — state, rules, mistakes — and decides what enters its context; it has no graph, backlinks or reading UI, and does not try to be your notebook. |
 
-Sweet spot: daily-driver Claude Code users (v2.1.59+) who want visible, editable, diffable memory with effectiveness feedback. Not a fit for shared/team memory or users working across many AI tools.
+Sweet spot: daily-driver Claude Code users (v2.1.59+) who want their agent to start each session knowing what it should, with memory that stays visible, editable and diffable. Not a fit for personal note-taking, shared/team memory, or users working across many AI tools.
 
 ## Install
 
@@ -257,6 +266,27 @@ v1 store.)
 - Before ending session → update the project's continuity file in its native store
 ```
 
+### Recommended: pull-only mode
+
+Turn off the per-prompt push and let the agent read the indexes — Claude
+Code's own design, and the mode the rest of this README describes. In
+`~/.claude/settings.json`:
+
+```json
+{ "env": { "HYPOMNEMA_PROMPT_INJECT": "off" } }
+```
+
+and in your user `~/.claude/CLAUDE.md`:
+
+```markdown
+@~/.claude/memory-global/MEMORY.md
+```
+
+The harness already loads each project's `MEMORY.md`; the import adds the
+global store's index (memoryctl regenerates it on every Stop). SessionStart
+(the core) and SubagentStart are unchanged. Without the variable,
+UserPromptSubmit pushes a gated, ranked top-8 on every prompt — the default.
+
 ### Restart Claude Code
 
 The shims activate on next session start.
@@ -319,7 +349,7 @@ The same data is available as JSON: `memoryctl stats --json --scope session|proj
 | strategies | 90 days |
 | knowledge | 90 days |
 | decisions | 90 days |
-| feedback | 45 days |
+| feedback | never for project-local (SessionStart core); 45 days for global |
 | notes | 30 days |
 | project | 90 days |
 | continuity | never for a project's freshest one; 30 days for older ones |
@@ -364,11 +394,11 @@ precision_class: ambient  # going uncited carries no silence penalty (use for la
 ---
 ```
 
-`ref_count` and `effectiveness` are sidecar-managed — do not set them by hand. `memoryctl inject` reads them from the sidecar; `memoryctl close` updates them from WAL.
+`ref_count` and `effectiveness` are sidecar-managed — do not set them by hand. `memoryctl close` updates them from WAL; they are diagnostics (`/memboard`, `stats`, `doctor`), and the ranker does not read them.
 
 ## Subagents
 
-Subagents get their own ranked memory at `SubagentStart`: `memoryctl` builds a query from the agent's own launch task (its `Agent`/`Task` call — description + prompt — read back out of the parent transcript) or, failing that, the parent's recent prompts, and injects its own top-5 (5 KB cap) before the subagent's first turn. Lookup-only agents (`fork`, `Explore`, `claude-code-guide`, `statusline-setup` by default; override with `HYPOMNEMA_SUBAGENT_SKIP`) are skipped — memory would be noise there; set `HYPOMNEMA_SUBAGENT_SKIP=*` (in `settings.json`'s `env` block, so both subagent hooks inherit it) to opt every subagent out. A subagent's citations are classified at `SubagentStop` under its own key (`<session_id>:<agent_id>`), separate from the parent session, so its usefulness signal never mixes with the parent's. There is still no auto-generated context file (`_agent_context.md` was a v1 artefact) — pass inline only what is specific to the task beyond what the ranker already covers.
+Subagents get memory at `SubagentStart` only when their own launch task names it: `memoryctl` reads the agent's `Agent`/`Task` call out of the parent transcript and injects a fact only if its head (name, description, keywords, domains) shares at least two distinct terms with the call's `description` — the task statement, not the long prompt — one of them in its name or keywords; paths, project and home path words, agent-type words, digits and corpus-common terms do not count. Gated facts are ranked to its own top-5 (5 KB cap) before the first turn. A subagent with no call of its own gets nothing. Lookup-only agents (`fork`, `Explore`, `claude-code-guide`, `statusline-setup` by default; override with `HYPOMNEMA_SUBAGENT_SKIP`) are skipped — memory would be noise there; set `HYPOMNEMA_SUBAGENT_SKIP=*` (in `settings.json`'s `env` block, so both subagent hooks inherit it) to opt every subagent out. A subagent's citations are classified at `SubagentStop` under its own key (`<session_id>:<agent_id>`), separate from the parent session, so its usefulness signal never mixes with the parent's. There is still no auto-generated context file (`_agent_context.md` was a v1 artefact) — pass inline what the subagent needs; it receives only facts its brief names.
 
 ## Design decisions
 
@@ -382,7 +412,7 @@ Subagents get their own ranked memory at `SubagentStart`: `memoryctl` builds a q
 
 **Why a global store?** Native memory is per-project only. Rules like "always respond in Russian" or "list 2-3 root causes before the first fix" apply everywhere. `~/.claude/memory-global/` is hypomnema-owned, injected alongside project-local facts, with the same ranking pipeline.
 
-**Why spaced repetition (ref_count + effectiveness)?** Raw frequency is noisy (a record injected 50 times during a benchmark run isn't 50× more useful). Effectiveness (Bayesian `(pos+1)/(pos+0.25·neg+2)`; cite-silent counts ¼ — the model under-cites, so silence is weak evidence) rewards records that actually help and down-ranks those that don't. The neutral prior means a new fact starts injectable, not suppressed.
+**Why are ref_count and effectiveness not in the score?** Raw frequency is noisy (a record injected 50 times during a benchmark run isn't 50× more useful) and both signals are circular: being injected raises `ref_count` and produces `cite-silent`. Effectiveness (Bayesian `(pos+1)/(pos+0.25·neg+2)`; cite-silent counts ¼) is kept as a diagnostic; only recency of the last *useful* citation feeds the rank.
 
 **Why not multiple pipelines?** v1 had two: a composite-score SessionStart pipeline and a substring-trigger UserPromptSubmit pipeline. They solved similar problems with different mechanics, creating maintenance overhead and edge-case conflicts. v2 merges them: one ranker, all tokens (git context + prompt) as relevance signal. The old negation-window mechanism disappears.
 
@@ -404,7 +434,7 @@ Yes — native memory files are plain markdown in `~/.claude/projects/<slug>/mem
 `inject` runs well under 1s warm on a ~200-file corpus. Shims are ~10 lines of bash — they're not the bottleneck. `close` is the heavier operation (classification + sidecar reproject + index/profile regen) and runs on every Stop, off the prompt hot path.
 
 **What happens if the sidecar is missing or corrupted?**
-`memoryctl` rebuilds it from WAL + native frontmatter scan. During rebuild, the ranker runs in degraded mode (overlap over native files only; ref_count/recency/effectiveness neutral). Injection still happens — degraded, not absent.
+`memoryctl` rebuilds it from WAL + native frontmatter scan. During rebuild, the ranker runs in degraded mode (overlap over native files only; recency neutral). Injection still happens — degraded, not absent.
 
 ## Contributing
 

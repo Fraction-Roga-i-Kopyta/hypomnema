@@ -30,6 +30,17 @@ doctor points at a specific check."
 
 ## SessionStart injects nothing
 
+An empty SessionStart is often normal. SessionStart does not rank: it
+injects only the fixed core — the project's freshest `continuity`,
+`status: pinned` facts (project-local, then global) and project-local
+`type: feedback` — after `/clear` and compaction too. A project with none of
+those (or whose core facts are stale, hidden or marked *less* in
+`/memboard`), and no open `/memboard` task, gets no `# Memory Context` block
+by design; everything else is read from the `MEMORY.md` index or `recall`.
+Write a `continuity.md`, pin a project card, or record a project feedback
+rule if the session should start with something. If it should already have
+a core:
+
 1. **Run `memoryctl doctor`.** `settings_hooks_registered` and
    `shim_files_present` FAIL tell you the hooks aren't wired — re-run
    `./install.sh` and restart Claude Code.
@@ -41,8 +52,8 @@ doctor points at a specific check."
    ls ~/.claude/projects/"$(echo "$PWD" | tr / -)"/memory/       # this project's facts
    ```
 
-   `corpus_counts` in doctor reports the same thing. An empty corpus has
-   nothing to rank — write a fact or `memoryctl recall` to seed usage.
+   `corpus_counts` in doctor reports the same thing. Only continuity,
+   pinned and project-local feedback facts count for SessionStart.
 3. **Run the shim manually** to see its output:
 
    ```bash
@@ -69,12 +80,22 @@ doctor points at a specific check."
    `settings.json`'s top-level `env` block so both the `SubagentStart` and
    `SubagentStop` hooks inherit it — deleting the hook entries themselves
    instead is undone by the next `./install.sh`.
-2. **A resumed agent getting nothing is by design**, not a bug: the harness
+2. **Most subagents get nothing, by design.** A fact injects only when the
+   Agent call's `description` (the 3–5 word task label, not the prompt)
+   names it: at least two distinct description terms in the fact's name,
+   description, keywords or domains, one of them in the name or keywords.
+   Path-like tokens, the project root's and `$HOME`'s path words, agent-type
+   words, numbers and corpus-common head terms do not count. Measured on 362
+   real launches, 36 % of subagents pass no fact. A subagent with no Agent
+   call of its own (see the next section) gets nothing at all. Pass the
+   subagent what it needs inline, or give its facts sharper names and
+   keywords.
+3. **A resumed agent getting nothing is by design**, not a bug: the harness
    never adds a second `SubagentStart` context to a transcript that already
    carries one, and `memoryctl` mirrors that — a key whose
    `rendered-<key>.list` already exists is a no-op on every later start for
    that key.
-3. **Run `memoryctl doctor`.** A missing or misrouted `SubagentStart`/
+4. **Run `memoryctl doctor`.** A missing or misrouted `SubagentStart`/
    `SubagentStop` registration shows up in `settings_hooks_registered` with
    the same wording as any other missing hook, e.g.:
 
@@ -92,7 +113,7 @@ doctor points at a specific check."
    memory either way: `make build` then re-run `./install.sh` (it refuses to
    proceed against a `bin/memoryctl` that doesn't understand `close
    --subagent`).
-4. **Claude Code older than the verified version (2.1.284) may not deliver
+5. **Claude Code older than the verified version (2.1.284) may not deliver
    `additionalContext` on `SubagentStart`**, even though the hook fires and
    `memoryctl` still writes its `inject` WAL row — the subagent's context
    never actually receives the text, but `ref_count` keeps climbing as if it
@@ -100,17 +121,17 @@ doctor points at a specific check."
    `HYPOMNEMA_SUBAGENT_SKIP=*` in `settings.json`'s top-level `env` block
    (item 1 above) rather than deleting the `SubagentStart` registration —
    deleting it is undone by the next `./install.sh`.
-5. **Nested agents (a subagent launching its own subagent) and a launching
-   call this hook cannot find at all** both fall back to ranking against the
-   parent's 3 most recent prompts instead of a specific task — expected, not
-   a bug; the subagent still gets memory, just against a less specific
-   query. This fallback fires when the agent has no launch acknowledgement
-   and no unanswered, unclaimed call of its type is left in the transcript
-   tail — every such call already answered or taken by a sibling, or none
-   there at all (a nested agent's launching call lives in its *parent
-   subagent's* transcript, not the top-level one this hook reads) —
-   not merely because the acknowledgement hasn't landed yet; see the next
-   section for that case.
+6. **Nested agents (a subagent launching its own subagent) and a launching
+   call this hook cannot find at all** get no memory — expected, not a bug.
+   Without its own Agent call there is no task to name a fact, and the
+   parent's recent prompts are the parent's state, so there is no fallback
+   to them. This happens when the agent has no launch acknowledgement and no
+   unanswered, unclaimed call of its type is left in the transcript tail —
+   every such call already answered or taken by a sibling, or none there at
+   all (a nested agent's launching call lives in its *parent subagent's*
+   transcript, not the top-level one this hook reads) — not merely because
+   the acknowledgement hasn't landed yet; see the next section for that
+   case.
 
 ## A subagent got memory for a sibling's task
 
@@ -325,8 +346,9 @@ session, just keyed to the subagent.
 By design. Ambient rules shape behaviour continuously (tone, language
 preference, security baseline) without producing citation events, so going
 uncited carries no silence penalty for them — their effectiveness stays at or
-above the neutral prior, and a useful citation still raises it. If the rule
-*should* compete like any other fact, remove `precision_class: ambient`.
+above the neutral prior, and a useful citation still raises it (effectiveness
+is a diagnostic, not a ranking input). If the rule's silence *should* count
+like any other fact's, remove `precision_class: ambient`.
 Either way usefulness comes only from the model wrapping the sentence in
 `<cc-memory filenames="…">`; an `evidence:` list is ignored.
 

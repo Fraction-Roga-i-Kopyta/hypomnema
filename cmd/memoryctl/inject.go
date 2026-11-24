@@ -12,18 +12,16 @@ import (
 	"unicode"
 
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/inject"
-	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/jsonl"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/native"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/pathutil"
 	"github.com/Fraction-Roga-i-Kopyta/hypomnema/internal/wal"
 )
 
 type hookStdin struct {
-	SessionID      string `json:"session_id"`
-	CWD            string `json:"cwd"`
-	Prompt         string `json:"prompt"`
-	Source         string `json:"source"`
-	TranscriptPath string `json:"transcript_path"`
+	SessionID string `json:"session_id"`
+	CWD       string `json:"cwd"`
+	Prompt    string `json:"prompt"`
+	Source    string `json:"source"`
 }
 
 // skipPromptSource reports machine-injected turns (task notifications, peer
@@ -55,6 +53,21 @@ func promptInjectOff() bool {
 // /clear dropped them), so render-dedup must not suppress them.
 func contextWiped(event, src string) bool {
 	return event == "SessionStart" && (src == "compact" || src == "clear")
+}
+
+// failSafe runs f and reports whether it panicked, swallowing the panic.
+// It wraps the prompt-path hook entry points (runInject, and through it
+// runSubagentStart): Go exits 2 on an unrecovered panic, the shims exec
+// memoryctl, and exit 2 on UserPromptSubmit blocks the user's prompt (I5).
+// The caller exits 0 with no output instead.
+func failSafe(f func()) (panicked bool) {
+	defer func() {
+		if recover() != nil {
+			panicked = true
+		}
+	}()
+	f()
+	return false
 }
 
 func runInject(args []string) {
@@ -108,20 +121,18 @@ func runInject(args []string) {
 	// but a later compaction/clear render dropped is no longer in context
 	// and must be re-offerable. Sessions that predate the rendered list
 	// (readRenderedList ok=false) fall back to the old union dedup.
-	renderDedup, prompt := already, in.Prompt
+	renderDedup := already
 	if rl, ok := readRenderedList(in.SessionID); ok {
 		renderDedup = rl
 	}
 	if contextWiped(event, in.Source) {
+		// SessionStart injects the core only, after compaction too: the
+		// summary carries the task state, anything else is pulled.
 		renderDedup = nil
-		if in.Source == "compact" {
-			if s, ok := jsonl.LastCompactSummary(in.TranscriptPath); ok {
-				prompt = inject.CompactQuery(s) // bounded: focus sections, top-40 terms
-			}
-		}
 	}
 	res, err := inject.Run(inject.Input{
-		Event: event, SessionID: in.SessionID, CWD: in.CWD, Prompt: prompt,
+		Event: event, Source: in.Source,
+		SessionID: in.SessionID, CWD: in.CWD, Prompt: in.Prompt,
 		ClaudeHome: claudeDir(), ConfigDir: configDir(), MemoryDir: memoryDir(), Today: today(), MaxK: 8,
 		Store:           r.Store,
 		AlreadyInjected: renderDedup,

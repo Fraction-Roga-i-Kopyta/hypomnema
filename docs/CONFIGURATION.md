@@ -4,8 +4,11 @@ Hypomnema v2 has **no configuration file**. There is no `.config.sh`, no
 `projects.json` to edit, no per-type `decay_rate:` knob. Everything the
 system reads at runtime is either an **environment variable** or a small
 on-disk allow-list (`.secretsignore`). Injection itself is not tunable:
-a single ranker produces one **top-8** result set capped at **2.5 KB per
-body / 8 KB total**, and that budget is fixed in the binary.
+SessionStart delivers a fixed core (freshest continuity, pinned facts,
+project feedback), UserPromptSubmit a ranked **top-8** and a subagent a gated
+top-5 — capped at **2.5 KB per body / 8 KB total** (5 KB for a subagent),
+fixed in the binary. The two switches that exist turn delivery paths off
+(`HYPOMNEMA_PROMPT_INJECT`, `HYPOMNEMA_SUBAGENT_SKIP`, §2).
 
 This document lists every knob that actually exists and where it lives.
 
@@ -74,6 +77,8 @@ out of the box. Set them only for non-standard installs, tests, or replay.
 | `HYPOMNEMA_TODAY` | wall clock | Freeze "today" as `YYYY-MM-DD` (decay windows, WAL cutoffs) for tests / replay. |
 | `HYPOMNEMA_NOW` | wall clock | Freeze `doctor`'s "now" as `YYYY-MM-DD HH:MM` when `HYPOMNEMA_TODAY` is unset. |
 | `HYPOMNEMA_ALLOW_SECRETS` | unset | Set to `1` to bypass the secrets gate for a single invocation (see §4). |
+| `HYPOMNEMA_PROMPT_INJECT` | on | `off` makes UserPromptSubmit inject nothing (pull-only mode, recommended): the harness-loaded `MEMORY.md` index plus `@~/.claude/memory-global/MEMORY.md` imported in the user CLAUDE.md carry the rest. SessionStart and SubagentStart are unchanged. Set it in `settings.json`'s `env` block. |
+| `HYPOMNEMA_SUBAGENT_SKIP` | `fork,Explore,claude-code-guide,statusline-setup` | Comma list of agent types that get no SubagentStart memory; set (even empty) it replaces the default; a `*` entry skips every agent type. |
 
 ## 3. Decay thresholds
 
@@ -104,6 +109,9 @@ Rules:
   when `created` is absent, to the date of Claude Code's `modified` stamp).
   A fact in active rotation never goes stale just because its file is old.
 - `status: pinned` files never decay.
+- Project-local `feedback` never decays: it is SessionStart core, a stale
+  fact is not core, and a core fact is refreshed only by being core. Global
+  feedback ages (45 days).
 - A project's **freshest** `continuity` fact — the later of `created` and
   `modified`; on a tie, the lexically greater filename — is the live "where
   we left off" marker: never decays, and it is the only continuity fact
@@ -139,8 +147,8 @@ path or replace the text with an obvious placeholder.
 
 These were tunable (or claimed to be) in v1 and are **gone** in v2:
 
-- **Injection caps** (`MAX_FILES`, `CAP_*`, per-type quotas). The ranker
-  emits a fixed top-8 / 8 KB budget; there is no `.config.sh`.
+- **Injection caps** (`MAX_FILES`, `CAP_*`, per-type quotas). The core,
+  the top-8 and the 8 KB budget are fixed; there is no `.config.sh`.
 - **`decay_rate:` frontmatter** and archive thresholds — decay is the single
   compiled table in §3.
 - **ADR review-triggers / `memoryctl decisions review`** — no such verb.

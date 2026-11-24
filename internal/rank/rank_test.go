@@ -1,7 +1,6 @@
 package rank
 
 import (
-	"math"
 	"testing"
 )
 
@@ -20,19 +19,6 @@ func TestRank_OverlapDominates(t *testing.T) {
 	got := Rank(q, []Candidate{b, a}, 0)
 	if len(got) != 2 || got[0].Slug != "a" {
 		t.Fatalf("higher overlap should rank first; got %v", slugs(got))
-	}
-}
-
-func TestRank_MonotonicInRefCountAndEffectiveness(t *testing.T) {
-	q := Query{Today: "2026-05-29"}
-	lo := base()
-	lo.Slug = "lo"
-	hi := base()
-	hi.Slug = "hi"
-	hi.RefCount = 100
-	got := Rank(q, []Candidate{lo, hi}, 0)
-	if got[0].Slug != "hi" {
-		t.Errorf("higher ref_count should rank first; got %v", slugs(got))
 	}
 }
 
@@ -118,7 +104,7 @@ func TestRank_CapK(t *testing.T) {
 	for i, n := range []int{1, 2, 3, 4, 5} {
 		c := base()
 		c.Slug = string(rune('a' + i))
-		c.RefCount = n
+		c.Overlap = n
 		cands = append(cands, c)
 	}
 	got := Rank(q, cands, 3)
@@ -126,7 +112,7 @@ func TestRank_CapK(t *testing.T) {
 		t.Fatalf("k=3 should cap to 3, got %d", len(got))
 	}
 	if got[0].Slug != "e" {
-		t.Errorf("expected highest-ref first; got %v", slugs(got))
+		t.Errorf("expected highest-overlap first; got %v", slugs(got))
 	}
 }
 
@@ -139,20 +125,6 @@ func TestRank_DeterministicTieBreak(t *testing.T) {
 	got := Rank(q, []Candidate{a, c}, 0)
 	if got[0].Slug != "a" {
 		t.Errorf("tie must break by slug asc; got %v", slugs(got))
-	}
-}
-
-func TestRank_MonotonicInEffectiveness(t *testing.T) {
-	q := Query{Today: "2026-05-29"}
-	lo := base()
-	lo.Slug = "lo"
-	lo.Effectiveness = 0.2
-	hi := base()
-	hi.Slug = "hi"
-	hi.Effectiveness = 0.9
-	got := Rank(q, []Candidate{lo, hi}, 0)
-	if got[0].Slug != "hi" {
-		t.Errorf("higher effectiveness should rank first; got %v", slugs(got))
 	}
 }
 
@@ -170,54 +142,26 @@ func TestRank_RecencyOrdering(t *testing.T) {
 	}
 }
 
-// Regression for the effectiveness gate: a heavily-injected fact that rarely
-// proved useful (low eff, high ref) must NOT out-rank a less-popular but
-// proven-useful fact at equal relevance. Pre-gate, popularity carried the
-// useless fact to the top (parallel-worktree eff 0.06 ref 572 beat
-// verification-before-done eff 0.53). This fails on the additive-only score.
-func TestRank_LowEffectivenessDampensPopularity(t *testing.T) {
-	q := Query{Today: "2026-06-28"}
-	useless := base()
-	useless.Slug = "useless"
-	useless.RefCount = 572
-	useless.Effectiveness = 0.06
-	useless.Overlap = 2
-	proven := base()
-	proven.Slug = "proven"
-	proven.RefCount = 10
-	proven.Effectiveness = 0.53
-	proven.Overlap = 2
-	got := Rank(q, []Candidate{useless, proven}, 0)
-	if got[0].Slug != "proven" {
-		t.Errorf("proven-useful fact must out-rank popular-but-useless at equal overlap; got %v", slugs(got))
+func TestRank_IgnoresEffectivenessAndRefCount(t *testing.T) {
+	base := Candidate{Status: "active", Overlap: 1, Created: "2026-11-01"}
+	hi, lo := base, base
+	hi.Slug, hi.Effectiveness, hi.RefCount = "a.md", 0.95, 900
+	lo.Slug, lo.Effectiveness, lo.RefCount = "b.md", 0.05, 0
+	got := Rank(Query{Today: "2026-11-24"}, []Candidate{lo, hi}, 0)
+	if got[0].Score != got[1].Score {
+		t.Fatalf("eff/ref must not change the score: %v vs %v", got[0].Score, got[1].Score)
+	}
+	if got[0].Slug != "a.md" {
+		t.Fatalf("tie-break by slug, got %s first", got[0].Slug)
 	}
 }
 
-// Cap guard: above the prior the ref reward saturates, so two facts that
-// differ only in (high) effectiveness differ by exactly the standalone
-// effectiveness term — the gate must never amplify popularity, or high-eff
-// facts would snowball on injection volume.
-func TestRank_EffGateNeverAmplifiesPopularity(t *testing.T) {
-	q := Query{Today: "2026-06-28"}
-	mk := func(slug string, eff float64) Candidate {
-		c := base()
-		c.Slug = slug
-		c.RefCount = 100
-		c.Effectiveness = eff
-		return c
-	}
-	got := Rank(q, []Candidate{mk("a", 0.75), mk("b", 1.0)}, 0)
-	var sa, sb float64
-	for _, sc := range got {
-		switch sc.Slug {
-		case "a":
-			sa = sc.Score
-		case "b":
-			sb = sc.Score
-		}
-	}
-	if gap, want := sb-sa, wEffective*(1.0-0.75); math.Abs(gap-want) > 1e-9 {
-		t.Errorf("above prior the score gap must be the standalone eff term only (%.3f); got %.3f", want, gap)
+func TestRank_ScoreIsOverlapRecencyProject(t *testing.T) {
+	c := Candidate{Slug: "x.md", Status: "active", Overlap: 2, Created: "2026-11-24",
+		Project: "p", Effectiveness: 0.5, RefCount: 9}
+	got := Rank(Query{Today: "2026-11-24", Project: "p"}, []Candidate{c}, 0)
+	if want := 3.0*2 + 2.0*1 + 1.0; got[0].Score != want { // old formula: 11
+		t.Fatalf("score = %v, want %v", got[0].Score, want)
 	}
 }
 

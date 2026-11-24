@@ -5,6 +5,41 @@ import (
 	"testing"
 )
 
+// Project-local feedback is SessionStart core: it is delivered only through
+// the core, and a stale fact is not core — staling it by injection age
+// would drop it permanently. It is exempt like pinned and the freshest
+// continuity. Global feedback is not core and still decays.
+func TestMarkStale_ProjectFeedbackExempt(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), ".sidecar.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	mustUpsert(t, s, Record{Slug: "rule.md", Project: "-work-proj", Type: "feedback", Created: "2025-01-01", Status: "active"})
+	mustUpsert(t, s, Record{Slug: "rule.md", Project: "global", Type: "feedback", Created: "2025-01-01", Status: "active"})
+	mustUpsert(t, s, Record{Slug: "kn.md", Project: "-work-proj", Type: "knowledge", Created: "2025-01-01", Status: "active"})
+	if _, err := s.MarkStale("2026-11-24"); err != nil {
+		t.Fatal(err)
+	}
+	want := map[[2]string]string{
+		{"rule.md", "-work-proj"}: "active",
+		{"rule.md", "global"}:     "stale",
+		{"kn.md", "-work-proj"}:   "stale",
+	}
+	recs, err := s.All()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != len(want) {
+		t.Fatalf("want %d rows, got %d", len(want), len(recs))
+	}
+	for _, r := range recs {
+		if w := want[[2]string{r.Slug, r.Project}]; r.Status != w {
+			t.Errorf("%s@%s status = %q, want %q", r.Slug, r.Project, r.Status, w)
+		}
+	}
+}
+
 func TestMarkStale(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), ".sidecar.db"))
 	if err != nil {

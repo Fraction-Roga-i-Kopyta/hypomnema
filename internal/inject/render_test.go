@@ -15,7 +15,7 @@ func TestRender_CapsLongBodies(t *testing.T) {
 	big := strings.Repeat("Z", 5000)
 	ranked := []rank.Scored{{Candidate: rank.Candidate{Slug: "big.md"}}}
 	bySlug := map[string]native.MemFile{
-		"big.md": {Slug: "big.md", Name: "Big", Body: big},
+		native.QKey("", "big.md"): {Slug: "big.md", Name: "Big", Body: big},
 	}
 
 	out, _ := render(ranked, bySlug, CiteInstruction, 500, 0)
@@ -37,7 +37,7 @@ func TestRender_MissingBySlugStillCarriesFileName(t *testing.T) {
 
 	out, injected := render(ranked, bySlug, CiteInstruction, 500, 0)
 
-	if len(injected) != 1 || injected[0] != "ghost.md" {
+	if len(injected) != 1 || injected[0].Slug != "ghost.md" {
 		t.Fatalf("ghost.md should still render: %v", injected)
 	}
 	if !strings.Contains(out, "— ghost.md (") {
@@ -49,7 +49,7 @@ func TestRender_MissingBySlugStillCarriesFileName(t *testing.T) {
 func TestRender_ShortBodyVerbatim(t *testing.T) {
 	ranked := []rank.Scored{{Candidate: rank.Candidate{Slug: "x.md"}}}
 	bySlug := map[string]native.MemFile{
-		"x.md": {Slug: "x.md", Name: "X", Body: "short body"},
+		native.QKey("", "x.md"): {Slug: "x.md", Name: "X", Body: "short body"},
 	}
 
 	out, _ := render(ranked, bySlug, CiteInstruction, 500, 0)

@@ -81,8 +81,8 @@ Every memory file is Markdown opening with a YAML frontmatter block delimited by
 holds it* — files in `~/.claude/projects/<slug>/memory/` belong to `<slug>`;
 files in `~/.claude/memory-global/` are global. Do not write a `project:` key.
 
-**`ref_count` and `effectiveness` are sidecar-managed.** `memoryctl` reads and
-updates them from the WAL. Never set them in frontmatter — they are not
+**`ref_count` and `effectiveness` are sidecar-managed.** `memoryctl close`
+updates them from the WAL; they are diagnostics, not ranking inputs. Never set them in frontmatter — they are not
 frontmatter fields in v2.
 
 **Field ordering** is not significant. Implementations SHOULD preserve order on
@@ -91,11 +91,17 @@ round-trip but MUST accept any order.
 ### 3.1 `status: pinned`
 
 `pinned` guarantees the fact is **never decayed** to `stale` by the close hook
-regardless of age, and that `pinned` outranks `active` on ranking ties. It does
-NOT reserve an injection slot — the top-8 flex pool is allocated by relevance
-score, so a pinned fact with weak keyword/effectiveness signal can still lose
-its slot. A project's freshest `continuity` fact also never decays, pinned or
-not (§4); every other type ages, `project` included.
+regardless of age, and makes it part of the **SessionStart core**: every
+session start (after `/clear` and compaction too) delivers pinned facts —
+project-local, then global — after the project's freshest `continuity` and
+before project-local `feedback`, regardless of rank (invariant I6). A core
+fact whose body does not fit the 8 KB budget is listed as a one-line pointer
+instead. Hidden or *less*-marked in `/memboard`, it leaves the core. On every
+other event (UserPromptSubmit, SubagentStart, `recall`) `pinned` reserves
+nothing: it competes on score like `active`, ties broken by slug. A project's
+freshest `continuity` fact also never decays, pinned or not (§4), nor does
+project-local `feedback` (SessionStart core); every other type ages,
+`project` and global `feedback` included.
 
 ### 3.2 Tolerated syntax (parser MUST accept)
 
@@ -233,7 +239,7 @@ Written by the v2 hooks / verbs:
 `cite-useful`/`cite-silent`) — `close` no longer writes them; see
 `docs/EVENTS.md` for the full registry and status legend.
 
-Additionally **consumed** by the sidecar projection for effectiveness/ranking
+Additionally **consumed** by the sidecar projection for its diagnostics (ref_count, effectiveness)
 (read for back-compat even if not actively written by v2 hooks): `inject-agg`
 (WAL compaction fold, `target = slug,count`), `outcome-positive`,
 `outcome-negative`, and `trigger-silent-retro` (along with `trigger-useful`/

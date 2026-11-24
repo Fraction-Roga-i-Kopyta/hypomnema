@@ -34,7 +34,9 @@ var staleDays = map[string]int{
 // concern, not decay's. The freshest continuity fact of each project (by its
 // stored `fresh` date, the same native dates injection compares — see
 // native.NewestContinuity) is the live "where we left
-// off" marker and never ages; older continuity files do. Rows are keyed by
+// off" marker and never ages; older continuity files do. Project-local
+// feedback never ages either: it is SessionStart core, refreshed only by
+// being core, so staling it would remove it permanently. Rows are keyed by
 // (slug, project): continuity.md exists in every project. Returns the number
 // newly marked. `today` is YYYY-MM-DD.
 func (s *Store) MarkStale(today string) (int, error) {
@@ -74,6 +76,12 @@ func (s *Store) MarkStale(today string) (int, error) {
 			continue
 		}
 		if r.typ == "continuity" && newest[r.project] == r.slug {
+			continue
+		}
+		// Project-local feedback is SessionStart core: it is delivered only
+		// through the core, and a stale fact is not core — staling it would
+		// drop it for good. Global feedback is not core and still decays.
+		if r.typ == "feedback" && r.project != "" && r.project != native.GlobalProject {
 			continue
 		}
 		c, perr := time.Parse("2006-01-02", r.lastInjected)

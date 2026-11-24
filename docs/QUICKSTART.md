@@ -58,9 +58,14 @@ cd ~/Development/<any-project>
 claude
 ```
 
-On SessionStart the `session-start` hook injects the most relevant facts for
-that project; there won't be any yet on a fresh install. You can also pull on
-demand from inside a session: `memoryctl recall "<query words>"`.
+On SessionStart the `session-start` hook injects the project's fixed core —
+its freshest `continuity`, pinned facts and project feedback rules (not a
+ranking); there won't be any yet on a fresh install. Other facts are read
+from the `MEMORY.md` index when their description fits, or pulled on demand
+from inside a session: `memoryctl recall "<query words>"`. Recommended:
+pull-only mode — `HYPOMNEMA_PROMPT_INJECT=off` in `settings.json`'s `env`
+block plus `@~/.claude/memory-global/MEMORY.md` in your user CLAUDE.md (by
+default each prompt also gets a gated ranked push).
 
 ## 6. Record your first real mistake (90 seconds)
 
@@ -68,7 +73,8 @@ When you hit a bug or take a wrong approach during a real task, ask Claude to
 remember it. Claude writes a **flat** native memory file — the kind is the
 `type:` frontmatter field (`mistake`), not a subdirectory — into
 `~/.claude/projects/<slug>/memory/` (or `~/.claude/memory-global/` for a
-cross-project lesson). Next session it is injected automatically when relevant.
+cross-project lesson). Later sessions find it through the `MEMORY.md` index
+(or the per-prompt push, if left on) when a task names it.
 
 ## What's next
 
