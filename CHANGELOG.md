@@ -1,5 +1,70 @@
 # Changelog
 
+## [3.2.0] — 2026-11-24
+
+Memory is the agent's working memory, not a human second brain: a session
+starts with a fixed core, subagents get only what their task names, and the
+rest is pulled from the index.
+
+Upgrade: `git pull && make build && make install`, then
+`memoryctl sidecar rebuild` and `memoryctl doctor`. Recommended: pull-only
+mode — `HYPOMNEMA_PROMPT_INJECT=off` in `settings.json` `env` plus
+`@~/.claude/memory-global/MEMORY.md` in your user CLAUDE.md (doctor's new
+`global_index` check tells you if either is missing).
+
+### Changed
+
+- **SessionStart injects a fixed core instead of a ranking**: the project's
+  freshest continuity, then pinned facts (project, then global), then the
+  project's feedback rules. Facts that do not fit the 8 KB budget are listed
+  as one-line pointers (not logged as delivered); the Memory-queue line
+  reserves its bytes first. `startup`, `resume`, `clear` and `compact` all
+  get the core only; no git or overlap work runs on this path.
+- **SubagentStart is task-gated**: a fact injects only when the Agent call's
+  `description` names it — ≥ 2 distinct head terms, one in `name` or
+  `keywords`; paths, `$HOME`/project-root components, agent-type words,
+  digits and corpus-common terms do not count. Calibrated on 362 real
+  briefs: median 1 fact, p90 4, 36 % of subagents get none (the whole-brief
+  gate passed a median of 136). No Agent call found → nothing injected (the
+  parent-prompt fallback is gone).
+- **Ranking drops effectiveness and ref_count**: score = 3 × overlap +
+  2 × recency + 1 project-local (`less` halves, `hide` drops). Both stay as
+  diagnostics in `/memboard`, `stats` and `doctor`. Live data showed 30
+  `cite-useful` vs 975 `cite-silent`: the signal measured citation habits,
+  not usefulness.
+- **Project feedback never decays** (like pinned facts and the freshest
+  continuity); rules that had gone stale return to the core after one close.
+- **A project fact and a global fact with the same file name are distinct
+  everywhere**: sidecar overlap, session lists, `inject` rows, citation
+  credit, `recall`, `skill-inject`. A citation credits every fact with that
+  name delivered in the session. Session-list lines from older binaries are
+  still read.
+- MEMORY.md indexes list pinned facts first, then the freshest, within
+  24 KB / 200 lines, and end with a note naming how many facts were left out.
+- README leads with who reads the memory (the agent) and adds an
+  Obsidian/PKM row to the comparison.
+
+### Added
+
+- `doctor` check `global_index`: warns on a global MEMORY.md memoryctl did
+  not generate, and on pull-only mode without the global index import.
+- ADR `docs/decisions/session-start-core.md`; INVARIANTS I6 rewritten for
+  the core.
+
+### Fixed
+
+- Every hook verb recovers from a panic: one stderr line, exit 0 (a panic
+  used to exit 2, blocking the prompt or extending Stop). `guard` /
+  `guard-bash` keep their deliberate exit 2.
+- WAL and other line readers no longer stop silently at a line over 1 MiB
+  (64 KiB in some doctor checks); one oversized WAL row used to abort the
+  sidecar reprojection. `migrate` now fails instead of pruning on a partial
+  WAL read; `.secretsignore` no longer drops a later `!` negation after a
+  long line.
+- Already-injected facts keep their top-K slot, so later prompts only add
+  facts that newly enter the top-8 (and a shown fact no longer hides its
+  unshown same-name twin).
+
 ## [3.1.0] — 2026-11-09
 
 Upgrade: `git pull && make build && ./install.sh` (registers the ninth shim),
