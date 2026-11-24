@@ -202,9 +202,13 @@ Observability shifts to WAL events + `memoryctl doctor`. See ADR
   error from `inject.Run` exits 0 with no output).
 - Panics: Go exits 2 on an unrecovered panic, and the shims `exec`
   memoryctl, so a panic would surface as exit 2 — which blocks the prompt
-  on UserPromptSubmit. The `inject` dispatch (SessionStart,
-  UserPromptSubmit and, through it, SubagentStart) runs under `failSafe`
-  (`cmd/memoryctl/inject.go`): a panic exits 0 with no output.
+  on UserPromptSubmit. Every hook verb (`hookVerbs` in
+  `cmd/memoryctl/inject.go`: `inject`, `close` incl. `--subagent`, `guard`,
+  `guard-bash`, `skill-inject`, `skill-active`) is dispatched through
+  `runHook`: a panic writes one stderr line
+  `memoryctl <verb>: recovered panic: <value>` and exits 0 with no stdout.
+  A panic in `guard`/`guard-bash` therefore fails open (like a missing
+  binary); a deliberate `os.Exit(2)` block is not a panic and still blocks.
 
 **How to check.** Mechanized. `memoryctl audit invariants` runs
 `hookFailSafeChecker` (`internal/invariants`), which scans `hooks/**/*.sh`

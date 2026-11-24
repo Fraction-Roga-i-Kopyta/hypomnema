@@ -112,7 +112,10 @@ side-effect-only (WAL writes, sidecar updates, `.runtime/` markers).
 envelope JSON, unreadable memory, missing session id. A broken memory file is
 never a reason to break the user's session. The **only** intentional non-zero
 exits are `2` from `guard` when it finds a secret and `2` from `guard-bash`
-when the command runs a panel verb.
+when the command runs a panel verb. A **panic** in any verb the shims call
+(`inject`, `close`, `guard`, `guard-bash`, `skill-inject`, `skill-active`) is
+recovered: one stderr line `memoryctl <verb>: recovered panic: <value>`, exit
+`0`, no stdout. For `guard`/`guard-bash` that means a panic fails open.
 
 ### 1.5 Environment variables
 
@@ -215,7 +218,7 @@ context was wiped:
 
 Contract:
 
-- Exit 0 always — a panic too (`failSafe`, invariant I5); empty
+- Exit 0 always — a panic too (`runHook`, invariant I5); empty
   `additionalContext` when the core is empty and no task is queued.
 - Writes an `inject` WAL event per **newly-logged** emitted fact (see above —
   a compact/clear re-render of an already-logged fact writes no second row).

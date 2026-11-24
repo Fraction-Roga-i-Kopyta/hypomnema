@@ -319,8 +319,9 @@ mechanically checks the ones that can be. The load-bearing ones:
 6. **No network.** Zero HTTP/curl anywhere in `internal/`, `cmd/`, or the
    shims. Hypomnema is entirely offline.
 7. **Silent-fail.** A hook never breaks the session: any internal error in
-   `inject`/`close` exits 0. The *only* non-zero exit is `guard` on a detected
-   secret (`exit 2`); even a scanner crash fails open.
+   hook verb exits 0, and a panic is recovered (`runHook`, stderr trace, exit
+   0). The *only* non-zero exit is `guard`/`guard-bash` on a detected secret
+   or panel verb (`exit 2`); even a scanner crash fails open.
 
 ## Secrets gate
 

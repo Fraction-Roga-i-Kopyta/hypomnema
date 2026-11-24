@@ -168,6 +168,10 @@ func main() {
 	}
 	// Top-level dispatch. `memoryctl --help` / `-h` print usage and exit 0
 	// so it's safe to call in shell completion.
+	if run, ok := hookVerbs[os.Args[1]]; ok {
+		runHook(os.Args[1], os.Stderr, func() { run(os.Args[2:]) })
+		return
+	}
 	switch os.Args[1] {
 	case "-h", "--help":
 		fmt.Print(usage)
@@ -194,14 +198,6 @@ func main() {
 		}
 	case "migrate":
 		runMigrate(os.Args[2:])
-	case "close":
-		runClose(os.Args[2:])
-	case "inject":
-		// Prompt path (SessionStart, UserPromptSubmit, SubagentStart): a
-		// panic exits 0 with no output instead of blocking the turn.
-		if failSafe(func() { runInject(os.Args[2:]) }) {
-			os.Exit(0)
-		}
 	case "rank":
 		runRank(os.Args[2:])
 	case "recall":
@@ -218,16 +214,8 @@ func main() {
 		runMark(os.Args[2:])
 	case "stats":
 		runStats(os.Args[2:])
-	case "skill-inject":
-		runSkillInject(os.Args[2:])
-	case "skill-active":
-		runSkillActive(os.Args[2:])
 	case "ab":
 		runAB(os.Args[2:])
-	case "guard":
-		runGuard(os.Args[2:])
-	case "guard-bash":
-		runGuardBash(os.Args[2:])
 	case "reindex":
 		runReindex(os.Args[2:])
 	default:

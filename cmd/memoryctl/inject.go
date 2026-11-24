@@ -55,19 +55,44 @@ func contextWiped(event, src string) bool {
 	return event == "SessionStart" && (src == "compact" || src == "clear")
 }
 
+// hookVerbs are the entry points the hook shims call. main dispatches them
+// through runHook, so a panic in any of them is recovered (a verb absent here
+// is not fail-safe). Go exits 2 on an unrecovered panic; exit 2 blocks
+// UserPromptSubmit / PreToolUse and is noise on Stop (I5). A deliberate
+// os.Exit(2) from guard/guard-bash is not a panic and still blocks.
+var hookVerbs = map[string]func([]string){
+	"inject":       runInject, // SessionStart, UserPromptSubmit, SubagentStart
+	"close":        runClose,  // Stop, and SubagentStop via --subagent
+	"guard":        runGuard,
+	"guard-bash":   runGuardBash,
+	"skill-inject": runSkillInject,
+	"skill-active": runSkillActive,
+}
+
 // failSafe runs f and reports whether it panicked, swallowing the panic.
-// It wraps the prompt-path hook entry points (runInject, and through it
-// runSubagentStart): Go exits 2 on an unrecovered panic, the shims exec
-// memoryctl, and exit 2 on UserPromptSubmit blocks the user's prompt (I5).
-// The caller exits 0 with no output instead.
-func failSafe(f func()) (panicked bool) {
+func failSafe(f func()) bool {
+	return failSafeTrace("", io.Discard, f)
+}
+
+// failSafeTrace is failSafe plus a one-line stderr trace
+// "memoryctl <verb>: recovered panic: <value>" on recovery.
+func failSafeTrace(verb string, stderr io.Writer, f func()) (panicked bool) {
 	defer func() {
-		if recover() != nil {
+		if r := recover(); r != nil {
 			panicked = true
+			fmt.Fprintf(stderr, "memoryctl %s: recovered panic: %v\n", verb, r)
 		}
 	}()
 	f()
 	return false
+}
+
+// runHook runs a hook verb under failSafeTrace; after a panic it exits 0 with
+// no stdout (a panicking guard therefore fails open, like a missing binary).
+func runHook(verb string, stderr io.Writer, f func()) {
+	if failSafeTrace(verb, stderr, f) {
+		os.Exit(0)
+	}
 }
 
 func runInject(args []string) {
